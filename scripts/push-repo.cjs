@@ -75,7 +75,7 @@ async function main() {
     const remoteUrl = `https://x-access-token:${token}@github.com/${repoOwner}/${repoName}.git`;
     
     console.log('Setting remote...');
-    execSync(`git remote remove origin 2>nul || true`, { cwd: localPath, shell: 'cmd' });
+    try { execSync('git remote remove origin', { cwd: localPath, shell: 'cmd' }); } catch {}
     execSync(`git remote add origin ${remoteUrl}`, { cwd: localPath });
     
     // Stage and commit
