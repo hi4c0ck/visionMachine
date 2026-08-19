@@ -98,7 +98,7 @@ coverage/
 
 # Documentation builds
 docs/_build/
-docs/site/
+.docs/
 .jekyll-cache/
 .gitpages/
 
