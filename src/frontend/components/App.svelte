@@ -1,116 +1,109 @@
-<script lang="ts">
-  // Main App Component - Assembles all sections
-  import Titlebar from '$components/Titlebar.svelte';
-  import ProjectSidebar from '$components/ProjectSidebar.svelte';
-  import AnimatedScene from '$components/AnimatedScene.svelte';
-  import ComposerSection from '$components/ComposerSection.svelte';
-  import ArtifactsPanel from '$components/ArtifactsPanel.svelte';
+<script>
+  import { onMount } from 'svelte';
+  import WelcomePage from './components/WelcomePage.svelte';
   
-  // State
-  let sidebarCollapsed = $state(false);
-  let artifactsCollapsed = $state(false);
-  let sceneMode = $state<'project' | 'default'>('project');
+  // App state
+  let userName = '';
+  let isLoggedIn = false;
+  
+  // Load user from localStorage
+  onMount(() => {
+    const savedUser = localStorage.getItem('vm-username');
+    if (savedUser) {
+      userName = savedUser;
+      isLoggedIn = true;
+    }
+  });
+  
+  function handleLogin(name) {
+    userName = name;
+    isLoggedIn = true;
+    localStorage.setItem('vm-username', name);
+  }
+  
+  function handleLogout() {
+    userName = '';
+    isLoggedIn = false;
+    localStorage.removeItem('vm-username');
+  }
 </script>
 
-<div class="app-container">
-  <!-- Titlebar -->
-  <Titlebar />
-  
-  <!-- Main Layout -->
-  <div class="app-body">
-    <!-- Left: Project Sidebar -->
-    <ProjectSidebar bind:collapsed={sidebarCollapsed} />
+{#if !isLoggedIn}
+  <WelcomePage 
+    userName={userName} 
+    isReturningUser={false}
+    onContinue={handleLogin}
+  />
+{:else}
+  <div class="app-container">
+    <!-- Main app content will go here -->
+    <header class="app-header">
+      <div class="header-left">
+        <h1>VisionMachine</h1>
+      </div>
+      <div class="header-right">
+        <span class="user-greeting">Hello, {userName}!</span>
+        <button class="btn btn-ghost btn-sm" on:click={handleLogout}>Logout</button>
+      </div>
+    </header>
     
-    <!-- Center: Content Area -->
-    <div class="content-area">
-      <!-- Top: Animated Scene (~150px, ~15% of height) -->
-      <AnimatedScene 
-        mode={sceneMode}
-        sceneIndex={0}
-        isPlaying={true}
-      />
-      
-      <!-- Middle: Composer Section -->
-      <ComposerSection 
-        on:addTexture={() => console.log('Add texture')}
-      />
-    </div>
-    
-    <!-- Right: Artifacts Panel -->
-    <ArtifactsPanel 
-      bind:collapsed={artifactsCollapsed}
-      on:refresh={() => console.log('Refresh artifacts')}
-    />
+    <main class="app-main">
+      <!-- Main content area -->
+      <div class="empty-state">
+        <p>Welcome, {userName}! Your video generation workspace.</p>
+      </div>
+    </main>
   </div>
-</div>
+{/if}
 
 <style>
-  :global(*) {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-  }
-  
-  :global(body) {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: var(--color-bg-primary);
-    color: var(--color-text-primary);
-    overflow: hidden;
-  }
-  
-  :root {
-    --color-bg-primary: #0a0a0a;
-    --color-bg-secondary: #141414;
-    --color-bg-tertiary: #1e1e1e;
-    --color-bg-hover: #252525;
-    --color-border: #2a2a2a;
-    --color-border-hover: #3a3a3a;
-    
-    --color-text-primary: #ffffff;
-    --color-text-secondary: #a0a0a0;
-    --color-text-muted: #666666;
-    
-    --color-accent: #6366f1;
-    --color-accent-hover: #4f46e5;
-    --color-accent-light: rgba(99, 102, 241, 0.1);
-    
-    --color-success: #22c55e;
-    --color-warning: #f59e0b;
-    --color-error: #ef4444;
-    
-    --space-xs: 4px;
-    --space-sm: 8px;
-    --space-md: 16px;
-    --space-lg: 24px;
-    --space-xl: 32px;
-    
-    --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  }
-  
   .app-container {
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    width: 100vw;
+    min-height: 100vh;
+    background: var(--bg-primary);
   }
   
-  .app-body {
+  .app-header {
     display: flex;
-    flex: 1;
-    overflow: hidden;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-md) var(--space-lg);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
   }
   
-  .content-area {
-    flex: 1;
+  .header-left h1 {
+    font-size: 1.25rem;
+    color: var(--text-primary);
+  }
+  
+  .header-right {
     display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-width: 0;
+    align-items: center;
+    gap: var(--space-md);
+  }
+  
+  .user-greeting {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+  }
+  
+  .app-main {
+    flex: 1;
+    padding: var(--space-lg);
+  }
+  
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+  }
+  
+  .btn-sm {
+    padding: var(--space-xs) var(--space-sm);
+    font-size: 0.875rem;
   }
 </style>
