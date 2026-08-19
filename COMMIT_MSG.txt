@@ -1,0 +1,4 @@
+Add docs README and update .env.example
+
+- Add docs/README.md as documentation index
+- Update config/.env.example with security notes (no real secrets)
