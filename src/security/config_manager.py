@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from dataclasses import dataclass, asdict, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from enum import Enum
 import os
 

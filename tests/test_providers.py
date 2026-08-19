@@ -1,9 +1,12 @@
 """Tests for provider abstractions."""
 import pytest
+import asyncio
 from unittest.mock import Mock, AsyncMock, patch
 from src.providers.base import BaseProvider, ProviderError
 from src.providers.agnes import AgnesProvider
 from src.providers.openai_compatible import OpenAICompatibleProvider
+from src.providers.factory import ProviderFactory
+from src.security import ProviderType
 
 
 class TestAgnesProvider:
@@ -75,11 +78,10 @@ class TestAgnesProvider:
         with patch('aiohttp.ClientSession') as mock_session:
             mock_resp = AsyncMock()
             mock_resp.status = 200
-            mock_resp.json.return_value = asyncio.Future()
-            mock_resp.json.return_value.set_result({
+            mock_resp.json.return_value = {
                 "video_url": "https://example.com/video.mp4",
                 "duration": 30
-            })
+            }
             
             mock_context = AsyncMock()
             mock_context.__aenter__.return_value = mock_resp
@@ -99,8 +101,7 @@ class TestAgnesProvider:
         with patch('aiohttp.ClientSession') as mock_session:
             mock_resp = AsyncMock()
             mock_resp.status = 200
-            mock_resp.json.return_value = asyncio.Future()
-            mock_resp.json.return_value.set_result({})
+            mock_resp.json.return_value = {}
             
             mock_context = AsyncMock()
             mock_context.__aenter__.return_value = mock_resp
@@ -113,6 +114,24 @@ class TestAgnesProvider:
             payload = call_args[1]['json']
             
             assert payload["duration"] == 60
+    
+    @pytest.mark.asyncio
+    async def test_generate_text(self, agnes_provider, mock_key_store):
+        """Test text generation."""
+        with patch('aiohttp.ClientSession') as mock_session:
+            mock_resp = AsyncMock()
+            mock_resp.status = 200
+            mock_resp.json.return_value = {
+                "choices": [{"message": {"content": "Generated text"}}]
+            }
+            
+            mock_context = AsyncMock()
+            mock_context.__aenter__.return_value = mock_resp
+            mock_session.return_value.post.return_value = mock_context
+            
+            result = await agnes_provider.generate_text(prompt="Hello")
+            
+            assert result == "Generated text"
 
 
 class TestOpenAICompatibleProvider:
@@ -146,10 +165,9 @@ class TestOpenAICompatibleProvider:
         with patch('aiohttp.ClientSession') as mock_session:
             mock_resp = AsyncMock()
             mock_resp.status = 200
-            mock_resp.json.return_value = asyncio.Future()
-            mock_resp.json.return_value.set_result({
+            mock_resp.json.return_value = {
                 "choices": [{"message": {"content": "Generated text"}}]
-            })
+            }
             
             mock_context = AsyncMock()
             mock_context.__aenter__.return_value = mock_resp
@@ -178,11 +196,39 @@ class TestProviderFactory:
     def test_create_agnes_provider(self):
         """Test creating Agnes provider."""
         from src.security.key_store import EncryptedKeyStore
-        from src.security.config_manager import ProviderType
         
-        with pytest.raises(Exception):  # Needs real DB path
+        # This should work with a real key store instance
+        provider = ProviderFactory.create(
+            provider_type=ProviderType.AGNES,
+            key_store=Mock(),
+            config={}
+        )
+        
+        assert isinstance(provider, AgnesProvider)
+    
+    def test_create_openai_compatible_provider(self):
+        """Test creating OpenAI-compatible provider."""
+        provider = ProviderFactory.create(
+            provider_type=ProviderType.OPENAI_COMPATIBLE,
+            key_store=Mock(),
+            config={
+                "endpoint": "https://api.openai.com/v1",
+                "model": "gpt-4o"
+            }
+        )
+        
+        assert isinstance(provider, OpenAICompatibleProvider)
+    
+    def test_create_unknown_provider_raises(self):
+        """Test that unknown provider type raises error."""
+        from enum import Enum
+        
+        class UnknownType(str, Enum):
+            UNKNOWN = "unknown"
+        
+        with pytest.raises(ValueError, match="Unknown provider type"):
             ProviderFactory.create(
-                provider_type=ProviderType.AGNES,
+                provider_type=UnknownType.UNKNOWN,
                 key_store=Mock(),
                 config={}
             )
@@ -193,3 +239,12 @@ class TestProviderFactory:
         
         assert "agnes" in types
         assert "openai_compatible" in types
+    
+    def test_missing_endpoint_for_openai(self):
+        """Test that missing endpoint raises error."""
+        with pytest.raises(ValueError, match="Endpoint required"):
+            ProviderFactory.create(
+                provider_type=ProviderType.OPENAI_COMPATIBLE,
+                key_store=Mock(),
+                config={}
+            )

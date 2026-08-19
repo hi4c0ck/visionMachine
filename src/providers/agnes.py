@@ -156,7 +156,7 @@ class AgnesProvider(BaseProvider):
         """
         return [self.model]
     
-    async def _handle_response(self, resp: aiohttp.Response):
+    async def _handle_response(self, resp):
         """Handle API response with appropriate error raising.
         
         Args:

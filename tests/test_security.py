@@ -2,6 +2,7 @@
 import pytest
 import tempfile
 from pathlib import Path
+from src.security.key_store import EncryptedKeyStore
 
 
 @pytest.fixture
