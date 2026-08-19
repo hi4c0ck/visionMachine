@@ -1,18 +1,43 @@
-import os
+"""Test that all required Python modules can be imported."""
 import sys
 
-def test_import_all():
-    """Test that all required modules can be imported."""
-    modules = ['torch', 'numpy', 'PIL', 'cv2', 'pytest', 'pydantic']
-    for mod in modules:
-        __import__(mod)
-    return True
 
-if __name__ == '__main__':
-    try:
-        test_import_all()
-        print('All imports OK')
-        sys.exit(0)
-    except ImportError as e:
-        print(f'Import error: {e}')
-        sys.exit(1)
+def test_torch_import():
+    """Test torch module import."""
+    import torch
+    assert hasattr(torch, '__version__')
+    print(f'torch: {torch.__version__}')
+
+
+def test_numpy_import():
+    """Test numpy module import."""
+    import numpy as np
+    assert hasattr(np, '__version__')
+    print(f'numpy: {np.__version__}')
+
+
+def test_pil_import():
+    """Test PIL/Pillow import."""
+    from PIL import Image
+    print(f'PIL: {Image.__version__}')
+
+
+def test_opencv_import():
+    """Test OpenCV import."""
+    import cv2
+    assert hasattr(cv2, '__version__')
+    print(f'cv2: {cv2.__version__}')
+
+
+def test_pytest_import():
+    """Test pytest module import."""
+    import pytest
+    assert hasattr(pytest, '__version__')
+    print(f'pytest: {pytest.__version__}')
+
+
+def test_pydantic_import():
+    """Test pydantic module import."""
+    from pydantic import BaseModel
+    assert BaseModel is not None
+    print('pydantic: OK')

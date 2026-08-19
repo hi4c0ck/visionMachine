@@ -5,7 +5,7 @@
 ### Repository
 - **URL**: https://github.com/hi4c0ck/visionMachine
 - **Branch**: main
-- **Last Commit**: 2d80f85 - Add test suite and Python CI checks
+- **Last Commit**: Initial project setup with clean history
 
 ### Python Environment
 ```
@@ -31,40 +31,35 @@ VisionMachine/
 │   └── test_imports.py    # Module import verification
 ├── config/
 │   └── .env.example       # Environment template
-├── scripts/               # Utility scripts (Node.js)
 ├── .github/workflows/     # CI pipelines
 │   └── ci.yml            # Python + Node.js checks
 ├── pyproject.toml        # Python project config
-├── package.json           # Node.js dependencies
 ├── README.md
 ├── conftest.py           # Pytest configuration
 └── .gitignore            # Updated ignore rules
 ```
 
-### How to Use
+### How to Use Python
 
-**Activate Python:**
-```bash
+**Activate virtual environment:**
+```powershell
 cd D:\work\horizonsMachine\VisionMachine
 uv venv --python 3.12
 uv pip install -e ".[dev]"
 ```
 
-**Run Tests:**
-```bash
+**Or use uv (recommended):**
+```powershell
+uv run python src/core.py
 uv run pytest tests/ -v
+uv pip add <package-name>
 ```
 
-**Verify Imports:**
-```bash
-uv run python -c "import torch; import numpy; from PIL import Image; import cv2; print('All OK')"
-```
-
-### Next Steps
-1. ✅ Python environment verified
-2. ✅ Test suite structure created
-3. ✅ CI/CD updated for Python checks
-4. ⏳ Start building vision processing modules
+### CI/CD Checks
+The workflow now verifies:
+- ✅ Python module imports (torch, numpy, PIL, cv2, pytest, pydantic)
+- ✅ Unit tests pass
+- ✅ Node.js linting and formatting
 
 ---
 

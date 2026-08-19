@@ -1,1 +1,1 @@
-# VisionMachine tests
+"""VisionMachine tests package."""

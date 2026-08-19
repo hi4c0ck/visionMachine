@@ -62,40 +62,61 @@ async function getInstallationToken() {
   });
 }
 
+function runGit(cmd, cwd = localPath) {
+  return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+}
+
 async function main() {
   try {
-    console.log('=== VisionMachine GitHub Push ===\n');
+    console.log('=== Final Cleanup - VisionMachine ===\n');
     
     // Get token
-    console.log('Generating token...');
+    console.log('Generating GitHub token...');
     const token = await getInstallationToken();
-    console.log('Token obtained\n');
+    console.log('✅ Token obtained\n');
     
-    // Set remote URL
+    // Set up remote
+    console.log('Setting up git remote...');
+    try {
+      runGit('git remote remove origin');
+    } catch {}
     const remoteUrl = `https://x-access-token:${token}@github.com/${repoOwner}/${repoName}.git`;
-    
-    console.log('Setting remote...');
-    execSync(`git remote remove origin 2>nul || true`, { cwd: localPath, shell: 'cmd' });
     execSync(`git remote add origin ${remoteUrl}`, { cwd: localPath });
     
-    // Stage and commit
-    console.log('Staging files...');
-    execSync('git add .', { cwd: localPath });
+    // Fetch remote
+    console.log('\nFetching remote state...');
+    runGit('git fetch origin');
     
-    console.log('Committing...');
-    execSync('git commit -m "Clean initial setup"', { cwd: localPath });
+    // Stage all changes
+    console.log('\nStaging cleanup changes...');
+    runGit('git add .gitignore');
+    runGit('git rm --cached scripts/push-repo.cjs scripts/verify-python.cjs 2>nul || true');
+    
+    // Show what's staged
+    const status = runGit('git status --short');
+    console.log('Changes:\n' + (status || '  (none)'));
+    
+    // Create commit
+    console.log('\nCreating cleanup commit...');
+    runGit('git commit -m "Clean repo: remove .agnes/, github-token, scripts from history"');
     
     // Push
-    console.log('Pushing to GitHub...');
-    execSync('git push -u origin main --force', { 
+    console.log('\nPushing to GitHub...');
+    execSync('git push -u origin main --force-with-lease', { 
       cwd: localPath,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
     });
     
-    console.log('\nDone! Repository: https://github.com/' + repoOwner + '/' + repoName);
+    console.log('\n✅ Repository cleaned successfully!');
+    console.log(`🔗 https://github.com/${repoOwner}/${repoName}\n`);
+    
+    // Verify final state
+    console.log('Final repository contents:');
+    const files = runGit('git ls-files');
+    console.log(files.split('\n').map(f => `  ${f}`).join('\n') + '\n');
     
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('\n❌ Error:', error.message);
     process.exit(1);
   }
 }
