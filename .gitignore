@@ -1,3 +1,5 @@
+# VisionMachine - .gitignore
+
 # Python
 __pycache__/
 *.py[cod]
@@ -132,8 +134,9 @@ scripts/
 src-tauri/target/
 src-tauri/gen/
 
-# Root-level development documentation (internal tracking only)
+# Internal development docs (NOT for public repo)
 FINAL_SUMMARY.md
 IMPLEMENTATION_SUMMARY.md
 PROJECT_STATUS.md
 README-TAURI.md
+COMPLETE_DOCUMENTATION_SUMMARY.md
