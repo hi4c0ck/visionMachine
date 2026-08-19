@@ -62,105 +62,70 @@ async function getInstallationToken() {
   });
 }
 
+function runGit(cmd, cwd = localPath) {
+  return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+}
+
 async function main() {
   try {
     console.log('=== VisionMachine GitHub Push ===\n');
     
     // Get token
-    console.log('Generating token...');
+    console.log('Generating GitHub App token...');
     const token = await getInstallationToken();
     console.log('✅ Token obtained\n');
     
-    // Remove old remote and add new one with token
+    const remoteUrl = `https://x-access-token:${token}@github.com/${repoOwner}/${repoName}.git`;
+    
+    // Set up remote
     console.log('Setting up git remote...');
     try {
-      execSync('git remote remove origin', { cwd: localPath, shell: 'cmd', stdio: 'ignore' });
+      runGit('git remote remove origin');
     } catch {}
-    
-    const remoteUrl = `https://x-access-token:${token}@github.com/${repoOwner}/${repoName}.git`;
     execSync(`git remote add origin ${remoteUrl}`, { cwd: localPath });
     
-    // Fetch to see current state
+    // Fetch remote
     console.log('\nFetching remote state...');
-    const fetchResult = execSync('git fetch origin', { 
-      cwd: localPath,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    });
-    console.log(fetchResult.trim());
+    runGit('git fetch origin');
     
-    // Check what's on remote
-    console.log('\nRemote branches:');
-    const branchList = execSync('git branch -r', { 
-      cwd: localPath,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim();
-    console.log(branchList);
-    
-    // Show remote log
+    // Check remote status
     console.log('\nRemote history:');
     try {
-      const remoteLog = execSync('git log origin/main --oneline -5', { 
-        cwd: localPath,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim();
+      const remoteLog = runGit('git log origin/main --oneline -5');
       console.log(remoteLog || '  (empty)');
     } catch {
-      console.log('  (no main branch on remote)');
+      console.log('  (no remote history)');
     }
     
-    // Stage all local files
-    console.log('\nStaging all local files...');
-    const statusBefore = execSync('git status --porcelain', { 
+    // Stage all files
+    console.log('\nStaging all files...');
+    runGit('git add .');
+    
+    // Check what's changed
+    const diff = runGit('git diff --cached --stat');
+    console.log(diff);
+    
+    // Create commit
+    console.log('\nCreating commit...');
+    runGit('git commit -m "Initial project setup: Python ML environment, CI/CD, core modules"');
+    
+    // Show commits to push
+    console.log('\nCommits to push:');
+    const commits = runGit('git log origin/main..HEAD --oneline 2>/dev/null || echo "new branch"');
+    console.log(commits || '  (nothing new)');
+    
+    // Push
+    console.log('\nPushing to GitHub...');
+    execSync('git push -u origin main --force-with-lease', { 
       cwd: localPath,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim();
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
     
-    console.log('Changes detected:');
-    if (statusBefore) {
-      console.log(statusBefore.split('\n').map(l => `  ${l}`).join('\n'));
-      
-      // Add all untracked and modified files
-      execSync('git add .', { cwd: localPath });
-      
-      // Create commit
-      console.log('\nCreating commit...');
-      execSync('git commit -m "Initial project setup: Python ML environment, CI/CD, core modules"', { 
-        cwd: localPath,
-        stdio: ['inherit', 'inherit', 'inherit']
-      });
-      
-      // Show what will be pushed
-      console.log('\nCommits to push:');
-      const toPush = execSync('git log origin/main..HEAD --oneline', { 
-        cwd: localPath,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim();
-      console.log(toPush || '  (all commits are up to date)');
-      
-      // Force push to overwrite remote
-      console.log('\nPushing to GitHub (force)...');
-      execSync('git push -u origin main --force', { 
-        cwd: localPath,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }
-      });
-      
-      console.log('\n✅ Successfully pushed!');
-      console.log(`🔗 Repository: https://github.com/${repoOwner}/${repoName}`);
-      
-    } else {
-      console.log('  No changes to push');
-    }
+    console.log('\n✅ Successfully pushed!');
+    console.log(`🔗 Repository: https://github.com/${repoOwner}/${repoName}\n`);
     
   } catch (error) {
     console.error('\n❌ Error:', error.message);
-    if (error.stderr) {
-      console.error('stderr:', error.stderr.toString());
-    }
     process.exit(1);
   }
 }
