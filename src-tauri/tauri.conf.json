@@ -3,27 +3,23 @@
   "version": "0.1.0",
   "identifier": "com.visionmachine.app",
   "build": {
-    "frontendDist": "../src/frontend",
+    "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
       {
-        "title": "VisionMachine - AI Video Generator",
+        "title": "VisionMachine",
         "width": 1280,
         "height": 800,
         "resizable": true,
         "fullscreen": false,
-        "minWidth": 800,
-        "minHeight": 600
+        "titleBarStyle": "Overlay"
       }
     ],
-    "security": {
-      "csp": null
-    },
-    "withGlobalTauri": true
+    "securityCsp": "default-src 'self'; img-src 'self' asset: https://asset.localhost; media-src 'self' asset: https://asset.localhost;"
   },
   "bundle": {
     "active": true,
