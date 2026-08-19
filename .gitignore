@@ -132,8 +132,7 @@ scripts/
 src-tauri/target/
 src-tauri/gen/
 
-# Root-level development documentation (internal use only)
-# Keep only README.md for users, hide all other root .md files
+# Root-level development docs (AgnesCode internal tracking only)
 FINAL_SUMMARY.md
 IMPLEMENTATION_SUMMARY.md
 PROJECT_STATUS.md
