@@ -11,36 +11,46 @@
 ### 2. API Reference
 - [API_REFERENCE.md](./API_REFERENCE.md) - Complete API documentation
 
-### 3. User Guides
-- [README-TAURI.md](../README-TAURI.md) - Quick start for desktop users
-- [IMPLEMENTATION_SUMMARY.md](../IMPLEMENTATION_SUMMARY.md) - What's built and how to use
+### 3. UI & Components
+- [UI_COMPONENTS.md](./UI_COMPONENTS.md) - UI component library recommendations
+
+### 4. User Guides
+- [GETTING_STARTED.md](./GETTING_STARTED.md) - Quick start guide
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - Contribution guidelines
+- [README-TAURI.md](../README-TAURI.md) - Desktop app user guide
+
+### 5. Implementation Summary
+- [IMPLEMENTATION_SUMMARY.md](../IMPLEMENTATION_SUMMARY.md) - What's built
+- [FINAL_SUMMARY.md](../FINAL_SUMMARY.md) - Complete summary
 
 ---
 
-## 🎯 Quick Navigation by Topic
+## 🎯 Quick Navigation by Role
 
 ### For Developers
-| Task | Document | Page |
-|------|----------|------|
+| Task | Document | Section |
+|------|----------|---------|
 | Set up dev environment | DEVELOPMENT_WORKFLOW.md | Setup section |
 | Add new provider | API_REFERENCE.md | Provider Configuration |
 | Debug issues | DEVELOPMENT_WORKFLOW.md | Debugging Guide |
 | Run tests | DEVELOPMENT_WORKFLOW.md | Testing section |
+| Contribute code | CONTRIBUTING.md | Full document |
 
 ### For End Users
-| Task | Document | Page |
-|------|----------|------|
-| Install app | README-TAURI.md | Quick Start |
+| Task | Document | Section |
+|------|----------|---------|
+| Install app | GETTING_STARTED.md | Quick Start |
 | Generate video | README-TAURI.md | UI Features |
 | Configure providers | SECURITY.md | Provider Configuration |
 | Troubleshoot | README-TAURI.md | Troubleshooting |
 
 ### For Architects
-| Task | Document | Page |
-|------|----------|------|
+| Task | Document | Section |
+|------|----------|---------|
 | Understand system design | ARCHITECTURE.md | Full document |
 | Review security | SECURITY.md | Full document |
 | Plan migrations | ARCHITECTURE.md | Framework Decision Matrix |
+| UI component selection | UI_COMPONENTS.md | Full document |
 
 ---
 
@@ -58,14 +68,15 @@
 
 ---
 
-## 📖 Reading Order Recommendations
+## 📖 Recommended Reading Order
 
 ### New Team Member
-1. [IMPLEMENTATION_SUMMARY.md](../IMPLEMENTATION_SUMMARY.md) - Overview of what exists
+1. [FINAL_SUMMARY.md](../FINAL_SUMMARY.md) - Overview of what exists
 2. [ARCHITECTURE.md](./ARCHITECTURE.md) - How it all fits together
-3. [DEVELOPMENT_WORKFLOW.md](./DEVELOPMENT_WORKFLOW.md) - How to work on it
-4. [API_REFERENCE.md](./API_REFERENCE.md) - Technical details
-5. [SECURITY.md](./SECURITY.md) - Security considerations
+3. [GETTING_STARTED.md](./GETTING_STARTED.md) - How to run it
+4. [DEVELOPMENT_WORKFLOW.md](./DEVELOPMENT_WORKFLOW.md) - How to work on it
+5. [API_REFERENCE.md](./API_REFERENCE.md) - Technical details
+6. [SECURITY.md](./SECURITY.md) - Security considerations
 
 ### Feature Development
 1. [ARCHITECTURE.md](./ARCHITECTURE.md) - Check existing patterns
@@ -80,7 +91,7 @@
 
 ---
 
-## 🔄 Documentation Conventions
+## 📝 Documentation Conventions
 
 ### Versioning
 All documents follow semantic versioning:
@@ -98,22 +109,5 @@ When making changes, update:
 
 ---
 
-## 📝 Contributing to Documentation
-
-### Adding New Documentation
-1. Create file in `docs/` directory
-2. Add entry to this INDEX.md
-3. Update relevant cross-references
-4. Commit with descriptive message
-
-### Format Standards
-- Use Markdown throughout
-- Include code examples where applicable
-- Link related sections with relative paths
-- Keep headers to H2/H3 maximum depth
-- Add "Last updated" date at end
-
----
-
-*Documentation index v1.0*
-*Created: 2026-08-19*
+*Documentation index v1.1*
+*Last updated: 2026-08-19*
