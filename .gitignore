@@ -124,3 +124,7 @@ dmypy.json
 
 # Pyre
 .pyre/
+
+# Scripts directory (local utilities only)
+scripts/
+!.github/workflows/
