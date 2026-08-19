@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisionMachine - AI Video Generator</title>
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>🎬 VisionMachine</h1>
+            <div class="header-controls">
+                <button id="btn-settings" class="btn-icon">⚙️</button>
+                <button id="btn-help" class="btn-icon">❓</button>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="main-layout">
+            <!-- Left Panel: Controls -->
+            <aside class="panel controls-panel">
+                <div class="panel-header">
+                    <h2>Generation Settings</h2>
+                </div>
+                
+                <div class="control-group">
+                    <label>Prompt</label>
+                    <textarea 
+                        id="prompt-input" 
+                        class="text-input"
+                        placeholder="Describe your video..."
+                        rows="4"
+                    ></textarea>
+                </div>
+
+                <div class="control-group">
+                    <label>Duration: <span id="duration-value">30</span>s</label>
+                    <input 
+                        type="range" 
+                        id="duration-slider" 
+                        min="3" 
+                        max="60" 
+                        value="30"
+                        class="slider"
+                    >
+                </div>
+
+                <div class="control-group">
+                    <label>Shot Count: <span id="shots-value">6</span></label>
+                    <input 
+                        type="range" 
+                        id="shots-slider" 
+                        min="4" 
+                        max="12" 
+                        value="6"
+                        class="slider"
+                    >
+                </div>
+
+                <div class="control-group">
+                    <label>Style</label>
+                    <select id="style-select" class="dropdown">
+                        <option value="cinematic">Cinematic</option>
+                        <option value="anime">Anime</option>
+                        <option value="realistic">Realistic</option>
+                        <option value="artistic">Artistic</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Resolution</label>
+                    <select id="resolution-select" class="dropdown">
+                        <option value="1920x1080">1080p (Full HD)</option>
+                        <option value="1280x720">720p (HD)</option>
+                        <option value="854x480">480p (SD)</option>
+                    </select>
+                </div>
+
+                <div class="progress-section" id="progress-section" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <p id="progress-text">Generating...</p>
+                </div>
+
+                <button id="btn-generate" class="btn-primary btn-generate">
+                    🎬 Generate Video
+                </button>
+            </aside>
+
+            <!-- Center: Video Preview -->
+            <section class="preview-area">
+                <div class="preview-container">
+                    <div id="video-placeholder" class="placeholder">
+                        <div class="placeholder-icon">🎥</div>
+                        <p>Your generated video will appear here</p>
+                    </div>
+                    
+                    <video id="video-player" class="video-player" controls style="display: none;"></video>
+                    
+                    <!-- Overlay controls -->
+                    <div class="video-overlay" id="video-overlay" style="display: none;">
+                        <button id="btn-play-pause" class="overlay-btn">⏸️</button>
+                        <button id="btn-download" class="overlay-btn">💾</button>
+                        <button id="btn-retry" class="overlay-btn">🔄</button>
+                    </div>
+                </div>
+
+                <!-- Timeline -->
+                <div class="timeline" id="timeline">
+                    <div class="timeline-header">
+                        <span>Shot Sequence</span>
+                        <span id="timeline-duration">0s / 30s</span>
+                    </div>
+                    <div class="timeline-shots" id="timeline-shots">
+                        <!-- Shots will be rendered here -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: History & Assets -->
+            <aside class="panel history-panel">
+                <div class="panel-header">
+                    <h2>History</h2>
+                    <button id="btn-clear-history" class="btn-small">Clear</button>
+                </div>
+                
+                <div id="history-list" class="history-list">
+                    <p class="empty-state">No generations yet</p>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Footer Status Bar -->
+        <footer class="status-bar">
+            <span id="status-text">Ready</span>
+            <span id="provider-status">Provider: Agnes (connected)</span>
+        </footer>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
