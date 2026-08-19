@@ -1,14 +1,12 @@
 <script lang="ts">
-  // TwoThumbSlider — NO GAP VERSION
-  export let values = $state([30, 70])
+  // TwoThumbSlider — CSS-Tricks stacked inputs technique
+  export let start = $state(30)
+  export let end = $state(70)
   export let min = $state(0)
   export let max = $state(100)
   export let step = $state(1)
   export let label = $state('')
-  
-  export let colorMain = $state('#2a2a3a')
   export let colorTension = $state('#58a6ff')
-  export let colorActioned = $state('#79c0ff')
   
   const MIN_GAP = 8
   
@@ -16,196 +14,179 @@
     return ((v - min) / (max - min)) * 100
   }
   
-  let dragging: 'left' | 'right' | null = null
-  
-  function startDrag(side: 'left' | 'right', e: PointerEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    dragging = side
-    document.body.setPointerCapture(e.pointerId)
+  function onLeftInput(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value)
+    start = Math.max(min, Math.min(v, end - MIN_GAP))
   }
   
-  function endDrag() {
-    dragging = null
-  }
-  
-  function getPercentFromEvent(e: PointerEvent): number {
-    const track = document.querySelector('.slider-track') as HTMLElement
-    if (!track) return 50
-    
-    const rect = track.getBoundingClientRect()
-    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-  }
-  
-  function handlePointerMove(e: PointerEvent) {
-    if (!dragging) return
-    
-    const p = getPercentFromEvent(e)
-    const v = Math.round((min + p * (max - min)) / step) * step
-    
-    if (dragging === 'left') {
-      const newVal = Math.min(v, values[1] - MIN_GAP)
-      values[0] = Math.max(min, newVal)
-    } else {
-      const newVal = Math.max(v, values[0] + MIN_GAP)
-      values[1] = Math.min(max, newVal)
-    }
-  }
-  
-  function handleClick(e: MouseEvent) {
-    if ((e.target as HTMLElement).closest('.thumb-hit')) return
-    if (dragging) return
-    
-    const p = getPercentFromEvent(e as PointerEvent)
-    const v = Math.round((min + p * (max - min)) / step) * step
-    
-    const d0 = Math.abs(values[0] - v)
-    const d1 = Math.abs(values[1] - v)
-    
-    if (d0 <= d1) {
-      const newLeft = Math.min(v, values[1] - MIN_GAP)
-      if (newLeft >= min) values[0] = newLeft
-    } else {
-      const newRight = Math.max(v, values[0] + MIN_GAP)
-      if (newRight <= max) values[1] = newRight
-    }
+  function onRightInput(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value)
+    end = Math.min(max, Math.max(v, start + MIN_GAP))
   }
 </script>
 
-<div 
-  class="slider"
-  style={`--tension: ${colorTension}; --actioned: ${colorActioned};`}
-  on:pointermove={handlePointerMove}
-  on:pointerup={endDrag}
-  on:pointerleave={endDrag}
->
+<div class="slider" style={`--tension: ${colorTension};`}>
   {#if label}<div class="label">{label}</div>{/if}
   
-  {/* Track — edge to edge, no gaps */}
-  <div class="slider-track" onclick={handleClick}>
-    {/* Rail spans full width */}
+  <div class="track-container">
+    {/* Visual rail */}
     <div class="rail"></div>
     
-    {/* Fill between thumbs */}
-    <div 
-      class="fill" 
-      style={`left: ${pct(Math.min(values[0], values[1]))}%; width: ${Math.abs(pct(values[1]) - pct(values[0]))}%`}
+    {/* Fill segment */}
+    <div class="fill" 
+      style={`left: ${pct(Math.min(start, end))}%; width: ${Math.abs(pct(end) - pct(start))}%`}
     ></div>
     
-    {/* Left thumb — edge to edge positioning */}
-    <div 
-      class="thumb-hit"
-      on:pointerdown={(e) => startDrag('left', e)}
-      style={`left: ${pct(values[0])}%`}
+    {/* Left thumb input — stacked ON TOP of right */}
+    <input 
+      type="range" 
+      class="input input-a"
+      min={min}
+      max={end - MIN_GAP}
+      step={step}
+      value={start}
+      oninput={onLeftInput}
     >
-      <div class="thumb thumb-a" class:active={dragging === 'left'}>
-        <span class="val">{Math.round(values[0])}</span>
-      </div>
-    </div>
     
-    {/* Right thumb — edge to edge positioning */}
-    <div 
-      class="thumb-hit"
-      on:pointerdown={(e) => startDrag('right', e)}
-      style={`left: ${pct(values[1])}%`}
+    {/* Right thumb input — stacked BEHIND left */}
+    <input 
+      type="range" 
+      class="input input-b"
+      min={start + MIN_GAP}
+      max={max}
+      step={step}
+      value={end}
+      oninput={onRightInput}
     >
-      <div class="thumb thumb-b" class:active={dragging === 'right'}>
-        <span class="val">{Math.round(values[1])}</span>
-      </div>
-    </div>
   </div>
 </div>
 
 <style>
   :global(.slider) {
     --tension: #58a6ff;
-    --actioned: #79c0ff;
-    
     display: flex; flex-direction: column; gap: 4px;
     width: 100%;
   }
   
-  :global(.label) {
-    font-size: 9px; color: #6e7681; text-transform: uppercase;
-    letter-spacing: .5px; padding-left: 2px;
-  }
+  :global(.label) { font-size: 9px; color: #6e7681; text-transform: uppercase; }
   
-  /* TRACK — no padding, no margin, no gaps */
-  :global(.slider-track) {
+  /* Track container */
+  :global(.track-container) {
     position: relative;
-    height: 24px;
+    height: 28px;
     cursor: pointer;
-    width: 100%;
   }
   
-  /* RAIL — FULL width, NO padding */
+  /* Background rail */
   :global(.rail) {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    left: 0;      /* NO padding-left! */
-    right: 0;     /* NO padding-right! */
+    left: 0; right: 0;
     height: 6px;
     background: #2a2a3a;
     border-radius: 3px;
   }
   
-  /* FILL — exactly between thumbs */
+  /* Fill between thumbs */
   :global(.fill) {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
     height: 6px;
     background: var(--tension);
-    opacity: 0.6;
+    opacity: 0.5;
     border-radius: 3px;
     pointer-events: none;
-    transition: left 0.06s, width 0.06s;
   }
   
-  /* THUMB HIT AREA — centered on value */
-  :global(.thumb-hit) {
+  /* Range inputs — the core of CSS-Tricks technique */
+  :global(.input) {
     position: absolute;
-    top: 50%;
-    width: 28px;   /* Slightly wider than thumb for easier targeting */
-    height: 24px;
-    transform: translate(-50%, -50%);
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
     cursor: grab;
-    z-index: 2;
+    z-index: 1;
+    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
   }
   
-  :global(.thumb-hit:active) { cursor: grabbing; }
+  /* Left thumb input — higher z-index (on top) */
+  :global(.input-a) { z-index: 2; }
   
-  /* THUMB — centered in hit area */
-  :global(.thumb) {
-    width: 16px;
-    height: 16px;
+  /* Right thumb input — lower z-index (behind) */
+  :global(.input-b) { z-index: 1; }
+  
+  /* Hide default tracks */
+  :global(.input::-webkit-slider-runnable-track) {
+    height: 6px;
+    background: transparent;
+  }
+  
+  :global(.input::-moz-range-track) {
+    height: 6px;
+    background: transparent;
+    border: none;
+  }
+  
+  /* Custom thumb for left (blue) */
+  :global(.input-a::-webkit-slider-thumb) {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    transition: transform 0.1s, box-shadow 0.15s;
-    user-select: none;
-    
-    /* Shared tension color */
-    background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--tension) 80%, white 20%), var(--tension));
-    border: 2px solid var(--tension);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    background: radial-gradient(circle at 35% 35%, #c8d8e8, #8ba4c4);
+    border: 2px solid #6a8ab5;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    cursor: grab;
+    margin-top: -6px;
   }
   
-  :global(.thumb:hover) { transform: translate(-50%, -50%) scale(1.1); }
-  :global(.thumb.active) { transform: translate(-50%, -50%) scale(1.15); }
-  
-  :global(.thumb.active) {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--actioned) 40%, transparent), 0 2px 6px rgba(0,0,0,0.4);
+  :global(.input-a::-moz-range-thumb) {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #c8d8e8, #8ba4c4);
+    border: 2px solid #6a8ab5;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    cursor: grab;
   }
   
-  :global(.val) {
-    font-size: 6px;
-    font-weight: 700;
-    color: rgba(0,0,0,0.7);
-    pointer-events: none;
+  /* Custom thumb for right (green) */
+  :global(.input-b::-webkit-slider-thumb) {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #c8e8d0, #7fb89a);
+    border: 2px solid #5a9a78;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    cursor: grab;
+    margin-top: -6px;
+  }
+  
+  :global(.input-b::-moz-range-thumb) {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #c8e8d0, #7fb89a);
+    border: 2px solid #5a9a78;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    cursor: grab;
+  }
+  
+  /* Hover effects */
+  :global(.input-a:hover::-webkit-slider-thumb) {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 3px rgba(139,164,196,.4), 0 2px 8px rgba(0,0,0,.5);
+  }
+  
+  :global(.input-b:hover::-webkit-slider-thumb) {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 3px rgba(127,184,154,.4), 0 2px 8px rgba(0,0,0,.5);
   }
 </style>
