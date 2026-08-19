@@ -127,4 +127,3 @@ dmypy.json
 
 # Scripts directory (local utilities only)
 scripts/
-!.github/workflows/
