@@ -132,9 +132,8 @@ scripts/
 src-tauri/target/
 src-tauri/gen/
 
-# Root-level development docs (AgnesCode internal tracking only)
+# Root-level development documentation (internal tracking only)
 FINAL_SUMMARY.md
 IMPLEMENTATION_SUMMARY.md
 PROJECT_STATUS.md
 README-TAURI.md
-COMPLETE_DOCUMENTATION_SUMMARY.md
