@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "identifier": "com.visionmachine.app",
   "build": {
-    "frontendDist": "../src/frontend/dist",
+    "frontendDist": "../src/frontend",
     "devUrl": "http://localhost:5173"
   },
   "app": {
