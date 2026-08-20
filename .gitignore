@@ -125,8 +125,8 @@ dmypy.json
 # Pyre
 .pyre/
 
-# Scripts directory (local utilities only)
-scripts/
+# Scripts directory (local utilities only) - moved to root for portability
+# scripts/
 
 # Tauri build artifacts
 src-tauri/target/
