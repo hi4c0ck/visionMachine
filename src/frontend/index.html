@@ -3,7 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VisionMachine</title>
+  <title>VisionMachine v0.1.0</title>
+  <style>
+    :root {
+      --bg: #0f0f1a;
+      --surface: #16161e;
+      --border: #2a2a3a;
+      --primary: #4a9eff;
+      --text: #fff;
+      --muted: #888;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    #app { height: 100%; }
+  </style>
 </head>
 <body>
   <div id="app"></div>

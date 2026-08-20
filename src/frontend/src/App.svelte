@@ -2,18 +2,21 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   
+  // Version info
+  const VERSION = '0.1.0';
+  const BUILD_NUMBER = import.meta.env.VITE_BUILD_NUMBER || 'dev';
+  
   // State
   let profiles = [];
   let projects = [];
-  let sessions = [];
+  let currentProfileId = null;
   let pipes = [];
   let artifacts = [];
   let loading = false;
   let error = null;
-  let currentView = 'welcome';
   
   onMount(async () => {
-    console.log('VisionMachine Desktop App Loaded');
+    console.log(`VisionMachine v${VERSION} (Build ${BUILD_NUMBER})`);
     await loadProfiles();
   });
   
@@ -25,17 +28,17 @@
       const result = await invoke('list_profiles');
       profiles = result || [];
       if (profiles.length > 0) {
-        await loadProjects(profiles[0].id);
+        selectProfile(profiles[0].id);
       }
     } catch (e) {
       error = `Failed to load profiles: ${e}`;
-      console.error(error);
     } finally {
       loading = false;
     }
   }
   
-  async function loadProjects(profileId) {
+  async function selectProfile(profileId) {
+    currentProfileId = profileId;
     try {
       const result = await invoke('list_projects', { profileId });
       projects = result || [];
@@ -51,19 +54,20 @@
     try {
       const result = await invoke('create_profile', { name, email: null });
       profiles.push(result);
-      await loadProjects(result.id);
+      await selectProfile(result.id);
     } catch (e) {
       error = `Failed to create profile: ${e}`;
     }
   }
   
-  async function createProject(profileId) {
+  async function createProject() {
+    if (!currentProfileId) return;
     const name = prompt('Enter project name:');
     if (!name) return;
     
     try {
       const result = await invoke('create_project', { 
-        profileId, 
+        profileId: currentProfileId, 
         name,
         description: '' 
       });
@@ -79,26 +83,17 @@
     
     try {
       const result = await invoke('create_session', { projectId, name });
-      sessions.push(result);
       
-      // Auto-load composer
-      await loadComposer(result.id);
-      
-      currentView = 'composer';
-    } catch (e) {
-      error = `Failed to create session: ${e}`;
-    }
-  }
-  
-  async function loadComposer(sessionId) {
-    try {
-      const result = await invoke('get_composer', { sessionId });
-      if (result && result.config_json) {
-        const config = JSON.parse(result.config_json);
+      // Load composer for this session
+      const composer = await invoke('get_composer', { sessionId: result.id });
+      if (composer && composer.config_json) {
+        const config = JSON.parse(composer.config_json);
         pipes = config.pipes || [];
       }
+      
+      window.currentSessionId = result.id;
     } catch (e) {
-      console.error('Failed to load composer:', e);
+      error = `Failed to create session: ${e}`;
     }
   }
   
@@ -122,8 +117,17 @@
   }
   
   async function saveComposer() {
-    // This would save to database in real implementation
-    console.log('Saving composer:', pipes);
+    if (!window.currentSessionId) return;
+    
+    const config = JSON.stringify({ pipes, state: 'ready' });
+    try {
+      await invoke('update_composer', { 
+        sessionId: window.currentSessionId, 
+        configJson: config 
+      });
+    } catch (e) {
+      console.error('Failed to save composer:', e);
+    }
   }
   
   async function generateFrame(pipeId) {
@@ -138,12 +142,13 @@
     pipe.status = 'completed';
     
     // Add artifact
-    artifacts.push({
+    const artifact = {
       id: crypto.randomUUID(),
       type: 'video',
       path: `/output/frame_${Date.now()}.mp4`,
       created_at: new Date().toISOString()
-    });
+    };
+    artifacts.push(artifact);
     
     await saveComposer();
   }
@@ -158,7 +163,7 @@
 <div class="app">
   <!-- Titlebar -->
   <div class="titlebar">
-    <span class="title">VisionMachine</span>
+    <span class="title">VisionMachine v{VERSION}</span>
     <div class="controls">
       <button class="btn-control">─</button>
       <button class="btn-control">□</button>
@@ -171,7 +176,7 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
-        <h3>Profiles</h3>
+        <h3>Profiles ({profiles.length})</h3>
         <button class="btn-primary" on:click={createProfile}>+ New</button>
       </div>
       
@@ -182,7 +187,7 @@
       {:else}
         <div class="profile-list">
           {#each profiles as profile (profile.id)}
-            <div class="profile-item" on:click={() => loadProjects(profile.id)}>
+            <div class="profile-item {currentProfileId === profile.id ? 'selected' : ''}" on:click={() => selectProfile(profile.id)}>
               <span class="avatar">👤</span>
               <span class="name">{profile.name}</span>
             </div>
@@ -197,8 +202,8 @@
       {#if profiles.length > 0}
         <div class="sidebar-section">
           <div class="section-header">
-            <h3>Projects</h3>
-            <button class="btn-small" on:click={() => createProject(profiles[0].id)}>+ New</button>
+            <h3>Projects ({projects.length})</h3>
+            <button class="btn-small" on:click={createProject}>+ New</button>
           </div>
           <div class="project-list">
             {#each projects as project (project.id)}
@@ -218,96 +223,65 @@
     
     <!-- Content Area -->
     <main class="content">
-      {#if currentView === 'welcome'}
-        <div class="welcome">
-          <div class="logo">🎬</div>
-          <h1>VisionMachine</h1>
-          <p class="tagline">AI-Powered Video Generation Desktop</p>
-          
-          <div class="features">
-            <div class="feature">
-              <div class="icon">🎨</div>
-              <h3>Dual Composer</h3>
-              <p>Manage multiple composition instances</p>
-            </div>
-            <div class="feature">
-              <div class="icon">⚡</div>
-              <h3>Fast Generation</h3>
-              <p>Optimized pipeline for rapid frames</p>
-            </div>
-            <div class="feature">
-              <div class="icon">🔒</div>
-              <h3>Local First</h3>
-              <p>All processing happens locally</p>
-            </div>
-          </div>
-          
-          <p class="hint">Create a profile to get started</p>
+      <header class="view-header">
+        <h2>Composer</h2>
+        <div class="actions">
+          <button class="btn-secondary" on:click={addPipe}>+ Add Pipe</button>
+          <button class="btn-primary" on:click={generateAll}>Generate All</button>
         </div>
-        
-      {:else if currentView === 'composer'}
-        <div class="composer-view">
-          <header class="view-header">
-            <h2>Composer</h2>
-            <div class="actions">
-              <button class="btn-secondary" on:click={addPipe}>+ Add Pipe</button>
-              <button class="btn-primary" on:click={generateAll}>Generate All</button>
+      </header>
+      
+      <div class="pipes-grid">
+        {#each pipes as pipe (pipe.id)}
+          <div class="pipe-card {pipe.status}">
+            <div class="pipe-header">
+              <span class="pipe-name">{pipe.name}</span>
+              <span class="status">{pipe.status === 'generating' ? '⏳...' : pipe.status === 'completed' ? '✅ Done' : '⏳ Idle'}</span>
+              <button class="remove-btn" on:click={() => removePipe(pipe.id)}>×</button>
             </div>
-          </header>
-          
-          <div class="pipes-grid">
-            {#each pipes as pipe (pipe.id)}
-              <div class="pipe-card {pipe.status}">
-                <div class="pipe-header">
-                  <span class="pipe-name">{pipe.name}</span>
-                  <span class="status">{pipe.status === 'generating' ? '⏳ Generating...' : pipe.status === 'completed' ? '✅ Done' : '⏳ Idle'}</span>
-                  <button class="remove-btn" on:click={() => removePipe(pipe.id)}>×</button>
-                </div>
-                
-                <div class="pipe-config">
-                  <div class="field">
-                    <label>Model</label>
-                    <select bind:value={pipe.model}>
-                      <option value="stable-video-diffusion">stable-video-diffusion</option>
-                      <option value="animatediff">animatediff</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label>Steps</label>
-                    <input type="number" bind:value={pipe.steps} min="1" max="100">
-                  </div>
-                  <div class="field">
-                    <label>Cfg Scale</label>
-                    <input type="number" bind:value={pipe.cfgScale} step="0.5" min="1" max="30">
-                  </div>
-                </div>
-                
-                <button 
-                  class="generate-btn" 
-                  on:click={() => generateFrame(pipe.id)}
-                  disabled={pipe.status === 'generating'}
-                >
-                  {pipe.status === 'generating' ? 'Generating...' : 'Generate Frame'}
-                </button>
-              </div>
-            {/each}
             
-            {#if pipes.length === 0}
-              <div class="empty-state">
-                <p>No pipes configured</p>
-                <button class="btn-primary" on:click={addPipe}>+ Add First Pipe</button>
+            <div class="pipe-config">
+              <div class="field">
+                <label>Model</label>
+                <select bind:value={pipe.model}>
+                  <option value="stable-video-diffusion">stable-video-diffusion</option>
+                  <option value="animatediff">animatediff</option>
+                </select>
               </div>
-            {/if}
+              <div class="field">
+                <label>Steps</label>
+                <input type="number" bind:value={pipe.steps} min="1" max="100">
+              </div>
+              <div class="field">
+                <label>Cfg Scale</label>
+                <input type="number" bind:value={pipe.cfgScale} step="0.5" min="1" max="30">
+              </div>
+            </div>
+            
+            <button 
+              class="generate-btn" 
+              on:click={() => generateFrame(pipe.id)}
+              disabled={pipe.status === 'generating'}
+            >
+              {pipe.status === 'generating' ? 'Generating...' : 'Generate Frame'}
+            </button>
           </div>
-        </div>
-      {/if}
+        {/each}
+        
+        {#if pipes.length === 0}
+          <div class="empty-state">
+            <p>No pipes configured</p>
+            <button class="btn-primary" on:click={addPipe}>+ Add First Pipe</button>
+          </div>
+        {/if}
+      </div>
     </main>
     
     <!-- Artifacts Panel -->
     <aside class="panel">
       <div class="panel-header">
-        <h3>Artifacts</h3>
-        <span class="count">{artifacts.length}</span>
+        <h3>Artifacts ({artifacts.length})</h3>
+        <span class="badge">Build {BUILD_NUMBER}</span>
       </div>
       
       <div class="artifacts-list">
@@ -400,9 +374,7 @@
   
   .sidebar-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
   
-  .profile-list {
-    padding: 8px;
-  }
+  .profile-list { padding: 8px; }
   
   .profile-item {
     display: flex;
@@ -415,6 +387,7 @@
   }
   
   .profile-item:hover { background: #1e1e2e; }
+  .profile-item.selected { background: rgba(74,158,255,0.15); border-left: 3px solid #4a9eff; }
   
   .profile-item .avatar { font-size: 18px; }
   .profile-item .name { font-size: 13px; }
@@ -433,11 +406,7 @@
   
   .section-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
   
-  .project-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
+  .project-list { display: flex; flex-direction: column; gap: 4px; }
   
   .project-item {
     display: flex;
@@ -460,46 +429,6 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-  }
-  
-  .welcome {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    text-align: center;
-    padding: 40px;
-  }
-  
-  .logo { font-size: 64px; margin-bottom: 16px; }
-  .welcome h1 { font-size: 36px; font-weight: 700; margin-bottom: 12px; }
-  .tagline { font-size: 16px; color: #888; margin-bottom: 40px; }
-  
-  .features {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
-    margin-bottom: 40px;
-    max-width: 600px;
-  }
-  
-  .feature {
-    padding: 20px;
-    background: #1e1e2e;
-    border-radius: 12px;
-  }
-  
-  .feature .icon { font-size: 28px; margin-bottom: 10px; }
-  .feature h3 { font-size: 14px; margin-bottom: 6px; }
-  .feature p { font-size: 12px; color: #888; line-height: 1.4; }
-  
-  .hint { font-size: 13px; color: #666; }
-  
-  /* Composer View */
-  .composer-view {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
   }
   
   .view-header {
@@ -620,7 +549,14 @@
   }
   
   .panel-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
-  .count { background: #1e1e2e; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  
+  .badge {
+    background: #2a2a3a;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    color: #888;
+  }
   
   .artifacts-list {
     flex: 1;

@@ -1,20 +1,11 @@
-# VisionMachine API Reference
+# API Reference
 
-## Overview
+## Tauri Commands (Frontend ↔ Rust)
 
-VisionMachine exposes APIs through three layers:
-1. **Tauri Commands** (Rust ↔ JavaScript)
-2. **Python Subprocess** (Rust → Python)
-3. **Provider Interfaces** (Python ↔ AI Services)
-
----
-
-## 🖥️ Tauri Commands (Frontend API)
-
-### Generation Commands
+### Video Generation
 
 #### `generate_video`
-Generate a video from prompt with multi-shot chaining.
+Generate a video from prompt using multi-shot chaining.
 
 **Parameters:**
 ```typescript
@@ -31,7 +22,7 @@ interface GenerateVideoParams {
 ```typescript
 interface GenerationResult {
   success: boolean;
-  video_url: string;        // Path or URL to generated video
+  video_url?: string;       // Path to generated video
   error?: string;           // Error message if failed
   metadata?: {
     prompt: string;
@@ -46,6 +37,8 @@ interface GenerationResult {
 
 **JavaScript Usage:**
 ```javascript
+import { invoke } from '@tauri-apps/api/core';
+
 const result = await invoke('generate_video', {
   prompt: "A beautiful sunset over mountains",
   duration: 30,
@@ -55,20 +48,12 @@ const result = await invoke('generate_video', {
 });
 ```
 
----
-
-### Provider Commands
+### Provider Management
 
 #### `list_providers`
 Get list of available provider types.
 
-**Returns:** `Promise<string[]>` - List of provider names
-
-**JavaScript Usage:**
-```javascript
-const providers = await invoke('list_providers');
-// Returns: ["agnes", "openai_compatible"]
-```
+**Returns:** `Promise<string[]>` - `["agnes", "openai_compatible"]`
 
 #### `validate_provider`
 Check if a provider is connected and credentials are valid.
@@ -80,171 +65,66 @@ interface ValidateProviderParams {
 }
 ```
 
-**Returns:** `Promise<boolean>` - true if connected
-
-**JavaScript Usage:**
-```javascript
-const isConnected = await invoke('validate_provider', {
-  provider_name: "agnes"
-});
-```
+**Returns:** `Promise<boolean>`
 
 #### `get_api_key_status`
 Check if API key exists for a provider.
 
-**Parameters:**
-```typescript
-interface GetKeyStatusParams {
-  provider_name: string;
-}
-```
+**Parameters:** `string provider_name`
+**Returns:** `Promise<boolean>`
 
-**Returns:** `Promise<boolean>` - true if key exists
+### Project Management
 
----
-
-### UI Commands
-
-#### `update_progress`
-Update generation progress indicator.
+#### `create_project`
+Create a new project.
 
 **Parameters:**
 ```typescript
-interface UpdateProgressParams {
-  percentage: number;       // 0-100
-  status_text: string;      // Status message
+interface CreateProjectParams {
+  name: string;
+  logo?: string;  // Optional logo path
 }
 ```
 
----
+**Returns:** `Promise<Project>`
 
-## 🔧 Python Service Layer
+#### `list_projects`
+List all projects.
 
-### Core Modules
+**Returns:** `Promise<Project[]>`
 
-#### `src.security.EncryptedKeyStore`
+#### `delete_project`
+Delete a project and all associated data.
 
-Secure API key storage using Fernet encryption.
+**Parameters:** `string project_id`
+**Returns:** `Promise<boolean>`
 
-**Constructor:**
-```python
-EncryptedKeyStore(
-    db_path: str,           # Path to SQLite database
-    master_password: str    # Master password for key derivation
-)
-```
+### Composer
 
-**Methods:**
+#### `get_composer`
+Load composer state for a session.
 
-```python
-# Save encrypted key
-store.save_key(provider: str, api_key: str) -> None
+**Parameters:** `string session_id`
+**Returns:** `Promise<ComposerState>`
 
-# Retrieve decrypted key
-store.get_key(provider: str) -> str
+#### `save_composer`
+Save composer state asynchronously.
 
-# Check if key exists
-store.key_exists(provider: str) -> bool
+**Parameters:** `ComposerState composer`
+**Returns:** `Promise<void>`
 
-# Delete key
-store.delete_key(provider: str) -> bool
+## Python Provider Interface
 
-# List all providers
-store.list_providers() -> List[str]
+### Base Provider
 
-# Clear all keys
-store.clear_all() -> int  # Returns count deleted
-```
-
-**Example:**
-```python
-from src.security import EncryptedKeyStore
-
-# Initialize store
-store = EncryptedKeyStore(
-    db_path=".config/visionmachine/keys.db",
-    master_password=os.environ["VISION_MACHINE_PASSWORD"]
-)
-
-# Save key
-store.save_key("agnes", "sk-agnes-xxxxx")
-
-# Retrieve key
-key = store.get_key("agnes")
-
-# Check existence
-if store.key_exists("openai"):
-    print("OpenAI key configured")
-```
-
----
-
-#### `src.security.ConfigManager`
-
-Configuration management with secure secrets.
-
-**Methods:**
+All providers must implement this interface:
 
 ```python
-# Load configuration from disk
-ConfigManager.load_configuration() -> AppConfiguration
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List, Optional
 
-# Get provider by name
-ConfigManager.get_provider(name: str = "primary") -> ProviderConfig
-
-# Add/update provider
-ConfigManager.add_provider(name: str, config: ProviderConfig) -> None
-
-# Remove provider
-ConfigManager.remove_provider(name: str) -> bool
-
-# Get API key (decrypts from store)
-ConfigManager.get_api_key(provider_name: str) -> str
-
-# Set API key (encrypts and stores)
-ConfigManager.set_api_key(provider_name: str, api_key: str) -> None
-
-# Delete API key
-ConfigManager.delete_api_key(provider_name: str) -> bool
-
-# Validate all settings
-ConfigManager.validate_configuration() -> Dict[str, bool]
-```
-
-**Example:**
-```python
-from src.security import ConfigManager
-
-cfg = ConfigManager()
-
-# Configure provider
-provider = cfg.get_provider("primary")
-print(f"Using: {provider.endpoint}")
-
-# Set API key
-cfg.set_api_key("agnes", "sk-xxx")
-
-# Validate setup
-results = cfg.validate_configuration()
-assert results["has_primary_provider"]
-assert results["master_password_set"]
-```
-
----
-
-#### `src.providers.BaseProvider`
-
-Abstract base class for all AI providers.
-
-**Subclasses:**
-- `AgnesProvider` - Primary provider (hardcoded endpoint)
-- `OpenAICompatibleProvider` - Flexible endpoint support
-
-**Common Interface:**
-
-```python
 class BaseProvider(ABC):
-    """All providers must implement these methods."""
+    """Base interface for all AI providers."""
     
     @abstractmethod
     async def generate_video(
@@ -286,291 +166,114 @@ class BaseProvider(ABC):
         pass
 ```
 
----
+### Agnes Provider
 
-#### `src.providers.ProviderFactory`
-
-Factory pattern for creating provider instances.
-
-**Methods:**
+Primary provider with hardcoded endpoint:
 
 ```python
-# Register new provider type
-ProviderFactory.register(name: str, provider_class: Type[BaseProvider])
-
-# Create provider instance
-ProviderFactory.create(
-    provider_type: ProviderType,
-    key_store: EncryptedKeyStore,
-    config: Dict[str, Any]
-) -> BaseProvider
-
-# Get registered types
-ProviderFactory.get_registered_types() -> List[str]
+class AgnesProvider(BaseProvider):
+    ENDPOINT = "https://api.agnes.ai/v1"
+    DEFAULT_MODEL = "agnes-video-v1"
+    
+    def __init__(self, key_store: EncryptedKeyStore):
+        self.key_store = key_store
+        self.client = None
 ```
-
-**Example:**
-```python
-from src.providers import ProviderFactory, ProviderType
-from src.security import ConfigManager
-
-cfg = ConfigManager()
-key_store = cfg.key_store
-
-# Create Agnes provider
-agnes = ProviderFactory.create(
-    provider_type=ProviderType.AGNES,
-    key_store=key_store,
-    config={}  # Agnes uses hardcoded endpoint
-)
-
-# Create OpenAI-compatible provider
-openai = ProviderFactory.create(
-    provider_type=ProviderType.OPENAI_COMPATIBLE,
-    key_store=key_store,
-    config={
-        "endpoint": "https://api.openai.com/v1",
-        "model": "gpt-4o"
-    }
-)
-```
-
----
-
-#### `src.services.VideoGenerationService`
-
-Multi-shot video generation with chaining.
-
-**Methods:**
-
-```python
-async def generate_video(
-    self,
-    prompt: str,
-    duration: int = 60,
-    style: str = "cinematic",
-    shot_count: Optional[int] = None,
-    **kwargs
-) -> Dict[str, Any]
-```
-
-**Shot Breaking Algorithm:**
-
-The service automatically decomposes long prompts into sequential shots:
-
-```
-Total Duration: 60s
-├── Shot 1: 8s - Opening establishing shot
-├── Shot 2: 7s - Medium shot, action begins
-├── Shot 3: 6s - Close-up details
-├── Shot 4: 7s - Reaction shots
-├── Shot 5: 8s - Climax sequence
-├── Shot 6: 6s - Resolution
-├── Shot 7: 7s - Final moments
-└── Shot 8: 8s - Closing shot
-```
-
-**Transitions:**
-- Auto-generated 0.5s crossfade between shots
-- Temporal consistency maintained via prompt chaining
-- Style preserved across all shots
-
----
-
-## 🔐 Provider Configuration
-
-### Agnes Provider (Primary)
-```python
-{
-    "type": "agnes",
-    "endpoint": "https://api.agnes.ai/v1",  # Hardcoded
-    "model": "agnes-video-v1",
-    "timeout": 300
-}
-```
-
-**Characteristics:**
-- ✅ Endpoint cannot be changed (security feature)
-- ✅ Requires valid Agnes API key
-- ✅ Full video generation support
-- ✅ Best performance and quality
-
----
 
 ### OpenAI-Compatible Provider
+
+Configurable endpoint:
+
 ```python
-{
-    "type": "openai_compatible",
-    "endpoint": "https://api.openai.com/v1",  # User configurable
-    "model": "gpt-4o",  # User selectable
-    "timeout": 300
-}
+class OpenAICompatibleProvider(BaseProvider):
+    def __init__(
+        self,
+        key_store: EncryptedKeyStore,
+        base_url: str,
+        model: Optional[str] = None
+    ):
+        self.endpoint = base_url.rstrip("/")
+        self.model = model or "gpt-4o-mini"
 ```
 
-**Supported Endpoints:**
-- Azure OpenAI (`https://{}.openai.azure.com/`)
-- Local Ollama servers
-- Other OpenAI-compatible APIs
+### Provider Factory
 
-**Notes:**
-- ⚠️ Video generation may not be supported by all endpoints
-- ✅ Text and image generation typically work
-- ✅ Use for fallback or alternative providers
-
----
-
-## 🎬 Video Generation Pipeline
-
-### Request Flow
-```
-User Input (UI)
-    ↓
-Tauri Command (Rust)
-    ↓
-Validation & Parameters
-    ↓
-Python Subprocess
-    ↓
-VideoGenerationService.generate_video()
-    ↓
-    ├── Prompt Decomposition
-    │     ↓
-    │   [Shot 1 Prompt], [Shot 2 Prompt], ...
-    │
-    ├── Per-Shot Generation
-    │     ↓
-    │   provider.generate_video(prompt, duration)
-    │     ↓
-    │   [Clip 1], [Clip 2], ...
-    │
-    └── Chaining
-          ↓
-        FFmpeg concatenation
-          ↓
-        Final Video Output
+```python
+class ProviderFactory:
+    _registry: Dict[str, Type[BaseProvider]] = {}
+    
+    @classmethod
+    def register(cls, name: str, provider_class: Type[BaseProvider])
+    
+    @classmethod
+    def create(
+        cls,
+        provider_type: ProviderType,
+        key_store: EncryptedKeyStore,
+        config: Dict[str, Any]
+    ) -> BaseProvider
 ```
 
-### Error Handling
+## Error Responses
 
-| Error Type | Cause | Recovery |
-|------------|-------|----------|
-| `ProviderAuthenticationError` | Invalid/expired API key | Re-authenticate via Settings |
-| `ProviderRateLimitError` | Too many requests | Wait and retry (exponential backoff) |
-| `ProviderConnectionError` | Network issue | Check connection, retry |
-| `VideoGenerationError` | API returned error | Show error message, allow retry |
+### Authentication Errors
 
----
-
-## 📊 Response Formats
-
-### Success Response
-```json
-{
-  "success": true,
-  "video_url": "/output/vm_20260819_143022.mp4",
-  "metadata": {
-    "prompt": "A beautiful sunset...",
-    "duration": 60,
-    "shots": 10,
-    "style": "cinematic",
-    "resolution": "1920x1080",
-    "generated_at": "2026-08-19T14:30:22Z"
-  }
-}
-```
-
-### Error Response
 ```json
 {
   "success": false,
-  "error": "Rate limit exceeded. Please wait 30 seconds.",
+  "error": "Invalid API key",
+  "type": "authentication_error"
+}
+```
+
+### Rate Limit Errors
+
+```json
+{
+  "success": false,
+  "error": "Rate limit exceeded. Retry after 30 seconds.",
+  "type": "rate_limit_error",
   "retry_after": 30
 }
 ```
 
----
+### Generation Errors
 
-## 🔌 Integration Examples
-
-### React Component Example
-```jsx
-import { invoke } from '@tauri-apps/api/core';
-
-function VideoGenerator() {
-  const [isGenerating, setIsGenerating] = useState(false);
-  
-  const handleGenerate = async () => {
-    setIsGenerating(true);
-    try {
-      const result = await invoke('generate_video', {
-        prompt: "Ocean waves at sunset",
-        duration: 30,
-        shots: 6,
-        style: "cinematic",
-        resolution: "1920x1080"
-      });
-      
-      if (result.success) {
-        playVideo(result.video_url);
-      }
-    } catch (error) {
-      showError(error);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-  
-  return (
-    <button onClick={handleGenerate} disabled={isGenerating}>
-      {isGenerating ? 'Generating...' : 'Generate Video'}
-    </button>
-  );
+```json
+{
+  "success": false,
+  "error": "Prompt too long (max 2000 characters)",
+  "type": "validation_error"
 }
 ```
 
-### Python CLI Example
-```python
-#!/usr/bin/env python3
-"""Batch video generation script."""
+## Event Types (Rust → Frontend)
 
-import asyncio
-from src.security import ConfigManager
-from src.providers.factory import ProviderFactory
-from src.services.video_generator import VideoGenerationService
+```typescript
+// Progress updates
+{
+  type: 'generation_progress',
+  payload: { percentage: number, status_text: string }
+}
 
+// Generation complete
+{
+  type: 'generation_complete',
+  payload: { video_url: string, metadata: object }
+}
 
-async def batch_generate(prompts: list, output_dir: str):
-    cfg = ConfigManager()
-    provider = ProviderFactory.create(
-        provider_type=cfg.get_provider().type,
-        key_store=cfg.key_store,
-        config={}
-    )
-    
-    service = VideoGenerationService(provider)
-    
-    for i, prompt in enumerate(prompts):
-        print(f"Generating video {i+1}/{len(prompts)}...")
-        result = await service.generate_video(
-            prompt=prompt,
-            duration=30,
-            style="cinematic"
-        )
-        
-        if result['success']:
-            print(f"✓ Saved to: {result['video_url']}")
+// Error
+{
+  type: 'generation_error',
+  payload: { error: string }
+}
 
-
-if __name__ == '__main__':
-    prompts = [
-        "Mountain landscape at dawn",
-        "City skyline at night",
-        "Forest with misty morning"
-    ]
-    asyncio.run(batch_generate(prompts, "./output"))
+// Project updates
+{
+  type: 'project_updated',
+  payload: { project_id: string, action: string }
+}
 ```
 
----
-
 *API Reference v1.0*
-*Last updated: 2026-08-19*
+*Last updated: 2026-08-21*

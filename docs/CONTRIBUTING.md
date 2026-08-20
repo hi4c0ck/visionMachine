@@ -19,11 +19,11 @@ Thank you for your interest in contributing! This document provides guidelines a
 ```powershell
 # Fork the repository on GitHub
 # Then clone your fork
-git clone https://github.com/YOUR_USERNAME/visionMachine.git
-cd visionMachine
+git clone https://github.com/YOUR_USERNAME/VisionMachine.git
+cd VisionMachine
 
 # Add upstream remote
-git remote add upstream https://github.com/hi4c0ck/visionMachine.git
+git remote add upstream https://github.com/hi4c0ck/VisionMachine.git
 ```
 
 ### 2. Setup Development Environment
@@ -125,7 +125,7 @@ Before submitting a PR, ensure:
 1. **Existing tests pass**
    ```powershell
    uv run pytest tests/ -v
-   cargo test
+   cargo test --manifest-path src-tauri/Cargo.toml
    ```
 
 2. **New tests for new features**
@@ -187,117 +187,7 @@ Add screenshots of UI changes
 
 ---
 
-## 📋 Contribution Areas
-
-Looking for somewhere to start? Check these areas:
-
-### 🎨 UI/UX Improvements
-- Enhance video preview player
-- Add more customization options
-- Improve accessibility
-- Optimize for different screen sizes
-
-### 🔧 Backend Features
-- Add new AI providers
-- Implement video post-processing
-- Add batch generation
-- Optimize performance
-
-### 📚 Documentation
-- Expand API reference
-- Add video tutorials
-- Create migration guides
-- Improve README examples
-
-### 🧪 Testing
-- Increase test coverage
-- Add end-to-end tests
-- Performance benchmarks
-- Security audits
-
-### 🔒 Security
-- Audit encryption implementation
-- Add penetration testing
-- Review dependency vulnerabilities
-- Enhance key rotation
-
----
-
-## 🐛 Reporting Bugs
-
-Use the bug report template:
-```markdown
-**Describe the bug**
-Clear and concise description
-
-**To Reproduce**
-Steps to reproduce:
-1. Go to '...'
-2. Click on '...'
-3. Scroll down to '...'
-4. See error
-
-**Expected behavior**
-What you expected to happen
-
-**Screenshots**
-If applicable
-
-**Environment:**
-- OS: [e.g., Windows 11]
-- Version: [e.g., 0.1.0]
-```
-
----
-
-## 💡 Suggesting Features
-
-Use the feature request template:
-```markdown
-**Is your feature request related to a problem?**
-A clear description of what the problem is
-
-**Describe the solution you'd like**
-What you want to happen
-
-**Describe alternatives you've considered**
-Any alternative solutions
-
-**Additional context**
-Any other context about the feature
-```
-
----
-
-## 🎓 Learning Resources
-
-### Rust
-- [The Rust Programming Language](https://doc.rust-lang.org/book/)
-- [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
-- [Tauri Documentation](https://v2.tauri.app/)
-
-### Python
-- [Python Documentation](https://docs.python.org/3/)
-- [AsyncIO Tutorial](https://docs.python.org/3/library/asyncio.html)
-- [Pydantic Documentation](https://docs.pydantic.dev/)
-
-### Web Development
-- [MDN Web Docs](https://developer.mozilla.org/)
-- [Tailwind CSS Documentation](https://tailwindcss.com/docs)
-- [Shadcn/UI Documentation](https://ui.shadcn.com/)
-
----
-
-## 📞 Getting Help
-
-- **Discussions**: GitHub Discussions tab
-- **Issues**: Open an issue for bugs/features
-- **Documentation**: Check docs/ folder first
-- **Chat**: Join our community chat (if available)
-
----
-
-## ✅ Commit Guidelines
+## 📋 Commit Guidelines
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 

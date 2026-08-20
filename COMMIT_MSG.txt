@@ -1,6 +1,0 @@
-fix: resolve blank screen issue with simplified Workspace component
-
-- Simplified Workspace.svelte to fix syntax errors
-- Ensured frontend builds successfully
-- Updated tauri.conf.json to use built dist folder
-- All components compile without errors

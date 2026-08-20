@@ -1,11 +1,14 @@
 {
   "build": {
-    "frontendDist": "../src/frontend/dist",
+    "frontendDist": "./dist",
     "devUrl": "http://localhost:5173"
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": ["msi"],
+    "icon": [
+      "icons/icon.ico"
+    ]
   },
   "productName": "VisionMachine",
   "version": "0.1.0",
@@ -14,6 +17,15 @@
     "withGlobalTauri": true,
     "security": {
       "csp": null
-    }
+    },
+    "windows": [
+      {
+        "title": "VisionMachine",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
   }
 }

@@ -36,7 +36,6 @@ node_modules/
 /dist
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 .npm
 .pnpm-store/
 
@@ -78,12 +77,12 @@ Thumbs.db
 *.log
 logs/
 npm-debug.log*
-yarn-debug.log*
 yarn-error.log*
 
 # AGNES artifacts (internal tooling)
 .agnes/
 .agnes-workspace/
+$null
 
 # Docker
 .docker/
@@ -131,11 +130,41 @@ scripts/
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/
+src-tauri/dist/
 
 # Build output
 *.exe
 *.app
 *.dmg
+*.ico
+
+# Batch scripts in repo root (use build.bat instead)
+build-now.bat
+build_app.bat
+build-desktop.bat
+install-tauri.bat
+INSTALL_TAURI.bat
+launch.bat
+publish.bat
+run_dev.bat
+setup_and_build.bat
+test.bat
+web-only.bat
+
+# Stale documentation (replaced by docs/)
+*_GUIDE.md
+*_SUCCESS.md
+*_COMPLETE.md
+*_SUMMARY.md
+*_STATUS.md
+*_CERTIFICATION.md
+*_READINESS.md
+*_REPORT.md
+*_VERIFICATION.md
+*_ANALYSIS.md
+*_RESEARCH.md
+*_LIGHTWEIGHT.md
+*_TAURI.md
 
 # Internal development docs (NOT for public repo - AgnesCode tracking)
 FINAL_SUMMARY.md
@@ -144,3 +173,5 @@ PROJECT_STATUS.md
 README-TAURI.md
 COMPLETE_DOCUMENTATION_SUMMARY.md
 BRANCHING_STRATEGY.md
+COMMIT_MSG.txt
+build_log.txt

@@ -147,6 +147,104 @@ impl Database {
             .execute(&mut **conn).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_artifacts_profile ON artifacts(profile_id)")
             .execute(&mut **conn).await?;
+
+        // ── Composer Schema (Migration 0002) ────────────────────────────────────
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS session_settings (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE,
+                resolution TEXT DEFAULT 'P720',
+                aspect_ratio TEXT DEFAULT 'R16x9',
+                total_frames INTEGER DEFAULT 121,
+                fps REAL DEFAULT 8.0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+        "#).execute(&mut **conn).await?;
+
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS pipes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                composer_id TEXT NOT NULL,
+                name TEXT DEFAULT '',
+                order_index INTEGER NOT NULL,
+                num_inference_steps INTEGER DEFAULT 20,
+                cfg_scale REAL DEFAULT 7.5,
+                target_frames INTEGER,
+                task_id TEXT,
+                status TEXT DEFAULT 'idle',
+                last_error TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY (composer_id) REFERENCES composers(id) ON DELETE CASCADE
+            )
+        "#).execute(&mut **conn).await?;
+
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS pipe_keyframes (
+                id TEXT PRIMARY KEY,
+                pipe_id TEXT NOT NULL,
+                slot_index INTEGER NOT NULL CHECK (slot_index BETWEEN 1 AND 3),
+                source_type TEXT NOT NULL,
+                source_value TEXT NOT NULL,
+                description TEXT,
+                width INTEGER,
+                height INTEGER,
+                ratio TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pipe_id) REFERENCES pipes(id) ON DELETE CASCADE,
+                UNIQUE(pipe_id, slot_index)
+            )
+        "#).execute(&mut **conn).await?;
+
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS pipe_prompt_nodes (
+                id TEXT PRIMARY KEY,
+                pipe_id TEXT NOT NULL,
+                parent_id TEXT,
+                tag TEXT NOT NULL,
+                value TEXT NOT NULL DEFAULT '',
+                frame_start INTEGER,
+                frame_end INTEGER,
+                enabled INTEGER DEFAULT 1,
+                order_index INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pipe_id) REFERENCES pipes(id) ON DELETE CASCADE,
+                FOREIGN KEY (parent_id) REFERENCES pipe_prompt_nodes(id) ON DELETE SET NULL
+            )
+        "#).execute(&mut **conn).await?;
+
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS pipe_generation_log (
+                id TEXT PRIMARY KEY,
+                pipe_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                num_inference_steps INTEGER,
+                cfg_scale REAL,
+                output_video_path TEXT,
+                output_frame_count INTEGER,
+                status TEXT DEFAULT 'queued',
+                error_message TEXT,
+                started_at DATETIME,
+                completed_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (pipe_id) REFERENCES pipes(id) ON DELETE CASCADE
+            )
+        "#).execute(&mut **conn).await?;
+
+        // Composer indexes
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipes_session ON pipes(session_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipes_composer ON pipes(composer_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipe_keyframes_pipe ON pipe_keyframes(pipe_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipe_prompt_nodes_pipe ON pipe_prompt_nodes(pipe_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipe_prompt_nodes_parent ON pipe_prompt_nodes(parent_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipe_gen_log_pipe ON pipe_generation_log(pipe_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_pipe_gen_log_task ON pipe_generation_log(task_id)").execute(&mut **conn).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_session_settings_session ON session_settings(session_id)").execute(&mut **conn).await?;
         
         Ok(())
     }
