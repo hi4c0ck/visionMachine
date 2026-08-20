@@ -44,79 +44,132 @@
 <div class="app">
   {/* Header */}
   <header class="header">
-    <div class="left">
+    <div class="frame-left">
       <span class="logo">🎬 VisionMachine</span>
       <div class="layout-btns">
-        <button class="btn {layoutMode === 'landscape' ? 'active' : ''}" onclick={() => setLayout('landscape')}>L</button>
-        <button class="btn {layoutMode === 'portrait' ? 'active' : ''}" onclick={() => setLayout('portrait')}>P</button>
-        <button class="btn {layoutMode === 'single' ? 'active' : ''}" onclick={() => setLayout('single')}>S</button>
+        <button class:active={layoutMode === 'landscape'} class="btn" onclick={() => setLayout('landscape')} title="Landscape view">▭</button>
+        <button class:active={layoutMode === 'portrait'} class="btn" onclick={() => setLayout('portrait')} title="Portrait view">☐</button>
+        <button class:active={layoutMode === 'single'} class="btn" onclick={() => setLayout('single')} title="Single panel">◻</button>
       </div>
     </div>
-    <div class="center"><h1>VisionMachine</h1></div>
-    <div class="right">
+    
+    <div class="frame-center">
+      <h1>VisionMachine</h1>
+    </div>
+    
+    <div class="frame-right">
       <button class="btn-ghost" onclick={logout}>Logout ({userName})</button>
     </div>
   </header>
 
   {/* Main Content */}
-  <main class="main">
+  <main class="content" class:landscape={layoutMode === 'landscape'} class:portrait={layoutMode === 'portrait'} class:single={layoutMode === 'single'}>
+    
     {/* Projects Panel */}
     {#if showProjects}
-      <aside class="panel projects">
-        <div class="panel-header">Projects</div>
+      <aside class="panel projects-panel">
+        <div class="panel-header">
+          <span>Projects</span>
+          <button class="btn-icon" title="New Project">+</button>
+        </div>
         <div class="panel-content">
-          <div class="item active">🎬 My First Video</div>
-          <div class="item">🎥 Product Demo</div>
-          <div class="item">🎞️ Tutorial</div>
+          <div class="project-item active">
+            <span class="project-icon">🎬</span>
+            <div class="project-info">
+              <div class="project-name">My First Video</div>
+              <div class="project-meta">Created today</div>
+            </div>
+          </div>
+          <div class="project-item">
+            <span class="project-icon">🎥</span>
+            <div class="project-info">
+              <div class="project-name">Product Demo</div>
+              <div class="project-meta">2 days ago</div>
+            </div>
+          </div>
         </div>
       </aside>
     {/if}
 
-    {/* Composer */}
+    {/* Profile Panel */}
+    {#if showProfile}
+      <aside class="panel profile-panel">
+        <div class="panel-header">
+          <span>Profile</span>
+        </div>
+        <div class="panel-content">
+          <div class="user-profile">
+            <div class="avatar">{userName.charAt(0).toUpperCase()}</div>
+            <div class="user-info">
+              <div class="user-name">{userName}</div>
+              <div class="user-role">Pro Member</div>
+            </div>
+          </div>
+          <button class="btn btn-block" onclick={() => alert('Settings clicked')}>
+            ⚙ Settings
+          </button>
+        </div>
+      </aside>
+    {/if}
+
+    {/* Composer (Main Workspace) */}
     <section class="composer">
-      <div class="header">
-        <h2>Composer</h2>
-        <button class="btn-primary" onclick={generateVideo}>Generate</button>
-      </div>
-      <div class="canvas">
-        <div class="empty">
-          <h3>Welcome, {userName}!</h3>
-          <p>Click Generate to create your video</p>
+      <div class="composer-header">
+        <div class="composer-title">
+          <h2>Main Composer</h2>
+          <span class="badge">Active</span>
+        </div>
+        <div class="composer-actions">
+          <button class="btn" onclick={() => alert('Export clicked')}>
+            ↓ Export
+          </button>
+          <button class="btn btn-primary" onclick={generateVideo}>
+            ▶ Generate
+          </button>
         </div>
       </div>
-      <div class="timeline">
-        <div class="track">
-          <span>Timeline</span>
-          <div class="clips">
-            <div class="clip">Shot 1</div>
-            <div class="clip">Shot 2</div>
-            <div class="clip">Shot 3</div>
+      
+      <div class="composer-canvas">
+        <div class="empty-state">
+          <div class="empty-icon">🎬</div>
+          <h3>Welcome, {userName}!</h3>
+          <p>Click "Generate" to create your first AI-powered video</p>
+          <button class="btn btn-primary" onclick={generateVideo}>Create Video</button>
+        </div>
+      </div>
+      
+      <div class="composer-timeline">
+        <div class="timeline-track">
+          <div class="track-label">Timeline</div>
+          <div class="track-content">
+            <div class="clip" style="left: 0%; width: 33%">Shot 1</div>
+            <div class="clip" style="left: 33%; width: 33%">Shot 2</div>
+            <div class="clip" style="left: 66%; width: 33%">Shot 3</div>
           </div>
         </div>
       </div>
     </section>
 
-    {/* Profile Panel */}
-    {#if showProfile}
-      <aside class="panel profile">
-        <div class="panel-header">Profile</div>
-        <div class="panel-content">
-          <div class="user-card">
-            <div class="avatar">{userName.charAt(0)}</div>
-            <div>{userName}</div>
-          </div>
-        </div>
-      </aside>
-    {/if}
-
     {/* Tools Panel */}
     {#if showTools}
-      <aside class="panel tools">
-        <div class="panel-header">Tools</div>
+      <aside class="panel tools-panel">
+        <div class="panel-header">
+          <span>Tools</span>
+          <button class="btn-icon" title="Add Tool">+</button>
+        </div>
         <div class="panel-content">
-          <div class="item active">▶ Generator</div>
-          <div class="item">🖼 Image</div>
-          <div class="item">✏ Edit</div>
+          <div class="tool-item active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span>Generator</span>
+          </div>
+          <div class="tool-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+            <span>Image</span>
+          </div>
+          <div class="tool-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            <span>Edit</span>
+          </div>
         </div>
       </aside>
     {/if}
@@ -124,52 +177,102 @@
 </div>
 
 <style>
+  /* ==================== LAYOUT ==================== */
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: #1e1e1e;
-    color: #d4d4d4;
+    width: 100vw;
+    overflow: hidden;
+    background: var(--bg-primary);
   }
   
+  /* Frame Header */
   .header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     padding: 8px 16px;
-    background: #252526;
-    border-bottom: 1px solid #3e3e42;
-    height: 48px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    min-height: 52px;
+    flex-shrink: 0;
   }
   
-  .left { display: flex; align-items: center; gap: 16px; }
-  .logo { font-weight: 600; font-size: 16px; }
-  .layout-btns { display: flex; gap: 4px; }
-  .center { flex: 1; text-align: center; }
-  .center h1 { margin: 0; font-size: 14px; font-weight: 500; color: #858585; }
-  .right { display: flex; align-items: center; gap: 8px; }
+  .frame-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
   
-  .main {
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  
+  .layout-btns {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+  }
+  
+  .frame-center {
+    flex: 1;
+    text-align: center;
+  }
+  
+  .app-title {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin: 0;
+  }
+  
+  .frame-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  /* Content Area */
+  .content {
     display: flex;
     flex: 1;
     overflow: hidden;
+    position: relative;
   }
   
+  /* Panels */
   .panel {
     display: flex;
     flex-direction: column;
-    background: #252526;
-    border-right: 1px solid #3e3e42;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
     overflow: hidden;
+    transition: all 0.25s ease;
   }
   
-  .tools { border-left: 1px solid #3e3e42; border-right: none; }
+  .tools-panel {
+    border-right: none;
+    border-left: 1px solid var(--border-color);
+  }
   
   .panel-header {
-    padding: 8px 12px;
-    border-bottom: 1px solid #3e3e42;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
     font-weight: 600;
-    font-size: 13px;
+    font-size: 0.8125rem;
+    flex-shrink: 0;
+    background: var(--bg-tertiary);
   }
   
   .panel-content {
@@ -178,151 +281,312 @@
     padding: 8px;
   }
   
-  .projects { width: 220px; }
-  .profile { width: 200px; }
-  .tools { width: 180px; }
+  /* Panel widths */
+  .projects-panel { width: 240px; min-width: 180px; max-width: 400px; }
+  .profile-panel { width: 220px; }
+  .tools-panel { width: 280px; min-width: 200px; max-width: 500px; }
   
-  .item {
-    padding: 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
+  /* Layout mode adjustments */
+  .content.landscape .profile-panel { display: none; }
+  .content.portrait .projects-panel { width: 60px !important; }
+  .content.single .projects-panel,
+  .content.single .profile-panel,
+  .content.single .tools-panel { display: none; }
+  .content.single .composer { flex: 1; }
+  
+  /* Project items */
+  .project-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   
-  .item:hover { background: #2d2d2d; }
-  .item.active { background: #007acc; color: white; }
+  .project-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
   
+  .project-item:hover { background: var(--bg-hover); }
+  .project-item.active { background: var(--accent-primary); color: white; }
+  
+  .project-icon { font-size: 1.25rem; }
+  
+  .project-info { flex: 1; min-width: 0; }
+  
+  .project-name {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.875rem;
+  }
+  
+  .project-meta {
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+  
+  /* Profile */
+  .user-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  
+  .avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: white;
+    flex-shrink: 0;
+  }
+  
+  .user-info { flex: 1; min-width: 0; }
+  .user-name { font-weight: 600; font-size: 1rem; }
+  .user-role { font-size: 0.75rem; color: var(--text-muted); }
+  
+  .quick-actions { display: flex; flex-direction: column; gap: 8px; }
+  
+  /* Composer */
   .composer {
     flex: 1;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    background: var(--bg-primary);
+    min-width: 0;
   }
   
-  .composer .header {
+  .composer-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
-    border-bottom: 1px solid #3e3e42;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
   }
   
-  .composer .header h2 { margin: 0; font-size: 14px; }
+  .composer-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
   
-  .canvas {
+  .composer-title h2 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  
+  .badge {
+    display: inline-flex;
+    padding: 2px 8px;
+    background: var(--accent-success);
+    color: white;
+    border-radius: 9999px;
+    font-size: 0.625rem;
+    font-weight: 500;
+  }
+  
+  .composer-actions { display: flex; gap: 8px; }
+  
+  .composer-canvas {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
+    padding: 32px;
+    overflow: auto;
   }
   
-  .empty { text-align: center; }
-  .empty h3 { margin-bottom: 8px; }
-  .empty p { color: #858585; margin-bottom: 24px; }
-  
-  .timeline {
-    height: 80px;
-    border-top: 1px solid #3e3e42;
-    background: #252526;
+  .composer-timeline {
+    height: 100px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
   }
   
-  .track {
+  /* Empty State */
+  .empty-state {
+    text-align: center;
+    color: var(--text-muted);
+    max-width: 400px;
+  }
+  
+  .empty-icon {
+    font-size: 4rem;
+    margin-bottom: 20px;
+    opacity: 0.5;
+  }
+  
+  .empty-state h3 {
+    margin-bottom: 8px;
+    color: var(--text-primary);
+    font-size: 1.25rem;
+  }
+  
+  .empty-state p {
+    margin-bottom: 24px;
+  }
+  
+  /* Timeline */
+  .timeline-track {
     display: flex;
     height: 100%;
   }
   
-  .track span {
+  .track-label {
     width: 80px;
+    padding: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-right: 1px solid #3e3e42;
-    font-size: 12px;
-    color: #858585;
+    border-right: 1px solid var(--border-color);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 500;
   }
   
-  .clips {
+  .track-content {
     flex: 1;
     position: relative;
-    padding: 8px;
+    padding: 10px;
   }
   
   .clip {
     position: absolute;
-    height: 32px;
-    background: #007acc;
+    height: 40px;
+    background: var(--accent-primary);
     border-radius: 4px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
     color: white;
+    font-size: 0.75rem;
     cursor: pointer;
+    transition: opacity 0.15s ease;
   }
   
-  .clip:nth-child(1) { left: 0%; width: 33%; }
-  .clip:nth-child(2) { left: 33%; width: 33%; }
-  .clip:nth-child(3) { left: 66%; width: 33%; }
+  .clip:hover { opacity: 0.8; }
   
-  .user-card {
+  /* Tools */
+  .tool-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  .tool-item {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
   }
   
-  .avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: #007acc;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 600;
-  }
+  .tool-item:hover { background: var(--bg-hover); }
+  .tool-item.active { background: var(--accent-primary); color: white; }
+  
+  .tool-item svg { width: 18px; height: 18px; flex-shrink: 0; }
   
   /* Buttons */
   .btn {
-    padding: 4px 10px;
-    border: 1px solid #3e3e42;
-    background: #2d2d2d;
-    color: #d4d4d4;
-    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
     cursor: pointer;
-    font-size: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    transition: all 0.15s ease;
   }
   
-  .btn:hover { background: #3e3e42; }
-  .btn.active { background: #007acc; border-color: #007acc; color: white; }
+  .btn:hover { background: var(--bg-hover); border-color: var(--border-focus); }
+  
+  .btn-primary {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: white;
+  }
+  
+  .btn-primary:hover {
+    background: var(--accent-primary-hover);
+    border-color: var(--accent-primary-hover);
+  }
+  
+  .btn-secondary { background: transparent; }
+  
+  .btn-icon {
+    padding: 6px;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+  }
+  
+  .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .btn-icon.active { background: var(--accent-primary); color: white; }
+  
+  .btn-block { width: 100%; justify-content: center; }
   
   .btn-ghost {
     background: transparent;
     border: none;
-    color: #d4d4d4;
-    cursor: pointer;
     padding: 6px 12px;
-    font-size: 13px;
-  }
-  
-  .btn-ghost:hover { background: #2d2d2d; }
-  
-  .btn-primary {
-    padding: 6px 16px;
-    background: #007acc;
-    border: none;
-    color: white;
-    border-radius: 4px;
+    color: var(--text-secondary);
     cursor: pointer;
-    font-size: 13px;
+    font-size: 0.875rem;
+    transition: all 0.15s ease;
   }
   
-  .btn-primary:hover { background: #1a8adb; }
+  .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
   
-  /* Layout modes */
-  .main.portrait .projects { width: 60px !important; }
-  .main.single .projects,
-  .main.single .profile,
-  .main.single .tools { display: none; }
+  /* SVG Icons */
+  svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+  }
+  
+  /* Responsive */
+  @media (max-width: 768px) {
+    .projects-panel,
+    .profile-panel,
+    .tools-panel {
+      position: absolute;
+      z-index: 100;
+      height: calc(100% - 52px);
+      top: 52px;
+    }
+    
+    .projects-panel { left: 0; }
+    .profile-panel, .tools-panel { right: 0; }
+  }
 </style>
