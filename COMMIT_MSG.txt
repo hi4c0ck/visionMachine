@@ -1,1 +1,7 @@
-fix: simplify Workspace component and fix layout structure
+feat: implement Svelte 5 migration, test suite, and CI/CD pipeline
+
+- Migrate to Svelte 5 (requirement 1)
+- Add comprehensive build test suite (requirement 2)
+- Create GitHub Actions workflow for automated testing
+- Update launch.bat to run tests before starting app
+- Keep desktop-only architecture (no web/mobile)
