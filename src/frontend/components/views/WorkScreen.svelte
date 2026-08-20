@@ -1,10 +1,32 @@
 <script>
   import { createEventDispatcher } from 'svelte';
-  import { fly, fade } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
   
   const dispatch = createEventDispatcher();
   
   export let userName;
+  
+  // State Machine Types
+  type ScreenState = 
+    | { screen: 'idle' }
+    | { screen: 'generating'; context: 'project' | 'settings' }
+    | { screen: 'loading' }
+    | { screen: 'error'; message: string };
+  
+  type ModalType = 
+    | null
+    | 'theme'
+    | 'settings'
+    | 'new-project'
+    | 'generate'
+    | 'export'
+    | 'delete-confirm';
+  
+  // State machine store
+  let currentState: ScreenState = { screen: 'idle' };
+  let currentModal: ModalType = null;
+  let modalData = {};
+  let previousScreen: ScreenState['screen'] = 'idle';
   
   // Layout state
   let layoutMode = 'landscape'; // 'landscape' | 'portrait' | 'single'
@@ -21,18 +43,87 @@
   let isResizing = false;
   let resizeTarget = null;
   
-  // Modal state
-  let showModal = false;
-  let modalType = '';
-  let modalData = {};
+  // Generate progress
+  let generateProgress = 0;
+  let generateStatus = '';
   
-  // Handle layout changes
-  function setLayout(mode) {
+  // State transitions
+  function transitionTo(state: ScreenState, modal?: ModalType) {
+    previousScreen = currentState.screen;
+    currentState = state;
+    if (modal !== undefined) {
+      currentModal = modal;
+    }
+  }
+  
+  function openModal(modalType: ModalType, data = {}) {
+    // Block all actions when modal is open (except closing it)
+    if (currentModal !== null) return;
+    
+    previousScreen = currentState.screen;
+    currentModal = modalType;
+    modalData = data;
+  }
+  
+  function closeModal() {
+    currentModal = null;
+    modalData = {};
+  }
+  
+  function startGeneration() {
+    if (currentModal !== null) return;
+    transitionTo({ screen: 'generating', context: 'project' });
+    closeModal();
+    
+    // Simulate generation process
+    simulateGeneration();
+  }
+  
+  function simulateGeneration() {
+    generateProgress = 0;
+    generateStatus = 'Initializing...';
+    
+    const steps = [
+      { progress: 10, status: 'Analyzing prompt...' },
+      { progress: 30, status: 'Generating frames...' },
+      { progress: 50, status: 'Applying effects...' },
+      { progress: 70, status: 'Rendering video...' },
+      { progress: 90, status: 'Finalizing...' },
+      { progress: 100, status: 'Complete!' }
+    ];
+    
+    let stepIndex = 0;
+    const interval = setInterval(() => {
+      if (stepIndex < steps.length) {
+        generateProgress = steps[stepIndex].progress;
+        generateStatus = steps[stepIndex].status;
+        stepIndex++;
+      } else {
+        clearInterval(interval);
+        // Return to idle state after completion
+        setTimeout(() => {
+          transitionTo({ screen: 'idle' });
+          dispatch('generation-complete');
+        }, 500);
+      }
+    }, 800);
+  }
+  
+  function handleError(message: string) {
+    transitionTo({ screen: 'error', message });
+  }
+  
+  function handleRetry() {
+    transitionTo({ screen: 'idle' });
+  }
+  
+  function setLayout(mode: 'landscape' | 'portrait' | 'single') {
+    if (currentModal !== null || currentState.screen !== 'idle') return;
     if (isTransitioning) return;
+    
     isTransitioning = true;
     layoutMode = mode;
     
-    // Auto-adjust panels based on mode
     switch(mode) {
       case 'portrait':
         showProjects = true;
@@ -54,7 +145,9 @@
     setTimeout(() => { isTransitioning = false; }, 300);
   }
   
-  function togglePanel(panel) {
+  function togglePanel(panel: 'projects' | 'profile' | 'tools') {
+    if (currentModal !== null) return;
+    
     switch(panel) {
       case 'projects':
         showProjects = !showProjects;
@@ -68,27 +161,16 @@
     }
   }
   
-  function openModal(type, data = {}) {
-    modalType = type;
-    modalData = data;
-    showModal = true;
-  }
-  
-  function closeModal() {
-    showModal = false;
-    modalType = '';
-    modalData = {};
-  }
-  
   // Resize handlers
-  function startResize(e, target) {
+  function startResize(e: MouseEvent | TouchEvent, target: string) {
+    if (currentModal !== null) return;
     isResizing = true;
     resizeTarget = target;
     e.preventDefault();
   }
   
-  function handleResize(e) {
-    if (!isResizing) return;
+  function handleResize(e: MouseEvent | TouchEvent) {
+    if (!isResizing || currentModal !== null) return;
     
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     
@@ -123,25 +205,114 @@
     document.removeEventListener('touchmove', handleResize);
     document.removeEventListener('touchend', stopResize);
   });
+  
+  // Keyboard handler
+  function handleKeydown(e: KeyboardEvent) {
+    // Close modal on Escape
+    if (e.key === 'Escape' && currentModal !== null) {
+      closeModal();
+      return;
+    }
+    
+    // Don't handle other keys when modal is open or app is busy
+    if (currentModal !== null || currentState.screen !== 'idle') return;
+    
+    switch(e.key) {
+      case 'l':
+        setLayout('landscape');
+        break;
+      case 'p':
+        setLayout('portrait');
+        break;
+      case 's':
+        setLayout('single');
+        break;
+      case 'g':
+        openModal('generate');
+        break;
+      case 't':
+        openModal('theme');
+        break;
+      case 'n':
+        openModal('new-project');
+        break;
+    }
+  }
+  
+  onMount(() => {
+    document.addEventListener('keydown', handleKeydown);
+  });
+  
+  onDestroy(() => {
+    document.removeEventListener('keydown', handleKeydown);
+  });
+  
+  // Helper functions
+  function getModalTitle(): string {
+    const titles: Record<string, string> = {
+      'theme': 'Theme Settings',
+      'settings': 'Settings',
+      'new-project': 'New Project',
+      'generate': 'Generate Video',
+      'export': 'Export Project',
+      'delete-confirm': 'Confirm Delete'
+    };
+    return titles[currentModal] || 'Modal';
+  }
+  
+  function isActionBlocked(): boolean {
+    return currentModal !== null || currentState.screen !== 'idle';
+  }
+  
+  function getBlockingReason(): string | null {
+    if (currentModal !== null) {
+      return `Modal is open: ${currentModal}`;
+    }
+    if (currentState.screen === 'generating') {
+      return 'Generation in progress';
+    }
+    if (currentState.screen === 'loading') {
+      return 'Loading data';
+    }
+    if (currentState.screen === 'error') {
+      return 'Error state active';
+    }
+    return null;
+  }
 </script>
 
-<div class="workspace" class:landscape={layoutMode === 'landscape'} class:portrait={layoutMode === 'portrait'} class:single={layoutMode === 'single'}>
+<div class="work-screen" class:idle={currentState.screen === 'idle'} class:generating={currentState.screen === 'generating'} class:loading={currentState.screen === 'loading'} class:error={currentState.screen === 'error'}>
   <!-- Top Frame -->
   <header class="frame">
     <div class="frame-left">
-      <button class="btn-icon" on:click={() => setLayout('landscape')} title="Landscape view" data-tooltip="Landscape view">
+      <button 
+        class="btn-icon" 
+        onclick={() => setLayout('landscape')} 
+        title="Landscape view (L)"
+        disabled={isActionBlocked()}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="3" y="3" width="18" height="18" rx="2"/>
           <line x1="9" y1="3" x2="9" y2="21"/>
         </svg>
       </button>
-      <button class="btn-icon" on:click={() => setLayout('portrait')} title="Portrait view" data-tooltip="Portrait view">
+      <button 
+        class="btn-icon" 
+        onclick={() => setLayout('portrait')} 
+        title="Portrait view (P)"
+        disabled={isActionBlocked()}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="3" y="3" width="18" height="18" rx="2"/>
           <line x1="3" y1="9" x2="21" y2="9"/>
         </svg>
       </button>
-      <button class="btn-icon" on:click={() => setLayout('single')} title="Single panel" data-tooltip="Single panel">
+      <button 
+        class="btn-icon" 
+        onclick={() => setLayout('single')} 
+        title="Single panel (S)"
+        disabled={isActionBlocked()}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <rect x="3" y="3" width="18" height="18" rx="2"/>
         </svg>
@@ -150,17 +321,29 @@
     
     <div class="frame-center">
       <h1 class="app-title">VisionMachine</h1>
+      {#if currentState.screen !== 'idle'}
+        <span class="state-indicator">{currentState.screen}</span>
+      {/if}
     </div>
     
     <div class="frame-right">
-      <button class="btn-ghost" on:click={() => openModal('theme')}>
+      <button 
+        class="btn-ghost" 
+        onclick={() => openModal('theme')}
+        disabled={isActionBlocked()}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="12" cy="12" r="10"/>
           <path d="M12 2a10 10 0 0 1 0 20"/>
         </svg>
         Theme
       </button>
-      <button class="btn-ghost" on:click={() => dispatch('logout')} title="Logout">
+      <button 
+        class="btn-ghost" 
+        onclick={() => dispatch('logout')} 
+        title="Logout"
+        disabled={isActionBlocked()}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
           <polyline points="16 17 21 12 16 7"/>
@@ -178,7 +361,12 @@
       <aside class="panel projects-panel" style="width: {sidebarWidth}px">
         <div class="panel-header">
           <span>Projects</span>
-          <button class="btn-icon" on:click={() => openModal('new-project')} title="New Project">
+          <button 
+            class="btn-icon" 
+            onclick={() => openModal('new-project')}
+            title="New Project (N)"
+            disabled={isActionBlocked()}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <line x1="12" y1="5" x2="12" y2="19"/>
               <line x1="5" y1="12" x2="19" y2="12"/>
@@ -222,7 +410,11 @@
             </div>
           </div>
           <div class="quick-actions">
-            <button class="btn-block" on:click={() => openModal('settings')}>
+            <button 
+              class="btn-block" 
+              onclick={() => openModal('settings')}
+              disabled={isActionBlocked()}
+            >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <circle cx="12" cy="12" r="3"/>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -239,16 +431,26 @@
       <div class="composer-header">
         <div class="composer-title">
           <h2>Main Composer</h2>
-          <span class="badge">Active</span>
+          <span class="badge" class:idle={currentState.screen === 'idle'} class:busy={currentState.screen !== 'idle'}>
+            {currentState.screen === 'idle' ? 'Ready' : currentState.screen}
+          </span>
         </div>
         <div class="composer-actions">
-          <button class="btn" on:click={() => openModal('generate')}>
+          <button 
+            class="btn btn-primary"
+            onclick={startGeneration}
+            disabled={isActionBlocked()}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
-            Generate
+            Generate (G)
           </button>
-          <button class="btn btn-secondary">
+          <button 
+            class="btn btn-secondary"
+            onclick={() => openModal('export')}
+            disabled={isActionBlocked()}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
@@ -260,14 +462,34 @@
       </div>
       
       <div class="composer-canvas">
-        <div class="empty-state">
-          <div class="empty-icon">🎬</div>
-          <h3>Start Creating</h3>
-          <p>Click "Generate" to create your first AI-powered video</p>
-          <button class="btn btn-primary" on:click={() => openModal('generate')}>
-            Create Video
-          </button>
-        </div>
+        {#if currentState.screen === 'idle'}
+          <div class="empty-state">
+            <div class="empty-icon">🎬</div>
+            <h3>Start Creating</h3>
+            <p>Click "Generate" to create your first AI-powered video</p>
+            <button class="btn btn-primary" onclick={() => openModal('generate')}>
+              Create Video
+            </button>
+          </div>
+        {:else if currentState.screen === 'generating'}
+          <div class="generating-state">
+            <div class="spinner"></div>
+            <h3>{generateStatus}</h3>
+            <div class="progress-bar">
+              <div class="progress-fill" style="width: {generateProgress}%"></div>
+            </div>
+            <p>{generateProgress}% complete</p>
+          </div>
+        {:else if currentState.screen === 'error'}
+          <div class="error-state">
+            <div class="error-icon">⚠️</div>
+            <h3>Error</h3>
+            <p>{currentState.message}</p>
+            <button class="btn btn-primary" onclick={handleRetry}>
+              Retry
+            </button>
+          </div>
+        {/if}
       </div>
       
       <div class="composer-timeline">
@@ -293,7 +515,12 @@
       <aside class="panel tools-panel" style="width: {toolsWidth}px">
         <div class="panel-header">
           <span>Tools</span>
-          <button class="btn-icon" on:click={() => openModal('add-tool')} title="Add Tool">
+          <button 
+            class="btn-icon" 
+            onclick={() => openModal('add-tool')}
+            title="Add Tool"
+            disabled={isActionBlocked()}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <line x1="12" y1="5" x2="12" y2="19"/>
               <line x1="5" y1="12" x2="19" y2="12"/>
@@ -331,12 +558,12 @@
   </main>
 
   <!-- Modal Overlay -->
-  {#if showModal}
-    <div class="modal-overlay" transition:fade={{duration: 200}}>
+  {#if currentModal !== null}
+    <div class="modal-overlay" transition:fade={{duration: 200}} on:click={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
       <div class="modal" transition:fly={{y: 20, duration: 200}}>
         <div class="modal-header">
           <h3>{getModalTitle()}</h3>
-          <button class="btn-icon" on:click={closeModal}>
+          <button class="btn-icon" onclick={closeModal} title="Close (Esc)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
@@ -344,28 +571,56 @@
           </button>
         </div>
         <div class="modal-body">
-          {#if modalType === 'generate'}
-            <p>Generate video form would go here</p>
-          {:else if modalType === 'settings'}
-            <p>Settings form would go here</p>
-          {:else if modalType === 'new-project'}
-            <p>New project form would go here</p>
+          {#if currentModal === 'generate'}
+            <div class="form-group">
+              <label>Prompt</label>
+              <textarea placeholder="Describe your video..."></textarea>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" onclick={startGeneration}>Generate</button>
+              <button class="btn" onclick={closeModal}>Cancel</button>
+            </div>
+          {:else if currentModal === 'settings'}
+            <div class="form-group">
+              <label>Settings</label>
+              <p>Configuration options would go here.</p>
+            </div>
+          {:else if currentModal === 'new-project'}
+            <div class="form-group">
+              <label>New Project Name</label>
+              <input type="text" placeholder="Enter project name..." />
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary">Create</button>
+              <button class="btn" onclick={closeModal}>Cancel</button>
+            </div>
           {:else}
-            <p>Modal content for {modalType}</p>
+            <p>Modal content for {currentModal}</p>
           {/if}
         </div>
       </div>
     </div>
   {/if}
+
+  <!-- State Indicator (debug) -->
+  {#if currentState.screen !== 'idle' || currentModal !== null}
+    <div class="state-debug">
+      <span>Screen: {currentState.screen}</span>
+      {#if currentModal !== null}
+        <span>Modal: {currentModal}</span>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
-  .workspace {
+  .work-screen {
     display: flex;
     flex-direction: column;
     height: 100vh;
     width: 100vw;
     overflow: hidden;
+    position: relative;
   }
   
   /* Frame Header */
@@ -389,6 +644,10 @@
   .frame-center {
     flex: 1;
     text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
   }
   
   .app-title {
@@ -396,6 +655,15 @@
     font-weight: 600;
     margin: 0;
     color: var(--text-primary);
+  }
+  
+  .state-indicator {
+    font-size: 0.625rem;
+    padding: 2px 8px;
+    background: var(--accent-primary);
+    color: white;
+    border-radius: var(--radius-full);
+    font-weight: 500;
   }
   
   /* Content Area */
@@ -406,7 +674,7 @@
     transition: all var(--transition-normal);
   }
   
-  .content.landscape .profile-panel {
+  .content.idle .profile-panel {
     display: none;
   }
   
@@ -550,6 +818,53 @@
     margin-bottom: var(--space-lg);
   }
   
+  /* Generating State */
+  .generating-state {
+    text-align: center;
+    color: var(--text-primary);
+  }
+  
+  .spinner {
+    width: 60px;
+    height: 60px;
+    border: 4px solid var(--border-color);
+    border-top-color: var(--accent-primary);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto var(--space-md);
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .progress-bar {
+    width: 300px;
+    height: 8px;
+    background: var(--border-color);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    margin: var(--space-md) auto;
+  }
+  
+  .progress-fill {
+    height: 100%;
+    background: var(--accent-primary);
+    border-radius: var(--radius-full);
+    transition: width 0.3s ease;
+  }
+  
+  /* Error State */
+  .error-state {
+    text-align: center;
+    color: var(--text-primary);
+  }
+  
+  .error-icon {
+    font-size: 4rem;
+    margin-bottom: var(--space-md);
+  }
+  
   /* Timeline */
   .timeline-track {
     display: flex;
@@ -633,6 +948,41 @@
     padding: var(--space-md);
   }
   
+  .form-group {
+    margin-bottom: var(--space-md);
+  }
+  
+  .form-group label {
+    display: block;
+    margin-bottom: var(--space-xs);
+    font-weight: 500;
+    font-size: 0.875rem;
+  }
+  
+  .form-group textarea,
+  .form-group input {
+    width: 100%;
+    padding: var(--space-sm);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.875rem;
+  }
+  
+  .form-group textarea {
+    min-height: 100px;
+    resize: vertical;
+  }
+  
+  .form-actions {
+    display: flex;
+    gap: var(--space-sm);
+    justify-content: flex-end;
+    margin-top: var(--space-md);
+  }
+  
   /* Buttons */
   .btn {
     display: inline-flex;
@@ -649,9 +999,14 @@
     transition: all var(--transition-fast);
   }
   
-  .btn:hover {
+  .btn:hover:not(:disabled) {
     background: var(--bg-hover);
     border-color: var(--border-focus);
+  }
+  
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   
   .btn-primary {
@@ -660,7 +1015,7 @@
     color: white;
   }
   
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     background: var(--accent-primary-hover);
     border-color: var(--accent-primary-hover);
   }
@@ -823,23 +1178,21 @@
     font-weight: 500;
   }
   
-  /* Tooltip */
-  [data-tooltip] {
-    position: relative;
+  .badge.busy {
+    background: var(--accent-warning);
   }
   
-  [data-tooltip]:hover::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    bottom: calc(100% + 8px);
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 4px 8px;
+  /* State Debug */
+  .state-debug {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
     background: var(--bg-tertiary);
-    color: var(--text-primary);
+    padding: var(--space-sm);
+    border-radius: var(--radius-md);
     font-size: 0.75rem;
-    border-radius: var(--radius-sm);
-    white-space: nowrap;
+    display: flex;
+    gap: var(--space-md);
     z-index: 100;
   }
   
@@ -867,16 +1220,3 @@
     }
   }
 </style>
-
-<script>
-  function getModalTitle() {
-    const titles = {
-      'generate': 'Generate Video',
-      'settings': 'Settings',
-      'new-project': 'New Project',
-      'theme': 'Theme',
-      'add-tool': 'Add Tool'
-    };
-    return titles[modalType] || 'Modal';
-  }
-</script>
