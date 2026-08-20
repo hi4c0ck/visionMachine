@@ -31,8 +31,6 @@
   }
 </script>
 
-{svelte:self}
-
 {#if !isLoggedIn}
   <WelcomeScreen on:login={handleLogin} />
 {:else}
