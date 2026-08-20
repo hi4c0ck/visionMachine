@@ -2,6 +2,10 @@
   import { createEventDispatcher } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   
+  // Import sub-components
+  import GenericModal from './components/GenericModal.svelte';
+  import DeleteConfirm from './components/DeleteConfirm.svelte';
+  
   const dispatch = createEventDispatcher();
   
   export let userName;
@@ -11,6 +15,7 @@
   let currentModal = null; // 'theme' | 'settings' | 'new-project' | 'generate' | 'export' | 'delete-confirm'
   let modalData = {};
   let errorMessage = '';
+  let previousScreen = 'idle';
   
   // Screen transitions
   function goToScreen(screen, data = {}) {
@@ -56,6 +61,18 @@
       currentScreen = 'idle';
       openModal('export', { success: true });
     }, 1500);
+  }
+  
+  function getModalTitle() {
+    const titles = {
+      'new-project': 'New Project',
+      'generate': 'Generate Video',
+      'settings': 'Settings',
+      'theme': 'Choose Theme',
+      'delete-confirm': 'Confirm Delete',
+      'export': 'Export Project'
+    };
+    return titles[currentModal] || 'Modal';
   }
 </script>
 
@@ -472,23 +489,3 @@
     }
   }
 </style>
-
-<script context="module">
-  // Import sub-components
-  import GenericModal from './components/GenericModal.svelte';
-  import DeleteConfirm from './components/DeleteConfirm.svelte';
-</script>
-
-<script>
-  function getModalTitle() {
-    const titles = {
-      'new-project': 'New Project',
-      'generate': 'Generate Video',
-      'settings': 'Settings',
-      'theme': 'Choose Theme',
-      'delete-confirm': 'Confirm Delete',
-      'export': 'Export Project'
-    };
-    return titles[currentModal] || 'Modal';
-  }
-</script>
