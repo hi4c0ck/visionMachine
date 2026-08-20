@@ -38,7 +38,7 @@
 {:else}
   <Workspace 
     userName={userName} 
-    on:logout={handleLogout} 
+    on:logout={handleLogout}
   />
 {/if}
 
