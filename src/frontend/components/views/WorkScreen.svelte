@@ -128,25 +128,81 @@
         </div>
         <div class="modal-body">
           {#if currentModal === 'new-project'}
-            <NewProjectForm onSubmit={(data) => { closeModal(); openModal('generate'); }} />
+            <div class="form-group">
+              <label>Project Name</label>
+              <input type="text" placeholder="Enter project name..." class="input" />
+            </div>
+            <div class="modal-actions">
+              <button class="btn btn-secondary" on:click={closeModal}>Cancel</button>
+              <button class="btn btn-primary" on:click={() => { closeModal(); openModal('generate'); }}>Create</button>
+            </div>
           {:else if currentModal === 'generate'}
-            <GenerateForm 
-              userName={userName} 
-              onSubmit={generateVideo}
-              onCancel={closeModal}
-            />
+            <div class="form-group">
+              <label>Prompt</label>
+              <textarea placeholder="Describe your video..." class="input" rows="4"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Duration (seconds)</label>
+              <input type="number" min="3" max="60" value="30" class="input" />
+            </div>
+            <div class="modal-actions">
+              <button class="btn btn-secondary" on:click={closeModal}>Cancel</button>
+              <button class="btn btn-primary" on:click={() => generateVideo()}>Generate</button>
+            </div>
           {:else if currentModal === 'settings'}
-            <SettingsForm userName={userName} />
+            <div class="settings-list">
+              <div class="setting-item">
+                <span>Theme</span>
+                <select class="select">
+                  <option>JetBrains Dark</option>
+                  <option>JetBrains Light</option>
+                  <option>Steel Dark</option>
+                  <option>Steel Light</option>
+                </select>
+              </div>
+              <div class="setting-item">
+                <span>Language</span>
+                <select class="select">
+                  <option>English</option>
+                  <option>Русский</option>
+                  <option>Deutsch</option>
+                  <option>日本語</option>
+                </select>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="btn btn-primary" on:click={closeModal}>Save</button>
+            </div>
           {:else if currentModal === 'theme'}
-            <ThemeSelector onClose={closeModal} />
+            <div class="theme-grid">
+              <div class="theme-option active" style="background: linear-gradient(135deg, #1e1e2e, #313244)">
+                <span>JetBrains Dark</span>
+              </div>
+              <div class="theme-option" style="background: linear-gradient(135deg, #f6f8fa, #eef0f4)">
+                <span>JetBrains Light</span>
+              </div>
+              <div class="theme-option" style="background: linear-gradient(135deg, #1a1d23, #2a2d35)">
+                <span>Steel Dark</span>
+              </div>
+              <div class="theme-option" style="background: linear-gradient(135deg, #e8eaf0, #f5f6f8)">
+                <span>Steel Light</span>
+              </div>
+            </div>
+            <div class="modal-actions">
+              <button class="btn btn-primary" on:click={closeModal}>Apply</button>
+            </div>
           {:else if currentModal === 'delete-confirm'}
             <DeleteConfirm 
-              item={modalData.item}
-              onConfirm={() => { closeModal(); /* Handle deletion */ }}
+              item={modalData.item || {name: 'this item'}}
+              onConfirm={() => { closeModal(); }}
               onCancel={closeModal}
             />
           {:else}
-            <GenericModal type={currentModal} data={modalData} onClose={closeModal} />
+            <GenericModal 
+              type={currentModal} 
+              data={modalData} 
+              onClose={closeModal}
+            />
           {/if}
         </div>
       </div>
@@ -272,6 +328,89 @@
     padding: var(--space-md);
   }
   
+  .modal-actions {
+    display: flex;
+    gap: var(--space-sm);
+    justify-content: flex-end;
+    margin-top: var(--space-lg);
+  }
+  
+  /* Forms */
+  .form-group {
+    margin-bottom: var(--space-md);
+  }
+  
+  .form-group label {
+    display: block;
+    margin-bottom: var(--space-sm);
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  
+  .input, .select {
+    width: 100%;
+    padding: var(--space-sm);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+  }
+  
+  .input:focus, .select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+  }
+  
+  textarea.input {
+    resize: vertical;
+    min-height: 100px;
+  }
+  
+  /* Settings */
+  .settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+  }
+  
+  .setting-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-sm) 0;
+  }
+  
+  .setting-item span {
+    font-weight: 500;
+  }
+  
+  .setting-item select {
+    width: auto;
+    min-width: 150px;
+  }
+  
+  /* Theme Grid */
+  .theme-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-md);
+  }
+  
+  .theme-option {
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    border: 2px solid transparent;
+    text-align: center;
+    color: white;
+    font-weight: 500;
+  }
+  
+  .theme-option.active {
+    border-color: var(--accent-primary);
+  }
+  
   /* Buttons */
   .btn {
     display: inline-flex;
@@ -327,18 +466,20 @@
       width: 100%;
       justify-content: center;
     }
+    
+    .theme-grid {
+      grid-template-columns: 1fr;
+    }
   }
 </style>
 
-<!-- Sub-components would be imported here -->
 <script context="module">
-  import NewProjectForm from './forms/NewProjectForm.svelte';
-  import GenerateForm from './forms/GenerateForm.svelte';
-  import SettingsForm from './forms/SettingsForm.svelte';
-  import ThemeSelector from './components/ThemeSelector.svelte';
-  import DeleteConfirm from './components/DeleteConfirm.svelte';
+  // Import sub-components
   import GenericModal from './components/GenericModal.svelte';
-  
+  import DeleteConfirm from './components/DeleteConfirm.svelte';
+</script>
+
+<script>
   function getModalTitle() {
     const titles = {
       'new-project': 'New Project',
