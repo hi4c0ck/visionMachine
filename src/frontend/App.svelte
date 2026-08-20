@@ -1,76 +1,103 @@
 <script>
   import { onMount } from 'svelte';
-  import WelcomeScreen from './components/WelcomeScreen.svelte';
-  import Workspace from './components/Workspace.svelte';
-  
-  // App state
-  let userName = localStorage.getItem('vm-username') || '';
-  let isLoggedIn = !!userName;
-  
-  // Load saved preferences
-  onMount(() => {
-    const savedTheme = localStorage.getItem('vm-theme') || 'jetbrains-dark';
-    applyTheme(savedTheme);
+  import { listen } from '@tauri-apps/api/event';
+  import { invoke } from '@tauri-apps/api/core';
+  import Titlebar from './components/Titlebar.svelte';
+  import ProjectSidebar from './components/ProjectSidebar.svelte';
+  import ComposerSection from './components/ComposerSection.svelte';
+  import ArtifactsPanel from './components/ArtifactsPanel.svelte';
+  import WelcomePage from './components/WelcomePage.svelte';
+
+  let currentView = 'welcome';
+  let projectData = null;
+  let composerData = null;
+  let loading = false;
+  let error = null;
+
+  async function loadProjects() {
+    loading = true;
+    error = null;
+    try {
+      const result = await invoke('list_projects');
+      projectData = result;
+      currentView = 'project';
+    } catch (e) {
+      error = `Failed to load projects: ${e}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function loadComposer(sessionId) {
+    loading = true;
+    error = null;
+    try {
+      const result = await invoke('get_composer', { sessionId });
+      composerData = result;
+      currentView = 'composer';
+    } catch (e) {
+      error = `Failed to load composer: ${e}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  onMount(async () => {
+    console.log('VisionMachine App initialized');
+    await listen('profile_updated', (event) => {
+      console.log('Profile updated:', event.payload);
+    });
+    await listen('session_created', (event) => {
+      console.log('Session created:', event.payload);
+    });
   });
-  
-  function handleLogin(name) {
-    userName = name;
-    isLoggedIn = true;
-    localStorage.setItem('vm-username', name);
-  }
-  
-  function handleLogout() {
-    userName = '';
-    isLoggedIn = false;
-    localStorage.removeItem('vm-username');
-  }
-  
-  function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('vm-theme', theme);
-  }
 </script>
 
-{#if !isLoggedIn}
-  <WelcomeScreen on:login={handleLogin} />
-{:else}
-  <Workspace 
-    userName={userName} 
-    on:logout={handleLogout}
-  />
-{/if}
+<div class="app">
+  <div class="titlebar-wrapper">
+    <Titlebar />
+  </div>
+  
+  <div class="main-content">
+    {#if currentView === 'welcome'}
+      <WelcomePage on:start={loadProjects} on:load-composer={(e) => loadComposer(e.detail)} />
+    {:else if currentView === 'project'}
+      <ProjectSidebar />
+      <ComposerSection projectData={projectData} on:load-composer={(e) => loadComposer(e.detail)} />
+      <ArtifactsPanel />
+    {:else if currentView === 'composer'}
+      <ProjectSidebar />
+      <ComposerSection composerData={composerData} />
+      <ArtifactsPanel />
+    {/if}
+  </div>
+</div>
 
 <style>
-  :global(:root) {
-    --space-xs: 4px;
-    --space-sm: 8px;
-    --space-md: 16px;
-    --space-lg: 24px;
-    --space-xl: 32px;
-    
-    --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    
-    --transition-fast: 150ms ease;
-    --transition-normal: 250ms ease;
-    --transition-slow: 350ms ease;
-  }
-  
   :global(body) {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
-    color: var(--text-primary);
-    background: var(--bg-primary);
     margin: 0;
     padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #fff;
     overflow: hidden;
   }
   
-  #app {
-    width: 100vw;
+  .app {
+    display: flex;
+    flex-direction: column;
     height: 100vh;
+    width: 100vw;
+  }
+  
+  .titlebar-wrapper {
+    height: 32px;
+    flex-shrink: 0;
+  }
+  
+  .main-content {
+    flex: 1;
+    display: flex;
     overflow: hidden;
   }
 </style>

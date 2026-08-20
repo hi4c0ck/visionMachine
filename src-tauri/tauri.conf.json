@@ -1,22 +1,19 @@
 {
-  "productName": "VisionMachine",
-  "version": "0.1.0",
-  "identifier": "com.visionmachine.app",
   "build": {
     "frontendDist": "../src/frontend/dist",
     "devUrl": "http://localhost:5173"
   },
-  "app": {
-    "windows": [
-      {
-        "title": "VisionMachine",
-        "width": 1280,
-        "height": 800,
-        "resizable": true
-      }
-    ]
-  },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": "all"
+  },
+  "productName": "VisionMachine",
+  "version": "0.1.0",
+  "identifier": "com.visionmachine.app",
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    }
   }
 }
