@@ -125,12 +125,17 @@ dmypy.json
 # Pyre
 .pyre/
 
-# Scripts directory (local utilities only) - moved to root for portability
-# scripts/
+# Scripts directory (local utilities only)
+scripts/
 
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/
+
+# Build output
+*.exe
+*.app
+*.dmg
 
 # Internal development docs (NOT for public repo - AgnesCode tracking)
 FINAL_SUMMARY.md
