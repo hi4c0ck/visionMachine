@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import WelcomeScreen from './components/WelcomeScreen.svelte';
-  import WorkScreen from './components/views/WorkScreen.svelte';
+  import Workspace from './components/Workspace.svelte';
   
   // App state
   let userName = localStorage.getItem('vm-username') || '';
@@ -34,7 +34,7 @@
 {#if !isLoggedIn}
   <WelcomeScreen on:login={handleLogin} />
 {:else}
-  <WorkScreen 
+  <Workspace 
     userName={userName} 
     on:logout={handleLogout}
   />
