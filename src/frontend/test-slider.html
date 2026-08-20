@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>TwoThumbSlider — CSS-Tricks Demo</title>
+  <title>TwoThumbSlider — Simple Working</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     
@@ -17,169 +17,168 @@
     h1 { color: #a8b5d6; margin-bottom: 8px; font-weight: 500; }
     p.subtitle { font-size: 12px; color: #6e7681; margin-bottom: 32px; }
     
-    /* ── Slider Styles ─────────────────── */
-    .slider {
-      --tension: #58a6ff;
-      display: flex; flex-direction: column; gap: 4px;
-      width: 100%;
+    /* ── Simple Two-Thumb Slider ───────── */
+    .slider-wrapper {
+      margin-bottom: 32px;
     }
     
-    .label { font-size: 9px; color: #6e7681; text-transform: uppercase; }
+    .label {
+      font-size: 11px;
+      color: #8b949e;
+      margin-bottom: 8px;
+    }
     
-    .track-container {
+    .track {
       position: relative;
-      height: 28px;
-      cursor: pointer;
+      height: 40px;
+      display: flex;
+      align-items: center;
     }
     
+    /* Background rail */
     .rail {
       position: absolute;
-      top: 50%; transform: translateY(-50%);
       left: 0; right: 0;
       height: 6px;
-      background: #2a2a3a;
+      background: #21262d;
       border-radius: 3px;
     }
     
+    /* Fill between thumbs */
     .fill {
       position: absolute;
-      top: 50%; transform: translateY(-50%);
       height: 6px;
-      background: var(--tension);
-      opacity: 0.5;
       border-radius: 3px;
       pointer-events: none;
     }
     
-    /* Range inputs */
-    .input {
+    /* Range inputs - transparent but functional */
+    .range-input {
       position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
+      width: 100%;
+      height: 40px;
       margin: 0;
-      cursor: grab;
       background: transparent;
       -webkit-appearance: none;
       appearance: none;
+      cursor: pointer;
+      z-index: 2;
     }
     
-    /* Left thumb on top */
-    .input-a { z-index: 2; }
-    /* Right thumb behind */
-    .input-b { z-index: 1; }
+    /* Hide default track */
+    .range-input::-webkit-slider-runnable-track {
+      height: 40px;
+      background: transparent;
+    }
     
-    /* Hide default tracks */
-    .input::-webkit-slider-runnable-track { height: 6px; background: transparent; }
-    .input::-moz-range-track { height: 6px; background: transparent; border: none; }
+    .range-input::-moz-range-track {
+      height: 40px;
+      background: transparent;
+      border: none;
+    }
+    
+    /* Custom thumbs */
+    .range-input::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      cursor: grab;
+      margin-top: -7px;
+      box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    }
+    
+    .range-input::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      cursor: grab;
+      box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    }
     
     /* Left thumb (blue) */
-    .input-a::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #c8d8e8, #8ba4c4);
-      border: 2px solid #6a8ab5;
-      box-shadow: 0 2px 6px rgba(0,0,0,.4);
-      cursor: grab;
-      margin-top: -6px;
+    .range-left::-webkit-slider-thumb {
+      background: #58a6ff;
     }
     
-    .input-a::-moz-range-thumb {
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #c8d8e8, #8ba4c4);
-      border: 2px solid #6a8ab5;
-      box-shadow: 0 2px 6px rgba(0,0,0,.4);
-      cursor: grab;
+    .range-left::-moz-range-thumb {
+      background: #58a6ff;
     }
     
     /* Right thumb (green) */
-    .input-b::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #c8e8d0, #7fb89a);
-      border: 2px solid #5a9a78;
-      box-shadow: 0 2px 6px rgba(0,0,0,.4);
-      cursor: grab;
-      margin-top: -6px;
+    .range-right::-webkit-slider-thumb {
+      background: #3fb950;
     }
     
-    .input-b::-moz-range-thumb {
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 35%, #c8e8d0, #7fb89a);
-      border: 2px solid #5a9a78;
-      box-shadow: 0 2px 6px rgba(0,0,0,.4);
-      cursor: grab;
+    .range-right::-moz-range-thumb {
+      background: #3fb950;
     }
     
-    /* Hover effects */
-    .input-a:hover::-webkit-slider-thumb { transform: scale(1.1); }
-    .input-b:hover::-webkit-slider-thumb { transform: scale(1.1); }
-    
-    /* Examples */
-    .example {
-      margin-bottom: 24px;
-      padding: 16px;
-      background: #161b22;
-      border-radius: 8px;
-      border: 1px solid #30363d;
+    /* Value display */
+    .values {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      font-size: 12px;
+      font-weight: 600;
     }
     
-    .example-title {
-      font-size: 10px; font-weight: 600; color: #8b949e;
-      text-transform: uppercase; margin-bottom: 12px;
-    }
+    .value-left { color: #58a6ff; }
+    .value-right { color: #3fb950; }
   </style>
 </head>
 <body>
   <div class="demo">
-    <h1>TwoThumbSlider — CSS-Tricks Demo</h1>
-    <p class="subtitle">Stacked native range inputs technique</p>
+    <h1>TwoThumbSlider — Working Demo</h1>
+    <p class="subtitle">Drag thumbs to adjust range (min 8-unit gap)</p>
     
     <!-- Example 1 -->
-    <div class="example">
-      <div class="example-title">Blue Theme (0–100)</div>
-      <div class="slider" style="--tension: #58a6ff;">
-        <div class="label">Position</div>
-        <div class="track-container">
-          <div class="rail"></div>
-          <div class="fill" id="fill1" style="left: 30%; width: 40%;"></div>
-          
-          <!-- Left thumb input (higher z-index) -->
-          <input type="range" min="0" max="62" step="1" value="30" 
-                 class="input input-a"
-                 oninput="updateSlider('s1', this.value, document.getElementById('b1').value)">
-          
-          <!-- Right thumb input (lower z-index) -->
-          <input type="range" min="38" max="100" step="1" value="70" 
-                 class="input input-b"
-                 id="b1"
-                 oninput="updateSlider('s1', document.getElementById('a1').value, this.value)">
-        </div>
+    <div class="slider-wrapper">
+      <div class="label">Position Range (0–100)</div>
+      <div class="track">
+        <div class="rail"></div>
+        <div class="fill" id="fill-1" style="left: 30%; width: 40%; background: #58a6ff; opacity: 0.6;"></div>
+        
+        <!-- Left thumb -->
+        <input type="range" min="0" max="100" value="30" 
+               class="range-input range-left"
+               id="left-1"
+               oninput="updateSlider('1', this.value, document.getElementById('right-1').value)">
+        
+        <!-- Right thumb -->
+        <input type="range" min="0" max="100" value="70" 
+               class="range-input range-right"
+               id="right-1"
+               oninput="updateSlider('1', document.getElementById('left-1').value, this.value)">
+      </div>
+      <div class="values">
+        <span class="value-left" id="val-left-1">30</span>
+        <span class="value-right" id="val-right-1">70</span>
       </div>
     </div>
     
     <!-- Example 2 -->
-    <div class="example">
-      <div class="example-title">Orange Theme (0–100)</div>
-      <div class="slider" style="--tension: #f0883e;">
-        <div class="label">Duration</div>
-        <div class="track-container">
-          <div class="rail"></div>
-          <div class="fill" id="fill2" style="left: 25%; width: 50%;"></div>
-          
-          <input type="range" min="0" max="67" step="1" value="25" 
-                 class="input input-a"
-                 id="a2"
-                 oninput="updateSlider('s2', this.value, document.getElementById('b2').value)">
-          
-          <input type="range" min="33" max="100" step="1" value="75" 
-                 class="input input-b"
-                 id="b2"
-                 oninput="updateSlider('s2', document.getElementById('a2').value, this.value)">
-        </div>
+    <div class="slider-wrapper">
+      <div class="label">Duration Range (0–100)</div>
+      <div class="track">
+        <div class="rail"></div>
+        <div class="fill" id="fill-2" style="left: 25%; width: 50%; background: #f0883e; opacity: 0.6;"></div>
+        
+        <input type="range" min="0" max="100" value="25" 
+               class="range-input range-left"
+               id="left-2"
+               oninput="updateSlider('2', this.value, document.getElementById('right-2').value)">
+        
+        <input type="range" min="0" max="100" value="75" 
+               class="range-input range-right"
+               id="right-2"
+               oninput="updateSlider('2', document.getElementById('left-2').value, this.value)">
+      </div>
+      <div class="values">
+        <span class="value-left" id="val-left-2">25</span>
+        <span class="value-right" id="val-right-2">75</span>
       </div>
     </div>
   </div>
@@ -187,31 +186,28 @@
   <script>
     const MIN_GAP = 8;
     
-    function updateSlider(id, valA, valB) {
-      const a = parseInt(valA);
-      const b = parseInt(valB);
+    function updateSlider(id, valLeft, valRight) {
+      let a = parseInt(valLeft);
+      let b = parseInt(valRight);
       
       // Enforce minimum gap
       if (a >= b - MIN_GAP) {
-        // Left thumb too close to right, push it back
-        const newA = b - MIN_GAP;
-        document.querySelector(`#${id.replace('s','')} .input-a`).value = newA;
+        a = b - MIN_GAP;
+        document.getElementById('left-' + id).value = a;
       }
-      
       if (b <= a + MIN_GAP) {
-        // Right thumb too close to left, push it forward
-        const newB = a + MIN_GAP;
-        document.querySelector(`#${id.replace('s','')} .input-b`).value = newB;
+        b = a + MIN_GAP;
+        document.getElementById('right-' + id).value = b;
       }
       
       // Update fill
-      const actualA = parseInt(document.querySelector(`#${id.replace('s','')} .input-a`).value);
-      const actualB = parseInt(document.querySelector(`#${id.replace('s','')} .input-b`).value);
-      const fill = document.getElementById('fill' + id.replace('s',''));
-      if (fill) {
-        fill.style.left = Math.min(actualA, actualB) + '%';
-        fill.style.width = Math.abs(actualB - actualA) + '%';
-      }
+      const fill = document.getElementById('fill-' + id);
+      fill.style.left = Math.min(a, b) + '%';
+      fill.style.width = Math.abs(b - a) + '%';
+      
+      // Update values display
+      document.getElementById('val-left-' + id).textContent = a;
+      document.getElementById('val-right-' + id).textContent = b;
     }
   </script>
 </body>
