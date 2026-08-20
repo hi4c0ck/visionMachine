@@ -1,11 +1,14 @@
 @echo off
 chcp 65001 >nul
-
-:: Set paths
-set PATH=C:\Users\user\.cargo\bin;C:\Users\user\AppData\Roaming\npm;C:\Program Files\nodejs;%PATH%
-
-:: Go to project
+set PATH=C:\Users\user\.cargo\bin;C:\Program Files\nodejs;%PATH%
 cd /d D:\work\horizonsMachine\VisionMachine
 
-:: Start Tauri dev mode (handles Vite automatically)
-tauri dev
+:: Check if release build exists, otherwise build
+if exist "src-tauri\target\release\visionmachine.exe" (
+    echo Starting VisionMachine...
+    start "" src-tauri\target\release\visionmachine.exe
+) else (
+    echo Building VisionMachine...
+    npm run build
+    npm run tauri:build
+)
