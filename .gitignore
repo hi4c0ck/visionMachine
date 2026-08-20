@@ -50,7 +50,6 @@ secrets/
 *.pem
 *.key
 *.token
-*.json
 config/github-token.txt
 config/repo-info.json
 
@@ -99,7 +98,6 @@ coverage/
 docs/_build/
 .docs/
 .jekyll-cache/
-.gitpages/
 
 # Temporary files
 *.tmp
@@ -175,3 +173,16 @@ COMPLETE_DOCUMENTATION_SUMMARY.md
 BRANCHING_STRATEGY.md
 COMMIT_MSG.txt
 build_log.txt
+
+# Root-level development files (not needed in repo)
+ARCHITECTURE_REPORT.md
+BUILD_COMPLETE.md
+index.html
+api_server.py
+launch.py
+run.bat
+run_final_verification.py
+verify_production.py
+verify_production.sh
+package-lock.json
+uv.lock
