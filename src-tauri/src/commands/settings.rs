@@ -9,7 +9,7 @@ pub async fn get_storage_path() -> String {
 }
 
 #[tauri::command]
-pub async fn get_database_stats(db: State<Database>) -> Result<serde_json::Value, String> {
+pub async fn get_database_stats(db: State<'_, Database>) -> Result<serde_json::Value, String> {
     db.stats()
         .await
         .map_err(|e| e.to_string())

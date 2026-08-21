@@ -5,7 +5,7 @@ use tauri::State;
 pub async fn create_session(
     project_id: String,
     name: String,
-    db: State<Database>,
+    db: State<'_, Database>,
 ) -> Result<serde_json::Value, String> {
     db.create_session(&project_id, &name)
         .await
@@ -13,22 +13,11 @@ pub async fn create_session(
 }
 
 #[tauri::command]
-pub async fn get_composer(
-    session_id: String,
-    db: State<Database>,
-) -> Result<serde_json::Value, String> {
-    db.get_composer(&session_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn update_composer(
-    session_id: String,
-    config_json: String,
-    db: State<Database>,
-) -> Result<serde_json::Value, String> {
-    db.update_composer(&session_id, &config_json)
+pub async fn list_sessions(
+    project_id: String,
+    db: State<'_, Database>,
+) -> Result<Vec<serde_json::Value>, String> {
+    db.list_sessions(&project_id)
         .await
         .map_err(|e| e.to_string())
 }
