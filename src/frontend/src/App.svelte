@@ -2,23 +2,30 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   
-  // App state
-  let currentView = 'welcome'; // 'welcome' | 'main'
-  let currentUser = null;
-  let userName = '';
-  let loading = false;
-  let error = null;
+  // Version info
   const VERSION = '0.1.0';
+  const BUILD_NUMBER = import.meta.env.VITE_BUILD_NUMBER || 'dev';
   
-  // Profiles and projects for main view
-  let profiles = [];
-  let projects = [];
-  let currentProfileId = null;
-  let pipes = [];
-  let artifacts = [];
-  let currentSessionId = null;
+  // Auth state
+  let currentView = $state('welcome'); // 'welcome' | 'main'
+  let currentUser = $state(null);
+  let userName = $state('');
+  let loginError = $state(null);
+  let loading = $state(false);
+  
+  // Main app state
+  let profiles = $state([]);
+  let projects = $state([]);
+  let sessions = $state([]);
+  let currentProfileId = $state(null);
+  let currentProjectId = $state(null);
+  let currentSessionId = $state(null);
+  let pipes = $state([]);
+  let artifacts = $state([]);
+  let appError = $state(null);
   
   onMount(async () => {
+    console.log(`VisionMachine v${VERSION} (Build ${BUILD_NUMBER})`);
     await checkAuth();
   });
   
@@ -42,7 +49,7 @@
     if (!userName.trim()) return;
     
     loading = true;
-    error = null;
+    loginError = null;
     
     try {
       // Try to find existing profile by name
@@ -51,7 +58,10 @@
       
       if (!profile) {
         // Create new profile
-        profile = await invoke('create_profile', { name: userName.trim(), email: null });
+        profile = await invoke('create_profile', { 
+          name: userName.trim(), 
+          email: null 
+        });
       }
       
       // Login
@@ -60,7 +70,7 @@
       userName = '';
       await loadProfiles();
     } catch (e) {
-      error = `Login failed: ${e}`;
+      loginError = `Login failed: ${e}`;
     } finally {
       loading = false;
     }
@@ -79,33 +89,55 @@
       currentView = 'welcome';
       profiles = [];
       projects = [];
+      sessions = [];
+      currentProfileId = null;
+      currentProjectId = null;
+      currentSessionId = null;
       pipes = [];
       artifacts = [];
-      currentProfileId = null;
-      currentSessionId = null;
+      appError = null;
     } catch (e) {
-      error = `Logout failed: ${e}`;
+      appError = `Logout failed: ${e}`;
     }
   }
   
   async function loadProfiles() {
+    loading = true;
+    appError = null;
+    
     try {
       profiles = await invoke('list_profiles');
-      if (profiles.length > 0) {
+      if (profiles.length > 0 && !currentProfileId) {
         selectProfile(profiles[0].id);
       }
     } catch (e) {
-      error = `Failed to load profiles: ${e}`;
+      appError = `Failed to load profiles: ${e}`;
+    } finally {
+      loading = false;
     }
   }
   
   async function selectProfile(profileId) {
     currentProfileId = profileId;
     try {
-      const result = await invoke('list_projects', { profileId });
-      projects = result || [];
+      projects = await invoke('list_projects', { profileId });
+      projects = projects || [];
     } catch (e) {
       console.error('Failed to load projects:', e);
+      appError = `Failed to load projects: ${e}`;
+    }
+  }
+  
+  async function createProfile() {
+    const name = prompt('Enter profile name:');
+    if (!name) return;
+    
+    try {
+      const profile = await invoke('create_profile', { name, email: null });
+      profiles.push(profile);
+      await selectProfile(profile.id);
+    } catch (e) {
+      appError = `Failed to create profile: ${e}`;
     }
   }
   
@@ -115,14 +147,24 @@
     if (!name) return;
     
     try {
-      const result = await invoke('create_project', { 
+      const project = await invoke('create_project', { 
         profileId: currentProfileId, 
         name,
         description: '' 
       });
-      projects.push(result);
+      projects.push(project);
     } catch (e) {
-      error = `Failed to create project: ${e}`;
+      appError = `Failed to create project: ${e}`;
+    }
+  }
+  
+  async function selectProject(projectId) {
+    currentProjectId = projectId;
+    try {
+      sessions = await invoke('list_sessions', { projectId });
+      sessions = sessions || [];
+    } catch (e) {
+      console.error('Failed to load sessions:', e);
     }
   }
   
@@ -131,17 +173,36 @@
     if (!name) return;
     
     try {
-      const result = await invoke('create_session', { projectId, name });
-      currentSessionId = result.id;
-      
-      // Load composer
-      const composer = await invoke('get_composer', { sessionId: result.id });
+      const session = await invoke('create_session', { projectId, name });
+      sessions.push(session);
+      await selectSession(session.id);
+    } catch (e) {
+      appError = `Failed to create session: ${e}`;
+    }
+  }
+  
+  async function selectSession(sessionId) {
+    currentSessionId = sessionId;
+    try {
+      const composer = await invoke('get_composer', { sessionId });
       if (composer && composer.config_json) {
         const config = JSON.parse(composer.config_json);
         pipes = config.pipes || [];
+      } else {
+        pipes = [];
       }
+      await loadArtifacts(sessionId);
     } catch (e) {
-      error = `Failed to create session: ${e}`;
+      console.error('Failed to load composer:', e);
+    }
+  }
+  
+  async function loadArtifacts(sessionId) {
+    try {
+      artifacts = await invoke('list_artifacts_by_session', { sessionId });
+      artifacts = artifacts || [];
+    } catch (e) {
+      console.error('Failed to load artifacts:', e);
     }
   }
   
@@ -149,6 +210,7 @@
     const pipe = {
       id: crypto.randomUUID(),
       name: `Pipe ${pipes.length + 1}`,
+      order: pipes.length,
       status: 'idle',
       model: 'stable-video-diffusion',
       steps: 30,
@@ -174,6 +236,7 @@
       });
     } catch (e) {
       console.error('Failed to save composer:', e);
+      appError = `Failed to save composer: ${e}`;
     }
   }
   
@@ -181,18 +244,15 @@
     const pipeIndex = pipes.findIndex(p => p.id === pipeId);
     if (pipeIndex === -1 || pipes[pipeIndex].status === 'generating') return;
     
-    // Update pipe status
     const updatedPipes = [...pipes];
     updatedPipes[pipeIndex] = { ...updatedPipes[pipeIndex], status: 'generating' };
     pipes = updatedPipes;
     
-    // Simulate generation
+    // Simulate generation delay
     await new Promise(r => setTimeout(r, 2000));
     
-    // Mark as completed
-    const finalPipes = [...pipes];
-    finalPipes[pipeIndex] = { ...finalPipes[pipeIndex], status: 'completed' };
-    pipes = finalPipes;
+    const completedPipe = { ...updatedPipes[pipeIndex], status: 'completed' };
+    pipes = [...pipes.slice(0, pipeIndex), completedPipe, ...pipes.slice(pipeIndex + 1)];
     
     // Add artifact
     const artifact = {
@@ -205,6 +265,12 @@
     
     await saveComposer();
   }
+  
+  async function generateAll() {
+    for (const pipe of [...pipes]) {
+      await generateFrame(pipe.id);
+    }
+  }
 </script>
 
 {#if currentView === 'welcome'}
@@ -212,14 +278,15 @@
     <div class="logo">
       <div class="logo-icon">V</div>
       <h1>VisionMachine</h1>
+      <p class="version">v{VERSION} (Build {BUILD_NUMBER})</p>
     </div>
     
     <div class="login-form">
       <h2>Welcome</h2>
       <p>Enter your name to continue</p>
       
-      {#if error}
-        <div class="error">{error}</div>
+      {#if loginError}
+        <div class="error">{loginError}</div>
       {/if}
       
       <div class="input-group">
@@ -239,8 +306,6 @@
         </button>
       </div>
     </div>
-    
-    <div class="version">v{VERSION}</div>
   </div>
 {:else}
   <div class="app">
@@ -248,7 +313,7 @@
     <div class="titlebar">
       <div class="title">VisionMachine v{VERSION}</div>
       <div class="user-info">
-        <span class="username">{currentUser?.name}</span>
+        <span class="username">👤 {currentUser?.name}</span>
         <button class="btn-logout" on:click={handleLogout}>Logout</button>
       </div>
       <div class="controls">
@@ -258,27 +323,41 @@
       </div>
     </div>
     
+    <!-- Error Banner -->
+    {#if appError}
+      <div class="error-banner">{appError}</div>
+    {/if}
+    
     <!-- Main Layout -->
     <div class="main">
       <!-- Sidebar -->
       <aside class="sidebar">
         <div class="sidebar-header">
           <h3>Profiles ({profiles.length})</h3>
+          <button class="btn-primary" on:click={createProfile}>+ New</button>
         </div>
         
-        <div class="profile-list">
-          {#each profiles as profile (profile.id)}
-            <div 
-              class="profile-item {currentProfileId === profile.id ? 'selected' : ''}"
-              on:click={() => selectProfile(profile.id)}
-            >
-              <span class="avatar">👤</span>
-              <span class="name">{profile.name}</span>
-            </div>
-          {/each}
-        </div>
+        {#if loading}
+          <div class="loading">Loading...</div>
+        {:else}
+          <div class="profile-list">
+            {#each profiles as profile (profile.id)}
+              <div 
+                class="profile-item {currentProfileId === profile.id ? 'selected' : ''}" 
+                on:click={() => selectProfile(profile.id)}
+              >
+                <span class="avatar">👤</span>
+                <span class="name">{profile.name}</span>
+              </div>
+            {/each}
+            
+            {#if profiles.length === 0}
+              <div class="empty">No profiles yet</div>
+            {/if}
+          </div>
+        {/if}
         
-        {#if profiles.length > 0}
+        {#if currentProfileId}
           <div class="sidebar-section">
             <div class="section-header">
               <h3>Projects ({projects.length})</h3>
@@ -286,7 +365,7 @@
             </div>
             <div class="project-list">
               {#each projects as project (project.id)}
-                <div class="project-item" on:click={() => createSession(project.id)}>
+                <div class="project-item" on:click={() => selectProject(project.id)}>
                   <span class="icon">🎬</span>
                   <span class="name">{project.name}</span>
                 </div>
@@ -298,76 +377,108 @@
             </div>
           </div>
         {/if}
+        
+        {#if currentProjectId}
+          <div class="sidebar-section">
+            <div class="section-header">
+              <h3>Sessions ({sessions.length})</h3>
+              <button class="btn-small" on:click={() => createSession(currentProjectId)}>+ New</button>
+            </div>
+            <div class="session-list">
+              {#each sessions as session (session.id)}
+                <div 
+                  class="session-item {currentSessionId === session.id ? 'selected' : ''}" 
+                  on:click={() => selectSession(session.id)}
+                >
+                  <span class="icon">📁</span>
+                  <span class="name">{session.name}</span>
+                </div>
+              {/each}
+              
+              {#if sessions.length === 0}
+                <div class="empty">No sessions</div>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </aside>
       
       <!-- Content Area -->
       <main class="content">
-        <header class="view-header">
-          <h2>Composer</h2>
-          <div class="actions">
-            <button class="btn-secondary" on:click={addPipe}>+ Add Pipe</button>
-          </div>
-        </header>
-        
-        <div class="pipes-grid">
-          {#each pipes as pipe (pipe.id)}
-            <div class="pipe-card {pipe.status}">
-              <div class="pipe-header">
-                <span class="pipe-name">{pipe.name}</span>
-                <span class="status">
-                  {pipe.status === 'generating' ? '⏳ Generating...' : 
-                   pipe.status === 'completed' ? '✓ Done' : '○ Idle'}
-                </span>
-                <button class="remove-btn" on:click={() => removePipe(pipe.id)}>✕</button>
-              </div>
-              
-              <div class="pipe-config">
-                <div class="field">
-                  <label>Model</label>
-                  <select bind:value={pipe.model}>
-                    <option value="stable-video-diffusion">stable-video-diffusion</option>
-                    <option value="animatediff">animatediff</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label>Steps</label>
-                  <input type="number" bind:value={pipe.steps} min="1" max="100">
-                </div>
-                <div class="field">
-                  <label>Cfg Scale</label>
-                  <input type="number" bind:value={pipe.cfgScale} step="0.5" min="1" max="30">
-                </div>
-              </div>
-              
-              <button 
-                class="generate-btn" 
-                on:click={() => generateFrame(pipe.id)}
-                disabled={pipe.status === 'generating'}
-              >
-                {pipe.status === 'generating' ? 'Generating...' : 'Generate Frame'}
-              </button>
+        {#if currentSessionId}
+          <header class="view-header">
+            <h2>Composer</h2>
+            <div class="actions">
+              <button class="btn-secondary" on:click={addPipe}>+ Add Pipe</button>
+              <button class="btn-primary" on:click={generateAll}>Generate All</button>
             </div>
-          {/each}
+          </header>
           
-          {#if pipes.length === 0}
-            <div class="empty-state">
-              <p>No pipes configured</p>
-              <button class="btn-primary" on:click={addPipe}>+ Add First Pipe</button>
-            </div>
-          {/if}
-        </div>
+          <div class="pipes-grid">
+            {#each pipes as pipe (pipe.id)}
+              <div class="pipe-card {pipe.status}">
+                <div class="pipe-header">
+                  <span class="pipe-name">{pipe.name}</span>
+                  <span class="status">
+                    {pipe.status === 'generating' ? '⏳ Generating...' : 
+                     pipe.status === 'completed' ? '✅ Done' : '⏳ Idle'}
+                  </span>
+                  <button class="remove-btn" on:click={() => removePipe(pipe.id)}>×</button>
+                </div>
+                
+                <div class="pipe-config">
+                  <div class="field">
+                    <label>Model</label>
+                    <select bind:value={pipe.model}>
+                      <option value="stable-video-diffusion">stable-video-diffusion</option>
+                      <option value="animatediff">animatediff</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Steps</label>
+                    <input type="number" bind:value={pipe.steps} min="1" max="100">
+                  </div>
+                  <div class="field">
+                    <label>Cfg Scale</label>
+                    <input type="number" bind:value={pipe.cfgScale} step="0.5" min="1" max="30">
+                  </div>
+                </div>
+                
+                <button 
+                  class="generate-btn" 
+                  on:click={() => generateFrame(pipe.id)}
+                  disabled={pipe.status === 'generating'}
+                >
+                  {pipe.status === 'generating' ? 'Generating...' : 'Generate Frame'}
+                </button>
+              </div>
+            {/each}
+            
+            {#if pipes.length === 0}
+              <div class="empty-state">
+                <p>No pipes configured</p>
+                <button class="btn-primary" on:click={addPipe}>+ Add First Pipe</button>
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div class="empty-state">
+            <p>Select or create a session to begin composing</p>
+          </div>
+        {/if}
       </main>
       
       <!-- Artifacts Panel -->
       <aside class="panel">
         <div class="panel-header">
           <h3>Artifacts ({artifacts.length})</h3>
+          <span class="badge">Build {BUILD_NUMBER}</span>
         </div>
         
         <div class="artifacts-list">
           {#each artifacts as artifact (artifact.id)}
             <div class="artifact-item">
-              <span class="icon">🎥</span>
+              <span class="icon">🎬</span>
               <div class="info">
                 <div class="name">{artifact.path.split('/').pop()}</div>
                 <div class="meta">{artifact.type} • {new Date(artifact.created_at).toLocaleDateString()}</div>
@@ -424,7 +535,12 @@
   .logo h1 {
     font-size: 32px;
     font-weight: 600;
-    margin: 0;
+    margin: 0 0 8px;
+  }
+  
+  .logo .version {
+    font-size: 14px;
+    color: #888;
   }
   
   .login-form {
@@ -533,6 +649,15 @@
   .btn-control:hover { background: rgba(255,255,255,0.1); }
   .btn-control.close:hover { background: #e81123; }
   
+  /* Error Banner */
+  .error-banner {
+    padding: 12px 20px;
+    background: rgba(239, 68, 68, 0.1);
+    border-bottom: 1px solid #ef4444;
+    color: #ef4444;
+    font-size: 13px;
+  }
+  
   /* Main Layout */
   .main {
     display: flex;
@@ -542,7 +667,7 @@
   
   /* Sidebar */
   .sidebar {
-    width: 240px;
+    width: 280px;
     background: #16161e;
     border-right: 1px solid #2a2a3a;
     display: flex;
@@ -552,14 +677,19 @@
   
   .sidebar-header {
     padding: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     border-bottom: 1px solid #2a2a3a;
   }
   
   .sidebar-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
   
-  .profile-list { padding: 8px; }
+  .profile-list, .project-list, .session-list {
+    padding: 8px;
+  }
   
-  .profile-item {
+  .profile-item, .project-item, .session-item {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -569,11 +699,22 @@
     transition: background 0.2s;
   }
   
-  .profile-item:hover { background: #1e1e2e; }
-  .profile-item.selected { background: rgba(74,158,255,0.15); border-left: 3px solid #4a9eff; }
+  .profile-item:hover, .project-item:hover, .session-item:hover {
+    background: #1e1e2e;
+  }
   
-  .profile-item .avatar { font-size: 18px; }
-  .profile-item .name { font-size: 13px; }
+  .profile-item.selected {
+    background: rgba(74,158,255,0.15);
+    border-left: 3px solid #4a9eff;
+  }
+  
+  .profile-item .avatar, .project-item .icon, .session-item .icon {
+    font-size: 18px;
+  }
+  
+  .profile-item .name, .project-item .name, .session-item .name {
+    font-size: 13px;
+  }
   
   .sidebar-section {
     border-top: 1px solid #2a2a3a;
@@ -588,23 +729,6 @@
   }
   
   .section-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
-  
-  .project-list { display: flex; flex-direction: column; gap: 4px; }
-  
-  .project-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  
-  .project-item:hover { background: #1e1e2e; }
-  
-  .project-item .icon { font-size: 16px; }
-  .project-item .name { font-size: 13px; }
   
   /* Content */
   .content {
@@ -716,7 +840,7 @@
   
   /* Right Panel */
   .panel {
-    width: 260px;
+    width: 280px;
     background: #16161e;
     border-left: 1px solid #2a2a3a;
     display: flex;
@@ -725,10 +849,21 @@
   
   .panel-header {
     padding: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     border-bottom: 1px solid #2a2a3a;
   }
   
   .panel-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
+  
+  .badge {
+    background: #2a2a3a;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    color: #888;
+  }
   
   .artifacts-list {
     flex: 1;
@@ -753,13 +888,13 @@
   
   /* Buttons */
   .btn-primary {
-    padding: 12px 20px;
+    padding: 6px 12px;
     background: #4a9eff;
     color: #fff;
     border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 500;
   }
   
@@ -789,22 +924,16 @@
   }
   
   /* States */
-  .error {
-    padding: 12px;
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid #ef4444;
-    border-radius: 8px;
-    color: #ef4444;
-    font-size: 13px;
-    margin-bottom: 16px;
-  }
-  
+  .loading { padding: 20px; text-align: center; color: #888; }
+  .error { padding: 12px; background: rgba(239, 68, 68, 0.1); border-radius: 6px; color: #ef4444; font-size: 13px; margin-bottom: 16px; }
   .empty { color: #666; font-size: 13px; padding: 12px; text-align: center; }
   
   .empty-state {
-    grid-column: 1/-1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
     text-align: center;
-    padding: 60px 20px;
     color: #888;
   }
   
