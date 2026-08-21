@@ -7,22 +7,22 @@
   const BUILD_NUMBER = import.meta.env.VITE_BUILD_NUMBER || 'dev';
   
   // Auth state
-  let currentView = $state('welcome'); // 'welcome' | 'main'
-  let currentUser = $state(null);
-  let userName = $state('');
-  let loginError = $state(null);
-  let loading = $state(false);
+  let currentView = 'welcome'; // 'welcome' | 'main'
+  let currentUser = null;
+  let userName = '';
+  let loginError = null;
+  let loading = false;
   
   // Main app state
-  let profiles = $state([]);
-  let projects = $state([]);
-  let sessions = $state([]);
-  let currentProfileId = $state(null);
-  let currentProjectId = $state(null);
-  let currentSessionId = $state(null);
-  let pipes = $state([]);
-  let artifacts = $state([]);
-  let appError = $state(null);
+  let profiles = [];
+  let projects = [];
+  let sessions = [];
+  let currentProfileId = null;
+  let currentProjectId = null;
+  let currentSessionId = null;
+  let pipes = [];
+  let artifacts = [];
+  let appError = null;
   
   onMount(async () => {
     console.log(`VisionMachine v${VERSION} (Build ${BUILD_NUMBER})`);
