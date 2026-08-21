@@ -6,7 +6,7 @@ pub async fn create_project(
     profile_id: String,
     name: String,
     description: Option<String>,
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<serde_json::Value, String> {
     db.create_project(&profile_id, &name, description.as_deref())
         .await
@@ -16,7 +16,7 @@ pub async fn create_project(
 #[tauri::command]
 pub async fn get_project(
     id: String,
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<serde_json::Value, String> {
     db.get_project(&id)
         .await
@@ -26,7 +26,7 @@ pub async fn get_project(
 #[tauri::command]
 pub async fn list_projects(
     profile_id: String,
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<Vec<serde_json::Value>, String> {
     db.list_projects(&profile_id)
         .await
@@ -36,7 +36,7 @@ pub async fn list_projects(
 #[tauri::command]
 pub async fn delete_project(
     id: String,
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<(), String> {
     db.delete_project(&id)
         .await

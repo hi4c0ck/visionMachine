@@ -5,7 +5,7 @@ use tauri::{Emitter, State};
 pub async fn create_profile(
     name: String,
     email: Option<String>,
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<serde_json::Value, String> {
     db.create_profile(&name, email.as_deref())
         .await
@@ -14,7 +14,7 @@ pub async fn create_profile(
 
 #[tauri::command]
 pub async fn list_profiles(
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<Vec<serde_json::Value>, String> {
     db.list_profiles()
         .await
@@ -23,7 +23,7 @@ pub async fn list_profiles(
 
 #[tauri::command]
 pub async fn get_current_profile(
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<Option<serde_json::Value>, String> {
     let pool = db.get_pool().await.map_err(|e| e.to_string())?;
     
@@ -45,7 +45,7 @@ pub async fn get_current_profile(
 #[tauri::command]
 pub async fn login_profile(
     profile_id: String,
-    db: State<'_, Database>,
+    db: State<Database>,
 ) -> Result<serde_json::Value, String> {
     let pool = db.get_pool().await.map_err(|e| e.to_string())?;
     
