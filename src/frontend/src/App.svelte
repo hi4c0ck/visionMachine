@@ -5,11 +5,11 @@
   const VERSION = '0.1.0';
   const BUILD_NUMBER = import.meta.env.VITE_BUILD_NUMBER || 'dev';
   
-  let currentView = $state('welcome');
-  let currentUser = $state(null);
-  let userName = $state('');
-  let loginError = $state(null);
-  let loading = $state(false);
+  let currentView = 'welcome';
+  let currentUser = null;
+  let userName = '';
+  let loginError = null;
+  let loading = false;
   
   onMount(async () => {
     console.log(`VisionMachine v${VERSION} (Build ${BUILD_NUMBER})`);
