@@ -1,5 +1,6 @@
-mod profiles;
-mod projects;
-mod sessions;
-mod artifacts;
-mod settings;
+pub mod artifacts;
+pub mod composer;
+pub mod profiles;
+pub mod projects;
+pub mod sessions;
+pub mod settings;
