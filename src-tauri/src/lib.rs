@@ -65,7 +65,10 @@ pub fn run() {
 }
 
 #[tauri::command]
-async fn create_profile(name: String, email: Option<String>) -> Result<serde_json::Value, String> {
+async fn create_profile(
+    name: String,
+    email: Option<String>,
+) -> Result<serde_json::Value, String> {
     use uuid::Uuid;
     Ok(serde_json::json!({
         "id": Uuid::new_v4().to_string(),
@@ -77,11 +80,13 @@ async fn create_profile(name: String, email: Option<String>) -> Result<serde_jso
 
 #[tauri::command]
 async fn list_profiles() -> Result<Vec<serde_json::Value>, String> {
+    // For now return empty - real impl would query DB
     Ok(Vec::new())
 }
 
 #[tauri::command]
 async fn get_current_profile() -> Result<Option<serde_json::Value>, String> {
+    // Returns current logged in profile
     Ok(None)
 }
 
