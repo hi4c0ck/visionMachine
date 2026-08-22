@@ -1,1 +1,0 @@
-"""VisionMachine models package."""

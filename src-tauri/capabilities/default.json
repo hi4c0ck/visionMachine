@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "Default capability for VisionMachine",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-create",
+    "core:window:allow-center",
+    "core:window:allow-set-title",
+    "core:app:default",
+    "core:app:allow-set-app-theme"
+  ]
+}

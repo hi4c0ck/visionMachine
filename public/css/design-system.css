@@ -1,0 +1,84 @@
+/* VisionMachine Design System - Color Palettes */
+
+/* JetBrains Dark Theme */
+[data-theme="jetbrains-dark"] {
+  /* Background Colors */
+  --bg-primary: #2B2B2B;
+  --bg-secondary: #3C3F46;
+  --bg-tertiary: #4E525A;
+  --bg-hover: #4E525A;
+  
+  /* Text Colors */
+  --text-primary: #EEEEEE;
+  --text-secondary: #BFBFBF;
+  --text-muted: #808080;
+  --text-inverse: #FFFFFF;
+  
+  /* Accent Colors */
+  --accent-primary: #59B5FF;
+  --accent-primary-hover: #7EC8FF;
+  --accent-secondary: #BB88EE;
+  
+  /* Border Colors */
+  --border-color: #4E525A;
+  
+  /* Special */
+  --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Steel Machinery Dark Theme */
+[data-theme="steel-dark"] {
+  /* Background Colors */
+  --bg-primary: #1A1A1D;
+  --bg-secondary: #2A2A2E;
+  --bg-tertiary: #3A3A3F;
+  --bg-hover: #3A3A3F;
+  
+  /* Text Colors */
+  --text-primary: #E8E8E8;
+  --text-secondary: #A0A0A0;
+  --text-muted: #606060;
+  --text-inverse: #FFFFFF;
+  
+  /* Accent Colors */
+  --accent-primary: #FF6B35;
+  --accent-primary-hover: #FF8C61;
+  --accent-secondary: #F7C948;
+  
+  /* Border Colors */
+  --border-color: #3A3A3F;
+  
+  /* Special */
+  --shadow-color: rgba(0, 0, 0, 0.5);
+}
+
+/* Light theme (default/fallback) */
+[data-theme="light"], :root {
+  /* Background Colors */
+  --bg-primary: #FAFAFA;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #F0F0F0;
+  --bg-hover: #E8E8E8;
+  
+  /* Text Colors */
+  --text-primary: #1A1A1A;
+  --text-secondary: #5A5A5A;
+  --text-muted: #8A8A8A;
+  --text-inverse: #FFFFFF;
+  
+  /* Accent Colors */
+  --accent-primary: #007ACC;
+  --accent-primary-hover: #005A9E;
+  --accent-secondary: #8B5CF6;
+  
+  /* Border Colors */
+  --border-color: #E0E0E0;
+  
+  /* Special */
+  --shadow-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Smooth theme transitions */
+*, *::before, *::after {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}

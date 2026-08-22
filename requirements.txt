@@ -1,0 +1,23 @@
+# VisionMachine - Requirements
+
+# Core dependencies
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.13.4
+aiohttp>=3.9.0
+
+# Security
+cryptography>=42.0.0
+python-dotenv>=1.2.3
+
+# ML/Data (optional, for future)
+# torch>=2.13.0
+# numpy>=2.5.2
+# pillow>=12.3.0
+
+# Desktop (optional)
+# pywebview>=4.5.1
+
+# Development
+pytest>=9.1.1
+pytest-asyncio>=0.23.0

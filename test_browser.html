@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionMachine Debug Test</title>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      background: #1e1e1e; 
+      color: #fff; 
+      padding: 20px;
+    }
+    .status { padding: 10px; margin: 5px 0; border-radius: 4px; }
+    .ok { background: #22c55e; color: white; }
+    .error { background: #ef4444; color: white; }
+    .warn { background: #f59e0b; color: black; }
+    pre { background: #2d2d2d; padding: 10px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>VisionMachine Debug Test</h1>
+  <div id="status"></div>
+  
+  <script type="module">
+    const status = document.getElementById('status');
+    
+    function addStatus(msg, type) {
+      const div = document.createElement('div');
+      div.className = `status ${type}`;
+      div.textContent = msg;
+      status.appendChild(div);
+    }
+    
+    async function test() {
+      addStatus('Starting tests...', 'warn');
+      
+      try {
+        // Test 1: Check if Svelte can load
+        addStatus('Test 1: Checking Svelte availability...', 'warn');
+        try {
+          const svelte = await import('svelte');
+          addStatus('✓ Svelte imported successfully', 'ok');
+        } catch (e) {
+          addStatus(`✗ Failed to import Svelte: ${e.message}`, 'error');
+        }
+        
+        // Test 2: Check if @tauri-apps/api can load
+        addStatus('Test 2: Checking Tauri API availability...', 'warn');
+        try {
+          const tauri = await import('@tauri-apps/api/core');
+          addStatus('✓ Tauri API imported successfully', 'ok');
+        } catch (e) {
+          addStatus(`✗ Failed to import Tauri API: ${e.message}`, 'error');
+          addStatus('  This is expected when testing in browser - Tauri not available', 'warn');
+        }
+        
+        // Test 3: Try to load the compiled JS
+        addStatus('Test 3: Loading compiled JS bundle...', 'warn');
+        try {
+          const response = await fetch('./dist/assets/index-D3-hMLDt.js');
+          if (response.ok) {
+            const text = await response.text();
+            addStatus(`✓ Bundle loaded (${text.length} chars)`, 'ok');
+          } else {
+            addStatus(`✗ Failed to load bundle: HTTP ${response.status}`, 'error');
+          }
+        } catch (e) {
+          addStatus(`✗ Error loading bundle: ${e.message}`, 'error');
+        }
+        
+        // Test 4: Check CSS
+        addStatus('Test 4: Checking CSS bundle...', 'warn');
+        try {
+          const response = await fetch('./dist/assets/index-C5UtDqa4.css');
+          if (response.ok) {
+            const text = await response.text();
+            addStatus(`✓ CSS loaded (${text.length} chars)`, 'ok');
+          } else {
+            addStatus(`✗ Failed to load CSS: HTTP ${response.status}`, 'error');
+          }
+        } catch (e) {
+          addStatus(`✗ Error loading CSS: ${e.message}`, 'error');
+        }
+        
+        addStatus('Tests complete!', 'ok');
+        
+      } catch (e) {
+        addStatus(`Fatal error: ${e.message}`, 'error');
+      }
+    }
+    
+    test().catch(e => {
+      addStatus(`Unexpected error: ${e.message}`, 'error');
+      console.error(e);
+    });
+  </script>
+</body>
+</html>

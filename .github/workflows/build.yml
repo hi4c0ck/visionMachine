@@ -1,0 +1,122 @@
+name: VisionMachine Build & Test
+
+on:
+  push:
+    branches: [develop, main, master]
+  pull_request:
+    branches: [develop, main, master]
+
+jobs:
+  # Test 1: Environment Check
+  environment-check:
+    name: Environment Check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Check versions
+        run: |
+          echo "Rust: $(rustc --version)"
+          echo "Cargo: $(cargo --version)"
+          echo "Node: $(node --version)"
+          echo "npm: $(npm --version)"
+          
+  # Test 2: Rust Compilation
+  rust-compile:
+    name: Rust Compilation
+    needs: environment-check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Check compilation
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+        
+  # Test 3: Frontend Build
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/frontend/package-lock.json
+          
+      - name: Install dependencies
+        run: npm install
+        working-directory: src/frontend
+        
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/frontend
+        
+      - name: Run type check
+        run: npm run check
+        working-directory: src/frontend
+        
+  # Test 4: Tauri Config Validation
+  tauri-config:
+    name: Tauri Config Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate tauri.conf.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            const required = ['productName', 'version', 'identifier', 'build', 'app'];
+            const missing = required.filter(field => !config[field]);
+            if (missing.length > 0) {
+              console.error('Missing required fields:', missing.join(', '));
+              process.exit(1);
+            }
+            console.log('✓ tauri.conf.json is valid');
+          "
+          
+  # Test 5: Full Test Suite
+  full-test-suite:
+    name: Full Test Suite
+    needs: [rust-compile, frontend-build, tauri-config]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Run test suite
+        run: node scripts/test-build.js
