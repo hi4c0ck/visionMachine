@@ -4,6 +4,11 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "shell:allow-open"
+    "core:window:default",
+    "core:window:allow-create",
+    "core:window:allow-center",
+    "core:window:allow-set-title",
+    "core:app:default",
+    "core:app:allow-set-app-theme"
   ]
 }

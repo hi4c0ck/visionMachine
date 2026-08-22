@@ -1,31 +1,34 @@
 {
-  "build": {
-    "frontendDist": "./dist",
-    "devUrl": "http://localhost:5173"
-  },
-  "bundle": {
-    "active": true,
-    "targets": ["msi"],
-    "icon": [
-      "icons/icon.ico"
-    ]
-  },
   "productName": "VisionMachine",
   "version": "0.1.0",
-  "identifier": "com.visionmachine.app",
+  "identifier": "com.visionmachine.desktop",
+  "build": {
+    "frontendDist": "../public",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
   "app": {
     "withGlobalTauri": true,
-    "security": {
-      "csp": null
-    },
     "windows": [
       {
+        "label": "main",
         "title": "VisionMachine",
         "width": 1280,
         "height": 800,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": true,
+        "center": true
       }
-    ]
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "icon": ["icons/icon.ico"]
   }
 }

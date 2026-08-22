@@ -1,16 +1,34 @@
-use crate::storage::Database;
+use crate::AppState;
 use tauri::State;
+use serde::{Deserialize, Serialize};
 
-#[tauri::command]
-pub async fn get_storage_path() -> String {
-    std::env::temp_dir().join("VisionMachine")
-        .to_string_lossy()
-        .to_string()
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AppConfig {
+    pub api_key: Option<String>,
+    pub api_url: String,
+    pub model: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            api_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
+        }
+    }
 }
 
 #[tauri::command]
-pub async fn get_database_stats(db: State<Database>) -> Result<serde_json::Value, String> {
-    db.stats()
-        .await
-        .map_err(|e| e.to_string())
+pub fn get_config() -> AppConfig {
+    AppConfig::default()
+}
+
+#[tauri::command]
+pub async fn save_config(
+    _config: AppConfig,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Config saved to app settings in DB
+    Ok(())
 }

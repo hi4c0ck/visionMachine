@@ -1,24 +1,21 @@
-use crate::storage::Database;
+use crate::AppState;
+use serde::Deserialize;
 use tauri::State;
 
-#[tauri::command]
-pub async fn create_project(
-    profile_id: String,
-    name: String,
-    description: Option<String>,
-    db: State<Database>,
-) -> Result<serde_json::Value, String> {
-    db.create_project(&profile_id, &name, description.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+#[derive(Deserialize)]
+pub struct CreateProjectInput {
+    pub profile_id: String,
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[tauri::command]
-pub async fn get_project(
-    id: String,
-    db: State<Database>,
+pub async fn create_project(
+    input: CreateProjectInput,
+    state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    db.get_project(&id)
+    let db = state.db.lock().await;
+    db.create_project(&input.profile_id, &input.name, input.description.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -26,19 +23,10 @@ pub async fn get_project(
 #[tauri::command]
 pub async fn list_projects(
     profile_id: String,
-    db: State<Database>,
+    state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    let db = state.db.lock().await;
     db.list_projects(&profile_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn delete_project(
-    id: String,
-    db: State<Database>,
-) -> Result<(), String> {
-    db.delete_project(&id)
         .await
         .map_err(|e| e.to_string())
 }

@@ -1,5 +1,25 @@
 /* VisionMachine Design System - Color Palettes */
 
+/* Default fallback (prevents white screen) */
+:root {
+  --bg-primary: #2B2B2B;
+  --bg-secondary: #3C3F46;
+  --bg-tertiary: #4E525A;
+  --bg-hover: #4E525A;
+  
+  --text-primary: #EEEEEE;
+  --text-secondary: #BFBFBF;
+  --text-muted: #808080;
+  --text-inverse: #FFFFFF;
+  
+  --accent-primary: #59B5FF;
+  --accent-primary-hover: #7EC8FF;
+  --accent-secondary: #BB88EE;
+  
+  --border-color: #4E525A;
+  --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
 /* JetBrains Dark Theme */
 [data-theme="jetbrains-dark"] {
   /* Background Colors */
@@ -52,8 +72,8 @@
   --shadow-color: rgba(0, 0, 0, 0.5);
 }
 
-/* Light theme (default/fallback) */
-[data-theme="light"], :root {
+/* Light Theme */
+[data-theme="light"] {
   /* Background Colors */
   --bg-primary: #FAFAFA;
   --bg-secondary: #FFFFFF;

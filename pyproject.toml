@@ -1,88 +1,17 @@
-[build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
-
 [project]
-name = "vision-machine"
+name = "visionmachine"
 version = "0.1.0"
-description = "A lightweight Windows desktop application for AI-powered video generation using OpenAI-compatible APIs"
-readme = "README.md"
-requires-python = ">=3.12"
-authors = [
-    {name = "HorizonsMachine"}
-]
-license = {text = "Proprietary"}
+description = "AI-powered video generation platform"
+requires-python = ">=3.9"
 dependencies = [
-    # Core dependencies
-    "aiohttp>=3.9.0",
-    "cryptography>=42.0.0",
-    
-    # ML/Video processing
-    "torch>=2.13.0",
-    "torchvision>=0.28.0",
-    "numpy>=2.5.2",
-    "pillow>=12.3.0",
-    "opencv-python-headless>=5.0.0",
-    
-    # Data validation
-    "pydantic>=2.13.4",
-    "python-dotenv>=1.2.3",
-    
-    # CLI
-    "click>=8.1.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=6.0.0",
-    "pytest-mock>=3.14.0",
-    "ruff>=0.11.0",
-    "mypy>=1.13.0",
-    "pre-commit>=3.8.0",
-]
-serve = [
-    "fastapi>=0.115.0",
-    "uvicorn>=0.32.0",
-]
-desktop = [
-    # Desktop packaging (optional)
-    "pyinstaller>=6.0.0",
-    "auto-py-to-exe>=2.40.0",
-]
-
-[project.scripts]
-vm = "vision_machine.cli:main"
-vision-machine = "vision_machine.cli:main"
-
-[tool.ruff]
-target-version = "py312"
-line-length = 100
-select = ["E", "F", "W", "I", "N", "UP", "B", "C90"]
-ignore = ["E501"]  # Line length handled by ruff format
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*" = ["S101"]  # Allow assert in tests
-"src/security/**/*" = ["S105"]  # Allow hardcoded passwords in tests
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-python_functions = ["test_*"]
-asyncio_mode = "auto"
-addopts = "-v --tb=short"
 
-[tool.mypy]
-python_version = "3.12"
-warn_return_any = true
-warn_unused_configs = true
-strict = true
-exclude = ["tests/"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
-
-[tool.setuptools.package-data]
-"src" = ["py.typed"]
+[tool.ruff]
+target-version = "py39"

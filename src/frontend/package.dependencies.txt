@@ -1,8 +1,0 @@
-# VisionMachine Frontend Dependencies
-@sveltejs/kit
-@sveltejs/vite-plugin-svelte
-svelte
-svelte-check
-tauri
-@tauri-apps/api
-typescript
