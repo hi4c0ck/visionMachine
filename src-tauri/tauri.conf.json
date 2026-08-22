@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "identifier": "com.visionmachine.desktop",
   "build": {
-    "frontendDist": "../public",
+    "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "",
     "beforeBuildCommand": ""
