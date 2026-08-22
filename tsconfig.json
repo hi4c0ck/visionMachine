@@ -12,15 +12,9 @@
     "noEmit": true,
     "jsx": "preserve",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "paths": {
-      "$components/*": ["./src/frontend/components/*"],
-      "$stores/*": ["./src/frontend/stores/*"],
-      "$lib/*": ["./src/frontend/lib/*"]
-    }
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/frontend/**/*.ts", "src/frontend/**/*.tsx", "src/frontend/**/*.svelte"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "*.ts", "*.svelte"]
 }

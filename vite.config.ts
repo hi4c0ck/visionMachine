@@ -1,22 +1,17 @@
 import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
-import path from 'path';
 
 export default defineConfig({
+  base: './',
   plugins: [svelte()],
-  clearScreen: false,
-  server: {
-    port: 1420,
+  server: { 
+    port: 1420, 
     strictPort: true,
-    watch: {
-      ignored: ['**/src-tauri/**'],
-    },
+    host: true,
+    cors: true
   },
-  resolve: {
-    alias: {
-      $components: path.resolve('./src/frontend/components'),
-      $stores: path.resolve('./src/frontend/stores'),
-      $lib: path.resolve('./src/frontend/lib'),
-    },
-  },
+  build: { 
+    outDir: 'dist', 
+    emptyOutDir: true 
+  }
 });
