@@ -86,7 +86,7 @@ const themes = [
   layoutMode={layoutMode}
   showWelcome={showWelcome}
   onlogout={handleLogout}
-  onthemechoice={handleThemeChange}
+  onthemeChange={handleThemeChange}
   onlayoutChange={handleLayoutChange}
 />
 ```
@@ -268,7 +268,7 @@ let {
   layoutMode,         // string
   showWelcome,        // boolean
   onlogout,           // (() => void)?
-  onthemechoice,      // ((theme: string) => void)?
+  onthemeChange,      // ((theme: string) => void)?
   onlayoutChange      // ((mode: string) => void)?
 } = $props();
 ```
@@ -305,7 +305,7 @@ let storageUsed = $state(0);
   {layoutMode}
   showWelcome={showWelcome}
   onlogout={handleLogout}
-  onthemechoice={handleThemeChange}
+  onthemeChange={handleThemeChange}
   onlayoutChange={handleLayoutChange}
 />
 ```
