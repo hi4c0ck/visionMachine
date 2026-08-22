@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import Workspace from './components/Workspace.svelte';
 	
 	// State declarations
@@ -24,13 +24,31 @@
 		localStorage.setItem('vm-theme', theme);
 	}
 	
-	function handleLogin() {
+	async function handleLogin() {
 		const name = userName.trim();
+		console.log('[App] handleLogin called with name:', name);
+		console.log('[App] Current showWelcome BEFORE:', showWelcome);
+		
 		if (!name) {
 			error = 'Please enter your name';
+			console.warn('[App] Name is empty!');
 			return;
 		}
+		
+		// Force state update
 		showWelcome = false;
+		console.log('[App] showWelcome set to:', showWelcome);
+		
+		// Wait for next tick to ensure DOM updates
+		await tick();
+		console.log('[App] After tick, showWelcome is:', showWelcome);
+		
+		// Check if DOM actually updated
+		const welcomeDiv = document.querySelector('.welcome-card');
+		const workspaceDiv = document.querySelector('.workspace');
+		console.log('[App] Welcome card present:', !!welcomeDiv);
+		console.log('[App] Workspace present:', !!workspaceDiv);
+		
 		localStorage.setItem('vm-username', name);
 	}
 	
@@ -59,12 +77,19 @@
 		const target = e.currentTarget as HTMLInputElement;
 		userName = target.value;
 		error = null;
+		console.log('[App] Input changed, userName:', userName, 'isNameEmpty:', isNameEmpty);
 	}
 	
 	// Lifecycle
 	onMount(() => {
+		console.log('[App] onMount called');
+		console.log('[App] Initial showWelcome:', showWelcome);
+		console.log('[App] Initial userName:', JSON.stringify(userName));
+		
+		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
+			console.log('[App] Restored username:', savedName);
 			userName = savedName;
 			showWelcome = false;
 		}
