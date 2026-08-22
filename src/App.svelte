@@ -19,83 +19,69 @@
 	
 	// Functions
 	function applyTheme(theme: string) {
-		console.log('[App] applyTheme:', theme);
 		document.documentElement.setAttribute('data-theme', theme);
 		localStorage.setItem('vm-theme', theme);
 	}
 	
 	function handleLogin() {
-		console.log('[App] handleLogin clicked');
-		console.log('[App] userName:', JSON.stringify(userName));
-		
 		const name = userName.trim();
 		if (!name) {
-			console.warn('[App] Name is empty!');
 			error = 'Please enter your name';
 			return;
 		}
 		
-		console.log('[App] Login successful:', name);
-	showWelcome = false;
-	console.log('[App] showWelcome changed to:', showWelcome);
-	localStorage.setItem('vm-username', name);
+		showWelcome = false;
+		localStorage.setItem('vm-username', name);
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
-		console.log('[App] Key pressed:', e.key);
 		if (e.key === 'Enter') {
-			console.log('[App] Enter pressed, calling handleLogin');
 			handleLogin();
 		}
 	}
 	
 	function handleLogout() {
-		console.log('[App] Logout clicked');
 		userName = '';
 		showWelcome = true;
 	}
 	
 	function handleThemeChange(theme: string) {
-		console.log('[App] Theme changed:', theme);
 		selectedTheme = theme;
 		applyTheme(theme);
 	}
 	
 	function handleLayoutChange(mode: string) {
-		console.log('[App] Layout changed:', mode);
 		layoutMode = mode;
 		localStorage.setItem('vm-layout', mode);
 	}
 	
+	function handleInputChange(e: Event) {
+		const target = e.currentTarget as HTMLInputElement;
+		userName = target.value;
+		error = null;
+	}
+	
 	// Lifecycle
 	onMount(() => {
-		console.log('[App] onMount called');
-		console.log('[App] Initial showWelcome:', showWelcome);
-		console.log('[App] Initial userName:', JSON.stringify(userName));
-		
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
-			console.log('[App] Restored username from storage:', savedName);
 			userName = savedName;
 			showWelcome = false;
 		}
 		
 		const savedTheme = localStorage.getItem('vm-theme');
 		if (savedTheme) {
-			console.log('[App] Restored theme:', savedTheme);
 			selectedTheme = savedTheme;
 		}
 		
 		const savedLayout = localStorage.getItem('vm-layout');
 		if (savedLayout) {
-			console.log('[App] Restored layout:', savedLayout);
 			layoutMode = savedLayout;
 		}
 		
 		// Use default app info
 		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
-		console.log('[App] App info set:', appInfo);
 		
 		applyTheme(selectedTheme);
 	});
@@ -131,14 +117,12 @@
 				<h1 class="welcome-title">Welcome to VisionMachine</h1>
 				<p class="hint">Enter your name to continue</p>
 				<input 
-					bind:value={userName}
+					value={userName}
 					placeholder="Your name..." 
 					class="input"
 					type="text"
 					onkeydown={handleKeyDown}
-					oninput={(e) => {
-						userName = (e.target as HTMLInputElement).value;
-					}}
+					oninput={handleInputChange}
 				/>
 				<button 
 					class="btn btn-primary" 
