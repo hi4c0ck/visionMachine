@@ -136,7 +136,6 @@
 					type="text"
 					onkeydown={handleKeyDown}
 					oninput={(e) => {
-						console.log('[App] oninput fired, new value:', (e.target as HTMLInputElement).value);
 						userName = (e.target as HTMLInputElement).value;
 					}}
 				/>
