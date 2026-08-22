@@ -1,279 +1,253 @@
-# API Reference
+# API Reference - Tauri Commands
 
-## Tauri Commands (Frontend ↔ Rust)
+## Overview
 
-### Video Generation
+This document lists all Tauri commands available in VisionMachine for frontend-to-backend communication.
 
-#### `generate_video`
-Generate a video from prompt using multi-shot chaining.
+---
+
+## Authentication Commands
+
+### `login_user`
+
+Authenticate a user with username.
 
 **Parameters:**
 ```typescript
-interface GenerateVideoParams {
-  prompt: string;           // Video description (required)
-  duration: number;         // Total duration in seconds (3-60)
-  shots: number;            // Number of shots (4-12)
-  style: string;            // Visual style (cinematic/anime/realistic/artistic)
-  resolution: string;       // Output resolution (1920x1080/1280x720/854x480)
+interface LoginUserParams {
+  username: string;  // User's display name (required, non-empty)
 }
 ```
 
 **Returns:**
 ```typescript
-interface GenerationResult {
-  success: boolean;
-  video_url?: string;       // Path to generated video
-  error?: string;           // Error message if failed
-  metadata?: {
-    prompt: string;
-    duration: number;
-    shots: number;
-    style: string;
-    resolution: string;
-    generated_at: string;   // ISO timestamp
-  };
+Promise<string>  // Welcome message: "Welcome, {username}!"
+```
+
+**Error Cases:**
+- Returns error if username is empty
+
+**Frontend Usage:**
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+
+const result = await invoke('login_user', { username: 'John Doe' });
+// result: "Welcome, John Doe!"
+```
+
+---
+
+### `logout_user`
+
+Log out the current user.
+
+**Parameters:** None
+
+**Returns:**
+```typescript
+Promise<void>
+```
+
+**Frontend Usage:**
+```typescript
+import { invoke } from '@tauri-apps/api/core';
+
+await invoke('logout_user');
+```
+
+---
+
+## Application Info Commands
+
+### `get_app_info`
+
+Get application metadata.
+
+**Parameters:** None
+
+**Returns:**
+```typescript
+Promise<{
+  appName: string;   // "VisionMachine"
+  version: string;   // Package version from Cargo.toml
+}>
+```
+
+**Frontend Usage:**
+```typescript
+const info = await invoke('get_app_info');
+console.log(info.appName);  // "VisionMachine"
+console.log(info.version);  // "0.1.0"
+```
+
+---
+
+## Theme Commands
+
+### `set_theme`
+
+Set the application theme (client-side management).
+
+**Parameters:**
+```typescript
+interface SetThemeParams {
+  theme: string;  // 'jetbrains-dark' | 'steel-dark' | 'light'
 }
 ```
 
-**JavaScript Usage:**
-```javascript
-import { invoke } from '@tauri-apps/api/core';
+**Returns:**
+```typescript
+Promise<void>
+```
 
-const result = await invoke('generate_video', {
-  prompt: "A beautiful sunset over mountains",
-  duration: 30,
-  shots: 6,
-  style: "cinematic",
-  resolution: "1920x1080"
+**Note:** Theme is actually managed client-side via localStorage. This command exists for future server-side sync.
+
+**Frontend Usage:**
+```typescript
+await invoke('set_theme', { theme: 'jetbrains-dark' });
+```
+
+---
+
+## Error Logging Commands
+
+### `report_error`
+
+Report an error to the application log.
+
+**Parameters:**
+```typescript
+interface ReportErrorParams {
+  error: string;    // Error message (required)
+  context: string;  // Context where error occurred (required)
+}
+```
+
+**Returns:**
+```typescript
+Promise<void>
+```
+
+**Storage:** Errors are stored in memory (last 100 entries only).
+
+**Frontend Usage:**
+```typescript
+await invoke('report_error', {
+  error: 'Failed to load project',
+  context: 'ProjectsPanel'
 });
 ```
 
-### Provider Management
+---
 
-#### `list_providers`
-Get list of available provider types.
+### `get_errors`
 
-**Returns:** `Promise<string[]>` - `["agnes", "openai_compatible"]`
-
-#### `validate_provider`
-Check if a provider is connected and credentials are valid.
+Retrieve recent errors from the log.
 
 **Parameters:**
 ```typescript
-interface ValidateProviderParams {
-  provider_name: string;    // Provider identifier
+interface GetErrorsParams {
+  limit?: number;  // Max errors to return (default: 50)
 }
 ```
 
-**Returns:** `Promise<boolean>`
-
-#### `get_api_key_status`
-Check if API key exists for a provider.
-
-**Parameters:** `string provider_name`
-**Returns:** `Promise<boolean>`
-
-### Project Management
-
-#### `create_project`
-Create a new project.
-
-**Parameters:**
+**Returns:**
 ```typescript
-interface CreateProjectParams {
-  name: string;
-  logo?: string;  // Optional logo path
+Promise<Array<{
+  timestamp: string;  // ISO 8601 format
+  message: string;    // Full error message
+}>>
+```
+
+**Frontend Usage:**
+```typescript
+const errors = await invoke('get_errors', { limit: 20 });
+errors.forEach(({ timestamp, message }) => {
+  console.log(`${timestamp}: ${message}`);
+});
+```
+
+---
+
+## Preflight Commands
+
+### `get_preflight_report`
+
+Get system preflight check results.
+
+**Parameters:** None
+
+**Returns:**
+```typescript
+Promise<PreflightReport>
+```
+
+**PreflightReport Structure:**
+```typescript
+interface PreflightReport {
+  os: string;              // e.g., "Windows (x86_64)"
+  status: 'passed' | 'failed';
+  checks: Array<{
+    name: string;          // Check name
+    passed: boolean;       // Result
+    message?: string;      // Optional details
+  }>;
+  timestamp: string;       // ISO 8601
 }
 ```
 
-**Returns:** `Promise<Project>`
-
-#### `list_projects`
-List all projects.
-
-**Returns:** `Promise<Project[]>`
-
-#### `delete_project`
-Delete a project and all associated data.
-
-**Parameters:** `string project_id`
-**Returns:** `Promise<boolean>`
-
-### Composer
-
-#### `get_composer`
-Load composer state for a session.
-
-**Parameters:** `string session_id`
-**Returns:** `Promise<ComposerState>`
-
-#### `save_composer`
-Save composer state asynchronously.
-
-**Parameters:** `ComposerState composer`
-**Returns:** `Promise<void>`
-
-## Python Provider Interface
-
-### Base Provider
-
-All providers must implement this interface:
-
-```python
-from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
-
-class BaseProvider(ABC):
-    """Base interface for all AI providers."""
-    
-    @abstractmethod
-    async def generate_video(
-        self,
-        prompt: str,
-        duration: int,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """Generate video from prompt."""
-        pass
-    
-    @abstractmethod
-    async def generate_image(
-        self,
-        prompt: str,
-        size: tuple[int, int] = (1920, 1080),
-        **kwargs
-    ) -> Dict[str, Any]:
-        """Generate image."""
-        pass
-    
-    @abstractmethod
-    async def generate_text(
-        self,
-        prompt: str,
-        **kwargs
-    ) -> str:
-        """Generate text response."""
-        pass
-    
-    @abstractmethod
-    async def validate_connection(self) -> bool:
-        """Check if provider is reachable."""
-        pass
-    
-    @abstractmethod
-    def get_supported_models(self) -> List[str]:
-        """Return list of supported model names."""
-        pass
+**Frontend Usage:**
+```typescript
+const report = await invoke('get_preflight_report');
+console.log(report.status);  // "passed"
 ```
 
-### Agnes Provider
+---
 
-Primary provider with hardcoded endpoint:
+## Complete Command List
 
-```python
-class AgnesProvider(BaseProvider):
-    ENDPOINT = "https://api.agnes.ai/v1"
-    DEFAULT_MODEL = "agnes-video-v1"
-    
-    def __init__(self, key_store: EncryptedKeyStore):
-        self.key_store = key_store
-        self.client = None
-```
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `login_user` | `{ username: string }` | `string` | Authenticate user |
+| `logout_user` | None | `void` | Logout user |
+| `get_app_info` | None | `{ appName, version }` | App metadata |
+| `set_theme` | `{ theme: string }` | `void` | Change theme |
+| `report_error` | `{ error, context }` | `void` | Log error |
+| `get_errors` | `{ limit? }` | `Array<{timestamp, message}>` | Get errors |
+| `get_preflight_report` | None | `PreflightReport` | System checks |
 
-### OpenAI-Compatible Provider
+---
 
-Configurable endpoint:
-
-```python
-class OpenAICompatibleProvider(BaseProvider):
-    def __init__(
-        self,
-        key_store: EncryptedKeyStore,
-        base_url: str,
-        model: Optional[str] = None
-    ):
-        self.endpoint = base_url.rstrip("/")
-        self.model = model or "gpt-4o-mini"
-```
-
-### Provider Factory
-
-```python
-class ProviderFactory:
-    _registry: Dict[str, Type[BaseProvider]] = {}
-    
-    @classmethod
-    def register(cls, name: str, provider_class: Type[BaseProvider])
-    
-    @classmethod
-    def create(
-        cls,
-        provider_type: ProviderType,
-        key_store: EncryptedKeyStore,
-        config: Dict[str, Any]
-    ) -> BaseProvider
-```
-
-## Error Responses
-
-### Authentication Errors
-
-```json
-{
-  "success": false,
-  "error": "Invalid API key",
-  "type": "authentication_error"
-}
-```
-
-### Rate Limit Errors
-
-```json
-{
-  "success": false,
-  "error": "Rate limit exceeded. Retry after 30 seconds.",
-  "type": "rate_limit_error",
-  "retry_after": 30
-}
-```
-
-### Generation Errors
-
-```json
-{
-  "success": false,
-  "error": "Prompt too long (max 2000 characters)",
-  "type": "validation_error"
-}
-```
-
-## Event Types (Rust → Frontend)
+## Error Handling Pattern
 
 ```typescript
-// Progress updates
-{
-  type: 'generation_progress',
-  payload: { percentage: number, status_text: string }
+import { invoke } from '@tauri-apps/api/core';
+
+async function safeInvoke<T>(command: string, args?: any): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    const err = error as { kind?: string; message?: string };
+    console.error(`[${command}]`, err.message || String(error));
+    throw error;
+  }
 }
 
-// Generation complete
-{
-  type: 'generation_complete',
-  payload: { video_url: string, metadata: object }
-}
+// Usage
+const result = await safeInvoke('login_user', { username: 'John' });
+```
 
-// Error
-{
-  type: 'generation_error',
-  payload: { error: string }
-}
+---
 
-// Project updates
-{
-  type: 'project_updated',
-  payload: { project_id: string, action: string }
+## State Management (Rust Side)
+
+```rust
+#[derive(Clone)]
+pub struct AppState {
+    pub username: Arc<Mutex<Option<String>>>,
+    pub preflight_report: Arc<Mutex<PreflightReport>>,
+    pub error_log: Arc<Mutex<Vec<(String, String)>>>,
 }
 ```
 
-*API Reference v1.0*
-*Last updated: 2026-08-21*
+**Thread Safety:** All state uses `Arc<Mutex<...>>` for safe cross-thread access.

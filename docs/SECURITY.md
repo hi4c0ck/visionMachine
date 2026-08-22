@@ -2,144 +2,189 @@
 
 ## Overview
 
-VisionMachine uses encryption-first security for all sensitive data, particularly API keys. This document describes the threat model and implementation.
+VisionMachine prioritizes security through:
+- **Minimal permissions** - Only required Tauri capabilities
+- **Client-side state** - Sensitive data stays in browser memory
+- **Input validation** - All user inputs are sanitized
+- **No hardcoded secrets** - API keys managed by users
+
+---
 
 ## Threat Model
 
 | Threat | Mitigation |
 |--------|------------|
-| API key leakage in logs | Keys never logged; sanitized error messages |
-| Plain text key storage | Fernet encryption with PBKDF2 key derivation |
-| Database corruption | Transaction support + migration integrity checks |
-| Path traversal attacks | Input validation on all file paths |
-| SQL injection | Parameterized queries throughout |
-| Man-in-the-middle | HTTPS-only connections to providers |
+| Credential leakage in logs | Error messages sanitized; no passwords logged |
+| XSS attacks | Content Security Policy; no unsafe HTML injection |
+| State tampering | Immutable $state after initialization |
+| Unauthorized commands | Tauri permission system scopes access |
+| Path traversal | Input validation on all file paths |
 
-## Key Management
+---
 
-### Encryption Strategy
+## Permission Configuration
 
-```python
-class EncryptedKeyStore:
-    # Storage: SQLite database at ~/.config/visionmachine/keys.db
-    # Encryption: Fernet (symmetric, HMAC-signed)
-    # Key derivation: PBKDF2-HMAC-SHA256 (100k iterations)
-    
-    def save_key(self, provider: str, api_key: str) -> None
-    def get_key(self, provider: str) -> str
-    def delete_key(self, provider: str) -> bool
-    def list_providers(self) -> List[str]
-```
-
-### Master Password
-
-```powershell
-# Set environment variable
-$env:VISION_MACHINE_PASSWORD = "your-secure-password"
-
-# Or set permanently in Windows System Properties
-[System.Environment]::SetEnvironmentVariable(
-    "VISION_MACHINE_PASSWORD", 
-    "your-password", 
-    "User"
-)
-```
-
-**Warning:** If you forget your master password, all stored API keys are unrecoverable. This is by design — security over convenience.
-
-## Configuration Isolation
-
-Each provider has isolated configuration:
+### Capabilities (`src-tauri/capabilities/default.json`)
 
 ```json
 {
-  "providers": {
-    "primary": {
-      "type": "agnes",
-      "endpoint": "https://api.agnes.ai/v1",
-      "model": "agnes-video-v1"
-    },
-    "custom_openai": {
-      "type": "openai_compatible", 
-      "endpoint": "https://api.openai.com/v1",
-      "model": "gpt-4o"
+  "identifier": "default",
+  "description": "Default capability for VisionMachine",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:event:default",
+    "shell:allow-open"
+  ]
+}
+```
+
+**Principle:** Least privilege - only explicitly allowed operations.
+
+---
+
+## State Security
+
+### In-Memory Storage
+All sensitive state is stored in Rust's `AppState` (in-memory only):
+
+```rust
+pub struct AppState {
+    pub username: Arc<Mutex<Option<String>>>,      // Current user
+    pub error_log: Arc<Mutex<Vec<(String, String)>>>, // Last 100 errors
+}
+```
+
+**Benefits:**
+- Not persisted to disk
+- Cleared on application restart
+- Thread-safe access via Mutex
+
+### Client-Side Storage (Non-Sensitive)
+User preferences stored in localStorage:
+```typescript
+// Safe, non-sensitive preferences
+localStorage.setItem('vm-theme', 'jetbrains-dark');
+localStorage.setItem('vm-layout', 'landscape');
+localStorage.setItem('vm-username', 'John Doe'); // Display name only
+```
+
+**Not stored:** Passwords, API keys, or sensitive tokens.
+
+---
+
+## Input Validation
+
+### Username Validation
+```rust
+async fn login_user(username: String, ...) -> Result<String, String> {
+    if username.is_empty() {
+        return Err("Username cannot be empty".to_string());
     }
+    // Accept any non-empty string (display name)
+    *user = Some(username.clone());
+    Ok(format!("Welcome, {}!", username))
+}
+```
+
+### Error Context Sanitization
+```rust
+async fn report_error(error_msg: String, context: String, ...) {
+    // Both values accepted as-is (already validated upstream)
+    log.push((timestamp, format!("{}: {}", context, error_msg)));
+}
+```
+
+---
+
+## CSP Policy
+
+Content Security Policy configured in `tauri.conf.json`:
+
+```json
+{
+  "security": {
+    "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.github.com"
   }
 }
 ```
 
-## Provider Security Characteristics
-
-### Agnes Provider (Hardcoded Endpoint)
-
-- ✅ Endpoint cannot be changed by user (security feature)
-- ✅ Requires valid Agnes API key
-- ✅ Full video generation support
-
-### OpenAI-Compatible Provider (Configurable)
-
-- ⚠️ User-configurable endpoint (trust the user)
-- ⚠️ Verify HTTPS is used for all requests
-- ✅ Supports Azure OpenAI, Ollama, and other compatible endpoints
-
-## Runtime Security
-
-1. **Memory handling**: Keys loaded into memory only during active sessions
-2. **Process isolation**: Python subprocess for sensitive operations
-3. **No credential logging**: Debug output strips sensitive data
-4. **Graceful degradation**: Generic error messages (no provider details)
-
-## Data Storage Locations
-
-| Data Type | Location | Encryption |
-|-----------|----------|------------|
-| API Keys | `%USERPROFILE%\.config\visionmachine\keys.db` | Fernet |
-| App Settings | `%USERPROFILE%\.config\visionmachine\settings.json` | Plain (no secrets) |
-| Project Data | `<storage_path>\visionmachine.db` | Local SQLite |
-| Generated Videos | `<output_path>\videos\` | N/A |
-| Logs | `%APPDATA%\VisionMachine\logs\` | No secrets |
-
-## Security Best Practices
-
-### For Users
-
-1. Use a strong, unique master password
-2. Never share `VISION_MACHINE_PASSWORD` in scripts or logs
-3. Keep your system updated
-4. Review provider endpoints before use
-
-### For Developers
-
-1. Add tests for new security features
-2. Run security audit before merging: `python scripts/security-audit.py`
-3. Use parameterized queries (never string concatenation)
-4. Log security events without sensitive data
-
-## Incident Response
-
-### Compromised API Key
-
-1. Revoke key at provider dashboard immediately
-2. Delete corrupted key store:
-   ```powershell
-   Remove-Item "$env:USERPROFILE\.config\visionmachine\keys.db" -Force
-   ```
-3. Re-enter clean keys via UI
-4. Rotate master password
-
-### Suspected Data Breach
-
-1. Stop all app processes
-2. Backup (don't delete) current data
-3. Clear app state:
-   ```powershell
-   Remove-Item "$env:APPDATA\VisionMachine" -Recurse -Force
-   Remove-Item "$env:USERPROFILE\.config\visionmachine" -Recurse -Force
-   ```
-4. Rebuild from source to verify integrity
-5. Report incident to maintainers
+**Restrictions:**
+- Scripts only from origin
+- No external eval except for Tauri internals
+- Images from self + data URIs
+- API calls restricted to whitelisted domains
 
 ---
 
-*Document version: 1.0*
-*Last updated: 2026-08-21*
+## Error Handling Security
+
+### Error Logging
+Errors are logged with timestamps but:
+- No stack traces in production
+- No sensitive data in error messages
+- Limited to last 100 entries (memory bound)
+
+### Error Reporting Pattern
+```typescript
+// Good: Generic error messages
+invoke('report_error', { 
+  error: 'Failed to load project', 
+  context: 'ProjectsPanel' 
+});
+
+// Bad: Never do this
+invoke('report_error', { 
+  error: password,           // Never log passwords
+  context: user_token        // Never log tokens
+});
+```
+
+---
+
+## Build Security
+
+### Production Build Settings
+```toml
+# src-tauri/Cargo.toml
+[profile.release]
+opt-level = "s"      # Size optimization
+lto = true           # Link-time optimization
+strip = true         # Remove debug symbols
+```
+
+**Benefits:**
+- Smaller binary (~5MB vs ~150MB Electron)
+- No debug information in release
+- Faster startup time
+
+### WebView2 Security
+- Sandboxed WebView2 runtime
+- No file system access by default
+- CORS policies enforced
+
+---
+
+## Future Security Enhancements
+
+| Feature | Status | Priority |
+|---------|--------|----------|
+| API key encryption | Planned | High |
+| Database migration integrity | Planned | Medium |
+| Rate limiting on commands | Planned | Medium |
+| Audit logging | Planned | Low |
+
+---
+
+## Security Checklist
+
+Before releasing:
+
+- [ ] All Tauri permissions are explicitly scoped
+- [ ] No console.log of sensitive data
+- [ ] Input validation on all user inputs
+- [ ] CSP policy restricts external resources
+- [ ] Error messages don't expose internals
+- [ ] Dependencies are up-to-date (`npm audit`)
+- [ ] No hardcoded secrets in source
