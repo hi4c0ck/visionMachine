@@ -88,18 +88,6 @@
 		activeTool = id;
 	}
 
-	function handleNewKeyframe(keyframe: any) {
-		console.log('[Workspace] Keyframe added:', keyframe);
-	}
-
-	function handleDeleteKeyframe(id: string) {
-		console.log('[Workspace] Keyframe deleted:', id);
-	}
-
-	function handleSelectKeyframe(id: string) {
-		console.log('[Workspace] Keyframe selected:', id);
-	}
-
 	function handleCreateSession() {
 		console.log('[Workspace] Session created');
 		if (selectedProjectId) {
@@ -134,14 +122,7 @@
 			/>
 		{/if}
 
-		<ComposerPanel 
-			projectId={selectedProjectId}
-			projectName={projects.find(p => p.id === selectedProjectId)?.name || ''}
-			onselectKeyframe={handleSelectKeyframe}
-			onnewKeyframe={handleNewKeyframe}
-			ondeleteKeyframe={handleDeleteKeyframe}
-			oncreateSession={handleCreateSession}
-		/>
+		<ComposerPanel />
 
 		{#if layoutMode === 'portrait' || layoutMode === 'landscape'}
 			<ProfilePanel 
