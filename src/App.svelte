@@ -17,7 +17,7 @@
 		{ id: 'light', name: 'Light' },
 	];
 	
-	// Functions (after state and constants)
+	// Functions
 	async function applyTheme(theme: string) {
 		console.log('[App] applyTheme:', theme);
 		document.documentElement.setAttribute('data-theme', theme);
@@ -132,7 +132,7 @@
 				<h1 class="welcome-title">Welcome to VisionMachine</h1>
 				<p class="hint">Enter your name to continue</p>
 				<input 
-					bind:value={userName} 
+					bind:value={userName}
 					placeholder="Your name..." 
 					class="input"
 					type="text"
