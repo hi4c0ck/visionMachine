@@ -1,34 +1,27 @@
 <script lang="ts">
 	interface PipeKeyframe {
 		id: string;
-		frame: number;
-		imageSrc?: string;
+		frame: number;        // position on ruler (0-N)
+		imageSrc?: string;    // url or data-uri
 		prompt?: string;
 		img2imgRef?: string;
 	}
 
 	interface PipeRow {
 		id: string;
-		name: string;
-		color: string;
 		keyframes: PipeKeyframe[];
-		qValues: number[]; // one less than keyframes (between each pair)
+		// Q/C per segment (between keyframes)
+		qValues: number[];
 		cValues: number[];
 	}
 
 	let {
 		projectId,
 		projectName,
-		onselectKeyframe,
-		onnewKeyframe,
-		ondeleteKeyframe,
 		oncreateSession
 	} = $props<{
 		projectId: string | null;
 		projectName: string;
-		onselectKeyframe?: (id: string) => void;
-		onnewKeyframe?: (keyframe: any) => void;
-		ondeleteKeyframe?: (id: string) => void;
 		oncreateSession?: () => void;
 	}>();
 
@@ -37,40 +30,48 @@
 	// Modal state
 	let showAddModal = $state(false);
 	let activePipeId = $state<string | null>(null);
+	let activeKfIndex = $state<number | null>(null);
 	let addMode = $state<'url' | 'txt2img' | 'img2img'>('url');
 	let modalUrl = $state('');
 	let modalPrompt = $state('');
-	let modalImg2Img = $state<string | null>(null);
+	let modalImg2Img = $state('');
 
+	// Ruler settings
+	const TOTAL_FRAMES = 441;  // 480p default (8n+1 constraint)
 	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
 	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
 
 	let pipes = $state<PipeRow[]>([
-		{ id: 'p1', name: 'Layer 1', color: '#FF6B6B', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
-		{ id: 'p2', name: 'Layer 2', color: '#4ECDC4', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
-		{ id: 'p3', name: 'Layer 3', color: '#FFE66D', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
-		{ id: 'p4', name: 'Layer 4', color: '#A8E6CF', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
+		{ id: 'p1', keyframes: [], qValues: [], cValues: [] },
+		{ id: 'p2', keyframes: [], qValues: [], cValues: [] },
+		{ id: 'p3', keyframes: [], qValues: [], cValues: [] },
+		{ id: 'p4', keyframes: [], qValues: [], cValues: [] },
 	]);
 
 	function closeModal() {
 		showAddModal = false;
+		activePipeId = null;
+		activeKfIndex = null;
 		modalUrl = '';
 		modalPrompt = '';
-		modalImg2Img = null;
+		modalImg2Img = '';
 		addMode = 'url';
 	}
 
-	function openAddModal(pipeId: string) {
+	function openAddModal(pipeId: string, kfIndex?: number) {
 		activePipeId = pipeId;
+		activeKfIndex = kfIndex ?? null;
 		showAddModal = true;
 	}
 
 	function openEditModal(pipeId: string, kf: PipeKeyframe) {
 		activePipeId = pipeId;
+		const idx = pipes.find(p => p.id === pipeId)?.keyframes.indexOf(kf) ?? null;
+		activeKfIndex = idx;
 		addMode = kf.imageSrc ? 'url' : 'txt2img';
 		modalUrl = kf.imageSrc ?? '';
 		modalPrompt = kf.prompt ?? '';
-		modalImg2Img = kf.img2imgRef ?? null;
+		modalImg2Img = kf.img2imgRef ?? '';
 		showAddModal = true;
 	}
 
@@ -79,36 +80,56 @@
 		const pipe = pipes.find(p => p.id === activePipeId);
 		if (!pipe) return;
 
-		const lastFrame = pipe.keyframes.length > 0
-			? Math.max(...pipe.keyframes.map(k => k.frame))
-			: 0;
-		const newFrame = lastFrame + 60;
-
-		const kf: PipeKeyframe = {
-			id: Date.now().toString(),
-			frame: newFrame,
-			imageSrc: addMode === 'url' ? modalUrl || undefined : undefined,
-			prompt: addMode === 'txt2img' ? modalPrompt : undefined,
-			img2imgRef: addMode === 'img2img' ? modalImg2Img ?? undefined : undefined,
-		};
-
-		pipe.keyframes = [...pipe.keyframes, kf];
-		// Add default Q/C values for the new segment
-		pipe.qValues = [...pipe.qValues, Q_DEFAULT];
-		pipe.cValues = [...pipe.cValues, C_DEFAULT];
-		
+		// Determine frame: append after last or insert at specified index
+		let newFrame: number;
+		if (activeKfIndex !== null && activeKfIndex >= 0 && activeKfIndex < pipe.keyframes.length) {
+			// Insert before existing keyframe at index
+			newFrame = pipe.keyframes[activeKfIndex].frame;
+			pipe.keyframes = [
+				...pipe.keyframes.slice(0, activeKfIndex),
+				{
+					id: Date.now().toString(),
+					frame: newFrame,
+					imageSrc: addMode === 'url' ? modalUrl || undefined : undefined,
+					prompt: addMode === 'txt2img' ? modalPrompt : undefined,
+					img2imgRef: addMode === 'img2img' ? modalImg2Img || undefined : undefined,
+				},
+				...pipe.keyframes.slice(activeKfIndex)
+			];
+			// Adjust q/c values for insertion
+			pipe.qValues = [...pipe.qValues.slice(0, activeKfIndex), Q_DEFAULT, ...pipe.qValues.slice(activeKfIndex)];
+			pipe.cValues = [...pipe.cValues.slice(0, activeKfIndex), C_DEFAULT, ...pipe.cValues.slice(activeKfIndex)];
+		} else {
+			// Append at end
+			const lastFrame = pipe.keyframes.length > 0
+				? Math.max(...pipe.keyframes.map(k => k.frame))
+				: 0;
+			newFrame = lastFrame + 60;
+			pipe.keyframes = [...pipe.keyframes, {
+				id: Date.now().toString(),
+				frame: newFrame,
+				imageSrc: addMode === 'url' ? modalUrl || undefined : undefined,
+				prompt: addMode === 'txt2img' ? modalPrompt : undefined,
+				img2imgRef: addMode === 'img2img' ? modalImg2Img ?? undefined : undefined,
+			}];
+			pipe.qValues = [...pipe.qValues, Q_DEFAULT];
+			pipe.cValues = [...pipe.cValues, C_DEFAULT];
+		}
 		closeModal();
-		onnewKeyframe?.(kf);
 	}
 
 	function deleteKeyframe(pipeId: string, kfId: string) {
 		const pipe = pipes.find(p => p.id === pipeId);
 		if (!pipe) return;
+		const idx = pipe.keyframes.findIndex(k => k.id === kfId);
+		if (idx === -1) return;
 		pipe.keyframes = pipe.keyframes.filter(k => k.id !== kfId);
-		// Remove corresponding Q/C value (keep same count as segments)
-		pipe.qValues = pipe.qValues.slice(0, Math.max(pipe.keyframes.length, 1));
-		pipe.cValues = pipe.cValues.slice(0, Math.max(pipe.keyframes.length, 1));
-		ondeleteKeyframe?.(kfId);
+		pipe.qValues = pipe.qValues.filter((_, i) => i !== idx);
+		pipe.cValues = pipe.cValues.filter((_, i) => i !== idx);
+	}
+
+	function addPipe() {
+		pipes = [...pipes, { id: `p${Date.now()}`, keyframes: [], qValues: [], cValues: [] }];
 	}
 
 	function createSession() {
@@ -129,6 +150,10 @@
 			pipe.cValues[idx] = val;
 		}
 	}
+
+	function getKfPosition(kf: PipeKeyframe): number {
+		return (kf.frame / TOTAL_FRAMES) * 100;
+	}
 </script>
 
 <div class="composer-panel" role="main">
@@ -146,90 +171,87 @@
 		</div>
 	</div>
 
-	<!-- Pipe Rows -->
-	<div class="pipes-container">
+	<!-- Pipes List -->
+	<div class="pipes-list">
 		{#each pipes as pipe (pipe.id)}
 			<div class="pipe-row">
-				<!-- Header -->
-				<div class="pipe-header" style={`border-left-color: ${pipe.color}`}>
-					<span class="pipe-name">{pipe.name}</span>
-					<span class="pipe-count">{pipe.keyframes.length} KF</span>
-				</div>
-
-				<!-- Keyframe strip -->
-				<div class="kf-strip">
-					{#if pipe.keyframes.length === 0}
-						<div class="add-kf-btn"
-						     onclick={() => openAddModal(pipe.id)}
-						     role="button"
-						     tabindex="0"
-						     onkeydown={(e) => e.key === 'Enter' && openAddModal(pipe.id)}>
-							+
+				<!-- Keyframes row -->
+				<div class="keyframes-row">
+					{#each pipe.keyframes as kf, i (kf.id)}
+						<div class="kf-box" onclick={() => openEditModal(pipe.id, kf)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && openEditModal(pipe.id, kf)}>
+							{#if kf.imageSrc}
+								<img class="kf-thumb" src={kf.imageSrc} alt={`KF ${i+1}`} />
+							{:else}
+								<div class="kf-placeholder">+</div>
+							{/if}
+							<span class="kf-frame">{kf.frame}f</span>
+							<!-- Add button inside box (bottom-right corner) -->
+							<button class="add-inside"
+							        onclick={(e) => { e.stopPropagation(); openAddModal(pipe.id, i + 1); }}
+							        title="Add next keyframe">+</button>
 						</div>
-					{:else}
-						{#each pipe.keyframes as kf (kf.id)}
-							<div class="kf-cell" onclick={() => openEditModal(pipe.id, kf)}>
-								{#if kf.imageSrc}
-									<img class="kf-thumb" src={kf.imageSrc} alt={`KF ${kf.frame}`} />
-								{:else}
-									<div class="kf-placeholder" style={`border-color: ${pipe.color}`}>+</div>
-								{/if}
-								<span class="kf-frame">{kf.frame}f</span>
-								<button class="kf-delete"
-								        onclick={(e) => { e.stopPropagation(); deleteKeyframe(pipe.id, kf.id); }}
-								        title="Delete">×</button>
-							</div>
-						{/each}
-						
-						<div class="add-kf-btn append"
-						     onclick={() => openAddModal(pipe.id)}
-						     role="button"
-						     tabindex="0"
-						     onkeydown={(e) => e.key === 'Enter' && openAddModal(pipe.id)}>
+					{/each}
+					
+					<!-- Empty state: add button -->
+					{#if pipe.keyframes.length === 0}
+						<div class="add-first-kf" onclick={() => openAddModal(pipe.id, 0)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && openAddModal(pipe.id, 0)}>
 							+
 						</div>
 					{/if}
 				</div>
 
-				<!-- Q/C sliders between keyframes -->
+				<!-- Frame Ruler -->
+				<div class="ruler-row">
+					<span class="ruler-label">frame ruler</span>
+					<div class="ruler-track">
+						{#each Array.from({length: Math.ceil(TOTAL_FRAMES / 60) + 1}, (_, i) => i * 60) as marker (marker)}
+							<div class="ruler-tick {marker % 120 === 0 ? 'major' : ''}"></div>
+						{/each}
+					</div>
+				</div>
+
+				<!-- Q/C Sliders Section -->
 				{#if pipe.keyframes.length > 1}
-					<div class="qc-row">
+					<div class="sliders-section">
 						{#each pipe.keyframes as kf, i (kf.id)}
 							{#if i < pipe.keyframes.length - 1}
-								<div class="qc-segment">
-									<label class="qc-label">q</label>
-									<input type="range" class="qc-slider" min={Q_MIN} max={Q_MAX} step="1"
-									       value={pipe.qValues[i]}
+								<div class="slider-segment">
+									<label class="slider-label" for={`q-${pipe.id}-${i}`}>q</label>
+									<input type="range" class="slider-input" id={`q-${pipe.id}-${i}`} min={Q_MIN} max={Q_MAX} step="1"
+									       value={pipe.qValues[i] ?? Q_DEFAULT}
 									       oninput={(e) => updateQ(pipe.id, i, Number(e.currentTarget.value))} />
-									<span class="qc-val">{pipe.qValues[i]}</span>
+									<span class="slider-val">{pipe.qValues[i] ?? Q_DEFAULT}</span>
 									
-									<label class="qc-label">c</label>
-									<input type="range" class="qc-slider" min={C_MIN} max={C_MAX} step="0.5"
-									       value={pipe.cValues[i]}
+									<label class="slider-label" for={`c-${pipe.id}-${i}`}>c</label>
+									<input type="range" class="slider-input" id={`c-${pipe.id}-${i}`} min={C_MIN} max={C_MAX} step="0.5"
+									       value={pipe.cValues[i] ?? C_DEFAULT}
 									       oninput={(e) => updateC(pipe.id, i, Number(e.currentTarget.value))} />
-									<span class="qc-val">{pipe.cValues[i]}</span>
+									<span class="slider-val">{pipe.cValues[i] ?? C_DEFAULT}</span>
 								</div>
 							{/if}
 						{/each}
 					</div>
 				{/if}
 
-				<!-- Frame ruler -->
-				<div class="ruler-row">
-					<div class="ruler-hint">8n+ frames · editable</div>
-				</div>
+				<!-- Delete empty pipe -->
+				{#if pipe.keyframes.length === 0}
+					<button class="delete-pipe" onclick={() => pipes = pipes.filter(p => p.id !== pipe.id)}>×</button>
+				{/if}
 			</div>
 		{/each}
+
+		<!-- Add new pipe button -->
+		<button class="add-pipe-btn" onclick={addPipe}>
+			+
+		</button>
 	</div>
 
 	<!-- Add/Edit Modal -->
 	{#if showAddModal}
-		<div class="modal-backdrop" onclick={closeModal}>
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
+		<div class="modal-backdrop" onclick={closeModal} role="presentation">
+			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
 				<div class="modal-header">
-					<span class="modal-title">
-						{#if activePipeId}{pipes.find(p => p.id === activePipeId)?.name} — Keyframe{/if}
-					</span>
+					<span class="modal-title">Keyframe Image</span>
 					<button class="modal-close" onclick={closeModal}>×</button>
 				</div>
 
@@ -245,7 +267,7 @@
 					{:else if addMode === 'txt2img'}
 						<textarea bind:value={modalPrompt} placeholder="Describe the image…" rows="4" class="modal-input"></textarea>
 					{:else}
-						<textarea bind:value={modalImg2Img ?? modalUrl} placeholder="Reference image URL…" rows="2" class="modal-input"></textarea>
+						<textarea bind:value={modalImg2Img} placeholder="Reference image URL…" rows="2" class="modal-input"></textarea>
 					{/if}
 				</div>
 
@@ -283,123 +305,91 @@
 	.btn-session { padding: 4px 12px; font-size: 0.8rem; background: var(--accent-primary, #FF6B35); color: white; border: none; border-radius: 4px; cursor: pointer; }
 	.btn-session:disabled { opacity: 0.5; cursor: not-allowed; }
 
-	/* ── Pipes container ─────────────────────────────── */
-	.pipes-container {
+	/* ── Pipes List ─────────────────────────────────── */
+	.pipes-list {
 		flex: 1;
 		overflow-y: auto;
 		display: flex;
 		flex-direction: column;
-		gap: 1px;
+		gap: 2px;
 		background: var(--bg-primary, #1A1A1D);
+		padding: 8px;
 	}
 
-	/* ── Pipe row ────────────────────────────────────── */
+	/* ── Pipe Row ───────────────────────────────────── */
 	.pipe-row {
 		display: flex;
 		flex-direction: column;
 		background: var(--bg-secondary, #2A2A2E);
-		min-height: 88px;
+		border: 1px solid var(--border-color, #3A3A3F);
+		border-radius: 6px;
+		padding: 8px;
+		gap: 6px;
+		position: relative;
 	}
 
-	.pipe-header {
+	/* ── Keyframes Row ─────────────────────────────── */
+	.keyframes-row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		padding: 4px 10px;
-		border-bottom: 1px solid var(--border-color, #3A3A3F);
-		background: var(--bg-tertiary, #3A3A3F);
-	}
-	.pipe-name {
-		font-size: 0.75rem; font-weight: 600;
-		color: var(--text-primary, #E8E8E8);
-		padding-left: 8px;
-		border-left: 3px solid transparent;
-	}
-	.pipe-count { font-size: 0.65rem; color: var(--text-muted, #606060); }
-
-	/* ── Keyframe strip ──────────────────────────────── */
-	.kf-strip {
-		display: flex;
-		align-items: flex-start;
-		gap: 0;
-		padding: 8px 10px;
-		min-height: 60px;
+		gap: 8px;
+		min-height: 64px;
 		overflow-x: auto;
 	}
 
-	.add-kf-btn {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 32px; height: 32px;
-		margin: 0 4px;
-		background: var(--bg-tertiary, #3A3A3F);
-		border: 1px dashed var(--border-color, #4E525A);
-		border-radius: 6px;
-		color: var(--text-muted, #808080);
-		cursor: pointer;
-		font-size: 1.2rem;
-		transition: all 0.15s;
-		flex-shrink: 0;
-	}
-	.add-kf-btn:hover {
-		border-color: var(--accent-primary, #FF6B35);
-		color: var(--accent-primary);
-		background: rgba(255, 107, 53, 0.1);
-	}
-	.add-kf-btn.append { margin-left: auto; }
-
-	.kf-cell {
+	.kf-box {
 		position: relative;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		gap: 2px;
 		cursor: pointer;
-		padding: 4px;
-		border-radius: 4px;
-		transition: background 0.15s;
 		flex-shrink: 0;
 	}
-	.kf-cell:hover { background: rgba(255,255,255,0.05); }
 
 	.kf-thumb {
-		width: 48px; height: 48px;
+		width: 56px;
+		height: 56px;
 		object-fit: cover;
 		border-radius: 4px;
-		border: 1px solid var(--border-color, #4E525A);
-		display: block;
+		border: 2px solid var(--border-color, #4E525A);
 	}
+
 	.kf-placeholder {
-		width: 48px; height: 48px;
-		border: 2px dashed;
+		width: 56px;
+		height: 56px;
+		border: 2px dashed var(--border-color, #4E525A);
 		border-radius: 4px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		color: var(--text-muted, #606060);
-		font-size: 1.4rem;
+		font-size: 1.5rem;
 		transition: all 0.15s;
 	}
 	.kf-placeholder:hover {
 		border-color: var(--accent-primary, #FF6B35);
 		color: var(--accent-primary);
 	}
+
 	.kf-frame {
 		font-size: 0.6rem;
 		color: var(--text-muted, #606060);
 		font-family: monospace;
 	}
-	.kf-delete {
+
+	.add-inside {
 		position: absolute;
-		top: -4px; right: -4px;
-		width: 16px; height: 16px;
+		bottom: -4px;
+		right: -4px;
+		width: 18px;
+		height: 18px;
 		border-radius: 50%;
-		background: #dc2626;
+		background: var(--accent-primary, #FF6B35);
 		color: white;
 		border: none;
 		cursor: pointer;
-		font-size: 0.7rem;
+		font-size: 0.8rem;
 		line-height: 1;
 		display: flex;
 		align-items: center;
@@ -407,71 +397,144 @@
 		opacity: 0;
 		transition: opacity 0.15s;
 	}
-	.kf-cell:hover .kf-delete { opacity: 1; }
+	.kf-box:hover .add-inside { opacity: 1; }
 
-	/* ── Q/C row ─────────────────────────────────────── */
-	.qc-row {
+	.add-first-kf {
+		width: 56px;
+		height: 56px;
+		border: 2px dashed var(--border-color, #4E525A);
+		border-radius: 4px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: var(--text-muted, #606060);
+		font-size: 1.5rem;
+		cursor: pointer;
+		transition: all 0.15s;
+		flex-shrink: 0;
+	}
+	.add-first-kf:hover {
+		border-color: var(--accent-primary, #FF6B35);
+		color: var(--accent-primary);
+	}
+
+	/* ── Frame Ruler ───────────────────────────────── */
+	.ruler-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 4px 10px;
-		background: rgba(0,0,0,0.2);
-		border-top: 1px solid var(--border-color, #3A3A3F);
-		min-height: 32px;
-		overflow-x: auto;
+		padding: 4px 0;
 	}
-	.qc-segment {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 0 8px;
-		border-right: 1px solid var(--border-color, #3A3A3F);
-	}
-	.qc-label {
-		font-size: 0.55rem;
+	.ruler-label {
+		font-size: 0.6rem;
 		color: var(--text-muted, #606060);
 		text-transform: uppercase;
-		font-weight: 600;
+		letter-spacing: 0.1em;
+		white-space: nowrap;
 	}
-	.qc-slider {
-		width: 40px;
-		appearance: none;
-		background: var(--bg-tertiary, #3A3A3F);
-		border-radius: 2px;
+	.ruler-track {
+		flex: 1;
+		height: 16px;
+		position: relative;
+		display: flex;
+		align-items: flex-end;
+		gap: 0;
+	}
+	.ruler-tick {
+		flex: 1;
 		height: 4px;
+		background: var(--border-color, #3A3A3F);
+		margin: 0 1px;
+	}
+	.ruler-tick.major {
+		height: 8px;
+		background: var(--text-muted, #808080);
+	}
+
+	/* ── Sliders Section ───────────────────────────── */
+	.sliders-section {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 4px 0;
+		overflow-x: auto;
+	}
+	.slider-segment {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 8px;
+		background: var(--bg-tertiary, #3A3A3F);
+		border-radius: 4px;
+		flex-shrink: 0;
+	}
+	.slider-label {
+		font-size: 0.6rem;
+		color: var(--text-muted, #808080);
+		text-transform: uppercase;
+		font-weight: 600;
+		min-width: 12px;
+	}
+	.slider-input {
+		width: 60px;
+		appearance: none;
+		background: var(--bg-primary, #1A1A1D);
+		height: 4px;
+		border-radius: 2px;
 		cursor: pointer;
 	}
-	.qc-slider::-webkit-slider-thumb {
+	.slider-input::-webkit-slider-thumb {
 		appearance: none;
-		width: 10px; height: 10px;
+		width: 10px;
+		height: 10px;
 		border-radius: 50%;
 		background: var(--accent-primary, #FF6B35);
 		cursor: pointer;
 	}
-	.qc-val {
-		font-size: 0.55rem;
+	.slider-val {
+		font-size: 0.6rem;
 		color: var(--text-muted, #808080);
 		font-family: monospace;
-		min-width: 20px;
+		min-width: 24px;
 		text-align: center;
 	}
 
-	/* ── Ruler hint ──────────────────────────────────── */
-	.ruler-row {
-		border-top: 1px solid var(--border-color, #3A3A3F);
-		background: var(--bg-primary, #1A1A1D);
-		height: 20px;
-		display: flex;
-		align-items: center;
-		padding: 0 10px;
-	}
-	.ruler-hint {
-		font-size: 0.6rem;
+	/* ── Delete empty pipe ─────────────────────────── */
+	.delete-pipe {
+		position: absolute;
+		top: 4px;
+		right: 4px;
+		background: transparent;
+		border: none;
 		color: var(--text-muted, #606060);
-		font-style: italic;
+		font-size: 1rem;
+		cursor: pointer;
+		padding: 2px 6px;
+		border-radius: 4px;
+	}
+	.delete-pipe:hover {
+		background: rgba(220, 38, 38, 0.15);
+		color: #dc2626;
 	}
 
-	/* ── Modal ───────────────────────────────────────── */
+	/* ── Add pipe button ───────────────────────────── */
+	.add-pipe-btn {
+		align-self: center;
+		padding: 8px 24px;
+		background: var(--bg-secondary, #2A2A2E);
+		border: 1px dashed var(--border-color, #4E525A);
+		border-radius: 6px;
+		color: var(--text-muted, #808080);
+		font-size: 1.2rem;
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+	.add-pipe-btn:hover {
+		border-color: var(--accent-primary, #FF6B35);
+		color: var(--accent-primary);
+	}
+
+	/* ── Modal ─────────────────────────────────────── */
 	.modal-backdrop {
 		position: fixed;
 		inset: 0;
