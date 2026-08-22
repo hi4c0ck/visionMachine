@@ -91,8 +91,8 @@
 	function handleCreateSession() {
 		console.log('[Workspace] Session created');
 		if (selectedProjectId) {
-			projects = projects.map(p => 
-				p.id === selectedProjectId 
+			projects = projects.map(p =>
+				p.id === selectedProjectId
 					? { ...p, sessionId: Date.now().toString() }
 					: p
 			);
@@ -101,7 +101,7 @@
 </script>
 
 <div class="workspace {layoutMode}">
-	<Frame 
+	<Frame
 		{userName}
 		{selectedTheme}
 		{layoutMode}
@@ -115,7 +115,7 @@
 		<!-- Left column: Projects + Profile -->
 		<div class="left-column">
 			{#if layoutMode !== 'single'}
-				<ProjectsPanel 
+				<ProjectsPanel
 					{projects}
 					{selectedProjectId}
 					onselect={handleProjectSelect}
@@ -123,9 +123,9 @@
 					ondelete={handleProjectDelete}
 				/>
 			{/if}
-			
+
 			<!-- Profile panel at bottom-left -->
-			<ProfilePanel 
+			<ProfilePanel
 				{userName}
 				{storageUsed}
 				oncreateSession={handleCreateSession}
@@ -133,11 +133,13 @@
 		</div>
 
 		<!-- Center: Composer (fills available space) -->
-		<ComposerPanel />
+		<div class="composer-area">
+			<ComposerPanel />
+		</div>
 
 		<!-- Right: Tools -->
 		{#if layoutMode === 'landscape'}
-			<ToolsPanel 
+			<ToolsPanel
 				tools={defaultTools}
 				{activeTool}
 				collapsed={toolsCollapsed}
@@ -171,6 +173,14 @@
 		min-width: 200px;
 		max-width: 320px;
 		border-right: 1px solid var(--border-color, #4E525A);
+		overflow: hidden;
+		flex-shrink: 0;
+	}
+
+	/* Center composer area - fills remaining horizontal space */
+	.composer-area {
+		flex: 1;
+		min-width: 0;
 		overflow: hidden;
 	}
 </style>
