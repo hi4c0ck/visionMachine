@@ -4,6 +4,7 @@
 	
 	// State declarations
 	let userName = $state('');
+	let isNameEmpty = $derived(!userName.trim());
 	let showWelcome = $state(true);
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
@@ -29,7 +30,6 @@
 			error = 'Please enter your name';
 			return;
 		}
-		
 		showWelcome = false;
 		localStorage.setItem('vm-username', name);
 	}
@@ -63,7 +63,6 @@
 	
 	// Lifecycle
 	onMount(() => {
-		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
 			userName = savedName;
@@ -80,9 +79,7 @@
 			layoutMode = savedLayout;
 		}
 		
-		// Use default app info
 		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
-		
 		applyTheme(selectedTheme);
 	});
 </script>
@@ -126,7 +123,7 @@
 				/>
 				<button 
 					class="btn btn-primary" 
-					disabled={!userName.trim()} 
+					disabled={isNameEmpty} 
 					onclick={handleLogin}
 				>
 					Get Started
