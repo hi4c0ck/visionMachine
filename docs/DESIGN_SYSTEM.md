@@ -2,68 +2,86 @@
 
 ## Color Palette
 
-### JetBrains Dark Theme
+### JetBrains Dark Theme (`data-theme="jetbrains-dark"`)
 ```css
 :root[data-theme="jetbrains-dark"] {
+  /* Background Colors */
   --bg-primary: #2B2B2B;
   --bg-secondary: #3C3F46;
   --bg-tertiary: #4E525A;
   --bg-hover: #4E525A;
   
+  /* Text Colors */
   --text-primary: #EEEEEE;
   --text-secondary: #BFBFBF;
   --text-muted: #808080;
   --text-inverse: #FFFFFF;
   
+  /* Accent Colors */
   --accent-primary: #59B5FF;
   --accent-primary-hover: #7EC8FF;
   --accent-secondary: #BB88EE;
   
+  /* Border Colors */
   --border-color: #4E525A;
+  
+  /* Special */
   --shadow-color: rgba(0, 0, 0, 0.3);
 }
 ```
 
-### Steel Machinery Dark Theme
+### Steel Machinery Dark Theme (`data-theme="steel-dark"`)
 ```css
 :root[data-theme="steel-dark"] {
-  --bg-primary: #1A1D23;
-  --bg-secondary: #2A2D35;
-  --bg-tertiary: #3A3D45;
-  --bg-hover: #3A3D45;
+  /* Background Colors */
+  --bg-primary: #1A1A1D;
+  --bg-secondary: #2A2A2E;
+  --bg-tertiary: #3A3A3F;
+  --bg-hover: #3A3A3F;
   
-  --text-primary: #E8EAF0;
-  --text-secondary: #B8BCC8;
-  --text-muted: #787C88;
+  /* Text Colors */
+  --text-primary: #E8E8E8;
+  --text-secondary: #A0A0A0;
+  --text-muted: #606060;
   --text-inverse: #FFFFFF;
   
-  --accent-primary: #4A90E2;
-  --accent-primary-hover: #5BA0F2;
-  --accent-secondary: #9B59B6;
+  /* Accent Colors */
+  --accent-primary: #FF6B35;
+  --accent-primary-hover: #FF8C61;
+  --accent-secondary: #F7C948;
   
-  --border-color: #3A3D45;
-  --shadow-color: rgba(0, 0, 0, 0.4);
+  /* Border Colors */
+  --border-color: #3A3A3F;
+  
+  /* Special */
+  --shadow-color: rgba(0, 0, 0, 0.5);
 }
 ```
 
-### Light Theme
+### Light Theme (`data-theme="light"`)
 ```css
 :root[data-theme="light"] {
-  --bg-primary: #F6F8FA;
-  --bg-secondary: #E8EAF0;
-  --bg-tertiary: #D0D5DD;
-  --bg-hover: #D0D5DD;
+  /* Background Colors */
+  --bg-primary: #FAFAFA;
+  --bg-secondary: #FFFFFF;
+  --bg-tertiary: #F0F0F0;
+  --bg-hover: #E8E8E8;
   
-  --text-primary: #1F2328;
-  --text-secondary: #444D56;
-  --text-muted: #6E7781;
+  /* Text Colors */
+  --text-primary: #1A1A1A;
+  --text-secondary: #5A5A5A;
+  --text-muted: #8A8A8A;
   --text-inverse: #FFFFFF;
   
-  --accent-primary: #0969DA;
-  --accent-primary-hover: #1C7FFF;
-  --accent-secondary: #8250DF;
+  /* Accent Colors */
+  --accent-primary: #007ACC;
+  --accent-primary-hover: #005A9E;
+  --accent-secondary: #8B5CF6;
   
-  --border-color: #D0D5DD;
+  /* Border Colors */
+  --border-color: #E0E0E0;
+  
+  /* Special */
   --shadow-color: rgba(0, 0, 0, 0.1);
 }
 ```
@@ -79,10 +97,10 @@
 ### Font Sizes
 | Token | Size | Usage |
 |-------|------|-------|
-| `--text-xs` | 0.625rem (10px) | Tiny labels |
-| `--text-sm` | 0.75rem (12px) | Meta text, hotkeys |
-| `--text-base` | 0.875rem (14px) | Body text, buttons |
-| `--text-lg` | 1rem (16px) | Headings, important text |
+| `--text-xs` | 0.625rem (10px) | Tiny labels, hotkeys |
+| `--text-sm` | 0.75rem (12px) | Meta text, buttons |
+| `--text-base` | 0.875rem (14px) | Body text |
+| `--text-lg` | 1rem (16px) | Headings |
 | `--text-xl` | 1.25rem (20px) | Section titles |
 | `--text-2xl` | 1.5rem (24px) | Page titles |
 | `--text-3xl` | 2rem (32px) | Hero text |
@@ -95,9 +113,8 @@
 | `--font-semibold` | 600 | Headings |
 | `--font-bold` | 700 | Important text |
 
-## Spacing
+## Spacing Scale
 
-### Scale
 | Token | Size | Usage |
 |-------|------|-------|
 | `--space-xs` | 4px | Tight padding |
@@ -126,7 +143,7 @@
 --shadow-xl: 0 20px 25px var(--shadow-color);
 ```
 
-## Component Styles
+## Component Dimensions
 
 ### Frame (Header)
 - Height: 140px
@@ -134,67 +151,20 @@
 - Background: `--bg-secondary`
 - Border-bottom: 1px solid `--border-color`
 
-### Panel (Sidebar)
-- Width: 220-280px
-- Background: `--bg-secondary`
-- Border-right/left: 1px solid `--border-color`
-- Padding: 16px
-
-### Button Primary
-```css
-background: var(--accent-primary);
-color: var(--text-inverse);
-padding: 6px 12px;
-border-radius: var(--radius-md);
-border: none;
-cursor: pointer;
-transition: all 0.15s ease;
-```
-
-### Button Secondary
-```css
-background: var(--bg-tertiary);
-color: var(--text-primary);
-padding: 6px 12px;
-border-radius: var(--radius-md);
-border: 1px solid var(--border-color);
-cursor: pointer;
-transition: all 0.15s ease;
-```
-
-### Input
-```css
-background: var(--bg-primary);
-color: var(--text-primary);
-border: 1px solid var(--border-color);
-border-radius: var(--radius-md);
-padding: 8px 12px;
-font-size: var(--text-base);
-```
-
-### Card
-```css
-background: var(--bg-secondary);
-border: 1px solid var(--border-color);
-border-radius: var(--radius-lg);
-padding: 16px;
-```
-
-## Layout Guidelines
-
 ### Panel Widths
-| Panel | Min Width | Max Width | Default |
-|-------|-----------|-----------|---------|
-| Projects | 200px | 320px | 240px |
-| Profile | 200px | 280px | 240px |
-| Tools | 160px | 280px | 200px |
+| Panel | Min | Max | Default |
+|-------|-----|-----|---------|
+| ProjectsPanel | 200px | 320px | 240px |
+| ProfilePanel | 200px | 280px | 240px |
+| ToolsPanel | 160px | 280px | 200px |
 
-### Canvas Aspect Ratio
-- Default: 16:9
-- Available: 16:9, 4:3, 1:1
+### Canvas Area
+- Aspect ratio: 16:9 default
+- Minimum height: 300px
+- Grid pattern: 20px spacing
 
 ### Timeline
-- Height: 140px
+- Total height: 140px
 - Ruler height: 24px
 - Track area: 80px
 - Keyframe panel: max 150px
@@ -223,4 +193,37 @@ padding: 16px;
 --focus-outline: 2px solid var(--accent-primary);
 --focus-offset: 2px;
 --click-target-min: 44px; /* Minimum touch target */
+```
+
+## Usage Examples
+
+### Setting Theme
+```typescript
+document.documentElement.setAttribute('data-theme', 'jetbrains-dark');
+localStorage.setItem('vm-theme', 'jetbrains-dark');
+```
+
+### Using CSS Variables
+```css
+.button {
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+}
+```
+
+### Layout
+```css
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.workspace-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
 ```

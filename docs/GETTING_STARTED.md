@@ -51,10 +51,10 @@ Visit [Releases](https://github.com/hi4c0ck/visionMachine/releases):
 | Shortcut | Action | Status |
 |----------|--------|--------|
 | `Enter` | Confirm login | ✅ Implemented |
-| `Enter` | Select keyframe | ✅ Implemented |
+| `Enter` | Select keyframe in list | ✅ Implemented |
 | `Enter` | Select frame in ruler | ✅ Implemented |
 
-**Note:** Tool selection via keyboard (V, B, E, T, S, C, G, ,) is displayed in the ToolsPanel but not yet bound to keyboard events. Use mouse clicks to select tools.
+**Note:** Tool hotkeys (V, B, E, T, S, C, G, ,) are displayed in the ToolsPanel as visual indicators but are not yet bound to keyboard events. Use mouse clicks to select tools.
 
 ---
 

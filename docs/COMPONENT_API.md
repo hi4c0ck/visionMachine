@@ -28,6 +28,19 @@ let error = $state<string | null>(null);
 | `onthemeChange` | `handleThemeChange(theme)` | Theme changed |
 | `onlayoutChange` | `handleLayoutChange(mode)` | Layout mode changed |
 
+### Usage
+```svelte
+<script lang="ts">
+  import App from './App.svelte';
+  
+  function handleLogout() { window.location.reload(); }
+  function handleThemeChange(theme: string) { /* apply theme */ }
+  function handleLayoutChange(mode: string) { /* save layout */ }
+</script>
+
+<App />
+```
+
 ---
 
 ## Frame.svelte
@@ -65,6 +78,19 @@ const themes = [
 ];
 ```
 
+### Usage
+```svelte
+<Frame 
+  userName={userName}
+  selectedTheme={selectedTheme}
+  layoutMode={layoutMode}
+  showWelcome={showWelcome}
+  onlogout={handleLogout}
+  onthemechoice={handleThemeChange}
+  onlayoutChange={handleLayoutChange}
+/>
+```
+
 ---
 
 ## ProjectsPanel.svelte
@@ -87,6 +113,24 @@ let {
   onnew,                 // (() => void)? - New project callback
   ondelete               // ((id: string) => void)? - Delete project callback
 } = $props();
+```
+
+### Events
+| Event | Callback | Parameters |
+|-------|----------|------------|
+| `onselect` | `handleProjectSelect(id)` | Project ID |
+| `onnew` | `handleProjectNew()` | None |
+| `ondelete` | `handleProjectDelete(id)` | Project ID |
+
+### Usage
+```svelte
+<ProjectsPanel 
+  {projects}
+  {selectedProjectId}
+  onselect={handleProjectSelect}
+  onnew={handleProjectNew}
+  ondelete={handleProjectDelete}
+/>
 ```
 
 ---
@@ -130,7 +174,7 @@ let {
 ### Keyboard Shortcuts
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+K` | Add keyframe |
+| `Enter` | Select focused keyframe |
 
 ---
 
@@ -152,6 +196,15 @@ let {
 ```typescript
 let sessions = $state<Array<{ id: string; name: string; status: string }>>([]);
 let showCreateSession = $state(false);
+```
+
+### Usage
+```svelte
+<ProfilePanel 
+  {userName}
+  {storageUsed}
+  oncreateSession={handleCreateSession}
+/>
 ```
 
 ---
@@ -191,6 +244,16 @@ const defaultTools = [
 ];
 ```
 
+### Usage
+```svelte
+<ToolsPanel 
+  tools={defaultTools}
+  {activeTool}
+  {toolsCollapsed}
+  onselect={handleToolSelect}
+/>
+```
+
 ---
 
 ## Workspace.svelte
@@ -205,7 +268,7 @@ let {
   layoutMode,         // string
   showWelcome,        // boolean
   onlogout,           // (() => void)?
-  onthemeChange,      // ((theme: string) => void)?
+  onthemechoice,      // ((theme: string) => void)?
   onlayoutChange      // ((mode: string) => void)?
 } = $props();
 ```
@@ -234,6 +297,19 @@ let storageUsed = $state(0);
 | `handleSelectKeyframe(id)` | Select keyframe |
 | `handleCreateSession()` | Create session |
 
+### Usage
+```svelte
+<Workspace
+  {userName}
+  {selectedTheme}
+  {layoutMode}
+  showWelcome={showWelcome}
+  onlogout={handleLogout}
+  onthemechoice={handleThemeChange}
+  onlayoutChange={handleLayoutChange}
+/>
+```
+
 ---
 
 ## FrameRuler.svelte
@@ -249,6 +325,15 @@ let {
   selectedFrame,      // number - Current frame position
   onframeSelect       // ((frame: number) => void)? - Frame selection callback
 } = $props();
+```
+
+### Usage
+```svelte
+<FrameRuler
+  {totalFrames}
+  {selectedFrame}
+  onframeSelect={handleFrameSelect}
+/>
 ```
 
 ---
@@ -272,6 +357,15 @@ let {
 } = $props();
 ```
 
+### Usage
+```svelte
+<MultiThumbSlider
+  values={[keyframe.valueStart, keyframe.valueEnd]}
+  label={`Keyframe: ${keyframe.label}`}
+  onchange={(v) => updateKeyframe(keyframe.id, v)}
+/>
+```
+
 ---
 
 ## Accessibility Requirements
@@ -281,6 +375,16 @@ All interactive elements must include:
 - `tabindex="0"` for keyboard focus
 - `onkeydown` handler for Enter/Space
 - `aria-pressed` for toggle states
+
+```svelte
+<div
+  role="button"
+  tabindex="0"
+  aria-pressed={selectedProjectId === project.id}
+  onclick={() => handleClick(project.id)}
+  onkeydown={(e) => e.key === 'Enter' && handleClick(project.id)}
+>
+```
 
 ---
 
