@@ -7,7 +7,7 @@
 	let showWelcome = $state(true);
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
-	let appInfo = $state(null);
+	let appInfo = $state<{ appName: string; version: string } | null>(null);
 	let error = $state<string | null>(null);
 	
 	// Constants
@@ -18,7 +18,7 @@
 	];
 	
 	// Functions
-	async function applyTheme(theme: string) {
+	function applyTheme(theme: string) {
 		console.log('[App] applyTheme:', theme);
 		document.documentElement.setAttribute('data-theme', theme);
 		localStorage.setItem('vm-theme', theme);
@@ -67,29 +67,32 @@
 	}
 	
 	// Lifecycle
-	onMount(async () => {
+	onMount(() => {
 		console.log('[App] onMount called');
 		console.log('[App] Initial showWelcome:', showWelcome);
-		console.log('[App] Initial userName:', userName);
+		console.log('[App] Initial userName:', JSON.stringify(userName));
 		
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
+			console.log('[App] Restored username from storage:', savedName);
 			userName = savedName;
 			showWelcome = false;
 		}
 		
 		const savedTheme = localStorage.getItem('vm-theme');
 		if (savedTheme) {
+			console.log('[App] Restored theme:', savedTheme);
 			selectedTheme = savedTheme;
 		}
 		
 		const savedLayout = localStorage.getItem('vm-layout');
 		if (savedLayout) {
+			console.log('[App] Restored layout:', savedLayout);
 			layoutMode = savedLayout;
 		}
 		
-		// Use default app info - skip Tauri invoke to avoid issues
+		// Use default app info
 		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
 		console.log('[App] App info set:', appInfo);
 		
@@ -132,6 +135,10 @@
 					class="input"
 					type="text"
 					onkeydown={handleKeyDown}
+					oninput={(e) => {
+						console.log('[App] oninput fired, new value:', (e.target as HTMLInputElement).value);
+						userName = (e.target as HTMLInputElement).value;
+					}}
 				/>
 				<button 
 					class="btn btn-primary" 
