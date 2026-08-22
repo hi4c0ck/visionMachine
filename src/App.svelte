@@ -36,8 +36,9 @@
 		}
 		
 		console.log('[App] Login successful:', name);
-		showWelcome = false;
-		localStorage.setItem('vm-username', name);
+	showWelcome = false;
+	console.log('[App] showWelcome changed to:', showWelcome);
+	localStorage.setItem('vm-username', name);
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
