@@ -18,16 +18,16 @@
 		// No props needed - composer is self-contained
 	}>();
 
+	const MAX_KEYFRAMES = 3;
+	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
+	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
+
 	let pipes = $state<PipeRow[]>([
 		{ id: 'p1', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
 		{ id: 'p2', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
 		{ id: 'p3', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
 		{ id: 'p4', keyframes: [], qValues: [Q_DEFAULT], cValues: [C_DEFAULT] },
 	]);
-
-	const MAX_KEYFRAMES = 3;
-	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
-	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
 
 	// Modal state
 	let showAddModal = $state(false);

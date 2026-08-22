@@ -140,7 +140,7 @@
 			<ToolsPanel 
 				tools={defaultTools}
 				{activeTool}
-				{toolsCollapsed}
+				collapsed={toolsCollapsed}
 				onselect={handleToolSelect}
 			/>
 		{/if}
