@@ -8,6 +8,7 @@ pub use preflight::{run_preflight_checks, PreflightReport};
 pub struct AppState {
     pub username: Arc<Mutex<Option<String>>>,
     pub preflight_report: Arc<Mutex<PreflightReport>>,
+    pub error_log: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl AppState {
@@ -15,6 +16,7 @@ impl AppState {
         Self {
             username: Arc::new(Mutex::new(None)),
             preflight_report: Arc::new(Mutex::new(PreflightReport::new())),
+            error_log: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -49,6 +51,31 @@ async fn logout_user(state: tauri::State<'_, AppState>) -> Result<(), String> {
 fn get_preflight_report(state: tauri::State<'_, AppState>) -> Result<PreflightReport, String> {
     let report = state.preflight_report.lock().map_err(|e| e.to_string())?;
     Ok(report.clone())
+}
+
+#[tauri::command]
+async fn report_error(error_msg: String, context: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let timestamp = chrono::Local::now().to_rfc3339();
+    let mut log = state.error_log.lock().map_err(|e| e.to_string())?;
+    log.push((timestamp, format!("{}: {}", context, error_msg)));
+    // Keep only last 100 errors
+    while log.len() > 100 {
+        log.remove(0);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_errors(limit: u32, state: tauri::State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
+    let log = state.error_log.lock().map_err(|e| e.to_string())?;
+    let limit = limit as usize;
+    Ok(log.iter().rev().take(limit).cloned().collect())
+}
+
+#[tauri::command]
+async fn set_theme(_theme: String, _state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // Theme is managed client-side via localStorage
+    Ok(())
 }
 
 fn setup_panic_hook() {
@@ -97,6 +124,9 @@ pub fn run() {
             logout_user,
             get_app_info,
             get_preflight_report,
+            report_error,
+            get_errors,
+            set_theme,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run app");
