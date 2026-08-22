@@ -112,26 +112,30 @@
 	/>
 
 	<div class="workspace-body">
-		{#if layoutMode !== 'single'}
-			<ProjectsPanel 
-				{projects}
-				{selectedProjectId}
-				onselect={handleProjectSelect}
-				onnew={handleProjectNew}
-				ondelete={handleProjectDelete}
-			/>
-		{/if}
-
-		<ComposerPanel />
-
-		{#if layoutMode === 'portrait' || layoutMode === 'landscape'}
+		<!-- Left column: Projects + Profile -->
+		<div class="left-column">
+			{#if layoutMode !== 'single'}
+				<ProjectsPanel 
+					{projects}
+					{selectedProjectId}
+					onselect={handleProjectSelect}
+					onnew={handleProjectNew}
+					ondelete={handleProjectDelete}
+				/>
+			{/if}
+			
+			<!-- Profile panel at bottom-left -->
 			<ProfilePanel 
 				{userName}
 				{storageUsed}
 				oncreateSession={handleCreateSession}
 			/>
-		{/if}
+		</div>
 
+		<!-- Center: Composer (fills available space) -->
+		<ComposerPanel />
+
+		<!-- Right: Tools -->
 		{#if layoutMode === 'landscape'}
 			<ToolsPanel 
 				tools={defaultTools}
@@ -158,5 +162,15 @@
 		flex: 1;
 		overflow: hidden;
 		min-height: 0;
+	}
+
+	.left-column {
+		display: flex;
+		flex-direction: column;
+		width: 240px;
+		min-width: 200px;
+		max-width: 320px;
+		border-right: 1px solid var(--border-color, #4E525A);
+		overflow: hidden;
 	}
 </style>
