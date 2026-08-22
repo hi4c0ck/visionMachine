@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
 	import Workspace from './components/Workspace.svelte';
 	
 	// State declarations
 	let userName = $state('');
-	let isNameEmpty = $derived(!userName.trim());
 	let showWelcome = $state(true);
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
@@ -24,32 +23,24 @@
 		localStorage.setItem('vm-theme', theme);
 	}
 	
-	async function handleLogin() {
+	function handleLogin() {
 		const name = userName.trim();
-		console.log('[App] handleLogin called with name:', name);
-		console.log('[App] Current showWelcome BEFORE:', showWelcome);
+		console.log('[App] handleLogin called');
+		console.log('[App] userName:', JSON.stringify(userName));
+		console.log('[App] showWelcome BEFORE:', showWelcome);
 		
 		if (!name) {
-			error = 'Please enter your name';
 			console.warn('[App] Name is empty!');
+			error = 'Please enter your name';
 			return;
 		}
 		
-		// Force state update
+		console.log('[App] Setting showWelcome = false');
 		showWelcome = false;
-		console.log('[App] showWelcome set to:', showWelcome);
-		
-		// Wait for next tick to ensure DOM updates
-		await tick();
-		console.log('[App] After tick, showWelcome is:', showWelcome);
-		
-		// Check if DOM actually updated
-		const welcomeDiv = document.querySelector('.welcome-card');
-		const workspaceDiv = document.querySelector('.workspace');
-		console.log('[App] Welcome card present:', !!welcomeDiv);
-		console.log('[App] Workspace present:', !!workspaceDiv);
+		console.log('[App] showWelcome AFTER:', showWelcome);
 		
 		localStorage.setItem('vm-username', name);
+		console.log('[App] Login complete');
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
@@ -73,13 +64,6 @@
 		localStorage.setItem('vm-layout', mode);
 	}
 	
-	function handleInputChange(e: Event) {
-		const target = e.currentTarget as HTMLInputElement;
-		userName = target.value;
-		error = null;
-		console.log('[App] Input changed, userName:', userName, 'isNameEmpty:', isNameEmpty);
-	}
-	
 	// Lifecycle
 	onMount(() => {
 		console.log('[App] onMount called');
@@ -89,7 +73,7 @@
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
-			console.log('[App] Restored username:', savedName);
+			console.log('[App] Restored username from storage:', savedName);
 			userName = savedName;
 			showWelcome = false;
 		}
@@ -139,16 +123,15 @@
 				<h1 class="welcome-title">Welcome to VisionMachine</h1>
 				<p class="hint">Enter your name to continue</p>
 				<input 
-					value={userName}
+					bind:value={userName}
 					placeholder="Your name..." 
 					class="input"
 					type="text"
 					onkeydown={handleKeyDown}
-					oninput={handleInputChange}
 				/>
 				<button 
 					class="btn btn-primary" 
-					disabled={isNameEmpty} 
+					disabled={!userName.trim()} 
 					onclick={handleLogin}
 				>
 					Get Started
@@ -157,15 +140,17 @@
 		</main>
 	</div>
 {:else}
-	<Workspace
-		{userName}
-		{selectedTheme}
-		{layoutMode}
-		showWelcome={showWelcome}
-		onlogout={handleLogout}
-		onthemeChange={handleThemeChange}
-		onlayoutChange={handleLayoutChange}
-	/>
+	<div id="workspace-container">
+		<Workspace
+			{userName}
+			{selectedTheme}
+			{layoutMode}
+			showWelcome={showWelcome}
+			onlogout={handleLogout}
+			onthemeChange={handleThemeChange}
+			onlayoutChange={handleLayoutChange}
+		/>
+	</div>
 {/if}
 
 <style>
