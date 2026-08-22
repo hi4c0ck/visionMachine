@@ -89,20 +89,9 @@
 			layoutMode = savedLayout;
 		}
 		
-		// Skip app info fetch in dev mode to avoid Tauri API issues
-		if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '')) {
-			console.log('[App] Dev mode detected - skipping Tauri app info');
-			appInfo = { appName: 'VisionMachine', version: 'dev' };
-		} else {
-			try {
-				const { invoke } = await import('@tauri-apps/api/core');
-				appInfo = await invoke('get_app_info');
-				console.log('[App] App info loaded:', appInfo);
-			} catch (err) {
-				console.warn('[App] Failed to load app info:', err);
-				appInfo = { appName: 'VisionMachine', version: '0.1.0' };
-			}
-		}
+		// Use default app info - skip Tauri invoke to avoid issues
+		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
+		console.log('[App] App info set:', appInfo);
 		
 		applyTheme(selectedTheme);
 	});
