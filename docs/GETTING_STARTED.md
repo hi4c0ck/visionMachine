@@ -48,16 +48,13 @@ Visit [Releases](https://github.com/hi4c0ck/visionMachine/releases):
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Enter` | Confirm login / Submit form |
-| `Ctrl+K` | Add keyframe |
-| `V` | Select tool |
-| `B` | Brush tool |
-| `E` | Eraser tool |
-| `T` | Text tool |
-| `G` | Generate tool |
-| `,` | Settings tool |
+| Shortcut | Action | Status |
+|----------|--------|--------|
+| `Enter` | Confirm login | ✅ Implemented |
+| `Enter` | Select keyframe | ✅ Implemented |
+| `Enter` | Select frame in ruler | ✅ Implemented |
+
+**Note:** Tool selection via keyboard (V, B, E, T, S, C, G, ,) is displayed in the ToolsPanel but not yet bound to keyboard events. Use mouse clicks to select tools.
 
 ---
 
@@ -78,7 +75,7 @@ Visit [Releases](https://github.com/hi4c0ck/visionMachine/releases):
 ```
 
 ### Portrait
-- Same as landscape but Profile panel moves below Composer
+- Same panels as Landscape but arranged vertically
 
 ### Single
 - Only Composer visible (fullscreen mode)
@@ -90,8 +87,8 @@ Visit [Releases](https://github.com/hi4c0ck/visionMachine/releases):
 | Theme | Background | Accent |
 |-------|-----------|--------|
 | JetBrains Dark | `#2B2B2B` | `#59B5FF` (blue) |
-| Steel Machinery Dark | `#1A1D23` | `#4A90E2` (steel blue) |
-| Light | `#F6F8FA` | `#0969DA` (GitHub blue) |
+| Steel Machinery Dark | `#1A1A1D` | `#FF6B35` (orange) |
+| Light | `#FAFAFA` | `#007ACC` (GitHub blue) |
 
 Switch via dropdown in top bar.
 
@@ -107,7 +104,7 @@ Switch via dropdown in top bar.
 
 ### Adding Keyframes
 1. Select a project
-2. Click "+ Keyframe" or press `Ctrl+K`
+2. Click "+ Keyframe" button
 3. Keyframe appears on timeline
 4. Select keyframe to edit range with sliders
 
