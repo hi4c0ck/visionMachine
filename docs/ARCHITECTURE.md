@@ -2,171 +2,252 @@
 
 ## System Overview
 
-VisionMachine is a hybrid desktop application combining:
-- **Rust/Tauri** for the native window and system integration
-- **Svelte** for the reactive UI
-- **Python** for AI provider logic and video generation services
+VisionMachine is a desktop video editing application built with:
+- **Tauri 2** (Rust backend) for native window and system integration
+- **Svelte 5** (TypeScript) for reactive UI with runes mode
+- **SQLite** for local data persistence
 
-The architecture follows a layered approach with clear separation between UI, business logic, and data persistence.
+The architecture follows a component-based approach with clear separation between UI, business logic, and data layers.
 
 ## Layer Diagram
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  PRESENTATION LAYER (Svelte)                          │
-│  DashboardView, CameraView, ComposerSection           │
-│  TwoThumbSlider, ArtifactsPanel                       │
-├──────────────────────────────────────────────────────┤
-│  VIEW MODEL LAYER (Rust)                              │
-│  FrameViewModel, ComposerViewModel, ProjectViewModel  │
-│  ProfileViewModel, ToolsViewModel                     │
-├──────────────────────────────────────────────────────┤
-│  COMMAND LAYER (Tauri + Rust)                         │
-│  generate_video, create_project, list_providers       │
-│  validate_provider, get_api_key_status                │
-├──────────────────────────────────────────────────────┤
-│  BUSINESS LOGIC (Python)                              │
-│  VideoGenerationService, ProviderFactory              │
-│  BaseProvider (abstract), AgnesProvider,              │
-│  OpenAICompatibleProvider                             │
-├──────────────────────────────────────────────────────┤
-│  DATA LAYER                                           │
-│  EncryptedKeyStore (SQLite + Fernet)                  │
-│  ConfigManager (JSON config + env vars)               │
-│  Database (Tauri SQLite plugin)                       │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  PRESENTATION LAYER (Svelte 5)                              │
+│  Frame, ProjectsPanel, ComposerPanel, ProfilePanel,         │
+│  ToolsPanel, Workspace                                      │
+│  FrameRuler, MultiThumbSlider                               │
+├─────────────────────────────────────────────────────────────┤
+│  STATE MANAGEMENT (Svelte Runes)                            │
+│  $state, $derived, $effect, $props                          │
+│  Callback event pattern (no createEventDispatcher)          │
+├─────────────────────────────────────────────────────────────┤
+│  IPC LAYER (Tauri Commands)                                 │
+│  login_user, logout_user, get_app_info                      │
+│  set_theme, report_error, get_errors                        │
+├─────────────────────────────────────────────────────────────┤
+│  DATA LAYER (Rust/Tauri)                                    │
+│  AppState (username, preflight_report, error_log)           │
+│  SQLite (planned for future)                                │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Key Design Decisions
+## Component Architecture
 
-### 1. Why Tauri over Electron?
-
-| Factor | Tauri | Electron |
-|--------|-------|----------|
-| Binary size | ~5 MB | ~150+ MB |
-| Memory usage | Low | High |
-| Rust backend | Native | N/A |
-| Ecosystem maturity | Growing | Mature |
-| Security model | Permission-based | Standard |
-
-**Decision:** Tauri chosen for lightweight footprint and native performance on Windows.
-
-### 2. Provider Abstraction
-
-All AI providers implement the `BaseProvider` interface:
-
-```python
-class BaseProvider(ABC):
-    @abstractmethod
-    async def generate_video(self, prompt: str, duration: int, **kwargs) -> Dict[str, Any]
-    
-    @abstractmethod
-    async def generate_image(self, prompt: str, size: tuple[int, int], **kwargs) -> Dict[str, Any]
-    
-    @abstractmethod
-    async def generate_text(self, prompt: str, **kwargs) -> str
-    
-    @abstractmethod
-    async def validate_connection(self) -> bool
+### Main Layout (Workspace.svelte)
+```
+Workspace
+├── Frame (140px height)
+│   ├── Logo + "New" badge
+│   ├── Layout mode switcher (Landscape/Portrait/Single)
+│   ├── Theme selector dropdown
+│   └── User badge + Logout button
+├── ProjectsPanel (Left, 220-280px)
+│   ├── Project list
+│   ├── Create new project button
+│   └── Delete project option
+├── ComposerPanel (Center, flexible)
+│   ├── Toolbar (playback controls, zoom)
+│   ├── Canvas area
+│   ├── FrameRuler (timeline navigation)
+│   ├── MultiThumbSlider (keyframe range)
+│   └── Keyframe list panel
+├── ProfilePanel (Right-bottom, 220px)
+│   ├── User avatar + info
+│   ├── Storage usage bar
+│   ├── Session list
+│   └── Quick action buttons
+└── ToolsPanel (Far-right, 180-200px)
+    ├── Collapsible tool palette
+    ├── Tool icons with hotkeys
+    └── Active state indicator
 ```
 
-This allows runtime switching between providers without changing the core logic.
-
-### 3. Data Storage Strategy
-
-**SQLite** was chosen for local storage because:
-- Zero configuration — single file, no server
-- Cross-platform compatibility
-- Transaction support for data integrity
-- ~5 MB footprint even with large datasets
-- No external dependencies
-
-Migration files live in `src-tauri/migrations/` and run automatically on app startup.
-
-### 4. Security Approach
-
-- **Fernet encryption** for API keys (symmetric, HMAC-signed)
-- **Key derivation** via PBKDF2-HMAC-SHA256
-- **Master password** from environment variable (`VISION_MACHINE_PASSWORD`)
-- **No logging** of sensitive data
-- **Input validation** prevents SQL injection and path traversal
-
-## Component Relationships
-
+### State Flow
 ```
-App.svelte
-├── Titlebar.svelte
-├── Sidebar.svelte
-│   └── ProjectSidebar.svelte
-├── StatusBar.svelte
-└── Workspace.svelte
-    └── WorkScreen.svelte (FSM state machine)
-        ├── DashboardView
-        ├── CameraView
-        ├── GenerationsView
-        └── StatusView
-
-ComposerSection.svelte
-├── FrameRuler.svelte
-├── MultiThumbSlider.svelte
-└── TwoThumbSlider.svelte
+User Input (UI Events)
+    ↓
+Component Handler (e.g., handleLogout)
+    ↓
+Callback Prop (e.g., onlogout)
+    ↓
+Parent State Update (e.g., showWelcome = false)
+    ↓
+Reactive UI Update (Svelte 5 runes)
 ```
 
-## State Management
+## Svelte 5 Patterns
 
-The app uses an FSM (Finite State Machine) pattern in `WorkScreen.svelte`:
+### Props Pattern
+All component communication uses callback props instead of events:
 
+```svelte
+<!-- Parent -->
+<ChildComponent 
+  userName={userName}
+  onlogout={handleLogout}
+  onthemechoice={handleThemeChange}
+/>
+
+<!-- Child -->
+<script lang="ts">
+  let {
+    userName,
+    onlogout,
+    onthemechoice
+  } = $props<{
+    userName: string;
+    onlogout?: () => void;
+    onthemechoice?: (theme: string) => void;
+  }>();
+</script>
+```
+
+### State Pattern
 ```typescript
-type ScreenState = 
-  | { screen: 'idle' }
-  | { screen: 'generating'; context: 'dashboard' | 'project' | 'camera' }
-  | { screen: 'loading'; source?: string }
-  | { screen: 'error'; message: string; previousScreen: string }
-  | { screen: 'camera-active' }
-  | { screen: 'settings-open' };
+// Reactive state
+let userName = $state('');
+let isLoading = $state(false);
+let projects = $state<Project[]>([]);
 
-type ModalType = 'theme' | 'settings' | 'new-project' | 'generate' | 'export' | 'delete-confirm' | 'crop-tool' | null;
+// Derived state
+let filteredProjects = $derived(
+  projects.filter(p => p.name.includes(searchTerm))
+);
+
+// Effects with cleanup
+$effect(() => {
+  const id = setInterval(() => { count++; }, 1000);
+  return () => clearInterval(id);
+});
 ```
 
-Blocking hierarchy:
-1. **Modals** (highest priority) — block all interactions
-2. **Generating/Loading states** — full block, only completion/error handlers work
-3. **Normal states** — full interaction available
+## Tauri Backend
 
-## Video Generation Pipeline
-
-```
-User Input (UI)
-    ↓
-Tauri Command: generate_video(prompt, duration, shots, style, resolution)
-    ↓
-Validate Parameters (Rust)
-    ↓
-Python Subprocess Call
-    ↓
-VideoGenerationService.generate_video()
-    ├─ Prompt Decomposition (shot breaking algorithm)
-    ├─ Per-Shot Generation via Provider
-    └─ FFmpeg Concatenation (if multi-shot)
-    ↓
-Result → SQLite Storage → UI Display
+### AppState
+```rust
+#[derive(Clone)]
+pub struct AppState {
+    pub username: Arc<Mutex<Option<String>>>,
+    pub preflight_report: Arc<Mutex<PreflightReport>>,
+    pub error_log: Arc<Mutex<Vec<(String, String)>>>,
+}
 ```
 
-## Performance Considerations
+### Tauri Commands
+| Command | Parameters | Returns | Description |
+|---------|-----------|---------|-------------|
+| `login_user` | `{ username: string }` | `Result<String, String>` | Authenticate user |
+| `logout_user` | None | `Result<(), String>` | Logout current user |
+| `get_app_info` | None | `serde_json::Value` | Get app metadata |
+| `set_theme` | `{ theme: string }` | `Result<(), String>` | Change UI theme |
+| `report_error` | `{ error: string, context: string }` | `Result<(), String>` | Log error |
+| `get_errors` | `{ limit: u32 }` | `Result<Vec<(String, String)>, String>` | Get error log |
 
-- GPU-accelerated video playback via HTML5 `<video>` element
-- Debounced composer saves (300ms) to prevent excessive disk I/O
-- Async write pattern (`AsyncWriter`) for non-blocking file operations
-- Thumbnail caching for artifact previews
+## Data Persistence
 
-## Future Extensibility
+### localStorage (Client-side)
+| Key | Type | Description |
+|-----|------|-------------|
+| `vm-username` | string | Current user name |
+| `vm-theme` | string | Selected theme |
+| `vm-layout` | string | Layout mode |
 
-| Feature | Implementation Path |
-|---------|---------------------|
-| Linux/macOS support | Tauri cross-compilation (already configured) |
-| Web deployment | Extract Svelte frontend + FastAPI backend |
-| Mobile support | React Native / Flutter port |
-| Batch processing | Queue-based with Redis/Celery |
-| Local models | ONNX Runtime integration |
+### Rust State (In-memory)
+- `AppState.username`: Current logged-in user
+- `AppState.error_log`: Last 100 errors
+- `AppState.preflight_report`: System check results
 
-*Last updated: 2026-08-21*
+## Build Configuration
+
+### Vite (Frontend)
+```typescript
+export default defineConfig({
+  plugins: [svelte()],
+  base: './',
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    sourcemap: false
+  }
+});
+```
+
+### Tauri (Desktop)
+```json
+{
+  "productName": "VisionMachine",
+  "version": "0.1.0",
+  "identifier": "com.visionmachine.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "VisionMachine",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  }
+}
+```
+
+## File Structure
+```
+VisionMachine/
+├── src/                          # Frontend (Svelte 5)
+│   ├── App.svelte               # Root component
+│   ├── main.ts                  # Entry point
+│   └── components/
+│       ├── Frame.svelte         # Top header (140px)
+│       ├── ProjectsPanel.svelte # Left panel
+│       ├── ComposerPanel.svelte # Center canvas + timeline
+│       ├── ProfilePanel.svelte  # Right bottom
+│       ├── ToolsPanel.svelte    # Far right
+│       ├── Workspace.svelte     # Main orchestrator
+│       ├── FrameRuler.svelte    # Timeline ruler
+│       └── MultiThumbSlider.svelte # Dual-thumb slider
+├── src-tauri/                   # Backend (Rust/Tauri)
+│   ├── src/
+│   │   ├── lib.rs               # Tauri commands & state
+│   │   └── preflight.rs         # System checks
+│   ├── tauri.conf.json          # App configuration
+│   ├── capabilities/            # Permission definitions
+│   └── icons/                   # App icons
+├── css/
+│   └── design-system.css        # CSS custom properties
+├── docs/
+│   ├── ARCHITECTURE.md          # This file
+│   ├── API_REFERENCE.md         # Tauri commands
+│   ├── COMPONENT_API.md         # Svelte components
+│   ├── DESIGN_SYSTEM.md         # Colors & typography
+│   └── SVELTE5_GUIDE.md         # Svelte 5 patterns
+├── scripts/
+│   ├── generate_github_token.py # GitHub App token generator
+│   └── push-all.py              # Push automation
+└── package.json                 # Dependencies
+```
+
+## Security Considerations
+
+### Permissions
+- Tauri capabilities are scoped to specific commands
+- No filesystem access in production build
+- WebView2 sandbox enabled
+
+### Data Storage
+- Sensitive data stored in Rust state (in-memory only)
+- User preferences in localStorage (non-sensitive)
+- Error logs limited to last 100 entries
+
+### CSP Policy
+Content Security Policy configured in tauri.conf.json:
+```json
+"csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'"
+```
