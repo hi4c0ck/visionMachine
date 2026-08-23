@@ -1,3 +1,2 @@
-// Legacy re-exports for backward compatibility
-// All core types have been moved to app.ts
+// Re-export everything from app.ts for backward compatibility
 export * from './app';

@@ -228,6 +228,42 @@ export function createEmptySession(projectName: string, directoryPath: string): 
 }
 
 /**
+ * Validate prompt segments have no overlapping ranges for same tag type
+ */
+export function validatePromptSegments(segments: PromptSegment[]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const tagRanges = new Map<TagType, Array<{ start: number; end: number; index: number }>>();
+
+  segments.forEach((seg, idx) => {
+    if (!tagRanges.has(seg.tag)) {
+      tagRanges.set(seg.tag, []);
+    }
+    tagRanges.get(seg.tag)!.push({ start: seg.frameStart, end: seg.frameEnd, index: idx });
+  });
+
+  // Check for overlaps within each tag type
+  tagRanges.forEach((ranges, tag) => {
+    for (let i = 0; i < ranges.length; i++) {
+      for (let j = i + 1; j < ranges.length; j++) {
+        const a = ranges[i];
+        const b = ranges[j];
+        // Check overlap: a.start < b.end && b.start < a.end
+        if (a.start < b.end && b.start < a.end) {
+          errors.push(
+            `Overlap detected for <${tag}> between segments ${a.index} (${a.start}-${a.end}) and ${b.index} (${b.start}-${b.end})`
+          );
+        }
+      }
+    }
+  });
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+/**
  * Generate unique folder name for session
  */
 export function generateSessionFolderName(baseName: string): string {
