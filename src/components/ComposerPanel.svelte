@@ -7,72 +7,72 @@
 		img2imgRef?: string;
 	}
 
-	interface SegmentParam {
+	interface PipeParam {
 		id: string;
 		name: 'segment' | 'scene' | 'camera' | 'lighting' | 'effect';
+		frameStart: number;  // frame position (8n+ rule)
+		frameEnd: number;
 		value: number;
-		min: number;
-		max: number;
-		step: number;
-	}
-
-	interface PipeRow {
-		id: string;
-		keyframes: PipeKeyframe[];
-		// Q/C values (render setup) - placed at end of keyframes row
-		qValue: number;  // num_inference_steps: 5-30, default 18
-		cValue: number;  // cfg_scale: 0.5-15, default 7
-		// Parameter sliders below frame ruler
-		params: SegmentParam[];
 	}
 
 	let { } = $props<{
-		// No props needed - composer is self-contained
+		// No props needed
 	}>();
 
 	const MAX_KEYFRAMES = 3;
 	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
 	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
 
-	const PARAM_TYPES: Array<{ id: SegmentParam['name']; label: string; min: number; max: number; step: number }> = [
-		{ id: 'segment', label: 'Segment', min: 1, max: 10, step: 1 },
-		{ id: 'scene', label: 'Scene', min: 0, max: 100, step: 1 },
-		{ id: 'camera', label: 'Camera', min: 0, max: 100, step: 1 },
-		{ id: 'lighting', label: 'Lighting', min: 0, max: 100, step: 1 },
-		{ id: 'effect', label: 'Effect', min: 0, max: 100, step: 1 },
+	// Param types with default ranges
+	const PARAM_TYPES: Array<{ id: PipeParam['name']; label: string; min: number; max: number }> = [
+		{ id: 'segment', label: 'Segment', min: 1, max: 10 },
+		{ id: 'scene', label: 'Scene', min: 0, max: 100 },
+		{ id: 'camera', label: 'Camera', min: 0, max: 100 },
+		{ id: 'lighting', label: 'Lighting', min: 0, max: 100 },
+		{ id: 'effect', label: 'Effect', min: 0, max: 100 },
 	];
 
-	function createDefaultParam(typeId: SegmentParam['name']): SegmentParam {
-		const type = PARAM_TYPES.find(t => t.id === typeId)!;
-		return {
-			id: Date.now().toString(),
-			name: typeId,
-			value: Math.floor((type.min + type.max) / 2),
-			min: type.min,
-			max: type.max,
-			step: type.step,
-		};
-	}
-
-	let pipes = $state<PipeRow[]>([
+	let pipes = $state<Array<{
+		id: string;
+		keyframes: PipeKeyframe[];
+		qValue: number;
+		cValue: number;
+		params: PipeParam[];
+	}>>([
 		createEmptyPipe(0),
 		createEmptyPipe(1),
 		createEmptyPipe(2),
 		createEmptyPipe(3),
 	]);
 
-	function createEmptyPipe(index: number): PipeRow {
+	function createEmptyPipe(index: number) {
 		return {
 			id: `p${index + 1}`,
 			keyframes: [],
 			qValue: Q_DEFAULT,
 			cValue: C_DEFAULT,
 			params: [
-				createDefaultParam('segment'),
-				createDefaultParam('scene'),
-				createDefaultParam('camera'),
+				createDefaultParam('segment', 0, 60),
+				createDefaultParam('scene', 60, 120),
+				createDefaultParam('camera', 120, 180),
 			],
 		};
+	}
+
+	function createDefaultParam(typeId: PipeParam['name'], frameStart: number, frameEnd: number): PipeParam {
+		const type = PARAM_TYPES.find(t => t.id === typeId)!;
+		return {
+			id: Date.now().toString() + Math.random(),
+			name: typeId,
+			frameStart,
+			frameEnd,
+			value: Math.floor((type.min + type.max) / 2),
+		};
+	}
+
+	// Find nearest 8n+ frame
+	function snapTo8n(frame: number): number {
+		return Math.round(frame / 8) * 8 + 8;
 	}
 
 	// Modal state
@@ -83,6 +83,13 @@
 	let modalUrl = $state('');
 	let modalPrompt = $state('');
 	let modalImg2Img = $state('');
+
+	// Calculate total frames from all keyframes
+	let totalFrames = $derived(Math.max(
+		...pipes.flatMap(p => p.keyframes.length > 0 ? [p.keyframes[p.keyframes.length - 1].frame + 120] : [0]),
+		...pipes.flatMap(p => p.params.map(param => param.frameEnd)),
+		600  // minimum
+	));
 
 	function closeModal() {
 		showAddModal = false;
@@ -106,7 +113,7 @@
 		if (!pipe || pipe.keyframes.length >= MAX_KEYFRAMES) return;
 
 		const baseFrame = pipe.keyframes.length > 0
-			? Math.max(...pipe.keyframes.map(k => k.frame)) + 60
+			? snapTo8n(Math.max(...pipe.keyframes.map(k => k.frame)) + 60)
 			: 0;
 
 		const newKf: PipeKeyframe = {
@@ -137,11 +144,23 @@
 		if (pipe) pipe.cValue = val;
 	}
 
-	function addParam(pipeIndex: number, paramType?: SegmentParam['name']) {
+	function addParam(pipeIndex: number) {
 		const pipe = pipes[pipeIndex];
 		if (!pipe) return;
-		const type = paramType || PARAM_TYPES[pipe.params.length % PARAM_TYPES.length].id;
-		pipe.params = [...pipe.params, createDefaultParam(type)];
+		
+		// Find next available frame range
+		const lastFrame = Math.max(
+			...pipe.keyframes.map(k => k.frame),
+			...pipe.params.map(p => p.frameEnd),
+			0
+		);
+		const newStart = snapTo8n(lastFrame);
+		const newEnd = snapTo8n(lastFrame + 60);
+		
+		const typeIndex = pipe.params.length % PARAM_TYPES.length;
+		const typeId = PARAM_TYPES[typeIndex].id;
+		
+		pipe.params = [...pipe.params, createDefaultParam(typeId, newStart, newEnd)];
 	}
 
 	function removeParam(pipeIndex: number, paramId: string) {
@@ -157,6 +176,22 @@
 		if (param) param.value = value;
 	}
 
+	function moveParamFrame(pipeIndex: number, paramId: string, delta: number) {
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return;
+		const param = pipe.params.find(p => p.id === paramId);
+		if (!param) return;
+		
+		const newStart = snapTo8n(param.frameStart + delta);
+		const newEnd = snapTo8n(param.frameEnd + delta);
+		
+		// Ensure non-overlapping
+		if (newStart >= 0 && newEnd > newStart) {
+			param.frameStart = newStart;
+			param.frameEnd = newEnd;
+		}
+	}
+
 	function addTrack() {
 		const newIdx = pipes.length;
 		pipes = [...pipes, createEmptyPipe(newIdx)];
@@ -169,21 +204,37 @@
 </script>
 
 <div class="composer-panel">
+	<!-- Shared Frame Ruler (stays fixed at top) -->
+	<div class="ruler-container">
+		<div class="ruler">
+			<div class="ruler-ticks">
+				{#each Array.from({ length: Math.ceil(totalFrames / 60) + 1 }, (_, i) => i * 60) as frame}
+					<div class="ruler-mark" style="left: {frame / totalFrames * 100}%">
+						<span>{frame}</span>
+					</div>
+				{/each}
+			</div>
+			<!-- Playhead indicator -->
+			<div class="playhead" style="left: 0%"></div>
+		</div>
+	</div>
+
 	<!-- Pipes List -->
 	<div class="pipes-list">
 		{#each pipes as pipe, pipeIdx (pipe.id)}
 			<div class="pipe-row">
-				<!-- Pipe Header -->
+				<!-- Pipe Header with Q/C -->
 				<div class="pipe-header">
 					<span class="pipe-label">Pipe {pipeIdx + 1}</span>
 					<button class="remove-pipe-btn" onclick={() => removeTrack(pipeIdx)} title="Remove pipe">×</button>
 				</div>
 
-				<!-- Row 1: Keyframes + Q/C sliders -->
+				<!-- Row 1: Keyframes + Q/C at end -->
 				<div class="kf-row">
 					{#each pipe.keyframes as kf, kfIdx (kf.id)}
 						<div 
 							class="kf-box {kf.imageSrc ? 'has-image' : ''}"
+							style="left: {kf.frame / totalFrames * 100}%"
 							onclick={() => openAddModal(pipeIdx, kfIdx)}
 						>
 							{#if kf.imageSrc}
@@ -202,7 +253,7 @@
 						<div class="add-kf-btn" onclick={() => openAddModal(pipeIdx, pipe.keyframes.length)}>+</div>
 					{/if}
 
-					<!-- Q/C Sliders - at the end of keyframes row -->
+					<!-- Q/C Sliders - at the END of keyframes row -->
 					<div class="qc-sliders">
 						<div class="qc-group">
 							<span class="qc-label">Q</span>
@@ -221,34 +272,31 @@
 					</div>
 				</div>
 
-				<!-- Row 2: Frame Ruler -->
-				<div class="ruler-row">
-					<span class="ruler-arrow">‹</span>
-					<div class="ruler-track">
-						{#each Array.from({ length: 12 }, (_, i) => i * 50) as frame}
-							<div class="ruler-tick" style="left: {frame / 600 * 100}%">
-								<span>{frame}</span>
-							</div>
-						{/each}
-					</div>
-					<span class="ruler-arrow">›</span>
-				</div>
-
-				<!-- Row 3+: Parameter Sliders -->
-				<div class="params-row">
-					{#each pipe.params as param (param.id)}
-						<div class="param-control">
+				<!-- Rows 2+: Parameter Sliders (one per param, with frame position) -->
+				{#each pipe.params as param (param.id)}
+					<div class="param-row">
+						<div class="param-frame-indicator" style="left: {param.frameStart / totalFrames * 100}%">
+							<span class="param-frame">{param.frameStart}</span>
+						</div>
+						<div class="param-content">
 							<span class="param-name">{param.name}</span>
-							<input type="range" min={param.min} max={param.max} step={param.step}
+							<input type="range" min={param.min} max={param.max} step="1"
 							       value={param.value}
 							       oninput={(e) => updateParam(pipeIdx, param.id, Number(e.currentTarget.value))} />
 							<span class="param-value">{param.value}</span>
+						</div>
+						<div class="param-controls">
+							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, param.id, -8)} title="Move left (-8f)">‹</button>
+							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, param.id, 8)} title="Move right (+8f)">›</button>
 							<button class="remove-param-btn" onclick={() => removeParam(pipeIdx, param.id)} title="Remove">×</button>
 						</div>
-					{/each}
-					<div class="add-param-row">
-						<button class="add-param-btn" onclick={() => addParam(pipeIdx)}>+</button>
 					</div>
+				{/each}
+
+				<!-- Add Parameter Button -->
+				<div class="add-param-row" onclick={() => addParam(pipeIdx)}>
+					<span>+</span>
+					<span>Add Param</span>
 				</div>
 			</div>
 		{/each}
@@ -260,7 +308,7 @@
 	<!-- Add Keyframe Modal -->
 	{#if showAddModal && activePipeIndex !== null}
 		<div class="modal-backdrop" onclick={closeModal} role="presentation">
-			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="0">
 				<div class="modal-header">
 					<span class="modal-title">Add Keyframe Image</span>
 					<button class="modal-close" onclick={closeModal}>×</button>
@@ -300,6 +348,68 @@
 		background: var(--bg-primary, #1A1A1D);
 	}
 
+	/* Ruler Container - Fixed at top */
+	.ruler-container {
+		position: sticky;
+		top: 0;
+		z-index: 100;
+		background: var(--bg-secondary, #2A2A2E);
+		border-bottom: 2px solid var(--border-color, #4E525A);
+		height: 40px;
+	}
+
+	.ruler {
+		position: relative;
+		width: 100%;
+		height: 100%;
+		overflow: hidden;
+	}
+
+	.ruler-ticks {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 100%;
+		width: max-content;
+		min-width: 100%;
+	}
+
+	.ruler-mark {
+		position: absolute;
+		top: 0;
+		transform: translateX(-50%);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		height: 100%;
+		justify-content: flex-end;
+		padding-bottom: 4px;
+	}
+
+	.ruler-mark::before {
+		content: '';
+		width: 1px;
+		height: 12px;
+		background: var(--accent-primary, #59B5FF);
+		margin-bottom: 2px;
+	}
+
+	.ruler-mark span {
+		font-size: 9px;
+		color: var(--text-muted, #808080);
+		font-family: monospace;
+	}
+
+	.playhead {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 2px;
+		height: 100%;
+		background: #dc2626;
+		z-index: 10;
+	}
+
 	/* Pipes List */
 	.pipes-list {
 		flex: 1;
@@ -317,18 +427,20 @@
 		background: var(--bg-secondary, #2A2A2E);
 		border: 1px solid var(--border-color, #3A3A3F);
 		border-radius: 4px;
-		gap: 4px;
-		padding: 8px;
+		gap: 2px;
+		padding: 6px;
+		position: relative;
 	}
 
 	.pipe-header {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
+		padding: 0 4px;
 	}
 
 	.pipe-label {
-		font-size: 11px;
+		font-size: 10px;
 		font-weight: 600;
 		color: var(--text-muted, #808080);
 		text-transform: uppercase;
@@ -355,15 +467,17 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		min-height: 72px;
-		overflow-x: auto;
-		padding-bottom: 4px;
+		min-height: 56px;
+		padding: 4px;
+		position: relative;
+		background: var(--bg-primary, #1A1A1D);
+		border-radius: 4px;
 	}
 
 	.kf-box {
 		position: relative;
-		width: 56px;
-		height: 56px;
+		width: 48px;
+		height: 48px;
 		border-radius: 4px;
 		border: 2px solid var(--border-color, #4E525A);
 		background: var(--bg-tertiary, #3A3A3F);
@@ -375,13 +489,13 @@
 		flex-shrink: 0;
 	}
 
+	.kf-box.has-image {
+		padding: 2px;
+	}
+
 	.kf-box:hover {
 		border-color: var(--accent-primary, #59B5FF);
 		transform: translateY(-2px);
-	}
-
-	.kf-box.has-image {
-		padding: 2px;
 	}
 
 	.kf-thumb {
@@ -392,7 +506,7 @@
 	}
 
 	.kf-label {
-		font-size: 11px;
+		font-size: 10px;
 		font-weight: bold;
 		color: var(--text-muted, #606060);
 		font-family: monospace;
@@ -402,14 +516,14 @@
 		position: absolute;
 		top: -6px;
 		right: -6px;
-		width: 18px;
-		height: 18px;
+		width: 16px;
+		height: 16px;
 		border-radius: 50%;
 		background: #dc2626;
 		color: #fff;
 		border: none;
 		cursor: pointer;
-		font-size: 11px;
+		font-size: 10px;
 		display: none;
 		align-items: center;
 		justify-content: center;
@@ -420,10 +534,9 @@
 		display: flex;
 	}
 
-	/* Add KF Button */
 	.add-kf-btn {
-		width: 28px;
-		height: 28px;
+		width: 24px;
+		height: 24px;
 		border-radius: 50%;
 		background: var(--accent-primary, #59B5FF);
 		color: #fff;
@@ -431,7 +544,7 @@
 		align-items: center;
 		justify-content: center;
 		cursor: pointer;
-		font-size: 18px;
+		font-size: 16px;
 		font-weight: bold;
 		opacity: 0.8;
 		transition: opacity 0.15s;
@@ -450,24 +563,25 @@
 		margin-left: auto;
 		padding-left: 16px;
 		border-left: 1px solid var(--border-color, #3A3A3F);
+		align-items: center;
 	}
 
 	.qc-group {
 		display: flex;
 		align-items: center;
-		gap: 6px;
+		gap: 4px;
 	}
 
 	.qc-label {
-		font-size: 10px;
+		font-size: 9px;
 		font-weight: bold;
 		color: var(--text-muted, #808080);
 		text-transform: uppercase;
-		min-width: 14px;
+		min-width: 12px;
 	}
 
 	.qc-group input[type="range"] {
-		width: 60px;
+		width: 50px;
 		height: 4px;
 		appearance: none;
 		background: var(--bg-primary, #1A1A1D);
@@ -477,90 +591,56 @@
 
 	.qc-group input[type="range"]::-webkit-slider-thumb {
 		appearance: none;
-		width: 12px;
-		height: 12px;
+		width: 10px;
+		height: 10px;
 		border-radius: 50%;
 		background: var(--accent-primary, #59B5FF);
 		cursor: pointer;
 	}
 
 	.qc-value {
-		font-size: 10px;
+		font-size: 9px;
 		color: var(--text-muted, #808080);
-		min-width: 20px;
+		min-width: 16px;
 		text-align: center;
 		font-family: monospace;
 	}
 
-	/* Frame Ruler */
-	.ruler-row {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 2px 0;
-	}
-
-	.ruler-arrow {
-		color: var(--text-muted, #606060);
-		cursor: pointer;
-		font-size: 12px;
-		flex-shrink: 0;
-	}
-
-	.ruler-arrow:hover {
-		color: var(--accent-primary, #59B5FF);
-	}
-
-	.ruler-track {
-		flex: 1;
-		height: 12px;
-		position: relative;
-		border-bottom: 1px solid var(--border-color, #4E525A);
-		cursor: pointer;
-	}
-
-	.ruler-tick {
-		position: absolute;
-		top: 0;
-		transform: translateX(-50%);
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-	}
-
-	.ruler-tick::before {
-		content: '';
-		width: 1px;
-		height: 6px;
-		background: var(--border-color, #4E525A);
-	}
-
-	.ruler-tick span {
-		font-size: 9px;
-		color: var(--text-muted, #606060);
-		margin-top: 2px;
-		font-family: monospace;
-	}
-
-	/* Params Row */
-	.params-row {
+	/* Param Row */
+	.param-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		flex-wrap: wrap;
-		min-height: 32px;
-		padding: 4px 0;
-		border-top: 1px dashed var(--border-color, #3A3A3F);
+		padding: 4px 8px;
+		background: var(--bg-secondary, #2A2A2E);
+		border-radius: 4px;
+		margin-top: 2px;
 	}
 
-	.param-control {
+	.param-frame-indicator {
+		position: relative;
+		width: 40px;
+		height: 20px;
+		flex-shrink: 0;
+	}
+
+	.param-frame {
+		position: absolute;
+		bottom: 0;
+		left: 50%;
+		transform: translateX(-50%);
+		font-size: 8px;
+		color: var(--text-muted, #606060);
+		font-family: monospace;
+		white-space: nowrap;
+	}
+
+	.param-content {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		background: var(--bg-tertiary, #3A3A3F);
-		padding: 4px 8px;
-		border-radius: 4px;
-		position: relative;
+		gap: 8px;
+		flex: 1;
+		min-width: 0;
 	}
 
 	.param-name {
@@ -568,11 +648,11 @@
 		color: var(--text-muted, #808080);
 		text-transform: uppercase;
 		font-weight: 600;
-		min-width: 50px;
+		min-width: 60px;
 	}
 
-	.param-control input[type="range"] {
-		width: 80px;
+	.param-content input[type="range"] {
+		flex: 1;
 		height: 4px;
 		appearance: none;
 		background: var(--bg-primary, #1A1A1D);
@@ -580,7 +660,7 @@
 		outline: none;
 	}
 
-	.param-control input[type="range"]::-webkit-slider-thumb {
+	.param-content input[type="range"]::-webkit-slider-thumb {
 		appearance: none;
 		width: 12px;
 		height: 12px;
@@ -597,45 +677,66 @@
 		font-family: monospace;
 	}
 
-	.remove-param-btn {
-		position: absolute;
-		top: -4px;
-		right: -4px;
-		width: 14px;
-		height: 14px;
-		border-radius: 50%;
-		background: #dc2626;
-		color: #fff;
-		border: none;
-		cursor: pointer;
-		font-size: 9px;
-		display: none;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.param-control:hover .remove-param-btn {
+	.param-controls {
 		display: flex;
+		gap: 4px;
+		flex-shrink: 0;
 	}
 
-	.add-param-row {
-		margin-left: auto;
-	}
-
-	.add-param-btn {
+	.move-btn {
 		background: none;
-		border: 1px dashed var(--border-color, #4E525A);
+		border: 1px solid var(--border-color, #3A3A3F);
 		color: var(--text-muted, #808080);
 		cursor: pointer;
-		padding: 4px 12px;
+		padding: 2px 6px;
+		border-radius: 4px;
+		font-size: 10px;
+	}
+
+	.move-btn:hover {
+		border-color: var(--accent-primary, #59B5FF);
+		color: var(--accent-primary, #59B5FF);
+	}
+
+	.remove-param-btn {
+		background: none;
+		border: none;
+		color: var(--text-muted, #606060);
+		cursor: pointer;
+		padding: 2px 6px;
 		border-radius: 4px;
 		font-size: 12px;
+	}
+
+	.remove-param-btn:hover {
+		background: rgba(220, 38, 38, 0.2);
+		color: #dc2626;
+	}
+
+	/* Add Param Row */
+	.add-param-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 8px;
+		margin-top: 2px;
+		border: 1px dashed var(--border-color, #3A3A3F);
+		border-radius: 4px;
+		cursor: pointer;
+		color: var(--text-muted, #606060);
+		font-size: 11px;
 		transition: all 0.15s;
 	}
 
-	.add-param-btn:hover {
+	.add-param-row:hover {
 		border-color: var(--accent-primary, #59B5FF);
 		color: var(--accent-primary, #59B5FF);
+		background: rgba(89, 181, 255, 0.05);
+	}
+
+	.add-param-row span:first-child {
+		font-size: 14px;
+		font-weight: bold;
 	}
 
 	/* Add Pipe Button */
