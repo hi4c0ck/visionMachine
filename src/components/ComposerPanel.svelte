@@ -7,11 +7,23 @@
 		img2imgRef?: string;
 	}
 
+	interface SegmentParam {
+		id: string;
+		name: 'segment' | 'scene' | 'camera' | 'lighting' | 'effect';
+		value: number;
+		min: number;
+		max: number;
+		step: number;
+	}
+
 	interface PipeRow {
 		id: string;
 		keyframes: PipeKeyframe[];
-		qValues: number[];
-		cValues: number[];
+		// Q/C values (render setup) - placed at end of keyframes row
+		qValue: number;  // num_inference_steps: 5-30, default 18
+		cValue: number;  // cfg_scale: 0.5-15, default 7
+		// Parameter sliders below frame ruler
+		params: SegmentParam[];
 	}
 
 	let { } = $props<{
@@ -21,21 +33,26 @@
 	const MAX_KEYFRAMES = 3;
 	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
 	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
-	const SEGMENT_HEIGHT = 28;
-	const TRACK_PADDING_TOP = 52;
-	const TRACK_PADDING_BOTTOM = 44;
 
-	// Colors for tracks
-	const TRACK_COLORS = [
-		{ main: '#FF6B6B', light: '#FF6B6B33', border: '#FF6B6B' },
-		{ main: '#FFE66D', light: '#FFE66D33', border: '#FFE66D' },
-		{ main: '#4ECDC4', light: '#4ECDC433', border: '#4ECDC4' },
-		{ main: '#45B7D1', light: '#45B7D133', border: '#45B7D1' },
-		{ main: '#96CEB4', light: '#96CEB433', border: '#96CEB4' },
-		{ main: '#DDA0DD', light: '#DDA0DD33', border: '#DDA0DD' },
-		{ main: '#FF6B35', light: '#FF6B3533', border: '#FF6B35' },
-		{ main: '#9B59B6', light: '#9B59B633', border: '#9B59B6' },
+	const PARAM_TYPES: Array<{ id: SegmentParam['name']; label: string; min: number; max: number; step: number }> = [
+		{ id: 'segment', label: 'Segment', min: 1, max: 10, step: 1 },
+		{ id: 'scene', label: 'Scene', min: 0, max: 100, step: 1 },
+		{ id: 'camera', label: 'Camera', min: 0, max: 100, step: 1 },
+		{ id: 'lighting', label: 'Lighting', min: 0, max: 100, step: 1 },
+		{ id: 'effect', label: 'Effect', min: 0, max: 100, step: 1 },
 	];
+
+	function createDefaultParam(typeId: SegmentParam['name']): SegmentParam {
+		const type = PARAM_TYPES.find(t => t.id === typeId)!;
+		return {
+			id: Date.now().toString(),
+			name: typeId,
+			value: Math.floor((type.min + type.max) / 2),
+			min: type.min,
+			max: type.max,
+			step: type.step,
+		};
+	}
 
 	let pipes = $state<PipeRow[]>([
 		createEmptyPipe(0),
@@ -48,13 +65,14 @@
 		return {
 			id: `p${index + 1}`,
 			keyframes: [],
-			qValues: [],
-			cValues: [],
+			qValue: Q_DEFAULT,
+			cValue: C_DEFAULT,
+			params: [
+				createDefaultParam('segment'),
+				createDefaultParam('scene'),
+				createDefaultParam('camera'),
+			],
 		};
-	}
-
-	function createColorForPipe(index: number) {
-		return TRACK_COLORS[index % TRACK_COLORS.length];
 	}
 
 	// Modal state
@@ -65,14 +83,6 @@
 	let modalUrl = $state('');
 	let modalPrompt = $state('');
 	let modalImg2Img = $state('');
-
-	// Computed values
-	let totalFrames = $derived(Math.max(
-		...pipes.flatMap(p => p.keyframes.length > 0 ? [p.keyframes[p.keyframes.length - 1].frame + 120] : [0]),
-		600
-	));
-	let trackHeight = $derived(pipes.length * (SEGMENT_HEIGHT + 8));
-	let scrollHeight = $derived(TRACK_PADDING_TOP + trackHeight + TRACK_PADDING_BOTTOM);
 
 	function closeModal() {
 		showAddModal = false;
@@ -108,147 +118,151 @@
 		};
 
 		pipe.keyframes = [...pipe.keyframes, newKf];
-		pipe.qValues = [...pipe.qValues, Q_DEFAULT];
-		pipe.cValues = [...pipe.cValues, C_DEFAULT];
 		closeModal();
 	}
 
 	function deleteKeyframe(pipeIndex: number, kfId: string) {
 		const pipe = pipes[pipeIndex];
 		if (!pipe) return;
-		const idx = pipe.keyframes.findIndex(k => k.id === kfId);
 		pipe.keyframes = pipe.keyframes.filter(k => k.id !== kfId);
-		if (idx >= 0) {
-			pipe.qValues = pipe.qValues.filter((_, i) => i !== idx);
-			pipe.cValues = pipe.cValues.filter((_, i) => i !== idx);
-		}
 	}
 
-	function updateQ(pipeIndex: number, segIdx: number, val: number) {
+	function updateQ(pipeIndex: number, val: number) {
 		const pipe = pipes[pipeIndex];
-		if (pipe && pipe.qValues[segIdx] !== undefined) {
-			pipe.qValues[segIdx] = val;
-		}
+		if (pipe) pipe.qValue = val;
 	}
 
-	function updateC(pipeIndex: number, segIdx: number, val: number) {
+	function updateC(pipeIndex: number, val: number) {
 		const pipe = pipes[pipeIndex];
-		if (pipe && pipe.cValues[segIdx] !== undefined) {
-			pipe.cValues[segIdx] = val;
-		}
+		if (pipe) pipe.cValue = val;
 	}
 
-	function getRemainingSlots(pipe: PipeRow): number {
-		return MAX_KEYFRAMES - pipe.keyframes.length;
+	function addParam(pipeIndex: number, paramType?: SegmentParam['name']) {
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return;
+		const type = paramType || PARAM_TYPES[pipe.params.length % PARAM_TYPES.length].id;
+		pipe.params = [...pipe.params, createDefaultParam(type)];
+	}
+
+	function removeParam(pipeIndex: number, paramId: string) {
+		const pipe = pipes[pipeIndex];
+		if (!pipe || pipe.params.length <= 1) return;
+		pipe.params = pipe.params.filter(p => p.id !== paramId);
+	}
+
+	function updateParam(pipeIndex: number, paramId: string, value: number) {
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return;
+		const param = pipe.params.find(p => p.id === paramId);
+		if (param) param.value = value;
 	}
 
 	function addTrack() {
 		const newIdx = pipes.length;
 		pipes = [...pipes, createEmptyPipe(newIdx)];
 	}
+
+	function removeTrack(pipeIndex: number) {
+		if (pipes.length <= 1) return;
+		pipes = pipes.filter((_, idx) => idx !== pipeIndex);
+	}
 </script>
 
 <div class="composer-panel">
-	<!-- Timeline Ruler -->
-	<div class="ruler" style="height: {TRACK_PADDING_TOP}px">
-		<div class="ruler-ticks">
-			{#each Array.from({ length: Math.ceil(totalFrames / 60) + 1 }, (_, i) => i * 60) as frame}
-				<div class="ruler-mark" style="left: {frame / totalFrames * 100}%">
-					<span>{frame}</span>
-				</div>
-			{/each}
-		</div>
-	</div>
-
-	<!-- Tracks Container -->
-	<div class="tracks-container" style="height: {scrollHeight}px">
+	<!-- Pipes List -->
+	<div class="pipes-list">
 		{#each pipes as pipe, pipeIdx (pipe.id)}
-			<div class="track-row">
-				<!-- Track Label -->
-				<div class="track-label">
-					<span>Pipe {pipeIdx + 1}</span>
+			<div class="pipe-row">
+				<!-- Pipe Header -->
+				<div class="pipe-header">
+					<span class="pipe-label">Pipe {pipeIdx + 1}</span>
+					<button class="remove-pipe-btn" onclick={() => removeTrack(pipeIdx)} title="Remove pipe">×</button>
 				</div>
 
-				<!-- Track Content -->
-				<div class="track-content">
-					{#if pipe.keyframes.length === 0}
-						<!-- Empty track placeholder -->
-						<div class="track-placeholder" onclick={() => openAddModal(pipeIdx)}>
-							<span>+</span>
-						</div>
-					{:else}
-						<!-- Keyframe markers -->
-						{#each pipe.keyframes as kf, kfIdx (kf.id)}
-							<div 
-								class="keyframe-marker {kf.imageSrc ? 'has-image' : ''}"
-								style="left: {kf.frame / totalFrames * 100}%"
-								onclick={() => openAddModal(pipeIdx, kfIdx)}
-							>
-								{#if kf.imageSrc}
-									<img src={kf.imageSrc} alt={`KF ${kfIdx + 1}`} class="kf-thumb" />
-								{:else}
-									<span>K{kfIdx + 1}</span>
-								{/if}
-								<button 
-									class="delete-btn" 
-									onclick={(e) => { e.stopPropagation(); deleteKeyframe(pipeIdx, kf.id); }}
-								>×</button>
-							</div>
-						{/each}
-
-						<!-- Segment bars with Q/C controls -->
-						{#each pipe.keyframes as kf, kfIdx (kf.id)}
-							{#if kfIdx < pipe.keyframes.length - 1}
-								<div class="segment-bar" style="
-									left: {kf.frame / totalFrames * 100}%;
-									width: {(pipe.keyframes[kfIdx + 1].frame - kf.frame) / totalFrames * 100}%;
-									background: {createColorForPipe(pipeIdx).main}40;
-								">
-									<div class="segment-controls">
-										<div class="qc-control">
-											<span class="qc-label">Q</span>
-											<input type="range" min={Q_MIN} max={Q_MAX} step="1"
-											       value={pipe.qValues[kfIdx] ?? Q_DEFAULT}
-											       oninput={(e) => updateQ(pipeIdx, kfIdx, Number(e.currentTarget.value))} />
-											<span>{pipe.qValues[kfIdx] ?? Q_DEFAULT}</span>
-										</div>
-										<div class="qc-control">
-											<span class="qc-label">C</span>
-											<input type="range" min={C_MIN} max={C_MAX} step="0.5"
-											       value={pipe.cValues[kfIdx] ?? C_DEFAULT}
-											       oninput={(e) => updateC(pipeIdx, kfIdx, Number(e.currentTarget.value))} />
-											<span>{pipe.cValues[kfIdx] ?? C_DEFAULT}</span>
-										</div>
-									</div>
-								</div>
+				<!-- Row 1: Keyframes + Q/C sliders -->
+				<div class="kf-row">
+					{#each pipe.keyframes as kf, kfIdx (kf.id)}
+						<div 
+							class="kf-box {kf.imageSrc ? 'has-image' : ''}"
+							onclick={() => openAddModal(pipeIdx, kfIdx)}
+						>
+							{#if kf.imageSrc}
+								<img src={kf.imageSrc} alt={`KF ${kfIdx + 1}`} class="kf-thumb" />
+							{:else}
+								<span class="kf-label">k{kfIdx + 1}</span>
 							{/if}
-						{/each}
+							<button 
+								class="delete-kf-btn"
+								onclick={(e) => { e.stopPropagation(); deleteKeyframe(pipeIdx, kf.id); }}
+							>×</button>
+						</div>
+					{/each}
 
-						<!-- Add keyframe button -->
-						{#if pipe.keyframes.length > 0 && pipe.keyframes.length < MAX_KEYFRAMES}
-							<div class="add-kf-marker" 
-							     style="left: {(pipe.keyframes[pipe.keyframes.length - 1].frame + 30) / totalFrames * 100}%"
-							     onclick={() => openAddModal(pipeIdx, pipe.keyframes.length)}>
-								<span>+</span>
-							</div>
-						{/if}
+					{#if pipe.keyframes.length < MAX_KEYFRAMES}
+						<div class="add-kf-btn" onclick={() => openAddModal(pipeIdx, pipe.keyframes.length)}>+</div>
 					{/if}
+
+					<!-- Q/C Sliders - at the end of keyframes row -->
+					<div class="qc-sliders">
+						<div class="qc-group">
+							<span class="qc-label">Q</span>
+							<input type="range" min={Q_MIN} max={Q_MAX} step="1"
+							       value={pipe.qValue}
+							       oninput={(e) => updateQ(pipeIdx, Number(e.currentTarget.value))} />
+							<span class="qc-value">{pipe.qValue}</span>
+						</div>
+						<div class="qc-group">
+							<span class="qc-label">C</span>
+							<input type="range" min={C_MIN} max={C_MAX} step="0.5"
+							       value={pipe.cValue}
+							       oninput={(e) => updateC(pipeIdx, Number(e.currentTarget.value))} />
+							<span class="qc-value">{pipe.cValue}</span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Row 2: Frame Ruler -->
+				<div class="ruler-row">
+					<span class="ruler-arrow">‹</span>
+					<div class="ruler-track">
+						{#each Array.from({ length: 12 }, (_, i) => i * 50) as frame}
+							<div class="ruler-tick" style="left: {frame / 600 * 100}%">
+								<span>{frame}</span>
+							</div>
+						{/each}
+					</div>
+					<span class="ruler-arrow">›</span>
+				</div>
+
+				<!-- Row 3+: Parameter Sliders -->
+				<div class="params-row">
+					{#each pipe.params as param (param.id)}
+						<div class="param-control">
+							<span class="param-name">{param.name}</span>
+							<input type="range" min={param.min} max={param.max} step={param.step}
+							       value={param.value}
+							       oninput={(e) => updateParam(pipeIdx, param.id, Number(e.currentTarget.value))} />
+							<span class="param-value">{param.value}</span>
+							<button class="remove-param-btn" onclick={() => removeParam(pipeIdx, param.id)} title="Remove">×</button>
+						</div>
+					{/each}
+					<div class="add-param-row">
+						<button class="add-param-btn" onclick={() => addParam(pipeIdx)}>+</button>
+					</div>
 				</div>
 			</div>
 		{/each}
 
-		<!-- Add Track Button -->
-		<div class="add-track-btn-row" onclick={() => addTrack()}>
-			<span>+</span>
-		</div>
+		<!-- Add Pipe Button -->
+		<div class="add-pipe-btn" onclick={() => addTrack()}>+ Add Pipe</div>
 	</div>
 
 	<!-- Add Keyframe Modal -->
 	{#if showAddModal && activePipeIndex !== null}
-		<div class="modal-backdrop" onclick={closeModal}>
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
+		<div class="modal-backdrop" onclick={closeModal} role="presentation">
+			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
 				<div class="modal-header">
-					<span>Add Keyframe Image</span>
+					<span class="modal-title">Add Keyframe Image</span>
 					<button class="modal-close" onclick={closeModal}>×</button>
 				</div>
 				
@@ -286,20 +300,226 @@
 		background: var(--bg-primary, #1A1A1D);
 	}
 
-	/* Timeline Ruler */
-	.ruler {
+	/* Pipes List */
+	.pipes-list {
+		flex: 1;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: 8px;
+	}
+
+	/* Pipe Row */
+	.pipe-row {
+		display: flex;
+		flex-direction: column;
+		background: var(--bg-secondary, #2A2A2E);
+		border: 1px solid var(--border-color, #3A3A3F);
+		border-radius: 4px;
+		gap: 4px;
+		padding: 8px;
+	}
+
+	.pipe-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.pipe-label {
+		font-size: 11px;
+		font-weight: 600;
+		color: var(--text-muted, #808080);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.remove-pipe-btn {
+		background: none;
+		border: none;
+		color: var(--text-muted, #606060);
+		cursor: pointer;
+		font-size: 14px;
+		padding: 2px 6px;
+		border-radius: 4px;
+	}
+
+	.remove-pipe-btn:hover {
+		background: rgba(220, 38, 38, 0.2);
+		color: #dc2626;
+	}
+
+	/* Keyframes Row */
+	.kf-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-height: 72px;
+		overflow-x: auto;
+		padding-bottom: 4px;
+	}
+
+	.kf-box {
+		position: relative;
+		width: 56px;
+		height: 56px;
+		border-radius: 4px;
+		border: 2px solid var(--border-color, #4E525A);
+		background: var(--bg-tertiary, #3A3A3F);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		transition: all 0.15s;
+		flex-shrink: 0;
+	}
+
+	.kf-box:hover {
+		border-color: var(--accent-primary, #59B5FF);
+		transform: translateY(-2px);
+	}
+
+	.kf-box.has-image {
+		padding: 2px;
+	}
+
+	.kf-thumb {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		border-radius: 2px;
+	}
+
+	.kf-label {
+		font-size: 11px;
+		font-weight: bold;
+		color: var(--text-muted, #606060);
+		font-family: monospace;
+	}
+
+	.delete-kf-btn {
+		position: absolute;
+		top: -6px;
+		right: -6px;
+		width: 18px;
+		height: 18px;
+		border-radius: 50%;
+		background: #dc2626;
+		color: #fff;
+		border: none;
+		cursor: pointer;
+		font-size: 11px;
+		display: none;
+		align-items: center;
+		justify-content: center;
+		line-height: 1;
+	}
+
+	.kf-box:hover .delete-kf-btn {
+		display: flex;
+	}
+
+	/* Add KF Button */
+	.add-kf-btn {
+		width: 28px;
+		height: 28px;
+		border-radius: 50%;
+		background: var(--accent-primary, #59B5FF);
+		color: #fff;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		font-size: 18px;
+		font-weight: bold;
+		opacity: 0.8;
+		transition: opacity 0.15s;
+		flex-shrink: 0;
+	}
+
+	.add-kf-btn:hover {
+		opacity: 1;
+		transform: scale(1.1);
+	}
+
+	/* Q/C Sliders */
+	.qc-sliders {
+		display: flex;
+		gap: 12px;
+		margin-left: auto;
+		padding-left: 16px;
+		border-left: 1px solid var(--border-color, #3A3A3F);
+	}
+
+	.qc-group {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.qc-label {
+		font-size: 10px;
+		font-weight: bold;
+		color: var(--text-muted, #808080);
+		text-transform: uppercase;
+		min-width: 14px;
+	}
+
+	.qc-group input[type="range"] {
+		width: 60px;
+		height: 4px;
+		appearance: none;
+		background: var(--bg-primary, #1A1A1D);
+		border-radius: 2px;
+		outline: none;
+	}
+
+	.qc-group input[type="range"]::-webkit-slider-thumb {
+		appearance: none;
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: var(--accent-primary, #59B5FF);
+		cursor: pointer;
+	}
+
+	.qc-value {
+		font-size: 10px;
+		color: var(--text-muted, #808080);
+		min-width: 20px;
+		text-align: center;
+		font-family: monospace;
+	}
+
+	/* Frame Ruler */
+	.ruler-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 0;
+	}
+
+	.ruler-arrow {
+		color: var(--text-muted, #606060);
+		cursor: pointer;
+		font-size: 12px;
+		flex-shrink: 0;
+	}
+
+	.ruler-arrow:hover {
+		color: var(--accent-primary, #59B5FF);
+	}
+
+	.ruler-track {
+		flex: 1;
+		height: 12px;
 		position: relative;
 		border-bottom: 1px solid var(--border-color, #4E525A);
-		background: var(--bg-secondary, #2A2A2E);
-		overflow: hidden;
+		cursor: pointer;
 	}
 
-	.ruler-ticks {
-		position: relative;
-		height: 100%;
-	}
-
-	.ruler-mark {
+	.ruler-tick {
 		position: absolute;
 		top: 0;
 		transform: translateX(-50%);
@@ -308,203 +528,51 @@
 		align-items: center;
 	}
 
-	.ruler-mark::before {
+	.ruler-tick::before {
 		content: '';
 		width: 1px;
-		height: 8px;
-		background: var(--accent-primary, #59B5FF);
+		height: 6px;
+		background: var(--border-color, #4E525A);
 	}
 
-	.ruler-mark span {
+	.ruler-tick span {
 		font-size: 9px;
-		color: var(--text-muted, #808080);
+		color: var(--text-muted, #606060);
 		margin-top: 2px;
 		font-family: monospace;
 	}
 
-	/* Tracks Container */
-	.tracks-container {
-		position: relative;
-		overflow-y: auto;
-		overflow-x: auto;
-		flex: 1;
-		min-height: 0;
-	}
-
-	/* Track Row */
-	.track-row {
+	/* Params Row */
+	.params-row {
 		display: flex;
 		align-items: center;
-		height: 28px;
-		border-bottom: 1px solid var(--border-color, #3A3A3F);
-		position: relative;
+		gap: 8px;
+		flex-wrap: wrap;
+		min-height: 32px;
+		padding: 4px 0;
+		border-top: 1px dashed var(--border-color, #3A3A3F);
 	}
 
-	.track-label {
-		width: 80px;
-		min-width: 80px;
-		padding: 0 12px;
-		background: var(--bg-secondary, #2A2A2E);
-		border-right: 1px solid var(--border-color, #4E525A);
+	.param-control {
 		display: flex;
 		align-items: center;
-		font-size: 11px;
-		color: var(--text-muted, #606060);
-		position: sticky;
-		left: 0;
-		z-index: 10;
-	}
-
-	.track-content {
-		flex: 1;
-		position: relative;
-		height: 100%;
-		min-width: 600px;
-	}
-
-	/* Empty Track Placeholder */
-	.track-placeholder {
-		position: absolute;
-		top: 50%;
-		left: 50%;
-		transform: translate(-50%, -50%);
-		width: 32px;
-		height: 32px;
-		border-radius: 50%;
+		gap: 6px;
 		background: var(--bg-tertiary, #3A3A3F);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		cursor: pointer;
-		color: var(--text-muted, #606060);
-		font-size: 18px;
-		transition: all 0.15s;
+		padding: 4px 8px;
+		border-radius: 4px;
+		position: relative;
 	}
 
-	.track-placeholder:hover {
-		background: var(--accent-primary, #59B5FF);
-		color: #fff;
-	}
-
-	/* Keyframe Marker */
-	.keyframe-marker {
-		position: absolute;
-		top: 50%;
-		transform: translate(-50%, -50%);
-		width: 32px;
-		height: 32px;
-		border-radius: 50%;
-		background: var(--bg-tertiary, #3A3A3F);
-		border: 2px solid var(--border-color, #4E525A);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		cursor: pointer;
-		transition: all 0.15s;
-		z-index: 5;
-	}
-
-	.keyframe-marker.has-image {
-		padding: 2px;
-	}
-
-	.keyframe-marker:hover {
-		border-color: var(--accent-primary, #59B5FF);
-		transform: translate(-50%, -50%) scale(1.1);
-	}
-
-	.kf-thumb {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		border-radius: 50%;
-	}
-
-	.keyframe-marker span {
+	.param-name {
 		font-size: 10px;
-		font-weight: bold;
-		color: var(--text-primary, #EEEEEE);
-	}
-
-	.delete-btn {
-		position: absolute;
-		top: -6px;
-		right: -6px;
-		width: 16px;
-		height: 16px;
-		border-radius: 50%;
-		background: #dc2626;
-		color: #fff;
-		border: none;
-		cursor: pointer;
-		font-size: 10px;
-		display: none;
-		align-items: center;
-		justify-content: center;
-		line-height: 1;
-	}
-
-	.keyframe-marker:hover .delete-btn {
-		display: flex;
-	}
-
-	/* Add Keyframe Marker */
-	.add-kf-marker {
-		position: absolute;
-		top: 50%;
-		transform: translate(-50%, -50%);
-		width: 24px;
-		height: 24px;
-		border-radius: 50%;
-		background: var(--accent-primary, #59B5FF);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		cursor: pointer;
-		color: #fff;
-		font-size: 14px;
-		font-weight: bold;
-		opacity: 0.7;
-		transition: opacity 0.15s;
-	}
-
-	.add-kf-marker:hover {
-		opacity: 1;
-	}
-
-	/* Segment Bar */
-	.segment-bar {
-		position: absolute;
-		top: 50%;
-		transform: translateY(-50%);
-		height: 12px;
-		border-radius: 6px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.segment-controls {
-		display: flex;
-		gap: 12px;
-		align-items: center;
-	}
-
-	.qc-control {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-	}
-
-	.qc-label {
-		font-size: 9px;
-		font-weight: bold;
 		color: var(--text-muted, #808080);
 		text-transform: uppercase;
+		font-weight: 600;
+		min-width: 50px;
 	}
 
-	.qc-control input[type="range"] {
-		width: 50px;
+	.param-control input[type="range"] {
+		width: 80px;
 		height: 4px;
 		appearance: none;
 		background: var(--bg-primary, #1A1A1D);
@@ -512,39 +580,80 @@
 		outline: none;
 	}
 
-	.qc-control input[type="range"]::-webkit-slider-thumb {
+	.param-control input[type="range"]::-webkit-slider-thumb {
 		appearance: none;
-		width: 10px;
-		height: 10px;
+		width: 12px;
+		height: 12px;
 		border-radius: 50%;
 		background: var(--accent-primary, #59B5FF);
 		cursor: pointer;
 	}
 
-	.qc-control span:last-child {
-		font-size: 9px;
+	.param-value {
+		font-size: 10px;
 		color: var(--text-muted, #808080);
-		min-width: 16px;
+		min-width: 24px;
 		text-align: center;
 		font-family: monospace;
 	}
 
-	/* Add Track Button Row */
-	.add-track-btn-row {
-		height: 36px;
-		display: flex;
+	.remove-param-btn {
+		position: absolute;
+		top: -4px;
+		right: -4px;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: #dc2626;
+		color: #fff;
+		border: none;
+		cursor: pointer;
+		font-size: 9px;
+		display: none;
 		align-items: center;
 		justify-content: center;
-		border-top: 1px dashed var(--border-color, #4E525A);
+	}
+
+	.param-control:hover .remove-param-btn {
+		display: flex;
+	}
+
+	.add-param-row {
+		margin-left: auto;
+	}
+
+	.add-param-btn {
+		background: none;
+		border: 1px dashed var(--border-color, #4E525A);
+		color: var(--text-muted, #808080);
 		cursor: pointer;
-		color: var(--text-muted, #606060);
-		font-size: 20px;
+		padding: 4px 12px;
+		border-radius: 4px;
+		font-size: 12px;
 		transition: all 0.15s;
 	}
 
-	.add-track-btn-row:hover {
+	.add-param-btn:hover {
+		border-color: var(--accent-primary, #59B5FF);
+		color: var(--accent-primary, #59B5FF);
+	}
+
+	/* Add Pipe Button */
+	.add-pipe-btn {
+		padding: 12px;
+		text-align: center;
+		color: var(--text-muted, #606060);
+		cursor: pointer;
+		border: 1px dashed var(--border-color, #3A3A3F);
+		border-radius: 4px;
+		margin-top: 4px;
+		transition: all 0.15s;
+	}
+
+	.add-pipe-btn:hover {
 		background: var(--bg-hover, #3A3A3F);
 		color: var(--accent-primary, #59B5FF);
+		border-color: var(--accent-primary, #59B5FF);
 	}
 
 	/* Modal */
@@ -571,17 +680,17 @@
 	}
 
 	.modal-header {
-		padding: 14px 16px;
-		border-bottom: 1px solid var(--border-color, #3A3A3F);
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
+		padding: 14px 16px;
+		border-bottom: 1px solid var(--border-color, #3A3A3F);
 	}
 
 	.modal-title {
-		color: var(--text-primary, #EEEEEE);
 		font-size: 14px;
 		font-weight: 600;
+		color: var(--text-primary, #EEEEEE);
 	}
 
 	.modal-close {
