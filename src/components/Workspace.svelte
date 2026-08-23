@@ -12,44 +12,25 @@
   let selectedProjectId = $state<string | null>(null);
   let selectedSessionId = $state<string | null>(null);
 
-  // Debug on mount
-  console.log('[Workspace] Component mounted', {
-    userName,
-    projectsLength: projects.length,
-  });
-
   // Derived state - these will automatically update
   let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
   let selectedSession = $derived(
     selectedProject?.sessions.find(s => s.id === selectedSessionId) || null
   );
 
-  // Debug logging
-  $effect(() => {
-    console.log('[Workspace] State updated:', {
-      projectCount: projects.length,
-      selectedProjectId,
-      selectedSessionId,
-      hasSession: !!selectedSession,
-    });
-  });
-
   // Handle project selection
   function handleSelectProject(projectId: string) {
-    console.log('[Workspace] Selecting project:', projectId);
     selectedProjectId = projectId;
     selectedSessionId = null;
   }
 
   // Handle session selection
   function handleSelectSession(sessionId: string) {
-    console.log('[Workspace] Selecting session:', sessionId);
     selectedSessionId = sessionId;
   }
 
   // Handle project creation
   function handleCreateProject(input: { name: string; path?: string }) {
-    console.log('[Workspace] Creating project:', input.name);
     const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
     const projectPath = `${basePath}\\${input.name}`;
     
@@ -58,18 +39,12 @@
     // Update projects array to trigger reactivity
     projects = [...projects, project];
     selectedProjectId = project.id;
-    
-    console.log('[Workspace] Project created:', project.id, 'Total projects:', projects.length);
   }
 
   // Handle session creation
   function handleCreateSession(projectId: string) {
-    console.log('[Workspace] Creating session for project:', projectId);
     const project = projects.find(p => p.id === projectId);
-    if (!project) {
-      console.warn('[Workspace] Project not found:', projectId);
-      return;
-    }
+    if (!project) return;
     
     const sessionName = `Session ${project.sessions.length + 1}`;
     const folderName = generateSessionFolderName(sessionName);
@@ -87,13 +62,10 @@
     
     projects = updatedProjects;
     selectedSessionId = session.id;
-    
-    console.log('[Workspace] Session created:', session.id, 'Total sessions:', updatedProjects.find(p => p.id === projectId)?.sessions.length);
   }
 
   // Handle session update (from composer)
   function handleSessionUpdate(updatedSession: SessionData) {
-    console.log('[Workspace] Session updated:', updatedSession.id);
     if (!selectedProject || !selectedSession) return;
     
     const updatedProjects = projects.map(p => {
@@ -111,7 +83,7 @@
 
   // Handle generation
   function handleGenerate(sessionId: string) {
-    console.log('[Workspace] Generating session:', sessionId);
+    console.log('Generating session:', sessionId);
     // TODO: Implement generation logic with Tauri IPC
   }
 
