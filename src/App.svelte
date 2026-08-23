@@ -3,7 +3,7 @@
   import Workspace from './components/Workspace.svelte';
   import { APP_CONSTANTS } from '$constants';
   
-  // State declarations
+  // State declarations - explicit reactive state
   let userName = $state('');
   let showWelcome = $state(true);
   let selectedTheme = $state('jetbrains-dark');
@@ -18,11 +18,14 @@
   
   function handleLogin() {
     const name = userName.trim();
+    console.log('[App] handleLogin called, userName:', JSON.stringify(userName), 'name:', JSON.stringify(name));
+    
     if (!name) {
       error = 'Please enter your name';
       return;
     }
     
+    console.log('[App] Setting showWelcome = false');
     showWelcome = false;
     localStorage.setItem('vm-username', name);
   }
@@ -50,9 +53,14 @@
   
   // Lifecycle
   onMount(() => {
+    console.log('[App] onMount called');
+    console.log('[App] Initial showWelcome:', showWelcome);
+    console.log('[App] Initial userName:', JSON.stringify(userName));
+    
     // Restore from localStorage
     const savedName = localStorage.getItem('vm-username');
     if (savedName) {
+      console.log('[App] Restored username from storage:', savedName);
       userName = savedName;
       showWelcome = false;
     }
@@ -98,20 +106,36 @@
       <div class="welcome-card">
         <h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
         <p class="hint">{APP_CONSTANTS.strings.enterName}</p>
+        
+        <!-- Use explicit oninput instead of bind:value for better control -->
         <input 
-          bind:value={userName}
+          value={userName}
+          oninput={(e) => userName = e.currentTarget.value}
           placeholder={APP_CONSTANTS.strings.namePlaceholder} 
           class="input"
           type="text"
           onkeydown={handleKeyDown}
+          id="username-input"
+          autofocus
         />
+        
+        <!-- Button disabled state based on userName length -->
         <button 
           class="btn btn-primary" 
-          disabled={!userName.trim()} 
+          disabled={userName.trim().length === 0}
           onclick={handleLogin}
+          id="get-started-btn"
         >
           {APP_CONSTANTS.strings.getStarted}
         </button>
+        
+        <!-- Debug info -->
+        <div class="debug-info">
+          <span>UserName: "{userName}"</span>
+          <span>| Length: {userName.length}</span>
+          <span>| Trimmed: "{userName.trim()}"</span>
+          <span>| Enabled: {userName.trim().length > 0}</span>
+        </div>
       </div>
     </main>
   </div>
@@ -272,5 +296,21 @@
     color: #dc2626;
     text-align: center;
     border-bottom: 1px solid rgba(220, 38, 38, 0.3);
+  }
+  
+  .debug-info {
+    margin-top: 20px;
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text-muted, #606060);
+    font-family: monospace;
+    text-align: left;
+  }
+  
+  .debug-info span {
+    display: block;
+    margin: 2px 0;
   }
 </style>
