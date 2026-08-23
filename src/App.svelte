@@ -7,7 +7,7 @@
 	let showWelcome = $state(true);
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
-	let appInfo = $state(null);
+	let appInfo = $state<{ appName: string; version: string } | null>(null);
 	let error = $state<string | null>(null);
 	
 	// Constants
@@ -17,64 +17,71 @@
 		{ id: 'light', name: 'Light' },
 	];
 	
-	// Functions (after state and constants)
-	async function applyTheme(theme: string) {
-		console.log('[App] applyTheme:', theme);
+	// Functions
+	function applyTheme(theme: string) {
 		document.documentElement.setAttribute('data-theme', theme);
 		localStorage.setItem('vm-theme', theme);
 	}
 	
 	function handleLogin() {
-		console.log('[App] handleLogin clicked');
-		console.log('[App] userName:', JSON.stringify(userName));
-		
 		const name = userName.trim();
+		console.log('[App] handleLogin called');
+		console.log('[App] userName:', JSON.stringify(userName));
+		console.log('[App] showWelcome BEFORE:', showWelcome);
+		
 		if (!name) {
 			console.warn('[App] Name is empty!');
 			error = 'Please enter your name';
 			return;
 		}
 		
-		console.log('[App] Login successful:', name);
+		console.log('[App] Setting showWelcome = false');
 		showWelcome = false;
+		console.log('[App] showWelcome AFTER:', showWelcome);
+		
+		// Check DOM after state change
+		setTimeout(() => {
+			const welcomeEl = document.querySelector('.welcome-card');
+			const workspaceEl = document.querySelector('#workspace-container');
+			console.log('[App] DOM check - Welcome card:', !!welcomeEl);
+			console.log('[App] DOM check - Workspace container:', !!workspaceEl);
+		}, 100);
+		
 		localStorage.setItem('vm-username', name);
+		console.log('[App] Login complete');
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
-		console.log('[App] Key pressed:', e.key);
 		if (e.key === 'Enter') {
-			console.log('[App] Enter pressed, calling handleLogin');
 			handleLogin();
 		}
 	}
 	
 	function handleLogout() {
-		console.log('[App] Logout clicked');
 		userName = '';
 		showWelcome = true;
 	}
 	
 	function handleThemeChange(theme: string) {
-		console.log('[App] Theme changed:', theme);
 		selectedTheme = theme;
 		applyTheme(theme);
 	}
 	
 	function handleLayoutChange(mode: string) {
-		console.log('[App] Layout changed:', mode);
 		layoutMode = mode;
 		localStorage.setItem('vm-layout', mode);
 	}
 	
 	// Lifecycle
-	onMount(async () => {
+	onMount(() => {
 		console.log('[App] onMount called');
 		console.log('[App] Initial showWelcome:', showWelcome);
-		console.log('[App] Initial userName:', userName);
+		console.log('[App] Initial userName:', JSON.stringify(userName));
 		
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
+			console.log('[App] Restored username from storage:', savedName);
 			userName = savedName;
 			showWelcome = false;
 		}
@@ -89,15 +96,7 @@
 			layoutMode = savedLayout;
 		}
 		
-		try {
-			const { invoke } = await import('@tauri-apps/api/core');
-			appInfo = await invoke('get_app_info');
-			console.log('[App] App info loaded:', appInfo);
-		} catch (err) {
-			console.error('[App] Failed to load app info:', err);
-			error = String(err);
-		}
-		
+		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
 		applyTheme(selectedTheme);
 	});
 </script>
@@ -132,7 +131,7 @@
 				<h1 class="welcome-title">Welcome to VisionMachine</h1>
 				<p class="hint">Enter your name to continue</p>
 				<input 
-					bind:value={userName} 
+					bind:value={userName}
 					placeholder="Your name..." 
 					class="input"
 					type="text"
@@ -149,15 +148,17 @@
 		</main>
 	</div>
 {:else}
-	<Workspace
-		{userName}
-		{selectedTheme}
-		{layoutMode}
-		showWelcome={showWelcome}
-		onlogout={handleLogout}
-		onthemeChange={handleThemeChange}
-		onlayoutChange={handleLayoutChange}
-	/>
+	<div id="workspace-container">
+		<Workspace
+			{userName}
+			{selectedTheme}
+			{layoutMode}
+			showWelcome={showWelcome}
+			onlogout={handleLogout}
+			onthemeChange={handleThemeChange}
+			onlayoutChange={handleLayoutChange}
+		/>
+	</div>
 {/if}
 
 <style>

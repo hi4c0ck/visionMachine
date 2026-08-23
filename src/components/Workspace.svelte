@@ -88,23 +88,11 @@
 		activeTool = id;
 	}
 
-	function handleNewKeyframe(keyframe: any) {
-		console.log('[Workspace] Keyframe added:', keyframe);
-	}
-
-	function handleDeleteKeyframe(id: string) {
-		console.log('[Workspace] Keyframe deleted:', id);
-	}
-
-	function handleSelectKeyframe(id: string) {
-		console.log('[Workspace] Keyframe selected:', id);
-	}
-
 	function handleCreateSession() {
 		console.log('[Workspace] Session created');
 		if (selectedProjectId) {
-			projects = projects.map(p => 
-				p.id === selectedProjectId 
+			projects = projects.map(p =>
+				p.id === selectedProjectId
 					? { ...p, sessionId: Date.now().toString() }
 					: p
 			);
@@ -113,7 +101,7 @@
 </script>
 
 <div class="workspace {layoutMode}">
-	<Frame 
+	<Frame
 		{userName}
 		{selectedTheme}
 		{layoutMode}
@@ -124,38 +112,37 @@
 	/>
 
 	<div class="workspace-body">
-		{#if layoutMode !== 'single'}
-			<ProjectsPanel 
-				{projects}
-				{selectedProjectId}
-				onselect={handleProjectSelect}
-				onnew={handleProjectNew}
-				ondelete={handleProjectDelete}
-			/>
-		{/if}
+		<!-- Left column: Projects + Profile -->
+		<div class="left-column">
+			{#if layoutMode !== 'single'}
+				<ProjectsPanel
+					{projects}
+					{selectedProjectId}
+					onselect={handleProjectSelect}
+					onnew={handleProjectNew}
+					ondelete={handleProjectDelete}
+				/>
+			{/if}
 
-		<ComposerPanel 
-			projectId={selectedProjectId}
-			projectName={projects.find(p => p.id === selectedProjectId)?.name || ''}
-			onselectKeyframe={handleSelectKeyframe}
-			onnewKeyframe={handleNewKeyframe}
-			ondeleteKeyframe={handleDeleteKeyframe}
-			oncreateSession={handleCreateSession}
-		/>
-
-		{#if layoutMode === 'portrait' || layoutMode === 'landscape'}
-			<ProfilePanel 
+			<!-- Profile panel at bottom-left -->
+			<ProfilePanel
 				{userName}
 				{storageUsed}
 				oncreateSession={handleCreateSession}
 			/>
-		{/if}
+		</div>
 
+		<!-- Center: Composer (fills available space) -->
+		<div class="composer-area">
+			<ComposerPanel />
+		</div>
+
+		<!-- Right: Tools -->
 		{#if layoutMode === 'landscape'}
-			<ToolsPanel 
+			<ToolsPanel
 				tools={defaultTools}
 				{activeTool}
-				{toolsCollapsed}
+				collapsed={toolsCollapsed}
 				onselect={handleToolSelect}
 			/>
 		{/if}
@@ -177,5 +164,23 @@
 		flex: 1;
 		overflow: hidden;
 		min-height: 0;
+	}
+
+	.left-column {
+		display: flex;
+		flex-direction: column;
+		width: 240px;
+		min-width: 200px;
+		max-width: 320px;
+		border-right: 1px solid var(--border-color, #4E525A);
+		overflow: hidden;
+		flex-shrink: 0;
+	}
+
+	/* Center composer area - fills remaining horizontal space */
+	.composer-area {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
 	}
 </style>

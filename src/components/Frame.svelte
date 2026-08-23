@@ -23,13 +23,20 @@
 		{ id: 'single', label: 'Single', icon: '🖥' },
 	];
 
+	let previewImage = $state<string | null>(null);
+
 	function setLayout(mode: string) {
 		console.log('[Frame] Layout:', mode);
 		onlayoutChange?.(mode);
 	}
+
+	function handlePreviewClick() {
+		console.log('[Frame] Preview image clicked');
+	}
 </script>
 
-<header class="frame" style="height: 140px;">
+<header class="frame">
+	<!-- Top section: logo + layout controls -->
 	<div class="frame-top">
 		<div class="logo">
 			<span class="logo-icon">◆</span>
@@ -52,6 +59,19 @@
 		</div>
 	</div>
 
+	<!-- Middle section: frame/video preview container -->
+	<div class="frame-preview">
+		{#if previewImage}
+			<img src={previewImage} alt="Frame preview" class="preview-img" onclick={handlePreviewClick} />
+		{:else}
+			<div class="preview-empty" onclick={handlePreviewClick}>
+				<span class="preview-icon">▶</span>
+				<span class="preview-label">Frame &lt;img-video-container&gt;</span>
+			</div>
+		{/if}
+	</div>
+
+	<!-- Bottom section: theme selector + user info -->
 	<div class="frame-bottom">
 		<div class="theme-selector">
 			<label for="theme-select">Theme:</label>
@@ -84,6 +104,7 @@
 		user-select: none;
 	}
 
+	/* ── Top section ── */
 	.frame-top {
 		display: flex;
 		align-items: center;
@@ -145,6 +166,49 @@
 		border-color: var(--accent-primary, #59B5FF);
 	}
 
+	/* ── Preview section ── */
+	.frame-preview {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 200px;
+		background: var(--bg-primary, #1A1A1D);
+		border-bottom: 1px solid var(--border-color, #3A3A3F);
+		cursor: pointer;
+		position: relative;
+		overflow: hidden;
+	}
+
+	.preview-empty {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 12px;
+		color: var(--text-muted, #606060);
+		transition: all 0.15s;
+	}
+
+	.preview-empty:hover {
+		color: var(--text-secondary, #BFBFBF);
+	}
+
+	.preview-icon {
+		font-size: 2rem;
+		opacity: 0.5;
+	}
+
+	.preview-label {
+		font-size: 0.85rem;
+		font-style: italic;
+	}
+
+	.preview-img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+
+	/* ── Bottom section ── */
 	.frame-bottom {
 		display: flex;
 		align-items: center;
