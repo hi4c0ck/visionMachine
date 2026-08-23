@@ -276,11 +276,7 @@
       return { ...p, lengthFrames: snapped, segments: truncatedSegments };
     });
 
-    const maxPipeLength = Math.max(...updatedPipes.map(p => p.lengthFrames));
-    onUpdate({
-      ...session,
-      pipes: updatedPipes,
-    });
+    onUpdate({ ...session, pipes: updatedPipes });
   }
 
   function openGlobalPromptModal(pipeIndex: number) {
@@ -417,11 +413,11 @@
 
         <!-- Global Prompt Bar -->
         <div class="global-prompt-bar" onclick={() => openGlobalPromptModal(pipeIdx)} role="button" tabindex="0">
-          <span class="global-label">{APP_CONSTANTS.strings.globalPrompt}</span>
+          <span class="global-label">GLOBAL</span>
           {#if pipe.globalPrompt?.text}
             <span class="global-preview">"{pipe.globalPrompt.text.substring(0, 30)}{pipe.globalPrompt.text.length > 30 ? '...' : ''}"</span>
           {:else}
-            <span class="global-placeholder">{APP_CONSTANTS.strings.addGlobalPrompt}</span>
+            <span class="global-placeholder">Click to add global prompt</span>
           {/if}
           <span class="global-action">✏️</span>
         </div>

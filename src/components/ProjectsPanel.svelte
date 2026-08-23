@@ -2,8 +2,17 @@
   import type { ProjectData, SessionData } from '$types';
   import { APP_CONSTANTS } from '$constants';
 
-  let { projects, selectedProjectId, selectedSessionId, onselectproject, onselectsession, oncreateproject, oncreatesession } = $props();
+  let { 
+    projects, 
+    selectedProjectId, 
+    selectedSessionId,
+    onselectproject,
+    onselectsession,
+    oncreateproject,
+    oncreatesession 
+  } = $props();
 
+  // Modal state
   let showCreateProjectModal = $state(false);
   let newProjectName = $state('');
   let specifyPath = $state(false);
@@ -59,7 +68,7 @@
         >
           <span class="project-icon">📁</span>
           <span class="project-name">{project.name}</span>
-          <span class="session-count">{project.sessions.length} {APP_CONSTANTS.strings.sessions}</span>
+          <span class="session-count">{project.sessions.length}</span>
         </div>
       {/each}
     </div>
@@ -70,17 +79,17 @@
     <div class="modal-backdrop" onclick={closeCreateProjectModal}>
       <div class="modal" onclick={(e) => e.stopPropagation()}>
         <div class="modal-header">
-          <span class="modal-title">Create New Project</span>
+          <span class="modal-title">{APP_CONSTANTS.strings.createProject}</span>
           <button class="modal-close" onclick={closeCreateProjectModal}>×</button>
         </div>
         
         <div class="modal-body">
-          <label class="form-label">Project Name</label>
+          <label class="form-label">{APP_CONSTANTS.strings.projectName}</label>
           <input 
             type="text" 
             class="modal-input"
             bind:value={newProjectName}
-            placeholder="Enter project name..."
+            placeholder={APP_CONSTANTS.strings.projectNamePlaceholder}
             onkeydown={handleKeyDown}
             autofocus
           />
@@ -92,19 +101,19 @@
           
           {#if specifyPath}
             <div class="path-section">
-              <label class="form-label">Custom Path</label>
+              <label class="form-label">{APP_CONSTANTS.strings.customPath}</label>
               <input 
                 type="text" 
                 class="modal-input path-input"
                 bind:value={customPath}
-                placeholder="C:\Projects\MyProject"
+                placeholder={APP_CONSTANTS.strings.customPathPlaceholder}
               />
             </div>
           {/if}
         </div>
         
         <div class="modal-footer">
-          <button class="btn-cancel" onclick={closeCreateProjectModal}>Cancel</button>
+          <button class="btn-cancel" onclick={closeCreateProjectModal}>{APP_CONSTANTS.strings.cancel}</button>
           <button 
             class="btn-confirm" 
             disabled={!newProjectName.trim()}
@@ -142,7 +151,7 @@
               <div class="empty-state">
                 <p>No sessions</p>
                 <button class="btn-create" onclick={() => oncreatesession(project.id)}>
-                  + Add Session
+                  {APP_CONSTANTS.strings.addSession}
                 </button>
               </div>
             {/if}
@@ -157,9 +166,12 @@
   .projects-panel {
     display: flex;
     flex-direction: column;
+    width: 220px;
+    min-width: 220px;
     height: 100%;
     background: var(--bg-secondary, #2A2A2E);
     border-right: 1px solid var(--border-color, #4E525A);
+    overflow: hidden;
   }
 
   .panel-header {
@@ -168,6 +180,7 @@
     align-items: center;
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-color, #3A3A3F);
+    flex-shrink: 0;
   }
 
   .panel-title {
@@ -190,6 +203,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
 
   .add-btn:hover {
@@ -244,6 +258,10 @@
   /* Sessions Section */
   .sessions-section {
     border-top: 1px solid var(--border-color, #3A3A3F);
+    flex-shrink: 0;
+    max-height: 50%;
+    display: flex;
+    flex-direction: column;
   }
 
   .sessions-list {
