@@ -10,6 +10,10 @@
   let layoutMode = $state('landscape');
   let error = $state<string | null>(null);
   
+  // Derived state - properly reactive
+  let isNameEmpty = $derived(!userName.trim().length);
+  let canLogin = $derived(userName.trim().length > 0);
+  
   // Functions
   function applyTheme(theme: string) {
     document.documentElement.setAttribute('data-theme', theme);
@@ -18,9 +22,13 @@
   
   function handleLogin() {
     const name = userName.trim();
-    console.log('[App] handleLogin called, userName:', JSON.stringify(userName), 'name:', JSON.stringify(name));
+    console.log('[App] handleLogin called');
+    console.log('[App] userName:', JSON.stringify(userName));
+    console.log('[App] isNameEmpty:', isNameEmpty);
+    console.log('[App] canLogin:', canLogin);
     
     if (!name) {
+      console.warn('[App] Name is empty!');
       error = 'Please enter your name';
       return;
     }
@@ -107,7 +115,7 @@
         <h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
         <p class="hint">{APP_CONSTANTS.strings.enterName}</p>
         
-        <!-- Use explicit oninput instead of bind:value for better control -->
+        <!-- Use explicit oninput with state update -->
         <input 
           value={userName}
           oninput={(e) => userName = e.currentTarget.value}
@@ -115,16 +123,13 @@
           class="input"
           type="text"
           onkeydown={handleKeyDown}
-          id="username-input"
-          autofocus
         />
         
-        <!-- Button disabled state based on userName length -->
+        <!-- Button uses derived state for disabled -->
         <button 
           class="btn btn-primary" 
-          disabled={userName.trim().length === 0}
+          disabled={isNameEmpty}
           onclick={handleLogin}
-          id="get-started-btn"
         >
           {APP_CONSTANTS.strings.getStarted}
         </button>
@@ -133,8 +138,9 @@
         <div class="debug-info">
           <span>UserName: "{userName}"</span>
           <span>| Length: {userName.length}</span>
-          <span>| Trimmed: "{userName.trim()}"</span>
-          <span>| Enabled: {userName.trim().length > 0}</span>
+          <span>| Trimmed Length: {userName.trim().length}</span>
+          <span>| isNameEmpty: {isNameEmpty}</span>
+          <span>| canLogin: {canLogin}</span>
         </div>
       </div>
     </main>
