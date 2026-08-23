@@ -12,6 +12,12 @@
   let selectedProjectId = $state<string | null>(null);
   let selectedSessionId = $state<string | null>(null);
 
+  // Debug on mount
+  console.log('[Workspace] Component mounted', {
+    userName,
+    projectsLength: projects.length,
+  });
+
   // Derived state - these will automatically update
   let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
   let selectedSession = $derived(
