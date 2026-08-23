@@ -4,6 +4,8 @@
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
+	import type { SceneData } from '$types';
+	import { createEmptyScene } from '$types';
 
 	console.log('[Workspace] Component ready');
 
@@ -31,6 +33,7 @@
 	let activeTool = $state<string | null>(null);
 	let toolsCollapsed = $state(false);
 	let storageUsed = $state(0);
+	let scene = $state<SceneData>(createEmptyScene());
 
 	const defaultTools = [
 		{ id: 'select', label: 'Select', icon: '🔍', hotkey: 'V' },
@@ -134,7 +137,7 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			<ComposerPanel />
+			<ComposerPanel {scene} />
 		</div>
 
 		<!-- Right: Tools -->

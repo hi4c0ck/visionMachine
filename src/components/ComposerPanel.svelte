@@ -1,79 +1,28 @@
 <script lang="ts">
-	interface PipeKeyframe {
-		id: string;
-		frame: number;
-		imageSrc?: string;
-		prompt?: string;
-		img2imgRef?: string;
-	}
+	import type { SceneData, PipeRow, PromptSegment, TagType } from '$types';
+	import { 
+		snapTo8nPlus1, 
+		isValidFrameCount,
+		getMaxFramesForResolution,
+		validatePromptSegments,
+		TAG_SPECIFICATIONS,
+		FPS_PRESETS,
+		createEmptyPipe,
+		recalculateTotalLength,
+		recalculateLengthSeconds,
+		addPromptSegment,
+		removePromptSegment,
+		updatePipeLength as updatePipeLengthModel,
+		addKeyframe,
+		removeKeyframe,
+	} from '$types';
 
-	interface PipeParam {
-		id: string;
-		name: 'segment' | 'scene' | 'camera' | 'lighting' | 'effect';
-		frameStart: number;  // frame position (8n+ rule)
-		frameEnd: number;
-		value: number;
-	}
-
-	let { } = $props<{
-		// No props needed
-	}>();
+	let { scene }: { scene: SceneData } = $props();
 
 	const MAX_KEYFRAMES = 3;
 	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
 	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
-
-	// Param types with default ranges
-	const PARAM_TYPES: Array<{ id: PipeParam['name']; label: string; min: number; max: number }> = [
-		{ id: 'segment', label: 'Segment', min: 1, max: 10 },
-		{ id: 'scene', label: 'Scene', min: 0, max: 100 },
-		{ id: 'camera', label: 'Camera', min: 0, max: 100 },
-		{ id: 'lighting', label: 'Lighting', min: 0, max: 100 },
-		{ id: 'effect', label: 'Effect', min: 0, max: 100 },
-	];
-
-	let pipes = $state<Array<{
-		id: string;
-		keyframes: PipeKeyframe[];
-		qValue: number;
-		cValue: number;
-		params: PipeParam[];
-	}>>([
-		createEmptyPipe(0),
-		createEmptyPipe(1),
-		createEmptyPipe(2),
-		createEmptyPipe(3),
-	]);
-
-	function createEmptyPipe(index: number) {
-		return {
-			id: `p${index + 1}`,
-			keyframes: [],
-			qValue: Q_DEFAULT,
-			cValue: C_DEFAULT,
-			params: [
-				createDefaultParam('segment', 0, 60),
-				createDefaultParam('scene', 60, 120),
-				createDefaultParam('camera', 120, 180),
-			],
-		};
-	}
-
-	function createDefaultParam(typeId: PipeParam['name'], frameStart: number, frameEnd: number): PipeParam {
-		const type = PARAM_TYPES.find(t => t.id === typeId)!;
-		return {
-			id: Date.now().toString() + Math.random(),
-			name: typeId,
-			frameStart,
-			frameEnd,
-			value: Math.floor((type.min + type.max) / 2),
-		};
-	}
-
-	// Find nearest 8n+ frame
-	function snapTo8n(frame: number): number {
-		return Math.round(frame / 8) * 8 + 8;
-	}
+	const MIN_PIPE_LENGTH = 41; // 5 segments of 8 frames + 1
 
 	// Modal state
 	let showAddModal = $state(false);
@@ -84,13 +33,7 @@
 	let modalPrompt = $state('');
 	let modalImg2Img = $state('');
 
-	// Calculate total frames from all keyframes
-	let totalFrames = $derived(Math.max(
-		...pipes.flatMap(p => p.keyframes.length > 0 ? [p.keyframes[p.keyframes.length - 1].frame + 120] : [0]),
-		...pipes.flatMap(p => p.params.map(param => param.frameEnd)),
-		600  // minimum
-	));
-
+	// Modal functions
 	function closeModal() {
 		showAddModal = false;
 		activePipeIndex = null;
@@ -109,132 +52,201 @@
 
 	function confirmAdd() {
 		if (activePipeIndex === null) return;
-		const pipe = pipes[activePipeIndex];
-		if (!pipe || pipe.keyframes.length >= MAX_KEYFRAMES) return;
+		
+		// Calculate frame position based on existing keyframes
+		let baseFrame = 0;
+		if (scene.pipes[activePipeIndex].keyframes.length > 0) {
+			const lastFrame = Math.max(...scene.pipes[activePipeIndex].keyframes.map(k => k.frame));
+			baseFrame = snapTo8nPlus1(lastFrame + 60);
+			// Ensure within pipe bounds
+			if (baseFrame >= scene.pipes[activePipeIndex].lengthFrames) {
+				baseFrame = snapTo8nPlus1(scene.pipes[activePipeIndex].lengthFrames - 60);
+			}
+		}
 
-		const baseFrame = pipe.keyframes.length > 0
-			? snapTo8n(Math.max(...pipe.keyframes.map(k => k.frame)) + 60)
-			: 0;
-
-		const newKf: PipeKeyframe = {
-			id: Date.now().toString(),
+		const result = addKeyframe(scene, scene.pipes[activePipeIndex].id, {
 			frame: baseFrame,
+			type: addMode as any,
 			imageSrc: addMode === 'url' ? modalUrl || undefined : undefined,
 			prompt: addMode === 'txt2img' ? modalPrompt : undefined,
-			img2imgRef: addMode === 'img2img' ? modalImg2Img || undefined : undefined,
-		};
+			referenceUrl: addMode === 'img2img' ? modalImg2Img || undefined : undefined,
+		});
 
-		pipe.keyframes = [...pipe.keyframes, newKf];
-		closeModal();
+		if (result.valid) {
+			closeModal();
+		} else {
+			console.error('Failed to add keyframe:', result.errors);
+		}
 	}
 
 	function deleteKeyframe(pipeIndex: number, kfId: string) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		pipe.keyframes = pipe.keyframes.filter(k => k.id !== kfId);
+		removeKeyframe(scene, scene.pipes[pipeIndex].id, kfId);
 	}
 
 	function updateQ(pipeIndex: number, val: number) {
-		const pipe = pipes[pipeIndex];
-		if (pipe) pipe.qValue = val;
+		scene.pipes[pipeIndex].qValue = val;
 	}
 
 	function updateC(pipeIndex: number, val: number) {
-		const pipe = pipes[pipeIndex];
-		if (pipe) pipe.cValue = val;
+		scene.pipes[pipeIndex].cValue = val;
 	}
 
 	function addParam(pipeIndex: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
+		const pipe = scene.pipes[pipeIndex];
 		
-		// Find next available frame range
-		const lastFrame = Math.max(
-			...pipe.keyframes.map(k => k.frame),
-			...pipe.params.map(p => p.frameEnd),
-			0
+		// Find next available tag type
+		const usedTags = new Set(pipe.prompt.segments.map(s => s.tag));
+		const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
+		const nextTag = allTags.find(t => !usedTags.has(t)) || 'scene';
+
+		// Calculate frame range for new segment
+		const maxFrame = pipe.prompt.segments.length > 0
+			? Math.max(...pipe.prompt.segments.map(s => s.frameEnd))
+			: 0;
+		const frameStart = maxFrame;
+		const frameEnd = Math.min(maxFrame + 60, pipe.lengthFrames);
+
+		const result = addPromptSegment(scene, pipe.id, {
+			id: crypto.randomUUID(),
+			frameStart,
+			frameEnd,
+			tag: nextTag,
+			value: Math.floor((frameEnd - frameStart) / 2),
+		});
+
+		if (!result.valid) {
+			console.error('Failed to add segment:', result.errors);
+		}
+	}
+
+	function removeParam(pipeIndex: number, segmentId: string) {
+		const pipe = scene.pipes[pipeIndex];
+		if (!pipe || pipe.prompt.segments.length <= 1) return;
+		removePromptSegment(scene, pipe.id, segmentId);
+	}
+
+	function updateParam(pipeIndex: number, segmentId: string, value: number) {
+		const pipe = scene.pipes[pipeIndex];
+		const segment = pipe.prompt.segments.find(s => s.id === segmentId);
+		if (segment) {
+			segment.value = value;
+		}
+	}
+
+	function moveParamFrame(pipeIndex: number, segmentId: string, delta: number) {
+		const pipe = scene.pipes[pipeIndex];
+		const segment = pipe.prompt.segments.find(s => s.id === segmentId);
+		if (!segment) return;
+
+		const newStart = snapTo8nPlus1(segment.frameStart + delta);
+		const newEnd = snapTo8nPlus1(segment.frameEnd + delta);
+
+		// Validate bounds
+		if (newStart < 0 || newEnd > pipe.lengthFrames) return;
+
+		// Check for overlaps
+		const testSegments = pipe.prompt.segments.map(s => 
+			s.id === segmentId ? { ...s, frameStart: newStart, frameEnd: newEnd } : s
 		);
-		const newStart = snapTo8n(lastFrame);
-		const newEnd = snapTo8n(lastFrame + 60);
-		
-		const typeIndex = pipe.params.length % PARAM_TYPES.length;
-		const typeId = PARAM_TYPES[typeIndex].id;
-		
-		pipe.params = [...pipe.params, createDefaultParam(typeId, newStart, newEnd)];
+		const validation = validatePromptSegments(testSegments);
+
+		if (validation.valid) {
+			segment.frameStart = newStart;
+			segment.frameEnd = newEnd;
+		}
 	}
 
-	function removeParam(pipeIndex: number, paramId: string) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe || pipe.params.length <= 1) return;
-		pipe.params = pipe.params.filter(p => p.id !== paramId);
-	}
-
-	function updateParam(pipeIndex: number, paramId: string, value: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		const param = pipe.params.find(p => p.id === paramId);
-		if (param) param.value = value;
-	}
-
-	function moveParamFrame(pipeIndex: number, paramId: string, delta: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		const param = pipe.params.find(p => p.id === paramId);
-		if (!param) return;
-		
-		const newStart = snapTo8n(param.frameStart + delta);
-		const newEnd = snapTo8n(param.frameEnd + delta);
-		
-		// Ensure non-overlapping
-		if (newStart >= 0 && newEnd > newStart) {
-			param.frameStart = newStart;
-			param.frameEnd = newEnd;
+	function handleUpdatePipeLength(pipeIndex: number, newLength: number) {
+		const result = updatePipeLengthModel(scene, scene.pipes[pipeIndex].id, newLength);
+		if (!result.valid) {
+			console.error('Invalid pipe length:', result.errors);
 		}
 	}
 
 	function addTrack() {
-		const newIdx = pipes.length;
-		pipes = [...pipes, createEmptyPipe(newIdx)];
+		const newIdx = scene.pipes.length;
+		scene.pipes = [...scene.pipes, createEmptyPipe(newIdx)];
+		scene.totalLength = recalculateTotalLength(scene);
+		scene.lengthSeconds = recalculateLengthSeconds(scene);
 	}
 
 	function removeTrack(pipeIndex: number) {
-		if (pipes.length <= 1) return;
-		pipes = pipes.filter((_, idx) => idx !== pipeIndex);
+		if (scene.pipes.length <= 1) return;
+		scene.pipes = scene.pipes.filter((_, idx) => idx !== pipeIndex);
+		scene.totalLength = recalculateTotalLength(scene);
+		scene.lengthSeconds = recalculateLengthSeconds(scene);
+	}
+
+	function updateFps(newFps: number) {
+		if (!FPS_PRESETS.includes(newFps)) return;
+		scene.fps = newFps;
+		scene.lengthSeconds = recalculateLengthSeconds(scene);
+	}
+
+	function updateResolution(resolution: typeof scene.resolution) {
+		scene.resolution = resolution;
+		// Recalculate max pipe lengths
+		scene = {
+			...scene,
+			pipes: scene.pipes.map(p => ({
+				...p,
+				lengthFrames: Math.min(p.lengthFrames, getMaxFramesForResolution(resolution)),
+			})),
+		};
+		scene.totalLength = recalculateTotalLength(scene);
+		scene.lengthSeconds = recalculateLengthSeconds(scene);
 	}
 </script>
 
 <div class="composer-panel">
-	<!-- Shared Frame Ruler (stays fixed at top) -->
+	<!-- Scene Header -->
+	<div class="scene-header">
+		<div class="scene-info">
+			<span class="scene-name">{scene.name}</span>
+			<span class="scene-meta">{scene.totalLength}f @ {scene.fps}fps = {scene.lengthSeconds}s</span>
+		</div>
+		<div class="scene-controls">
+			<select class="fps-select" value={scene.fps} onchange={(e) => updateFps(Number(e.currentTarget.value))}>
+				{#each FPS_PRESETS as fps}
+					<option value={fps}>{fps} fps</option>
+				{/each}
+			</select>
+			<select class="resolution-select" value={scene.resolution} onchange={(e) => updateResolution(e.currentTarget.value)}>
+				<option value="480p">480p</option>
+				<option value="720p">720p</option>
+				<option value="1080p">1080p</option>
+			</select>
+		</div>
+	</div>
+
+	<!-- Shared Frame Ruler -->
 	<div class="ruler-container">
 		<div class="ruler">
 			<div class="ruler-ticks">
-				{#each Array.from({ length: Math.ceil(totalFrames / 60) + 1 }, (_, i) => i * 60) as frame}
-					<div class="ruler-mark" style="left: {frame / totalFrames * 100}%">
+				{#each Array.from({ length: Math.ceil(scene.totalLength / 60) + 1 }, (_, i) => i * 60) as frame}
+					<div class="ruler-mark" style="left: {frame / scene.totalLength * 100}%">
 						<span>{frame}</span>
 					</div>
 				{/each}
 			</div>
-			<!-- Playhead indicator -->
-			<div class="playhead" style="left: 0%"></div>
 		</div>
 	</div>
 
 	<!-- Pipes List -->
 	<div class="pipes-list">
-		{#each pipes as pipe, pipeIdx (pipe.id)}
+		{#each scene.pipes as pipe, pipeIdx (pipe.id)}
 			<div class="pipe-row">
-				<!-- Pipe Header with Q/C -->
+				<!-- Pipe Header -->
 				<div class="pipe-header">
 					<span class="pipe-label">Pipe {pipeIdx + 1}</span>
 					<button class="remove-pipe-btn" onclick={() => removeTrack(pipeIdx)} title="Remove pipe">×</button>
 				</div>
 
-				<!-- Row 1: Keyframes + Q/C at end -->
+				<!-- Row 1: Keyframes + Q/C -->
 				<div class="kf-row">
 					{#each pipe.keyframes as kf, kfIdx (kf.id)}
 						<div 
 							class="kf-box {kf.imageSrc ? 'has-image' : ''}"
-							style="left: {kf.frame / totalFrames * 100}%"
 							onclick={() => openAddModal(pipeIdx, kfIdx)}
 						>
 							{#if kf.imageSrc}
@@ -253,7 +265,7 @@
 						<div class="add-kf-btn" onclick={() => openAddModal(pipeIdx, pipe.keyframes.length)}>+</div>
 					{/if}
 
-					<!-- Q/C Sliders - at the END of keyframes row -->
+					<!-- Q/C Sliders -->
 					<div class="qc-sliders">
 						<div class="qc-group">
 							<span class="qc-label">Q</span>
@@ -272,23 +284,38 @@
 					</div>
 				</div>
 
-				<!-- Rows 2+: Parameter Sliders (one per param, with frame position) -->
-				{#each pipe.params as param (param.id)}
-					<div class="param-row">
-						<div class="param-frame-indicator" style="left: {param.frameStart / totalFrames * 100}%">
-							<span class="param-frame">{param.frameStart}</span>
+				<!-- Row 2: Pipe Length Input -->
+				<div class="length-row">
+					<label class="length-label">Length:</label>
+					<input 
+						type="number" 
+						class="length-input"
+						value={pipe.lengthFrames}
+						min={MIN_PIPE_LENGTH}
+						max={getMaxFramesForResolution(scene.resolution)}
+						step="9"
+						onchange={(e) => updatePipeLength(pipeIdx, Number(e.currentTarget.value))}
+					/>
+					<span class="length-unit">frames</span>
+				</div>
+
+				<!-- Rows 3+: Segment Timelines -->
+				{#each pipe.prompt.segments as segment (segment.id)}
+					<div class="param-row" style="--tag-color: {segment.spec.color}">
+						<div class="param-frame-indicator" style="left: {segment.frameStart / pipe.lengthFrames * 100}%">
+							<span class="param-frame">{segment.frameStart}</span>
 						</div>
 						<div class="param-content">
-							<span class="param-name">{param.name}</span>
-							<input type="range" min={param.min} max={param.max} step="1"
-							       value={param.value}
-							       oninput={(e) => updateParam(pipeIdx, param.id, Number(e.currentTarget.value))} />
-							<span class="param-value">{param.value}</span>
+							<span class="param-name" style="color: {segment.spec.color}">[{segment.name}]</span>
+							<input type="range" min={0} max={100} step="1"
+							       value={segment.value}
+							       oninput={(e) => updateParam(pipeIdx, segment.id, Number(e.currentTarget.value))} />
+							<span class="param-value">{segment.value}</span>
 						</div>
 						<div class="param-controls">
-							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, param.id, -8)} title="Move left (-8f)">‹</button>
-							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, param.id, 8)} title="Move right (+8f)">›</button>
-							<button class="remove-param-btn" onclick={() => removeParam(pipeIdx, param.id)} title="Remove">×</button>
+							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, segment.id, -8)} title="Move left (-8f)">‹</button>
+							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, segment.id, 8)} title="Move right (+8f)">›</button>
+							<button class="remove-param-btn" onclick={() => removeParam(pipeIdx, segment.id)} title="Remove">×</button>
 						</div>
 					</div>
 				{/each}
@@ -348,14 +375,59 @@
 		background: var(--bg-primary, #1A1A1D);
 	}
 
-	/* Ruler Container - Fixed at top */
+	/* Scene Header */
+	.scene-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 8px 12px;
+		background: var(--bg-secondary, #2A2A2E);
+		border-bottom: 1px solid var(--border-color, #4E525A);
+		flex-shrink: 0;
+	}
+
+	.scene-info {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.scene-name {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-primary, #EEEEEE);
+	}
+
+	.scene-meta {
+		font-size: 10px;
+		color: var(--text-muted, #808080);
+		font-family: monospace;
+	}
+
+	.scene-controls {
+		display: flex;
+		gap: 8px;
+	}
+
+	.fps-select, .resolution-select {
+		background: var(--bg-tertiary, #3A3A3F);
+		border: 1px solid var(--border-color, #4E525A);
+		color: var(--text-primary, #EEEEEE);
+		padding: 4px 8px;
+		border-radius: 4px;
+		font-size: 11px;
+		cursor: pointer;
+	}
+
+	/* Ruler Container */
 	.ruler-container {
 		position: sticky;
 		top: 0;
 		z-index: 100;
 		background: var(--bg-secondary, #2A2A2E);
 		border-bottom: 2px solid var(--border-color, #4E525A);
-		height: 40px;
+		height: 36px;
+		flex-shrink: 0;
 	}
 
 	.ruler {
@@ -389,7 +461,7 @@
 	.ruler-mark::before {
 		content: '';
 		width: 1px;
-		height: 12px;
+		height: 10px;
 		background: var(--accent-primary, #59B5FF);
 		margin-bottom: 2px;
 	}
@@ -398,16 +470,6 @@
 		font-size: 9px;
 		color: var(--text-muted, #808080);
 		font-family: monospace;
-	}
-
-	.playhead {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 2px;
-		height: 100%;
-		background: #dc2626;
-		z-index: 10;
 	}
 
 	/* Pipes List */
@@ -475,7 +537,6 @@
 	}
 
 	.kf-box {
-		position: relative;
 		width: 48px;
 		height: 48px;
 		border-radius: 4px;
@@ -606,6 +667,45 @@
 		font-family: monospace;
 	}
 
+	/* Length Row */
+	.length-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 4px 8px;
+		background: var(--bg-tertiary, #3A3A3F);
+		border-radius: 4px;
+		margin-top: 2px;
+	}
+
+	.length-label {
+		font-size: 10px;
+		color: var(--text-muted, #808080);
+		font-weight: 600;
+		text-transform: uppercase;
+	}
+
+	.length-input {
+		width: 70px;
+		background: var(--bg-primary, #1A1A1D);
+		border: 1px solid var(--border-color, #4E525A);
+		color: var(--text-primary, #EEEEEE);
+		padding: 2px 6px;
+		border-radius: 4px;
+		font-size: 11px;
+		font-family: monospace;
+	}
+
+	.length-input:focus {
+		outline: none;
+		border-color: var(--accent-primary, #59B5FF);
+	}
+
+	.length-unit {
+		font-size: 10px;
+		color: var(--text-muted, #606060);
+	}
+
 	/* Param Row */
 	.param-row {
 		display: flex;
@@ -615,6 +715,7 @@
 		background: var(--bg-secondary, #2A2A2E);
 		border-radius: 4px;
 		margin-top: 2px;
+		border-left: 3px solid var(--tag-color, #59B5FF);
 	}
 
 	.param-frame-indicator {
@@ -645,8 +746,6 @@
 
 	.param-name {
 		font-size: 10px;
-		color: var(--text-muted, #808080);
-		text-transform: uppercase;
 		font-weight: 600;
 		min-width: 60px;
 	}
@@ -665,7 +764,7 @@
 		width: 12px;
 		height: 12px;
 		border-radius: 50%;
-		background: var(--accent-primary, #59B5FF);
+		background: var(--tag-color, #59B5FF);
 		cursor: pointer;
 	}
 
