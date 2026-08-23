@@ -39,14 +39,6 @@
 		showWelcome = false;
 		console.log('[App] showWelcome AFTER:', showWelcome);
 		
-		// Check DOM after state change
-		setTimeout(() => {
-			const welcomeEl = document.querySelector('.welcome-card');
-			const workspaceEl = document.querySelector('#workspace-container');
-			console.log('[App] DOM check - Welcome card:', !!welcomeEl);
-			console.log('[App] DOM check - Workspace container:', !!workspaceEl);
-		}, 100);
-		
 		localStorage.setItem('vm-username', name);
 		console.log('[App] Login complete');
 	}
@@ -96,7 +88,7 @@
 			layoutMode = savedLayout;
 		}
 		
-		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
+		appInfo = { appName: 'VisionMachine', version: '0.1.2' };
 		applyTheme(selectedTheme);
 	});
 </script>

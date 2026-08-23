@@ -5,6 +5,11 @@ import { resolve } from 'path';
 export default defineConfig({
   base: './',
   plugins: [svelte()],
+  resolve: {
+    alias: {
+      '$types': resolve(__dirname, 'src/types'),
+    },
+  },
   server: { 
     port: 1420, 
     strictPort: true,
