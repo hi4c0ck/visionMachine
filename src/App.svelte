@@ -34,8 +34,14 @@
     }
     
     console.log('[App] Setting showWelcome = false');
-    showWelcome = false;
-    localStorage.setItem('vm-username', name);
+    try {
+      showWelcome = false;
+      localStorage.setItem('vm-username', name);
+      console.log('[App] showWelcome set to false successfully');
+    } catch (e) {
+      console.error('[App] Error setting showWelcome:', e);
+      error = 'Failed to login: ' + e;
+    }
   }
   
   function handleKeyDown(e: KeyboardEvent) {
@@ -45,6 +51,7 @@
   }
   
   function handleLogout() {
+    console.log('[App] handleLogout called');
     userName = '';
     showWelcome = true;
   }
