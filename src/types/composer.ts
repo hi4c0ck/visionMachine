@@ -42,19 +42,25 @@ export interface TagSpecification {
 	name: string;
 	/** Special construction rule for text output (e.g., JSON, XML, plain text) */
 	constructRule: 'json' | 'xml' | 'plain' | 'markdown';
+	/** Minimum numeric value (for range-based tags) */
+	min?: number;
+	/** Maximum numeric value (for range-based tags) */
+	max?: number;
+	/** Whether this tag uses a text prompt instead of numeric value */
+	usePrompt?: boolean;
 }
 
 /**
  * All available tag specifications
  */
 export const TAG_SPECIFICATIONS: Record<TagType, TagSpecification> = {
-	scene:      { color: '#FF6B6B', name: 'Scene', constructRule: 'plain' },
-	camera:     { color: '#FFE66D', name: 'Camera', constructRule: 'json' },
-	rotation:   { color: '#4ECDC4', name: 'Rotation', constructRule: 'json' },
-	lighting:   { color: '#45B7D1', name: 'Lighting', constructRule: 'plain' },
-	effect:     { color: '#96CEB4', name: 'Effect', constructRule: 'markdown' },
-	zoom:       { color: '#DDA0DD', name: 'Zoom', constructRule: 'json' },
-	transition: { color: '#FF6B35', name: 'Transition', constructRule: 'plain' },
+	scene:      { color: '#FF6B6B', name: 'Scene', constructRule: 'plain', usePrompt: true },
+	camera:     { color: '#FFE66D', name: 'Camera', constructRule: 'json', min: 0, max: 360 },
+	rotation:   { color: '#4ECDC4', name: 'Rotation', constructRule: 'json', min: -180, max: 180 },
+	lighting:   { color: '#45B7D1', name: 'Lighting', constructRule: 'plain', usePrompt: true },
+	effect:     { color: '#96CEB4', name: 'Effect', constructRule: 'markdown', usePrompt: true },
+	zoom:       { color: '#DDA0DD', name: 'Zoom', constructRule: 'json', min: 0.5, max: 5 },
+	transition: { color: '#FF6B35', name: 'Transition', constructRule: 'plain', usePrompt: true },
 };
 
 /**
@@ -112,6 +118,8 @@ export function snapTo8nPlus1(frames: number): number {
  * Segment timeline range within a pipe prompt
  */
 export interface PromptSegment {
+	/** Unique identifier */
+	id: string;
 	/** Start frame (inclusive) */
 	frameStart: number;
 	/** End frame (exclusive) */
@@ -122,6 +130,8 @@ export interface PromptSegment {
 	value: number;
 	/** Specification for this tag type */
 	spec: TagSpecification;
+	/** Custom text prompt (optional, for non-numeric tags) */
+	prompt?: string;
 }
 
 /**
@@ -202,7 +212,11 @@ export function serializePrompt(prompt: PipePrompt): string {
 				lines.push(`${prefix} [${seg.frameStart}-${seg.frameEnd}]: **${seg.value}**`);
 				break;
 			default:
-				lines.push(`${prefix} [${seg.frameStart}-${seg.frameEnd}]: ${seg.value}`);
+				if (seg.prompt) {
+					lines.push(`${prefix} [${seg.frameStart}-${seg.frameEnd}]: ${seg.prompt}`);
+				} else {
+					lines.push(`${prefix} [${seg.frameStart}-${seg.frameEnd}]: ${seg.value}`);
+				}
 		}
 	});
 
@@ -343,12 +357,16 @@ export function recalculateLengthSeconds(scene: SceneData): number {
 /**
  * Add segment to pipe prompt with validation
  */
-export function addPromptSegment(scene: SceneData, pipeId: string, segment: Omit<PromptSegment, 'spec'>): { valid: boolean; errors: string[] } {
+export function addPromptSegment(scene: SceneData, pipeId: string, segment: Omit<PromptSegment, 'id' | 'spec'>): { valid: boolean; errors: string[] } {
 	const pipe = scene.pipes.find(p => p.id === pipeId);
 	if (!pipe) return { valid: false, errors: ['Pipe not found'] };
 
 	const spec = TAG_SPECIFICATIONS[segment.tag];
-	const newSegment: PromptSegment = { ...segment, spec };
+	const newSegment: PromptSegment = { 
+		...segment, 
+		id: `${Date.now()}-${Math.random()}`,
+		spec,
+	};
 
 	// Validate bounds against pipe length
 	if (newSegment.frameStart < 0 || newSegment.frameEnd > pipe.lengthFrames) {
@@ -439,7 +457,7 @@ export function removeKeyframe(scene: SceneData, pipeId: string, keyframeId: str
  * Update keyframe status
  */
 export function updateKeyframeStatus(scene: SceneData, pipeId: string, keyframeId: string, status: GenerationStatus): boolean {
-	const pipe = scene.pipes.find(p => p.id === pipeId);
+	const pipe = scene.pipes.find(p => p.id === keyframeId);
 	if (!pipe) return false;
 
 	const keyframe = pipe.keyframes.find(k => k.id === keyframeId);
@@ -477,6 +495,7 @@ export function deserializePrompt(text: string): PipePrompt {
 
 		const spec = TAG_SPECIFICATIONS[tag] || TAG_SPECIFICATIONS.scene;
 		segments.push({
+			id: `${Date.now()}-${Math.random()}`,
 			frameStart,
 			frameEnd,
 			tag,

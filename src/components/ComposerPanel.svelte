@@ -7,6 +7,8 @@
 		validatePromptSegments,
 		TAG_SPECIFICATIONS,
 		FPS_PRESETS,
+		addPromptSegment,
+		removePromptSegment,
 	} from '$types';
 
 	let { scene }: { scene: SceneData } = $props();
@@ -25,6 +27,17 @@
 	let modalPrompt = $state('');
 	let modalImg2Img = $state('');
 
+	// Segment modal state
+	let showSegmentModal = $state(false);
+	let activeSegmentId = $state<string | null>(null);
+	let segmentValue = $state(0);
+	let segmentPrompt = $state('');
+
+	// Add segment type picker
+	let showTypePicker = $state(false);
+	let activePipeForType = $state<number | null>(null);
+	const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
+
 	// Helper to create empty pipe
 	function createEmptyPipe(index: number): PipeRow {
 		return {
@@ -41,13 +54,18 @@
 	}
 
 	function createDefaultSegment(tag: TagType, frameStart: number, frameEnd: number): PromptSegment {
+		const spec = TAG_SPECIFICATIONS[tag];
+		let value = 0;
+		if (spec.min !== undefined && spec.max !== undefined) {
+			value = Math.floor((spec.min + spec.max) / 2);
+		}
 		return {
 			id: `${Date.now()}-${Math.random()}`,
 			frameStart,
 			frameEnd,
 			tag,
-			value: Math.floor((frameEnd - frameStart) / 2),
-			spec: TAG_SPECIFICATIONS[tag],
+			value,
+			spec,
 		};
 	}
 
@@ -137,23 +155,70 @@
 		}
 	}
 
-	function addParam(pipeIndex: number) {
-		const pipe = scene.pipes[pipeIndex];
+	function openSegmentModal(pipeIndex: number, segment: PromptSegment) {
+		activeSegmentId = segment.id;
+		segmentValue = segment.value;
+		segmentPrompt = segment.prompt || '';
+		showSegmentModal = true;
+	}
+
+	function closeSegmentModal() {
+		showSegmentModal = false;
+		activeSegmentId = null;
+	}
+
+	function confirmSegmentUpdate() {
+		if (activeSegmentId === null || activePipeIndex === null) return;
+		
+		const pipe = scene.pipes[activePipeIndex];
 		if (!pipe) return;
 
-		// Find next available tag type
-		const usedTags = new Set(pipe.prompt.segments.map(s => s.tag));
-		const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
-		const nextTag = allTags.find(t => !usedTags.has(t)) || 'scene';
+		const spec = TAG_SPECIFICATIONS[pipe.prompt.segments.find(s => s.id === activeSegmentId)?.tag || 'scene'];
 
-		// Calculate frame range for new segment
+		scene.pipes = scene.pipes.map((p, idx) => {
+			if (idx !== activePipeIndex) return p;
+			return {
+				...p,
+				prompt: {
+					...p.prompt,
+					segments: p.prompt.segments.map(s => {
+						if (s.id !== activeSegmentId) return s;
+						return {
+							...s,
+							value: spec.usePrompt ? s.value : segmentValue,
+							prompt: spec.usePrompt ? segmentPrompt : undefined,
+						};
+					}),
+				},
+			};
+		});
+
+		closeSegmentModal();
+	}
+
+	function openTypePicker(pipeIndex: number) {
+		activePipeForType = pipeIndex;
+		showTypePicker = true;
+	}
+
+	function closeTypePicker() {
+		showTypePicker = false;
+		activePipeForType = null;
+	}
+
+	function addSegmentWithType(tag: TagType) {
+		if (activePipeForType === null) return;
+		
+		const pipe = scene.pipes[activePipeForType];
+		if (!pipe) return;
+
 		const maxFrame = pipe.prompt.segments.length > 0
 			? Math.max(...pipe.prompt.segments.map(s => s.frameEnd))
 			: 0;
 		const frameStart = maxFrame;
 		const frameEnd = Math.min(maxFrame + 60, pipe.lengthFrames);
 
-		const newSegment: PromptSegment = createDefaultSegment(nextTag, frameStart, frameEnd);
+		const newSegment = createDefaultSegment(tag, frameStart, frameEnd);
 
 		// Validate before adding
 		const testSegments = [...pipe.prompt.segments, newSegment];
@@ -161,7 +226,7 @@
 
 		if (validation.valid) {
 			scene.pipes = scene.pipes.map((p, idx) => {
-				if (idx !== pipeIndex) return p;
+				if (idx !== activePipeForType) return p;
 				return {
 					...p,
 					prompt: {
@@ -171,6 +236,8 @@
 				};
 			});
 		}
+
+		closeTypePicker();
 	}
 
 	function removeParam(pipeIndex: number, segmentId: string) {
@@ -423,29 +490,38 @@
 
 				<!-- Rows 3+: Segment Timelines -->
 				{#each pipe.prompt.segments as segment (segment.id)}
-					<div class="param-row" style="--tag-color: {segment.spec.color}">
+					<div 
+						class="param-row" 
+						style="--tag-color: {segment.spec.color}"
+						onclick={() => openSegmentModal(pipeIdx, segment)}
+					>
 						<div class="param-frame-indicator" style="left: {segment.frameStart / pipe.lengthFrames * 100}%">
 							<span class="param-frame">{segment.frameStart}</span>
 						</div>
 						<div class="param-content">
-							<span class="param-name" style="color: {segment.spec.color}">[{segment.name}]</span>
-							<input type="range" min={segment.spec.min} max={segment.spec.max} step="1"
-							       value={segment.value}
-							       oninput={(e) => updateParam(pipeIdx, segment.id, Number(e.currentTarget.value))} />
-							<span class="param-value">{segment.value}</span>
+							<span class="param-name" style="color: {segment.spec.color}">[{segment.spec.name}]</span>
+							{#if segment.spec.usePrompt}
+								<span class="param-prompt-text">{segment.prompt || '(empty)'}</span>
+							{:else}
+								<input type="range" min={segment.spec.min ?? 0} max={segment.spec.max ?? 100} step="1"
+								       value={segment.value}
+								       onclick={(e) => e.stopPropagation()}
+								       oninput={(e) => updateParam(pipeIdx, segment.id, Number(e.currentTarget.value))} />
+								<span class="param-value">{segment.value}</span>
+							{/if}
 						</div>
-						<div class="param-controls">
-							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, segment.id, -8)} title="Move left (-8f)">‹</button>
-							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, segment.id, 8)} title="Move right (+8f)">›</button>
+						<div class="param-controls" onclick={(e) => e.stopPropagation()}>
+							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, segment.id, -8)} title="Move left (-8f)">&lt;</button>
+							<button class="move-btn" onclick={() => moveParamFrame(pipeIdx, segment.id, 8)} title="Move right (+8f)">&gt;</button>
 							<button class="remove-param-btn" onclick={() => removeParam(pipeIdx, segment.id)} title="Remove">×</button>
 						</div>
 					</div>
 				{/each}
 
 				<!-- Add Parameter Button -->
-				<div class="add-param-row" onclick={() => addParam(pipeIdx)}>
+				<div class="add-param-row" onclick={() => openTypePicker(pipeIdx)}>
 					<span>+</span>
-					<span>Add Param</span>
+					<span>Add Segment</span>
 				</div>
 			</div>
 		{/each}
@@ -482,6 +558,82 @@
 				<div class="modal-footer">
 					<button class="btn-cancel" onclick={closeModal}>Cancel</button>
 					<button class="btn-confirm" onclick={confirmAdd}>Add</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Segment Edit Modal -->
+	{#if showSegmentModal && activeSegmentId !== null}
+		<div class="modal-backdrop" onclick={closeSegmentModal} role="presentation">
+			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="0">
+				<div class="modal-header">
+					<span class="modal-title">Edit Segment</span>
+					<button class="modal-close" onclick={closeSegmentModal}>×</button>
+				</div>
+				
+				<div class="modal-body">
+					{#each scene.pipes[activePipeIndex || 0]?.prompt.segments as segment (segment.id)}
+						{#if segment.id === activeSegmentId}
+							<div class="segment-info">
+								<span class="segment-tag" style="color: {segment.spec.color}">[{segment.spec.name}]</span>
+								<span class="segment-frames">{segment.frameStart}-{segment.frameEnd}</span>
+							</div>
+							
+							{#if segment.spec.usePrompt}
+								<label class="modal-label">Prompt:</label>
+								<textarea 
+									class="modal-input" 
+									bind:value={segmentPrompt} 
+									placeholder="Enter prompt text..."
+									rows="4"
+								></textarea>
+							{:else}
+								<label class="modal-label">Value:</label>
+								<input 
+									type="range" 
+									min={segment.spec.min ?? 0} 
+									max={segment.spec.max ?? 100} 
+									step="1"
+									bind:value={segmentValue}
+								/>
+								<span class="modal-value">{segmentValue}</span>
+							{/if}
+						{/if}
+					{/each}
+				</div>
+
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={closeSegmentModal}>Cancel</button>
+					<button class="btn-confirm" onclick={confirmSegmentUpdate}>Save</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Add Segment Type Picker -->
+	{#if showTypePicker && activePipeForType !== null}
+		<div class="modal-backdrop" onclick={closeTypePicker} role="presentation">
+			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="0">
+				<div class="modal-header">
+					<span class="modal-title">Add Segment</span>
+					<button class="modal-close" onclick={closeTypePicker}>×</button>
+				</div>
+				
+				<div class="modal-body">
+					<p class="modal-hint">Select segment type to add:</p>
+					<div class="type-grid">
+						{#each allTags as tag}
+							<button 
+								class="type-btn" 
+								style="--btn-color: {TAG_SPECIFICATIONS[tag].color}"
+								onclick={() => addSegmentWithType(tag)}
+							>
+								<span class="type-color" style="background: {TAG_SPECIFICATIONS[tag].color}"></span>
+								<span>{TAG_SPECIFICATIONS[tag].name}</span>
+							</button>
+						{/each}
+					</div>
 				</div>
 			</div>
 		</div>
@@ -830,7 +982,7 @@
 		color: var(--text-muted, #606060);
 	}
 
-	/* Param Row */
+	/* Param Row - CLICKABLE */
 	.param-row {
 		display: flex;
 		align-items: center;
@@ -840,6 +992,13 @@
 		border-radius: 4px;
 		margin-top: 2px;
 		border-left: 3px solid var(--tag-color, #59B5FF);
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+
+	.param-row:hover {
+		background: var(--bg-hover, #3A3A3F);
+		border-left-color: var(--tag-color, #59B5FF);
 	}
 
 	.param-frame-indicator {
@@ -872,6 +1031,16 @@
 		font-size: 10px;
 		font-weight: 600;
 		min-width: 60px;
+	}
+
+	.param-prompt-text {
+		font-size: 10px;
+		color: var(--text-secondary, #BFBFBF);
+		font-style: italic;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 200px;
 	}
 
 	.param-content input[type="range"] {
@@ -1063,6 +1232,25 @@
 		gap: 10px;
 	}
 
+	.modal-hint {
+		font-size: 12px;
+		color: var(--text-muted, #808080);
+		margin: 0;
+	}
+
+	.modal-label {
+		font-size: 11px;
+		color: var(--text-muted, #808080);
+		font-weight: 600;
+		text-transform: uppercase;
+	}
+
+	.modal-value {
+		font-size: 11px;
+		color: var(--text-primary, #EEEEEE);
+		font-family: monospace;
+	}
+
 	.modal-input {
 		width: 100%;
 		padding: 10px 12px;
@@ -1115,5 +1303,59 @@
 
 	.btn-confirm:hover {
 		background: var(--accent-primary-hover, #7EC8FF);
+	}
+
+	/* Segment Info */
+	.segment-info {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px;
+		background: var(--bg-tertiary, #3A3A3F);
+		border-radius: 4px;
+	}
+
+	.segment-tag {
+		font-size: 12px;
+		font-weight: 600;
+	}
+
+	.segment-frames {
+		font-size: 11px;
+		color: var(--text-muted, #808080);
+		font-family: monospace;
+	}
+
+	/* Type Picker Grid */
+	.type-grid {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 8px;
+	}
+
+	.type-btn {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 12px;
+		background: var(--bg-tertiary, #3A3A3F);
+		border: 1px solid var(--border-color, #3A3A3F);
+		border-radius: 4px;
+		cursor: pointer;
+		transition: all 0.15s;
+		color: var(--text-primary, #EEEEEE);
+		font-size: 12px;
+	}
+
+	.type-btn:hover {
+		border-color: var(--btn-color, #59B5FF);
+		background: rgba(89, 181, 255, 0.1);
+	}
+
+	.type-color {
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		flex-shrink: 0;
 	}
 </style>
