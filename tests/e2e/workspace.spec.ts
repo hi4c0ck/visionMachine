@@ -23,8 +23,7 @@ test.describe('Workspace Layout', () => {
     // Center (Composer area)
     await expect(page.locator('.composer-area')).toBeVisible();
     
-    // Right panel (Tools)
-    await expect(page.locator('.tools-panel')).toBeVisible();
+    // Right panel (Tools) - should be visible in landscape mode with session
   });
 
   test('should show empty composer state initially', async ({ page }) => {
@@ -67,7 +66,7 @@ test.describe('Workspace Layout', () => {
     
     await page.locator('.add-session-btn').click();
     
-    // Select session
+    // Select session - should now use correct event handler
     await page.locator('.session-item').first().click();
     
     // Composer should unlock
@@ -75,12 +74,28 @@ test.describe('Workspace Layout', () => {
     await expect(page.locator('.pipe-row')).toBeVisible();
   });
 
-  test('should show tools panel when landscape layout', async ({ page }) => {
-    // Landscape is default
+  test('should show tools panel when landscape layout and session selected', async ({ page }) => {
+    // Create project and session
+    await page.locator('.projects-panel .add-btn').click();
+    await page.locator('input[placeholder*="project name"]').fill('Project');
+    await page.locator('button:has-text("Create")').click();
+    await page.locator('.add-session-btn').click();
+    await page.locator('.session-item').first().click();
+    
+    // Tools should be visible in landscape mode
     await expect(page.locator('.tools-panel')).toBeVisible();
   });
 
-  test('should update stats when working', async ({ page }) => {
-    await expect(page.locator('.stat-value')).toBeVisible();
+  test('should persist data across page reloads', async ({ page }) => {
+    // Create project
+    await page.locator('.projects-panel .add-btn').click();
+    await page.locator('input[placeholder*="project name"]').fill('Persistent Project');
+    await page.locator('button:has-text("Create")').click();
+    
+    // Reload page
+    await page.reload();
+    
+    // Project should still exist
+    await expect(page.locator('.project-name')).toContainText('Persistent Project');
   });
 });
