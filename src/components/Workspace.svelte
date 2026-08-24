@@ -161,6 +161,11 @@
 	function handleSessionSelect(sessionId: string) {
 		console.log('[Workspace] Session selected:', sessionId);
 		selectedSessionId = sessionId;
+		// Also set the parent project if not already set
+		if (!selectedProjectId) {
+			const pid = projects.find(p => p.sessions.some(s => s.id === sessionId))?.id;
+			if (pid) selectedProjectId = pid;
+		}
 		saveProjects();
 	}
 
