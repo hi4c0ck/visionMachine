@@ -7,7 +7,7 @@
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData } from '$types';
 
-	function log(msg) { console.log('[Workspace] ' + msg); }\n\tlog('Component ready');
+	function log(msg) {\n\t\tconsole.log('[Workspace] ' + msg);\n\t}\n\tlog('Component ready');
 
 	let {
 		userName,
