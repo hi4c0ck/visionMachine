@@ -7,12 +7,24 @@
     selectedProjectId, 
     selectedSessionId,
     onselectproject,
+    onselectsession,
     oncreateproject,
     ondeleteproject,
     oncreatesession,
     onrenamesession,
     ondeletesession
-  } = $props();
+  } = $props<{
+    projects: ProjectData[];
+    selectedProjectId: string | null;
+    selectedSessionId: string | null;
+    onselectproject: (projectId: string) => void;
+    onselectsession: (sessionId: string) => void;
+    oncreateproject: (input: { name: string; path?: string }) => void;
+    ondeleteproject: (projectId: string) => void;
+    oncreatesession: (projectId: string) => void;
+    onrenamesession: (sessionId: string, newName: string) => void;
+    ondeletesession: (projectId: string, sessionId: string) => void;
+  }>();
 
   // Modal state
   let showCreateProjectModal = $state(false);
@@ -51,6 +63,10 @@
     onselectproject(projectId);
   }
 
+  function handleSelectSession(sessionId: string) {
+    onselectsession(sessionId);
+  }
+
   function handleDeleteProject(projectId: string) {
     ondeleteproject(projectId);
   }
@@ -59,7 +75,7 @@
     oncreatesession(projectId);
   }
 
-  function handleRenameSession(projectId: string, sessionId: string, newName: string) {
+  function handleRenameSession(sessionId: string, newName: string) {
     onrenamesession(sessionId, newName);
   }
 
@@ -103,19 +119,19 @@
             {#each project.sessions as session (session.id)}
               <div 
                 class="session-item {selectedSessionId === session.id ? 'selected' : ''}"
-                onclick={() => onselectproject(project.id)}
+                onclick={() => handleSelectSession(session.id)}
               >
                 <span class="session-icon">🎬</span>
                 <input 
                   type="text" 
                   class="session-name-input"
                   value={session.name}
-                  oninput={(e) => handleRenameSession(project.id, session.id, e.currentTarget.value)}
+                  oninput={(e) => handleRenameSession(session.id, e.currentTarget.value)}
                   placeholder="Session name"
                 />
                 <button 
                   class="delete-session-btn"
-                  onclick={() => handleDeleteSession(project.id, session.id)}
+                  onclick={(e) => { e.stopPropagation(); handleDeleteSession(project.id, session.id); }}
                   title="Delete Session">×</button>
               </div>
             {/each}

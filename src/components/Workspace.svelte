@@ -130,6 +130,12 @@
 		saveProjects();
 	}
 
+	function handleSessionSelect(sessionId: string) {
+		console.log('[Workspace] Session selected:', sessionId);
+		selectedSessionId = sessionId;
+		saveProjects();
+	}
+
 	function handleCreateProject(input: { name: string; path?: string }) {
 		console.log('[Workspace] Create project:', input.name);
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
@@ -277,6 +283,7 @@
 					{selectedProjectId}
 					{selectedSessionId}
 					onselectproject={handleProjectSelect}
+					onselectsession={handleSessionSelect}
 					oncreateproject={handleCreateProject}
 					ondeleteproject={handleDeleteProject}
 					oncreatesession={handleCreateSession}
