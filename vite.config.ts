@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '$types': resolve(__dirname, 'src/types'),
+      '$constants': resolve(__dirname, 'src/constants'),
     },
   },
   server: { 
@@ -19,5 +20,5 @@ export default defineConfig({
   build: { 
     outDir: 'dist', 
     emptyOutDir: true 
-  }
+  },
 });

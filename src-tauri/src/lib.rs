@@ -1,14 +1,15 @@
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+use std::path::PathBuf;
 
 mod preflight;
 pub use preflight::{run_preflight_checks, PreflightReport};
+mod logger;
 
 #[derive(Clone)]
 pub struct AppState {
     pub username: Arc<Mutex<Option<String>>>,
     pub preflight_report: Arc<Mutex<PreflightReport>>,
-    pub error_log: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl AppState {
@@ -16,7 +17,6 @@ impl AppState {
         Self {
             username: Arc::new(Mutex::new(None)),
             preflight_report: Arc::new(Mutex::new(PreflightReport::new())),
-            error_log: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -30,103 +30,92 @@ fn get_app_info() -> serde_json::Value {
 }
 
 #[tauri::command]
-async fn login_user(username: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+fn login_user(username: String) -> Result<String, String> {
     if username.is_empty() {
         return Err("Username cannot be empty".to_string());
     }
-    
-    let mut user = state.username.lock().map_err(|e| e.to_string())?;
-    *user = Some(username.clone());
     Ok(format!("Welcome, {}!", username))
 }
 
 #[tauri::command]
-async fn logout_user(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut user = state.username.lock().map_err(|e| e.to_string())?;
-    *user = None;
-    Ok(())
+fn get_preflight_report() -> Result<PreflightReport, String> {
+    Ok(run_preflight_checks())
 }
 
-#[tauri::command]
-fn get_preflight_report(state: tauri::State<'_, AppState>) -> Result<PreflightReport, String> {
-    let report = state.preflight_report.lock().map_err(|e| e.to_string())?;
-    Ok(report.clone())
-}
-
-#[tauri::command]
-async fn report_error(error_msg: String, context: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let timestamp = chrono::Local::now().to_rfc3339();
-    let mut log = state.error_log.lock().map_err(|e| e.to_string())?;
-    log.push((timestamp, format!("{}: {}", context, error_msg)));
-    // Keep only last 100 errors
-    while log.len() > 100 {
-        log.remove(0);
+/// Simple database initialization: check if exists, create if not
+fn init_database(app_data_dir: &PathBuf, log: &mut logger::FileLogger) -> Result<PathBuf, String> {
+    let db_path = app_data_dir.join("visionmachine.db");
+    
+    // Check if database already exists
+    if db_path.exists() {
+        log.log("INFO", &format!("[DB] Database already exists at: {:?}", db_path));
+        return Ok(db_path);
     }
-    Ok(())
-}
-
-#[tauri::command]
-async fn get_errors(limit: u32, state: tauri::State<'_, AppState>) -> Result<Vec<(String, String)>, String> {
-    let log = state.error_log.lock().map_err(|e| e.to_string())?;
-    let limit = limit as usize;
-    Ok(log.iter().rev().take(limit).cloned().collect())
-}
-
-#[tauri::command]
-async fn set_theme(_theme: String, _state: tauri::State<'_, AppState>) -> Result<(), String> {
-    // Theme is managed client-side via localStorage
-    Ok(())
-}
-
-fn setup_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
-        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
-        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic".to_string()
-        };
-        eprintln!("PANIC: {} at {:?}", msg, location);
-    }));
+    
+    // Create parent directories if needed
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    
+    // Create empty database file
+    std::fs::File::create(&db_path)
+        .map_err(|e| format!("Failed to create database: {}", e))?;
+    
+    log.log("INFO", &format!("[DB] Created new database at: {:?}", db_path));
+    Ok(db_path)
 }
 
 pub fn run() {
-    // Setup panic hook FIRST
-    setup_panic_hook();
+    // Initialize logging FIRST
+    let mut log = logger::FileLogger::new();
+    log.log("INFO", "Application starting...");
     
     // Run pre-flight checks
     let report = run_preflight_checks();
     let report_str = report.format_report();
     eprintln!("{}", report_str);
+    log.log("INFO", &format!("Preflight checks: {}", if report.passed { "PASSED" } else { "FAILED" }));
     
     if !report.passed {
         eprintln!("\nCritical environment issues detected. Application cannot start.");
-        eprintln!("\nFor troubleshooting, visit: https://docs.visionmachine.app/troubleshooting");
+        log.log("ERROR", "Critical environment issues detected");
         std::process::exit(1);
     }
     
+    // Move log into the closure by using Arc<Mutex<>>
+    let log = std::sync::Mutex::new(log);
+    
     tauri::Builder::default()
         .manage(AppState::new())
-        .setup(|app| {
-            let _ = app.path().app_local_data_dir();
+        .setup(move |app| {
+            let mut log_guard = log.lock().unwrap();
+            log_guard.log("INFO", "[Setup] Application starting...");
             
-            // Store preflight report in state
-            let state = app.state::<AppState>();
-            let mut report_lock = state.preflight_report.lock().unwrap();
-            *report_lock = report;
+            // Get app data directory
+            let app_data_dir = app.path().app_local_data_dir()
+                .map_err(|e| format!("Failed to get app data directory: {}", e))?;
             
+            log_guard.log("INFO", &format!("[Setup] App data directory: {:?}", app_data_dir));
+            
+            // Initialize database (check if exists, create if not)
+            match init_database(&app_data_dir, &mut log_guard) {
+                Ok(db_path) => {
+                    log_guard.log("INFO", &format!("[Setup] Database initialized at: {:?}", db_path));
+                }
+                Err(e) => {
+                    log_guard.log("WARN", &format!("[Setup] Could not initialize database: {}", e));
+                    // Continue anyway - app can work without DB for now
+                }
+            }
+            
+            log_guard.log("INFO", "[Setup] Setup complete!");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             login_user,
-            logout_user,
             get_app_info,
             get_preflight_report,
-            report_error,
-            get_errors,
-            set_theme,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run app");

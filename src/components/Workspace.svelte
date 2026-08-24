@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Frame from './Frame.svelte';
 	import ProjectsPanel from './ProjectsPanel.svelte';
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import type { SceneData } from '$types';
-	import { createEmptyScene } from '$types';
+	import type { ProjectData, SessionData } from '$types';
 
 	console.log('[Workspace] Component ready');
 
@@ -16,7 +16,8 @@
 		showWelcome,
 		onlogout,
 		onthemeChange,
-		onlayoutChange
+		onlayoutChange,
+		onprojectsupdate
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -25,15 +26,75 @@
 		onlogout?: () => void;
 		onthemeChange?: (theme: string) => void;
 		onlayoutChange?: (mode: string) => void;
+		onprojectsupdate?: (projects: ProjectData[]) => void;
 	}>();
 
-	// State
-	let projects = $state<Array<{ id: string; name: string; thumbnail?: string; sessionId?: string }>>([]);
+	// State - Using proper data models
+	let projects = $state<ProjectData[]>([]);
 	let selectedProjectId = $state<string | null>(null);
+	let selectedSessionId = $state<string | null>(null);
 	let activeTool = $state<string | null>(null);
 	let toolsCollapsed = $state(false);
 	let storageUsed = $state(0);
-	let scene = $state<SceneData>(createEmptyScene());
+
+	// Derived state
+	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
+	let selectedSession = $derived(
+		selectedProject?.sessions.find(s => s.id === selectedSessionId) || null
+	);
+
+	// Load projects from localStorage on mount
+	function loadProjects() {
+		try {
+			const saved = localStorage.getItem('vm-projects');
+			if (saved) {
+				const parsed = JSON.parse(saved) as ProjectData[];
+				console.log('[Workspace] Loaded projects from localStorage:', parsed.length);
+				projects = parsed;
+				
+				// Restore selection if exists
+				const savedSelection = localStorage.getItem('vm-selected-project');
+				if (savedSelection && projects.find(p => p.id === savedSelection)) {
+					selectedProjectId = savedSelection;
+					const savedSession = localStorage.getItem('vm-selected-session');
+					if (savedSession && projects.find(p => p.id === savedSelection)?.sessions.find(s => s.id === savedSession)) {
+						selectedSessionId = savedSession;
+					}
+				}
+			}
+		} catch (e) {
+			console.error('[Workspace] Failed to load projects:', e);
+		}
+	}
+
+	// Save projects to localStorage
+	function saveProjects() {
+		try {
+			console.log('[Workspace] Saving projects to localStorage...');
+			localStorage.setItem('vm-projects', JSON.stringify(projects));
+			console.log('[Workspace] Projects saved, count:', projects.length);
+			
+			// Notify parent
+			if (onprojectsupdate) {
+				onprojectsupdate(projects);
+			}
+			
+			// Save selection
+			if (selectedProjectId) {
+				localStorage.setItem('vm-selected-project', selectedProjectId);
+				if (selectedSessionId) {
+					localStorage.setItem('vm-selected-session', selectedSessionId);
+				}
+			}
+		} catch (e) {
+			console.error('[Workspace] Failed to save projects:', e);
+		}
+	}
+
+	// Call load on mount
+	onMount(() => {
+		loadProjects();
+	});
 
 	const defaultTools = [
 		{ id: 'select', label: 'Select', icon: '🔍', hotkey: 'V' },
@@ -62,28 +123,119 @@
 		onlayoutChange?.(mode);
 	}
 
-	function handleProjectSelect(id: string) {
-		console.log('[Workspace] Project selected:', id);
-		selectedProjectId = id;
+	function handleProjectSelect(projectId: string) {
+		console.log('[Workspace] Project selected:', projectId);
+		selectedProjectId = projectId;
+		selectedSessionId = null;
+		saveProjects();
 	}
 
-	function handleProjectNew() {
-		console.log('[Workspace] Create new project');
-		const newProject = {
-			id: Date.now().toString(),
-			name: `Project ${projects.length + 1}`,
-			sessionId: undefined
+	function handleCreateProject(input: { name: string; path?: string }) {
+		console.log('[Workspace] Create project:', input.name);
+		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
+		const projectPath = `${basePath}\\${input.name}`;
+		
+		const newProject: ProjectData = {
+			id: crypto.randomUUID(),
+			name: input.name,
+			createdAt: Date.now(),
+			directoryPath: projectPath,
+			sessions: [],
+			totalGenerations: 0,
 		};
+		
 		projects = [...projects, newProject];
 		selectedProjectId = newProject.id;
+		saveProjects();
+		console.log('[Workspace] Project created, total:', projects.length);
 	}
 
-	function handleProjectDelete(id: string) {
-		console.log('[Workspace] Delete project:', id);
-		projects = projects.filter(p => p.id !== id);
-		if (selectedProjectId === id) {
+	function handleDeleteProject(projectId: string) {
+		console.log('[Workspace] Delete project:', projectId);
+		projects = projects.filter(p => p.id !== projectId);
+		if (selectedProjectId === projectId) {
 			selectedProjectId = null;
+			selectedSessionId = null;
 		}
+		saveProjects();
+	}
+
+	function handleCreateSession(projectId: string) {
+		console.log('[Workspace] Create session for project:', projectId);
+		const project = projects.find(p => p.id === projectId);
+		if (!project) return;
+		
+		const sessionName = `Session ${project.sessions.length + 1}`;
+		const folderName = `session_${Date.now()}`;
+		const sessionPath = `${project.directoryPath}\\${folderName}`;
+		
+		const newSession: SessionData = {
+			id: crypto.randomUUID(),
+			name: sessionName,
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			directoryPath: sessionPath,
+			pipes: [],
+			fps: 24,
+			resolution: '720p',
+			orientation: 'horizontal',
+			totalGeneratedFrames: 0,
+		};
+		
+		const updatedProject = {
+			...project,
+			sessions: [...project.sessions, newSession],
+		};
+		
+		projects = projects.map(p => 
+			p.id === projectId ? updatedProject : p
+		);
+		
+		selectedSessionId = newSession.id;
+		saveProjects();
+		console.log('[Workspace] Session created:', newSession.id);
+	}
+
+	function handleRenameSession(sessionId: string, newName: string) {
+		console.log('[Workspace] Rename session:', sessionId, '->', newName);
+		if (!selectedProject) return;
+		
+		const updatedSessions = selectedProject.sessions.map(s =>
+			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
+		);
+		
+		const updatedProject = {
+			...selectedProject,
+			sessions: updatedSessions,
+			updatedAt: Date.now(),
+		};
+		
+		projects = projects.map(p =>
+			p.id === selectedProject.id ? updatedProject : p
+		);
+		saveProjects();
+	}
+
+	function handleDeleteSession(projectId: string, sessionId: string) {
+		console.log('[Workspace] Delete session:', sessionId);
+		const project = projects.find(p => p.id === projectId);
+		if (!project) return;
+		
+		const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
+		const updatedProject = {
+			...project,
+			sessions: updatedSessions,
+			updatedAt: Date.now(),
+		};
+		
+		projects = projects.map(p =>
+			p.id === projectId ? updatedProject : p
+		);
+		
+		if (selectedSessionId === sessionId) {
+			selectedSessionId = null;
+		}
+		saveProjects();
 	}
 
 	function handleToolSelect(id: string) {
@@ -91,15 +243,17 @@
 		activeTool = id;
 	}
 
-	function handleCreateSession() {
-		console.log('[Workspace] Session created');
-		if (selectedProjectId) {
-			projects = projects.map(p =>
-				p.id === selectedProjectId
-					? { ...p, sessionId: Date.now().toString() }
-					: p
-			);
+	function handleGenerate() {
+		console.log('[Workspace] Generate clicked');
+		// TODO: Implement generation logic
+	}
+
+	function getHomeDir(): string {
+		if (typeof window !== 'undefined') {
+			const user = (window as any).userName || userName || 'User';
+			return `C:\\Users\\${user}`;
 		}
+		return 'C:\\Users';
 	}
 </script>
 
@@ -121,9 +275,13 @@
 				<ProjectsPanel
 					{projects}
 					{selectedProjectId}
-					onselect={handleProjectSelect}
-					onnew={handleProjectNew}
-					ondelete={handleProjectDelete}
+					{selectedSessionId}
+					onselectproject={handleProjectSelect}
+					oncreateproject={handleCreateProject}
+					ondeleteproject={handleDeleteProject}
+					oncreatesession={handleCreateSession}
+					onrenamesession={handleRenameSession}
+					ondeletesession={handleDeleteSession}
 				/>
 			{/if}
 
@@ -131,22 +289,47 @@
 			<ProfilePanel
 				{userName}
 				{storageUsed}
-				oncreateSession={handleCreateSession}
 			/>
 		</div>
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			<ComposerPanel {scene} />
+			{#if selectedSession}
+				<ComposerPanel
+					{selectedSession}
+					onupdate={(session) => {
+						if (!selectedProject) return;
+						const updatedSessions = selectedProject.sessions.map(s =>
+							s.id === session.id ? session : s
+						);
+						const updatedProject = { 
+							...selectedProject, 
+							sessions: updatedSessions,
+							updatedAt: Date.now()
+						};
+						projects = projects.map(p =>
+							p.id === selectedProject.id ? updatedProject : p
+						);
+						saveProjects();
+					}}
+				/>
+			{:else}
+				<div class="composer-empty">
+					<div class="empty-icon">🎬</div>
+					<h2>Select a Session</h2>
+					<p>Create a project and add a session to start editing</p>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Right: Tools -->
 		{#if layoutMode === 'landscape'}
 			<ToolsPanel
-				tools={defaultTools}
+				{selectedSession}
+				{selectedProject}
 				{activeTool}
-				collapsed={toolsCollapsed}
 				onselect={handleToolSelect}
+				ongenerate={handleGenerate}
 			/>
 		{/if}
 	</div>
@@ -180,10 +363,39 @@
 		flex-shrink: 0;
 	}
 
-	/* Center composer area - fills remaining horizontal space */
 	.composer-area {
 		flex: 1;
 		min-width: 0;
 		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.composer-empty {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 16px;
+		color: var(--text-muted, #808080);
+	}
+
+	.composer-empty .empty-icon {
+		font-size: 64px;
+		opacity: 0.5;
+	}
+
+	.composer-empty h2 {
+		font-size: 24px;
+		font-weight: 600;
+		color: var(--text-primary, #EEEEEE);
+	}
+
+	.composer-empty p {
+		font-size: 14px;
+		max-width: 400px;
+		text-align: center;
+		line-height: 1.5;
 	}
 </style>

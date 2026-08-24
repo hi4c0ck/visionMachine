@@ -1,21 +1,33 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Workspace from './components/Workspace.svelte';
+	import { APP_CONSTANTS } from '$constants';
 	
-	// State declarations
+	// State declarations - explicit reactive state
 	let userName = $state('');
 	let showWelcome = $state(true);
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
-	let appInfo = $state<{ appName: string; version: string } | null>(null);
 	let error = $state<string | null>(null);
 	
-	// Constants
-	const themes = [
-		{ id: 'jetbrains-dark', name: 'JetBrains Dark' },
-		{ id: 'steel-dark', name: 'Steel Machinery Dark' },
-		{ id: 'light', name: 'Light' },
-	];
+	// Derived state - properly reactive
+	let isNameEmpty = $derived(!userName.trim().length);
+	let canLogin = $derived(userName.trim().length > 0);
+	
+	// Load saved data from localStorage
+	function loadAppData() {
+		try {
+			const savedProjects = localStorage.getItem('vm-projects');
+			if (savedProjects) {
+				console.log('[App] Loaded projects from localStorage:', savedProjects);
+				// This will be passed to Workspace via props
+				return JSON.parse(savedProjects);
+			}
+		} catch (e) {
+			console.error('[App] Failed to load projects:', e);
+		}
+		return null;
+	}
 	
 	// Functions
 	function applyTheme(theme: string) {
@@ -26,29 +38,15 @@
 	function handleLogin() {
 		const name = userName.trim();
 		console.log('[App] handleLogin called');
-		console.log('[App] userName:', JSON.stringify(userName));
-		console.log('[App] showWelcome BEFORE:', showWelcome);
 		
 		if (!name) {
-			console.warn('[App] Name is empty!');
 			error = 'Please enter your name';
 			return;
 		}
 		
-		console.log('[App] Setting showWelcome = false');
 		showWelcome = false;
-		console.log('[App] showWelcome AFTER:', showWelcome);
-		
-		// Check DOM after state change
-		setTimeout(() => {
-			const welcomeEl = document.querySelector('.welcome-card');
-			const workspaceEl = document.querySelector('#workspace-container');
-			console.log('[App] DOM check - Welcome card:', !!welcomeEl);
-			console.log('[App] DOM check - Workspace container:', !!workspaceEl);
-		}, 100);
-		
 		localStorage.setItem('vm-username', name);
-		console.log('[App] Login complete');
+		console.log('[App] Login successful, user:', name);
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
@@ -72,11 +70,19 @@
 		localStorage.setItem('vm-layout', mode);
 	}
 	
+	function handleProjectsUpdate(projects: any[]) {
+		console.log('[App] Projects updated, saving to localStorage...');
+		try {
+			localStorage.setItem('vm-projects', JSON.stringify(projects));
+			console.log('[App] Projects saved successfully');
+		} catch (e) {
+			console.error('[App] Failed to save projects:', e);
+		}
+	}
+	
 	// Lifecycle
 	onMount(() => {
 		console.log('[App] onMount called');
-		console.log('[App] Initial showWelcome:', showWelcome);
-		console.log('[App] Initial userName:', JSON.stringify(userName));
 		
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
@@ -96,7 +102,6 @@
 			layoutMode = savedLayout;
 		}
 		
-		appInfo = { appName: 'VisionMachine', version: '0.1.0' };
 		applyTheme(selectedTheme);
 	});
 </script>
@@ -105,15 +110,13 @@
 	<div class="app">
 		<header class="header">
 			<div class="logo-section">
-				<span class="logo-text">VisionMachine</span>
-				{#if appInfo}
-					<span class="version-badge">v{appInfo.version}</span>
-				{/if}
+				<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
+				<span class="version-badge">v{APP_CONSTANTS.version}</span>
 			</div>
 			
 			<div class="controls">
 				<select class="theme-select" value={selectedTheme} onchange={(e) => applyTheme(e.currentTarget.value)}>
-					{#each themes as theme}
+					{#each APP_CONSTANTS.themes as theme}
 						<option value={theme.id}>{theme.name}</option>
 					{/each}
 				</select>
@@ -128,22 +131,33 @@
 
 		<main class="main">
 			<div class="welcome-card">
-				<h1 class="welcome-title">Welcome to VisionMachine</h1>
-				<p class="hint">Enter your name to continue</p>
+				<h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
+				<p class="hint">{APP_CONSTANTS.strings.enterName}</p>
+				
 				<input 
-					bind:value={userName}
-					placeholder="Your name..." 
+					value={userName}
+					oninput={(e) => userName = e.currentTarget.value}
+					placeholder={APP_CONSTANTS.strings.namePlaceholder} 
 					class="input"
 					type="text"
 					onkeydown={handleKeyDown}
 				/>
+				
 				<button 
 					class="btn btn-primary" 
-					disabled={!userName.trim()} 
+					disabled={isNameEmpty}
 					onclick={handleLogin}
 				>
-					Get Started
+					{APP_CONSTANTS.strings.getStarted}
 				</button>
+				
+				<div class="debug-info">
+					<span>UserName: "{userName}"</span>
+					<span>| Length: {userName.length}</span>
+					<span>| Trimmed Length: {userName.trim().length}</span>
+					<span>| isNameEmpty: {isNameEmpty}</span>
+					<span>| canLogin: {canLogin}</span>
+				</div>
 			</div>
 		</main>
 	</div>
@@ -157,6 +171,7 @@
 			onlogout={handleLogout}
 			onthemeChange={handleThemeChange}
 			onlayoutChange={handleLayoutChange}
+			onprojectsupdate={handleProjectsUpdate}
 		/>
 	</div>
 {/if}
@@ -304,5 +319,21 @@
 		color: #dc2626;
 		text-align: center;
 		border-bottom: 1px solid rgba(220, 38, 38, 0.3);
+	}
+	
+	.debug-info {
+		margin-top: 20px;
+		padding: 10px;
+		background: rgba(0, 0, 0, 0.2);
+		border-radius: 4px;
+		font-size: 11px;
+		color: var(--text-muted, #606060);
+		font-family: monospace;
+		text-align: left;
+	}
+	
+	.debug-info span {
+		display: block;
+		margin: 2px 0;
 	}
 </style>

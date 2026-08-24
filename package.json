@@ -1,6 +1,6 @@
 {
   "name": "visionmachine-desktop",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "VisionMachine Desktop Application - Tauri 2 + Svelte 5",
   "type": "module",
   "scripts": {
