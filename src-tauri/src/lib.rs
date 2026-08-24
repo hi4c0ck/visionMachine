@@ -98,6 +98,14 @@ pub fn run() {
                 }
             }
             
+            // Create logs directory
+            let logs_dir = app_data_dir.join("logs");
+            if let Err(e) = std::fs::create_dir_all(&logs_dir) {
+                eprintln!("[Setup] Warning: Could not create logs dir: {}", e);
+            } else {
+                eprintln!("[Setup] Logs directory created: {:?}", logs_dir);
+            }
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
