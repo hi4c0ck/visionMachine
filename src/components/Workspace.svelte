@@ -1,10 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Frame from './Frame.svelte';
 	import ProjectsPanel from './ProjectsPanel.svelte';
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import type { SceneData, ProjectData, SessionData } from '$types';
+	import type { ProjectData, SessionData } from '$types';
 
 	console.log('[Workspace] Component ready');
 
@@ -15,7 +16,8 @@
 		showWelcome,
 		onlogout,
 		onthemeChange,
-		onlayoutChange
+		onlayoutChange,
+		onprojectsupdate
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -24,6 +26,7 @@
 		onlogout?: () => void;
 		onthemeChange?: (theme: string) => void;
 		onlayoutChange?: (mode: string) => void;
+		onprojectsupdate?: (projects: ProjectData[]) => void;
 	}>();
 
 	// State - Using proper data models
@@ -40,6 +43,59 @@
 		selectedProject?.sessions.find(s => s.id === selectedSessionId) || null
 	);
 
+	// Load projects from localStorage on mount
+	function loadProjects() {
+		try {
+			const saved = localStorage.getItem('vm-projects');
+			if (saved) {
+				const parsed = JSON.parse(saved) as ProjectData[];
+				console.log('[Workspace] Loaded projects from localStorage:', parsed.length);
+				projects = parsed;
+				
+				// Restore selection if exists
+				const savedSelection = localStorage.getItem('vm-selected-project');
+				if (savedSelection && projects.find(p => p.id === savedSelection)) {
+					selectedProjectId = savedSelection;
+					const savedSession = localStorage.getItem('vm-selected-session');
+					if (savedSession && projects.find(p => p.id === savedSelection)?.sessions.find(s => s.id === savedSession)) {
+						selectedSessionId = savedSession;
+					}
+				}
+			}
+		} catch (e) {
+			console.error('[Workspace] Failed to load projects:', e);
+		}
+	}
+
+	// Save projects to localStorage
+	function saveProjects() {
+		try {
+			console.log('[Workspace] Saving projects to localStorage...');
+			localStorage.setItem('vm-projects', JSON.stringify(projects));
+			console.log('[Workspace] Projects saved, count:', projects.length);
+			
+			// Notify parent
+			if (onprojectsupdate) {
+				onprojectsupdate(projects);
+			}
+			
+			// Save selection
+			if (selectedProjectId) {
+				localStorage.setItem('vm-selected-project', selectedProjectId);
+				if (selectedSessionId) {
+					localStorage.setItem('vm-selected-session', selectedSessionId);
+				}
+			}
+		} catch (e) {
+			console.error('[Workspace] Failed to save projects:', e);
+		}
+	}
+
+	// Call load on mount
+	onMount(() => {
+		loadProjects();
+	});
+
 	const defaultTools = [
 		{ id: 'select', label: 'Select', icon: '🔍', hotkey: 'V' },
 		{ id: 'brush', label: 'Brush', icon: '🖌', hotkey: 'B' },
@@ -51,7 +107,7 @@
 		{ id: 'settings', label: 'Settings', icon: '⚙️', hotkey: ',' },
 	];
 
-	// Event handlers - Fixed to match ProjectsPanel events
+	// Event handlers
 	function handleLogout() {
 		console.log('[Workspace] Logout');
 		onlogout?.();
@@ -71,6 +127,7 @@
 		console.log('[Workspace] Project selected:', projectId);
 		selectedProjectId = projectId;
 		selectedSessionId = null;
+		saveProjects();
 	}
 
 	function handleCreateProject(input: { name: string; path?: string }) {
@@ -89,6 +146,7 @@
 		
 		projects = [...projects, newProject];
 		selectedProjectId = newProject.id;
+		saveProjects();
 		console.log('[Workspace] Project created, total:', projects.length);
 	}
 
@@ -99,6 +157,7 @@
 			selectedProjectId = null;
 			selectedSessionId = null;
 		}
+		saveProjects();
 	}
 
 	function handleCreateSession(projectId: string) {
@@ -133,6 +192,7 @@
 		);
 		
 		selectedSessionId = newSession.id;
+		saveProjects();
 		console.log('[Workspace] Session created:', newSession.id);
 	}
 
@@ -141,17 +201,19 @@
 		if (!selectedProject) return;
 		
 		const updatedSessions = selectedProject.sessions.map(s =>
-			s.id === sessionId ? { ...s, name: newName } : s
+			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
 		);
 		
 		const updatedProject = {
 			...selectedProject,
 			sessions: updatedSessions,
+			updatedAt: Date.now(),
 		};
 		
 		projects = projects.map(p =>
 			p.id === selectedProject.id ? updatedProject : p
 		);
+		saveProjects();
 	}
 
 	function handleDeleteSession(projectId: string, sessionId: string) {
@@ -163,6 +225,7 @@
 		const updatedProject = {
 			...project,
 			sessions: updatedSessions,
+			updatedAt: Date.now(),
 		};
 		
 		projects = projects.map(p =>
@@ -172,6 +235,7 @@
 		if (selectedSessionId === sessionId) {
 			selectedSessionId = null;
 		}
+		saveProjects();
 	}
 
 	function handleToolSelect(id: string) {
@@ -238,10 +302,15 @@
 						const updatedSessions = selectedProject.sessions.map(s =>
 							s.id === session.id ? session : s
 						);
-						const updatedProject = { ...selectedProject, sessions: updatedSessions };
+						const updatedProject = { 
+							...selectedProject, 
+							sessions: updatedSessions,
+							updatedAt: Date.now()
+						};
 						projects = projects.map(p =>
 							p.id === selectedProject.id ? updatedProject : p
 						);
+						saveProjects();
 					}}
 				/>
 			{:else}
