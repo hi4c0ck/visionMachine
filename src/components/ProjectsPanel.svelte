@@ -64,6 +64,13 @@
   }
 
   function handleSelectSession(sessionId: string) {
+    // Find which project contains this session
+    for (const project of projects) {
+      if (project.sessions.some(s => s.id === sessionId)) {
+        onselectproject(project.id);
+        break;
+      }
+    }
     onselectsession(sessionId);
   }
 

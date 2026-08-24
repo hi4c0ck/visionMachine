@@ -344,7 +344,7 @@
 		</div>
 
 		<!-- Right: Tools -->
-		{#if layoutMode === 'landscape' && selectedSession}
+		{#if layoutMode === 'landscape'}
 			<ToolsPanel
 				{selectedSession}
 				{selectedProject}
