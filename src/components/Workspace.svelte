@@ -7,7 +7,10 @@
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData } from '$types';
 
-	function log(msg) {\n\t\tconsole.log('[Workspace] ' + msg);\n\t}\n\tlog('Component ready');
+	function log(msg: string) {
+		console.log('[Workspace] ' + msg);
+	}
+	log('Component ready');
 
 	let {
 		userName,
@@ -169,19 +172,28 @@
 	}
 
 	function handleSessionSelect(sessionId: string) {
-		log('[Workspace] Session clicked: ' + sessionId + ', project before: ' + selectedProjectId);
-		log('[Workspace] Sessions count: ' + projects.reduce((a, p) => a + p.sessions.length, 0));
-		const foundProject = projects.find(p => p.sessions.some(s => String(s.id) === String(sessionId)));
+		console.log('[Workspace] Session clicked: ' + sessionId + ', project before: ' + selectedProjectId);
+		console.log('[Workspace] Sessions count: ' + projects.reduce((a, p) => a + p.sessions.length, 0));
+		
+		const foundProject = projects.find(p => 
+			p.sessions.some(s => String(s.id) === String(sessionId))
+		);
+		
 		if (!foundProject) {
-			log('[Workspace] ERROR: Session not found in any project');
+			console.error('[Workspace] Session not found in any project');
 			return;
 		}
-		log('[Workspace] Found project: ' + foundProject.id + ' (' + foundProject.name + ')');
-		log('[Workspace] sessions.some() matched: ' + foundProject.sessions.some(s => String(s.id) === String(sessionId)));
+		
+		console.log('[Workspace] Found project: ' + foundProject.id + ' (' + foundProject.name + ')');
+		console.log('[Workspace] sessions.some() matched: ' + foundProject.sessions.some(s => String(s.id) === String(sessionId)));
+		
+		// Set both atomically to avoid intermediate null state
 		selectedProjectId = foundProject.id;
 		selectedSessionId = sessionId;
-		log('[Workspace] State set - project: ' + selectedProjectId + ', session: ' + selectedSessionId);
-		log('[Workspace] After set - selectedProject: ' + !!selectedProject + ', selectedSession: ' + !!selectedSession);
+		
+		console.log('[Workspace] State set - project: ' + selectedProjectId + ', session: ' + selectedSessionId);
+		console.log('[Workspace] After set - selectedProject: ' + !!selectedProject + ', selectedSession: ' + !!selectedSession);
+		
 		saveProjects();
 	}
 
