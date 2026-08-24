@@ -1,0 +1,66 @@
+name: Clean repo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Remove stale docs
+        run: |
+          rm -f COMMIT_MSG.md
+          rm -f DEBUGGING.md
+          rm -f FINAL_SOLUTION.md
+          rm -f FINAL_WHITE_SCREEN_FIX.md
+          rm -f FIXES_v0.1.3.md
+          rm -f FIX_SUMMARY_v0.3.0.md
+          rm -f LOCAL_DEV_FIX.md
+          rm -f LOGGING_FIX.md
+          rm -f QUICK_REFERENCE.md
+          rm -f REACTIVITY_FIX.md
+          rm -f REACTIVITY_FIX_COMPLETE.md
+          rm -f README.data-polish.md
+          rm -f README_BUILD.md
+          rm -f README_BUILD_IMPROVEMENTS.md
+          rm -f SOURCE_OF_BROKEN_BUILD.md
+          rm -f STATUS.md
+          rm -f TESTING_GUIDE_v0.1.4.md
+          rm -f VisionMachine_0.1.0_backup.msi
+          rm -f WHITE_SCREEN_FIX.md
+          rm -f WHITE_SCREEN_RESOLVED.md
+          rm -f WORKING_APP.md
+          rm -f build-artifacts.md
+          rm -f index.html
+          rm -f minimal_test.html
+          rm -f run_debug.bat
+          rm -f test_app.js
+          rm -f test_app.py
+          rm -f test_browser.html
+          rm -f test_exe.py
+          rm -f upload_*.jpg
+          rm -f verify_app.py
+          
+      - name: Remove debug scripts
+        run: |
+          rm -f check_app.py
+          rm -f check_dist.py
+          rm -f check_render.py
+          rm -f check_webkit.py
+          rm -f debug.py
+          rm -f debug_build.py
+          rm -f diagnose.ps1
+          rm -f diagnose_app.py
+          rm -f diagnose_issues.py
+          rm -f read_log.py
+          rm -f server.py
+          
+      - name: Commit cleanup
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -m "chore: cleanup stale docs and debug files" || echo "No changes to commit"
+          git push
