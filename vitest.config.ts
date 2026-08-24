@@ -2,11 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 export default defineConfig({
-  plugins: [svelte({
-    compilerOptions: {
-      dev: false,
-    },
-  })],
+  plugins: [svelte()] as any,
   test: {
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],

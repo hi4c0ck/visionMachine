@@ -1,304 +1,151 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { createCanvas } from './canvas.js';
 	import Workspace from './components/Workspace.svelte';
-	import { APP_CONSTANTS } from '$constants';
+	import ProjectsPanel from './components/ProjectsPanel.svelte';
+	import ComposerPanel from './components/ComposerPanel.svelte';
+	import ToolsPanel from './components/ToolsPanel.svelte';
+	import ProfilePanel from './components/ProfilePanel.svelte';
+	import App from './App.ts';
 	
-	// State declarations - explicit reactive state
-	let userName = $state('');
-	let showWelcome = $state(true);
-	let selectedTheme = $state('jetbrains-dark');
-	let layoutMode = $state('landscape');
-	let error = $state<string | null>(null);
+	let { onNavigate }: { onNavigate?: () => void } = $props();
 	
-	// Derived state - properly reactive
-	let isNameEmpty = $derived(!userName.trim().length);
-	let canLogin = $derived(userName.trim().length > 0);
+	// App instance is NOT wrapped in $state - it manages its own reactivity via localStorage
+	let app = new App();
+	let canvasElement = $state<HTMLCanvasElement | null>(null);
 	
-	// Load saved data from localStorage
-	function loadAppData() {
+	$effect(() => {
+		const el = document.getElementById('canvas') as HTMLCanvasElement | null;
+		if (!el) return;
+		
+		canvasElement = el;
+		const ctx = el.getContext('2d');
+		if (!ctx) return;
+		
+		createCanvas(el, app);
+		
+		// Apply theme colors based on detected platform
 		try {
-			const savedProjects = localStorage.getItem('vm-projects');
-			if (savedProjects) {
-				return JSON.parse(savedProjects);
+			const platform = (import.meta.env as Record<string, string>).TAURI_PLATFORM;
+			if (platform === 'windows') {
+				document.documentElement.style.setProperty('--sidebar-bg', '#2a2a2a');
+				document.documentElement.style.setProperty('--sidebar-border', '#3a3a3a');
+			} else if (platform === 'linux') {
+				document.documentElement.style.setProperty('--sidebar-bg', '#2e2e2e');
+				document.documentElement.style.setProperty('--sidebar-border', '#444');
 			}
-		} catch (e) {
-			console.error('[App] Failed to load projects:', e);
+		} catch {
+			// ignore platform detection errors in browser
 		}
-		return null;
-	}
-	
-	// Functions
-	function applyTheme(theme: string) {
-		document.documentElement.setAttribute('data-theme', theme);
-		localStorage.setItem('vm-theme', theme);
-	}
-	
-	function handleLogin() {
-		const name = userName.trim();
-		if (!name) {
-			error = 'Please enter your name';
-			return;
-		}
-		showWelcome = false;
-		localStorage.setItem('vm-username', name);
-	}
-	
-	function handleKeyDown(e: KeyboardEvent) {
-		if (e.key === 'Enter') {
-			handleLogin();
-		}
-	}
-	
-	function handleLogout() {
-		userName = '';
-		showWelcome = true;
-	}
-	
-	function handleThemeChange(theme: string) {
-		selectedTheme = theme;
-		applyTheme(theme);
-	}
-	
-	function handleLayoutChange(mode: string) {
-		layoutMode = mode;
-		localStorage.setItem('vm-layout', mode);
-	}
-	
-	function handleProjectsUpdate(projects: any[]) {
-		try {
-			localStorage.setItem('vm-projects', JSON.stringify(projects));
-		} catch (e) {
-			console.error('[App] Failed to save projects:', e);
-		}
-	}
-	
-	// Lifecycle
-	onMount(() => {
-		// Restore from localStorage
-		const savedName = localStorage.getItem('vm-username');
-		if (savedName) {
-			userName = savedName;
-			showWelcome = false;
-		}
-		
-		const savedTheme = localStorage.getItem('vm-theme');
-		if (savedTheme) {
-			selectedTheme = savedTheme;
-		}
-		
-		const savedLayout = localStorage.getItem('vm-layout');
-		if (savedLayout) {
-			layoutMode = savedLayout;
-		}
-		
-		applyTheme(selectedTheme);
 	});
 </script>
 
-{#if showWelcome}
-	<div class="app">
-		<header class="header">
-			<div class="logo-section">
-				<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
-				<span class="version-badge">v{APP_CONSTANTS.version}</span>
-			</div>
-			
-			<div class="controls">
-				<select class="theme-select" value={selectedTheme} onchange={(e) => applyTheme(e.currentTarget.value)}>
-					{#each APP_CONSTANTS.themes as theme}
-						<option value={theme.id}>{theme.name}</option>
-					{/each}
-				</select>
-			</div>
-		</header>
+<svelte:head>
+	<title>VisionMachine</title>
+</svelte:head>
 
-		{#if error}
-			<div class="error-banner">
-				<span>{error}</span>
-			</div>
-		{/if}
+<div class="frame" role="application" aria-label="VisionMachine application">
+	<aside class="project-panel-sidebar" aria-label="Projects panel">
+		<ProjectsPanel {app} />
+	</aside>
 
-		<main class="main">
-			<div class="welcome-card">
-				<h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
-				<p class="hint">{APP_CONSTANTS.strings.enterName}</p>
-				
-				<input 
-					value={userName}
-					oninput={(e) => userName = e.currentTarget.value}
-					placeholder={APP_CONSTANTS.strings.namePlaceholder} 
-					class="input"
-					type="text"
-					onkeydown={handleKeyDown}
-				/>
-				
-				<button 
-					class="btn btn-primary" 
-					disabled={isNameEmpty}
-					onclick={handleLogin}
-				>
-					{APP_CONSTANTS.strings.getStarted}
-				</button>
-			</div>
-		</main>
-	</div>
-{:else}
-	<div id="workspace-container">
-		<Workspace
-			{userName}
-			{selectedTheme}
-			{layoutMode}
-			showWelcome={showWelcome}
-			onlogout={handleLogout}
-			onthemeChange={handleThemeChange}
-			onlayoutChange={handleLayoutChange}
-			onprojectsupdate={handleProjectsUpdate}
+	<main class="main-content">
+		<div id="canvas-container">
+			<canvas id="canvas"></canvas>
+		</div>
+		<Workspace {app} />
+	</main>
+
+	<div class="right-sidebar" aria-label="Tools panel">
+		<ToolsPanel 
+			tools={[]} 
+			activeTool="brush" 
+			onToolChange={() => {}} 
+			onColorChange={() => {}} 
+			onBrushSizeChange={() => {}} 
+			onImportFile={() => {}} 
+		/>
+		<ComposerPanel {app} />
+		<ProfilePanel 
+			user={app.user} 
+			onUserNameChange={(name) => { app.user.displayName = name; }}
+			onThemeChange={(theme) => { app.user.theme = theme; }}
+			onExportProject={() => {}}
+			onImportProject={() => {}}
 		/>
 	</div>
-{/if}
+</div>
 
 <style>
-	* { margin: 0; padding: 0; box-sizing: border-box; }
-	
-	.app {
+	/* Global styles */
+	.frame {
+		display: flex;
+		height: 100vh;
+		width: 100vw;
+		overflow: hidden;
+		position: relative;
+		font-family: 'Inter', sans-serif;
+		color: #f5f5f5;
+		background: #1e1e1e;
+	}
+
+	.project-panel-sidebar {
+		width: 280px;
+		min-width: 200px;
+		max-width: 400px;
+		background: var(--sidebar-bg, #2c2c2c);
+		border-right: 1px solid var(--sidebar-border, #444);
 		display: flex;
 		flex-direction: column;
+		resize: horizontal;
+		overflow: hidden;
 		min-height: 100vh;
-		height: 100vh;
-		width: 100%;
-		background: var(--bg-primary, #2B2B2B);
 	}
-	
-	.header {
+
+	.main-content {
+		flex: 1;
 		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 16px 24px;
-		background: var(--bg-secondary, #3C3F46);
-		border-bottom: 1px solid var(--border-color, #4E525A);
-		height: 60px;
-		flex-shrink: 0;
+		flex-direction: column;
+		min-width: 0;
+		background: #1e1e1e;
 	}
-	
-	.logo-section {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-	}
-	
-	.logo-text {
-		font-size: 1.2rem;
-		font-weight: bold;
-		color: var(--text-primary, #EEEEEE);
-	}
-	
-	.version-badge {
-		font-size: 0.75rem;
-		padding: 2px 8px;
-		background: var(--bg-tertiary, #4E525A);
-		border-radius: 12px;
-		color: var(--text-muted, #808080);
-	}
-	
-	.controls {
-		display: flex;
-		gap: 16px;
-		align-items: center;
-	}
-	
-	.theme-select {
-		padding: 8px 12px;
-		background: var(--bg-tertiary, #4E525A);
-		color: var(--text-primary, #EEEEEE);
-		border: 1px solid var(--border-color, #4E525A);
-		border-radius: 4px;
-		cursor: pointer;
-		font-size: 0.9rem;
-	}
-	
-	.main {
+
+	#canvas-container {
 		flex: 1;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		padding: 32px;
+		background: #252525;
+		min-height: 400px;
 		overflow: auto;
-		background: var(--bg-primary, #2B2B2B);
+		padding: 20px;
 	}
-	
-	.welcome-card {
-		text-align: center;
-		max-width: 400px;
-		width: 100%;
-		padding: 40px;
-		background: var(--bg-secondary, #3C3F46);
-		border-radius: 12px;
-		border: 1px solid var(--border-color, #4E525A);
+
+	#canvas {
+		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+		border-radius: 4px;
+		max-width: 100%;
+		max-height: 100%;
 	}
-	
-	.welcome-title {
-		font-size: 2rem;
-		margin-bottom: 16px;
-		color: var(--text-primary, #EEEEEE);
+
+	.right-sidebar {
+		width: 320px;
+		min-width: 250px;
+		max-width: 450px;
+		background: var(--sidebar-bg, #2c2c2c);
+		border-left: 1px solid var(--sidebar-border, #444);
+		display: flex;
+		flex-direction: column;
+		resize: horizontal;
+		overflow: hidden;
+		min-height: 100vh;
 	}
-	
-	.hint {
-		font-size: 0.9rem;
-		color: var(--text-muted, #808080);
-		margin-bottom: 24px;
-	}
-	
-	.input {
-		width: 100%;
-		padding: 12px 16px;
-		margin-bottom: 16px;
-		background: var(--bg-primary, #2B2B2B);
-		border: 1px solid var(--border-color, #4E525A);
-		border-radius: 6px;
-		color: var(--text-primary, #EEEEEE);
-		font-size: 1rem;
-	}
-	
-	.input:focus {
-		outline: none;
-		border-color: var(--accent-primary, #59B5FF);
-	}
-	
-	.btn {
-		padding: 12px 32px;
-		font-size: 1rem;
-		font-weight: 500;
-		border-radius: 6px;
-		cursor: pointer;
-		transition: all 0.2s;
-		border: none;
-	}
-	
-	.btn-primary {
-		background: var(--accent-primary, #59B5FF);
-		color: var(--text-inverse, #FFFFFF);
-	}
-	
-	.btn-primary:hover:not(:disabled) {
-		background: var(--accent-primary-hover, #7EC8FF);
-		transform: translateY(-1px);
-	}
-	
-	.btn-primary:active:not(:disabled) {
-		transform: translateY(0);
-	}
-	
-	.btn-primary:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-		transform: none;
-	}
-	
-	.error-banner {
-		padding: 12px;
-		background: rgba(220, 38, 38, 0.1);
-		color: #dc2626;
-		text-align: center;
-		border-bottom: 1px solid rgba(220, 38, 38, 0.3);
+
+	@media (max-width: 768px) {
+		.project-panel-sidebar {
+			display: none;
+		}
+		.right-sidebar {
+			display: none;
+		}
 	}
 </style>

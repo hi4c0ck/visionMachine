@@ -7,8 +7,8 @@ export default defineConfig({
   plugins: [svelte()],
   resolve: {
     alias: {
-      '$types': resolve(__dirname, 'src/types'),
-      '$constants': resolve(__dirname, 'src/constants'),
+      '$types': resolve(import.meta.dirname, 'src/types'),
+      '$constants': resolve(import.meta.dirname, 'src/constants'),
     },
   },
   root: 'public',

@@ -14,7 +14,11 @@
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "$types/*": ["./src/types/*"],
+      "$constants": ["./src/constants.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "*.ts", "*.svelte"]
 }

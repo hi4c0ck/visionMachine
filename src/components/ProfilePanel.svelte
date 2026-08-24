@@ -1,205 +1,267 @@
 <script lang="ts">
-	let {
-		userName,
-		storageUsed,
-		oncreateSession
-	} = $props<{
-		userName: string;
-		storageUsed: number;
-		oncreateSession?: () => void;
-	}>();
+	import type { UserProfile } from '$types/app';
 
-	function handleCreateSession() {
-		oncreateSession?.();
+	interface Props {
+		user: UserProfile;
+		onUserNameChange: (name: string) => void;
+		onThemeChange: (theme: string) => void;
+		onExportProject: () => void;
+		onImportProject: () => void;
 	}
 
-	function handleShortcut(toolId: string) {
-		console.log(`[Profile] Quick tool shortcut: ${toolId}`);
+	let {
+		user,
+		onUserNameChange,
+		onThemeChange,
+		onExportProject,
+		onImportProject,
+	}: Props = $props();
+
+	// Use $derived to keep displayName and currentTheme reactive to user prop changes
+	let displayName = $derived(user.displayName);
+	let currentTheme = $derived(user.theme);
+
+	function handleUserNameChange(event: Event) {
+		const target = event.target as HTMLInputElement;
+		onUserNameChange(target.value);
+	}
+
+	function handleThemeChange(event: Event) {
+		const target = event.target as HTMLSelectElement;
+		onThemeChange(target.value);
+		applyTheme(target.value);
+	}
+
+	function applyTheme(theme: string) {
+		document.documentElement.setAttribute('data-theme', theme);
+	}
+
+	function handleExport() {
+		onExportProject();
+	}
+
+	function handleImport() {
+		onImportProject();
+	}
+
+	function handleKeyDown(event: KeyboardEvent) {
+		if (event.key === 'Enter') {
+			onUserNameChange(displayName);
+		}
 	}
 </script>
 
-<div class="profile-panel" role="complementary" aria-label="User profile">
-	<!-- User avatar and info -->
+<div class="profile-panel" role="region" aria-label="Profile panel">
 	<div class="profile-header">
-		<div class="user-avatar">{userName.charAt(0).toUpperCase()}</div>
+		<div class="avatar" aria-hidden="true">
+			<span class="material-symbols-outlined">person</span>
+		</div>
 		<div class="user-info">
-			<div class="user-name">{userName}</div>
-			<div class="user-storage">Storage: {storageUsed} MB</div>
+			<input
+				type="text"
+				value={displayName}
+				oninput={handleUserNameChange}
+				onkeydown={handleKeyDown}
+				class="username-input"
+				placeholder="Enter your name"
+				aria-label="Display name"
+			/>
+			<div class="user-stats">
+				<span>{user.projectsCreated} Projects</span>
+				<span>{user.sessionTime}h Session</span>
+			</div>
 		</div>
 	</div>
 
-	<!-- Stats section -->
-	<div class="profile-sections">
-		<div class="section-item">
-			<span class="section-label">Sessions</span>
-			<span class="section-value">3</span>
-		</div>
-		<div class="section-item">
-			<span class="section-label">Projects</span>
-			<span class="section-value">5</span>
-		</div>
+	<div class="settings-section">
+		<label for="theme-select">Theme</label>
+		<select
+			id="theme-select"
+			value={currentTheme}
+			onchange={handleThemeChange}
+			class="theme-select"
+			aria-label="Select theme"
+		>
+			<option value="light">Light</option>
+			<option value="dark">Dark</option>
+			<option value="jetbrains-dark">JetBrains Dark</option>
+			<option value="github-light">GitHub Light</option>
+		</select>
 	</div>
 
-	<!-- Create session button -->
-	<button class="btn-create-session" onclick={handleCreateSession}>
-		Create Session
-	</button>
+	<div class="action-buttons">
+		<button onclick={handleExport} class="btn-export" aria-label="Export project">
+			<span class="material-symbols-outlined" aria-hidden="true">download</span>
+			Export Project
+		</button>
+		<button onclick={handleImport} class="btn-import" aria-label="Import project">
+			<span class="material-symbols-outlined" aria-hidden="true">upload</span>
+			Import Project
+		</button>
+	</div>
 
-	<!-- Diamond tool shortcuts at bottom -->
-	<div class="shortcuts-diamonds">
-		<button 
-			class="diamond-shortcut" 
-			onclick={() => handleShortcut('brush')}
-			title="Quick Brush Tool"
-		>
-			◊
+	<div class="quick-actions">
+		<button class="action-btn" aria-label="Settings">
+			<span class="material-symbols-outlined" aria-hidden="true">settings</span>
+			Settings
 		</button>
-		<button 
-			class="diamond-shortcut" 
-			onclick={() => handleShortcut('eraser')}
-			title="Quick Eraser Tool"
-		>
-			◊
+		<button class="action-btn" aria-label="Help">
+			<span class="material-symbols-outlined" aria-hidden="true">help</span>
+			Help
 		</button>
-		<button 
-			class="diamond-shortcut" 
-			onclick={() => handleShortcut('shape')}
-			title="Quick Shape Tool"
-		>
-			◊
+		<button class="action-btn" aria-label="About">
+			<span class="material-symbols-outlined" aria-hidden="true">info</span>
+			About
 		</button>
 	</div>
 </div>
 
 <style>
 	.profile-panel {
-		width: 100%;
-		background: var(--bg-secondary, #3C3F46);
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-		padding: 12px;
-		border-top: 1px solid var(--border-color, #4E525A);
+		gap: 20px;
+		padding: 16px;
 	}
 
-	/* ── Header ── */
 	.profile-header {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		padding-bottom: 8px;
-		border-bottom: 1px solid var(--border-color, #4E525A);
+		gap: 12px;
+		padding-bottom: 16px;
+		border-bottom: 1px solid var(--sidebar-border, #444);
 	}
 
-	.user-avatar {
-		width: 36px;
-		height: 36px;
+	.avatar {
+		width: 48px;
+		height: 48px;
 		border-radius: 50%;
-		background: var(--accent-primary, #59B5FF);
-		color: white;
+		background: var(--accent-color, #4CAF50);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-size: 1rem;
-		font-weight: 600;
-		flex-shrink: 0;
+	}
+
+	.avatar .material-symbols-outlined {
+		font-size: 28px;
+		color: white;
 	}
 
 	.user-info {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
 		flex: 1;
-	}
-
-	.user-name {
-		font-size: 0.85rem;
-		font-weight: 600;
-		color: var(--text-primary, #EEEEEE);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.user-storage {
-		font-size: 0.65rem;
-		color: var(--text-muted, #808080);
-	}
-
-	/* ── Sections ── */
-	.profile-sections {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 4px;
 	}
 
-	.section-item {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 6px 10px;
-		background: var(--bg-tertiary, #4E525A);
-		border-radius: 4px;
-	}
-
-	.section-label {
-		font-size: 0.75rem;
-		color: var(--text-secondary, #BFBFBF);
-	}
-
-	.section-value {
-		font-size: 0.8rem;
-		color: var(--text-primary, #EEEEEE);
-		font-weight: 500;
-	}
-
-	/* ── Create Session Button ── */
-	.btn-create-session {
-		padding: 8px;
-		background: var(--accent-primary, #59B5FF);
+	.username-input {
+		background: transparent;
 		border: none;
-		border-radius: 6px;
-		color: white;
-		font-size: 0.8rem;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.15s;
+		border-bottom: 1px solid var(--border-color, #555);
+		color: var(--text-primary, #f5f5f5);
+		font-size: 16px;
+		font-weight: 600;
+		padding: 4px 0;
+		width: 100%;
 	}
 
-	.btn-create-session:hover {
-		background: var(--accent-primary-hover, #7EC8FF);
+	.username-input:focus {
+		outline: none;
+		border-bottom-color: var(--accent-color, #4CAF50);
 	}
 
-	/* ── Diamond Shortcuts ── */
-	.shortcuts-diamonds {
+	.user-stats {
 		display: flex;
+		gap: 12px;
+		font-size: 12px;
+		color: var(--text-secondary, #aaa);
+	}
+
+	.settings-section {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.settings-section label {
+		font-size: 12px;
+		color: var(--text-secondary, #aaa);
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+
+	.theme-select {
+		padding: 8px 12px;
+		background: var(--input-bg, #3a3a3a);
+		border: 1px solid var(--border-color, #555);
+		border-radius: 6px;
+		color: var(--text-primary, #f5f5f5);
+		font-size: 14px;
+		cursor: pointer;
+	}
+
+	.action-buttons {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.btn-export,
+	.btn-import {
+		display: flex;
+		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		padding-top: 8px;
-		border-top: 1px solid var(--border-color, #4E525A);
-		margin-top: auto;
-	}
-
-	.diamond-shortcut {
-		width: 32px;
-		height: 32px;
-		background: var(--bg-tertiary, #4E525A);
-		border: 1px solid var(--border-color, #4E525A);
-		border-radius: 4px;
-		color: var(--text-muted, #808080);
+		padding: 10px 16px;
+		background: var(--button-bg, #3a3a3a);
+		border: 1px solid var(--border-color, #555);
+		border-radius: 6px;
+		color: var(--text-primary, #f5f5f5);
+		font-size: 14px;
 		cursor: pointer;
-		font-size: 1rem;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: all 0.15s;
+		transition: all 0.2s ease;
 	}
 
-	.diamond-shortcut:hover {
-		background: var(--accent-primary, #59B5FF);
-		color: white;
-		border-color: var(--accent-primary, #59B5FF);
-		transform: rotate(45deg);
+	.btn-export:hover,
+	.btn-import:hover {
+		background: var(--button-hover, #4a4a4a);
+		transform: translateY(-1px);
+	}
+
+	.btn-export span,
+	.btn-import span {
+		font-size: 18px;
+	}
+
+	.quick-actions {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.action-btn {
+		flex: 1;
+		min-width: 80px;
+		padding: 8px 12px;
+		background: var(--button-bg, #3a3a3a);
+		border: 1px solid var(--border-color, #555);
+		border-radius: 6px;
+		color: var(--text-primary, #f5f5f5);
+		font-size: 12px;
+		cursor: pointer;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		transition: all 0.2s ease;
+	}
+
+	.action-btn:hover {
+		background: var(--button-hover, #4a4a4a);
+	}
+
+	.action-btn .material-symbols-outlined {
+		font-size: 20px;
 	}
 </style>

@@ -11,15 +11,17 @@ export default defineConfig({
     baseURL: 'http://localhost:1420',
     trace: 'on-first-retry',
   },
-  projects: {
-    setup: {
+  projects: [
+    {
+      name: 'setup',
       testMatch: /.*\.setup\.ts/,
     },
-    chromium: {
+    {
+      name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
       dependencies: ['setup'],
     },
-  },
+  ],
   webServer: {
     command: 'npm run dev',
     port: 1420,

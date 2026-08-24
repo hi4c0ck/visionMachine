@@ -1,540 +1,322 @@
-<script lang="ts">
-  import type { SessionData, ProjectData } from '$types';
-  import { APP_CONSTANTS } from '$constants';
+<script lang="ts" generics="T">
+	import type { Tool } from '$types/app';
 
-  let { 
-    session, 
-    project, 
-    activeTool,
-    onselect,
-    ongenerate 
-  } = $props<{
-    session: SessionData | null;
-    project: ProjectData | null;
-    activeTool: string | null;
-    onselect: (toolId: string) => void;
-    ongenerate: () => void;
-  }>();
+	let {
+		tools,
+		activeTool,
+		onToolChange,
+		onColorChange,
+		onBrushSizeChange,
+		onImportFile,
+	}: {
+		tools: Tool[];
+		activeTool: string;
+		onToolChange: (toolId: string) => void;
+		onColorChange: (color: string) => void;
+		onBrushSizeChange: (size: number) => void;
+		onImportFile: (file: File) => void;
+	} = $props();
 
-  let showModal = $state(false);
-  let newSessionName = $state('');
+	let selectedColor = $state('#ffffff');
+	let brushSize = $state(8);
+	let dragOver = $state(false);
 
-  function openNewSessionModal() {
-    if (!project) return;
-    newSessionName = '';
-    showModal = true;
-  }
+	function handleToolClick(toolId: string) {
+		onToolChange(toolId);
+	}
 
-  function closeNewSessionModal() {
-    showModal = false;
-  }
+	function handleColorChange(color: string) {
+		selectedColor = color;
+		onColorChange(color);
+	}
 
-  function confirmNewSession() {
-    if (!newSessionName.trim() || !project) return;
-    // This will be handled by the parent
-    console.log('[ToolsPanel] Create session:', newSessionName);
-    closeNewSessionModal();
-  }
+	function handleBrushSizeChange(event: Event) {
+		const target = event.target as HTMLInputElement;
+		brushSize = parseInt(target.value, 10);
+		onBrushSizeChange(brushSize);
+	}
 
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      confirmNewSession();
-    }
-  }
+	function handleFileDrop(event: DragEvent) {
+		dragOver = false;
+		const file = event.dataTransfer?.files[0];
+		if (file) {
+			onImportFile(file);
+		}
+	}
 
-  function getStats() {
-    if (!session) {
-      return {
-        sessions: project?.sessions.length || 0,
-        pipes: 0,
-        frames: 0,
-        generations: project?.totalGenerations || 0,
-      };
-    }
-    
-    return {
-      sessions: project?.sessions.length || 0,
-      pipes: session.pipes.length,
-      frames: session.pipes.reduce((acc, p) => acc + p.lengthFrames, 0),
-      generations: session.totalGeneratedFrames,
-    };
-  }
+	function handleDragOver(event: DragEvent) {
+		event.preventDefault();
+		dragOver = true;
+	}
 
-  const stats = $derived(getStats());
+	function handleDragLeave() {
+		dragOver = false;
+	}
 </script>
 
-<div class="tools-panel">
-  <!-- Session Preview -->
-  <div class="preview-section">
-    <div class="section-header">
-      <span class="section-title">Preview</span>
-      {#if session}
-        <button class="btn-generate" onclick={ongenerate}>
-          {APP_CONSTANTS.strings.generate}
-        </button>
-      {/if}
-    </div>
-    <div class="preview-area">
-      {#if session}
-        <div class="preview-active">
-          <div class="preview-icon">🎬</div>
-          <p class="preview-name">{session.name}</p>
-          <p class="preview-meta">{session.pipes.length} pipes · {stats.frames}f</p>
-        </div>
-      {:else}
-        <div class="preview-empty">
-          <div class="preview-icon">🎬</div>
-          <p>No preview available</p>
-          <p class="hint">Select a session to see preview</p>
-        </div>
-      {/if}
-    </div>
-  </div>
+<div class="tools-panel" role="region" aria-label="Tools panel">
+	<div class="panel-header">
+		<h2>Tools</h2>
+	</div>
 
-  <!-- Settings -->
-  <div class="settings-section">
-    <div class="section-header">
-      <span class="section-title">{APP_CONSTANTS.strings.settings}</span>
-    </div>
-    
-    {#if session}
-      <div class="settings-content">
-        <div class="setting-row">
-          <label class="setting-label">FPS</label>
-          <select 
-            class="setting-select"
-            value={session.fps}
-            onchange={(e) => console.log('FPS changed:', e.currentTarget.value)}
-          >
-            <option value="24">24 fps</option>
-            <option value="30">30 fps</option>
-            <option value="60">60 fps</option>
-          </select>
-        </div>
+	<div class="tools-grid">
+		{#each tools as tool (tool.id)}
+			<button
+				class="tool-button {tool.id === activeTool ? 'active' : ''}"
+				onclick={() => handleToolClick(tool.id)}
+				title={tool.name}
+				aria-label={tool.name}
+				aria-pressed={tool.id === activeTool}
+			>
+				<span class="material-symbols-outlined" aria-hidden="true">{tool.icon}</span>
+				<span class="tool-name">{tool.name}</span>
+			</button>
+		{/each}
+	</div>
 
-        <div class="setting-row">
-          <label class="setting-label">Resolution</label>
-          <select 
-            class="setting-select"
-            value={session.resolution}
-            onchange={(e) => console.log('Resolution changed:', e.currentTarget.value)}
-          >
-            <option value="480p">480p</option>
-            <option value="720p">720p</option>
-            <option value="1080p">1080p</option>
-          </select>
-        </div>
+	<div class="color-picker">
+		<label for="color-picker-input">Brush Color</label>
+		<div class="color-swatches" role="group" aria-label="Color swatches">
+			{#each ['#ffffff', '#000000', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#00ffff', '#ff00ff'] as color}
+				<button
+					class="color-swatch {selectedColor === color ? 'active' : ''}"
+					style="background-color: {color}"
+					onclick={() => handleColorChange(color)}
+					aria-label={`Select color ${color}`}
+					aria-pressed={selectedColor === color}
+				></button>
+			{/each}
+		</div>
+		<input
+			id="color-picker-input"
+			type="color"
+			bind:value={selectedColor}
+			oninput={(e) => handleColorChange((e.target as HTMLInputElement).value)}
+			class="color-input"
+			aria-label="Custom color picker"
+		/>
+	</div>
 
-        <div class="setting-row">
-          <label class="setting-label">Orientation</label>
-          <select 
-            class="setting-select"
-            value={session.orientation}
-            onchange={(e) => console.log('Orientation changed:', e.currentTarget.value)}
-          >
-            <option value="horizontal">Horizontal</option>
-            <option value="vertical">Vertical</option>
-          </select>
-        </div>
+	<div class="brush-size">
+		<label for="brush-size-slider">Brush Size: {brushSize}px</label>
+		<input
+			id="brush-size-slider"
+			type="range"
+			min="1"
+			max="100"
+			value={brushSize}
+			oninput={handleBrushSizeChange}
+			onchange={handleBrushSizeChange}
+			class="size-slider"
+			aria-label="Brush size"
+		/>
+	</div>
 
-        <div class="setting-row">
-          <label class="setting-label">Quality</label>
-          <input type="range" min="5" max="30" step="1" value="18" class="setting-slider" />
-          <span class="setting-value">18</span>
-        </div>
-
-        <div class="setting-row">
-          <label class="setting-label">Creativity</label>
-          <input type="range" min="0.5" max="15" step="0.5" value="7" class="setting-slider" />
-          <span class="setting-value">7</span>
-        </div>
-      </div>
-    {:else}
-      <div class="no-session-hint">
-        <p>Select a session to configure settings</p>
-      </div>
-    {/if}
-  </div>
-
-  <!-- Stats -->
-  <div class="stats-section">
-    <div class="section-header">
-      <span class="section-title">{APP_CONSTANTS.strings.stats}</span>
-    </div>
-    
-    <div class="stats-content">
-      <div class="stat-item">
-        <span class="stat-value">{stats.sessions}</span>
-        <span class="stat-label">Sessions</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{stats.pipes}</span>
-        <span class="stat-label">Pipes</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{stats.frames}</span>
-        <span class="stat-label">Frames</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{stats.generations}</span>
-        <span class="stat-label">Generations</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- New Session Modal -->
-  {#if showModal && project}
-    <div class="modal-backdrop" onclick={closeNewSessionModal}>
-      <div class="modal" onclick={(e) => e.stopPropagation()}>
-        <div class="modal-header">
-          <span class="modal-title">Create New Session</span>
-          <button class="modal-close" onclick={closeNewSessionModal}>×</button>
-        </div>
-        
-        <div class="modal-body">
-          <label class="form-label">Session Name</label>
-          <input 
-            type="text" 
-            class="modal-input"
-            bind:value={newSessionName}
-            placeholder="Enter session name..."
-            onkeydown={handleKeyDown}
-          />
-        </div>
-        
-        <div class="modal-footer">
-          <button class="btn-cancel" onclick={closeNewSessionModal}>{APP_CONSTANTS.strings.cancel}</button>
-          <button 
-            class="btn-confirm" 
-            disabled={!newSessionName.trim()}
-            onclick={confirmNewSession}
-          >
-            {APP_CONSTANTS.strings.create}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+	<div
+		class="import-area {dragOver ? 'drag-over' : ''}"
+		ondrop={handleFileDrop}
+		ondragover={handleDragOver}
+		ondragleave={handleDragLeave}
+		role="button"
+		tabindex="0"
+		aria-label="Drop image files here to import"
+	>
+		<span class="material-symbols-outlined" aria-hidden="true">upload_file</span>
+		<p>Drop image files here</p>
+		<input
+			type="file"
+			accept="image/*"
+			class="file-input"
+			aria-label="Import file input"
+			onchange={(e) => {
+				const file = (e.target as HTMLInputElement).files?.[0];
+				if (file) onImportFile(file);
+			}}
+		/>
+	</div>
 </div>
 
 <style>
-  .tools-panel {
-    display: flex;
-    flex-direction: column;
-    width: 280px;
-    min-width: 240px;
-    max-width: 320px;
-    border-left: 1px solid var(--border-color, #4E525A);
-    background: var(--bg-secondary, #2A2A2E);
-    overflow: hidden;
-  }
+	.tools-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 20px;
+		padding: 16px;
+		overflow-y: auto;
+		height: 100%;
+	}
 
-  /* Sections */
-  .preview-section,
-  .settings-section,
-  .stats-section {
-    border-bottom: 1px solid var(--border-color, #3A3A3F);
-  }
+	.panel-header {
+		padding-bottom: 12px;
+		border-bottom: 1px solid var(--sidebar-border, #444);
+	}
 
-  .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 12px;
-    background: var(--bg-tertiary, #3A3A3F);
-  }
+	.panel-header h2 {
+		margin: 0;
+		font-size: 16px;
+		font-weight: 600;
+		color: var(--text-primary, #f5f5f5);
+	}
 
-  .section-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted, #808080);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
+	.tools-grid {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 8px;
+	}
 
-  .btn-generate {
-    padding: 6px 12px;
-    background: var(--accent-primary, #59B5FF);
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 500;
-    transition: all 0.15s;
-  }
+	.tool-button {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		padding: 12px 8px;
+		background: var(--button-bg, #3a3a3a);
+		border: 1px solid var(--border-color, #555);
+		border-radius: 8px;
+		color: var(--text-primary, #f5f5f5);
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
 
-  .btn-generate:hover {
-    background: var(--accent-primary-hover, #7EC8FF);
-    transform: translateY(-1px);
-  }
+	.tool-button:hover {
+		background: var(--button-hover, #4a4a4a);
+		transform: translateY(-2px);
+	}
 
-  .btn-generate:active {
-    transform: translateY(0);
-  }
+	.tool-button.active {
+		background: var(--accent-color, #4CAF50);
+		border-color: var(--accent-color, #4CAF50);
+	}
 
-  /* Preview Area */
-  .preview-area {
-    padding: 16px;
-    min-height: 120px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+	.tool-button .material-symbols-outlined {
+		font-size: 24px;
+	}
 
-  .preview-active {
-    text-align: center;
-  }
+	.tool-name {
+		font-size: 10px;
+		text-align: center;
+	}
 
-  .preview-icon {
-    font-size: 32px;
-    margin-bottom: 8px;
-  }
+	.color-picker {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
 
-  .preview-name {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-primary, #EEEEEE);
-    margin-bottom: 4px;
-  }
+	.color-picker label {
+		font-size: 12px;
+		color: var(--text-secondary, #aaa);
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
 
-  .preview-meta {
-    font-size: 11px;
-    color: var(--text-muted, #808080);
-  }
+	.color-swatches {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
 
-  .preview-empty {
-    text-align: center;
-    color: var(--text-muted, #606060);
-  }
+	.color-swatch {
+		width: 24px;
+		height: 24px;
+		border-radius: 50%;
+		border: 2px solid transparent;
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
 
-  .preview-empty .preview-icon {
-    font-size: 24px;
-    opacity: 0.5;
-    margin-bottom: 8px;
-  }
+	.color-swatch:hover {
+		transform: scale(1.1);
+	}
 
-  .preview-empty p {
-    font-size: 12px;
-    margin: 4px 0;
-  }
+	.color-swatch.active {
+		border-color: var(--text-primary, #f5f5f5);
+		box-shadow: 0 0 0 2px var(--accent-color, #4CAF50);
+	}
 
-  .preview-empty .hint {
-    font-size: 11px;
-    color: var(--text-muted, #606060);
-  }
+	.color-input {
+		width: 100%;
+		height: 32px;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+		background: transparent;
+	}
 
-  /* Settings */
-  .settings-content {
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
+	.brush-size {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
 
-  .setting-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+	.brush-size label {
+		font-size: 12px;
+		color: var(--text-secondary, #aaa);
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
 
-  .setting-label {
-    font-size: 11px;
-    color: var(--text-muted, #808080);
-    min-width: 70px;
-  }
+	.size-slider {
+		width: 100%;
+		height: 4px;
+		border-radius: 2px;
+		background: var(--slider-bg, #555);
+		outline: none;
+		-webkit-appearance: none;
+		appearance: none;
+	}
 
-  .setting-select {
-    flex: 1;
-    padding: 6px 8px;
-    background: var(--bg-primary, #1A1A1D);
-    border: 1px solid var(--border-color, #3A3A3F);
-    border-radius: 4px;
-    color: var(--text-primary, #EEEEEE);
-    font-size: 11px;
-    cursor: pointer;
-  }
+	.size-slider::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		appearance: none;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		background: var(--accent-color, #4CAF50);
+		cursor: pointer;
+	}
 
-  .setting-select:focus {
-    outline: none;
-    border-color: var(--accent-primary, #59B5FF);
-  }
+	.import-area {
+		position: relative;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 24px;
+		border: 2px dashed var(--border-color, #555);
+		border-radius: 8px;
+		text-align: center;
+		transition: all 0.2s ease;
+		cursor: pointer;
+	}
 
-  .setting-slider {
-    flex: 1;
-    height: 4px;
-    appearance: none;
-    background: var(--bg-primary, #1A1A1D);
-    border-radius: 2px;
-    outline: none;
-  }
+	.import-area:hover,
+	.import-area.drag-over {
+		border-color: var(--accent-color, #4CAF50);
+		background: var(--drag-over-bg, rgba(76, 175, 80, 0.1));
+	}
 
-  .setting-slider::-webkit-slider-thumb {
-    appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent-primary, #59B5FF);
-    cursor: pointer;
-  }
+	.import-area .material-symbols-outlined {
+		font-size: 32px;
+		color: var(--text-secondary, #aaa);
+	}
 
-  .setting-value {
-    font-size: 11px;
-    color: var(--text-muted, #808080);
-    min-width: 24px;
-    text-align: right;
-    font-family: monospace;
-  }
+	.import-area p {
+		margin: 0;
+		font-size: 12px;
+		color: var(--text-secondary, #aaa);
+	}
 
-  .no-session-hint {
-    padding: 20px;
-    text-align: center;
-    color: var(--text-muted, #606060);
-    font-size: 12px;
-  }
-
-  /* Stats */
-  .stats-content {
-    padding: 12px;
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-  }
-
-  .stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 12px;
-    background: var(--bg-tertiary, #3A3A3F);
-    border-radius: 6px;
-  }
-
-  .stat-value {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--accent-primary, #59B5FF);
-  }
-
-  .stat-label {
-    font-size: 10px;
-    color: var(--text-muted, #808080);
-    text-transform: uppercase;
-    margin-top: 4px;
-  }
-
-  /* Modal */
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-
-  .modal {
-    background: var(--bg-secondary, #2A2A2E);
-    border: 1px solid var(--border-color, #4E525A);
-    border-radius: 8px;
-    width: 360px;
-    max-width: 90vw;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-  }
-
-  .modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color, #3A3A3F);
-  }
-
-  .modal-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary, #EEEEEE);
-  }
-
-  .modal-close {
-    background: none;
-    border: none;
-    color: var(--text-muted, #808080);
-    font-size: 20px;
-    cursor: pointer;
-  }
-
-  .modal-body {
-    padding: 14px 16px;
-  }
-
-  .form-label {
-    font-size: 11px;
-    color: var(--text-muted, #808080);
-    font-weight: 600;
-    text-transform: uppercase;
-    margin-bottom: 8px;
-    display: block;
-  }
-
-  .modal-input {
-    width: 100%;
-    padding: 10px 12px;
-    background: var(--bg-tertiary, #3A3A3F);
-    border: 1px solid var(--border-color, #3A3A3F);
-    border-radius: 4px;
-    color: var(--text-primary, #EEEEEE);
-    font-size: 13px;
-    box-sizing: border-box;
-  }
-
-  .modal-input:focus {
-    outline: none;
-    border-color: var(--accent-primary, #59B5FF);
-  }
-
-  .modal-footer {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border-color, #3A3A3F);
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-
-  .btn-cancel {
-    padding: 8px 18px;
-    background: var(--bg-tertiary, #3A3A3F);
-    color: var(--text-secondary, #BFBFBF);
-    border: 1px solid var(--border-color, #3A3A3F);
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-  }
-
-  .btn-cancel:hover {
-    background: var(--bg-hover, #3A3A3F);
-  }
-
-  .btn-confirm {
-    padding: 8px 18px;
-    background: var(--accent-primary, #59B5FF);
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-  }
-
-  .btn-confirm:hover:not(:disabled) {
-    background: var(--accent-primary-hover, #7EC8FF);
-  }
-
-  .btn-confirm:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+	.file-input {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		opacity: 0;
+		cursor: pointer;
+	}
 </style>

@@ -1,414 +1,306 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import Frame from './Frame.svelte';
-	import ProjectsPanel from './ProjectsPanel.svelte';
-	import ComposerPanel from './ComposerPanel.svelte';
-	import ProfilePanel from './ProfilePanel.svelte';
-	import ToolsPanel from './ToolsPanel.svelte';
-	import type { ProjectData, SessionData } from '$types';
+	import type { Project, Layer, Frame } from '$types/app';
+	import App from '../App.ts';
 
-	let {
-		userName,
-		selectedTheme,
-		layoutMode,
-		showWelcome,
-		onlogout,
-		onthemeChange,
-		onlayoutChange,
-		onprojectsupdate
-	} = $props<{
-		userName: string;
-		selectedTheme: string;
-		layoutMode: string;
-		showWelcome: boolean;
-		onlogout?: () => void;
-		onthemeChange?: (theme: string) => void;
-		onlayoutChange?: (mode: string) => void;
-		onprojectsupdate?: (projects: ProjectData[]) => void;
-	}>();
+	let { app }: { app: App } = $props();
+	
+	let isDrawing = $state(false);
+	let lastPos = $state({ x: 0, y: 0 });
+	let zoom = $state(1);
+	let panOffset = $state({ x: 0, y: 0 });
 
-	// State - Using proper data models
-	let projects = $state<ProjectData[]>([]);
-	let selectedProjectId = $state<string | null>(null);
-	let selectedSessionId = $state<string | null>(null);
-	let activeTool = $state<string | null>(null);
-	let toolsCollapsed = $state(false);
-	let storageUsed = $state(0);
+	let selectedLayer = $derived(app.activeProject?.layers[app.activeLayerIndex] ?? null);
+	let activeProject = $derived(app.activeProject);
 
-	// Derived state
-	let selectedProject = $derived(() => projects.find(p => p.id === selectedProjectId) || null);
-	let selectedSession = $derived.by(() => {
-		if (!selectedProject) return null;
-		return selectedProject.sessions.find(s => String(s.id) === String(selectedSessionId)) || null;
+	$effect(() => {
+		if (!selectedLayer || !activeProject) return;
+		
+		const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+		if (!canvas) return;
+		
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+		
+		canvas.width = activeProject.dimensions.width ?? 1920;
+		canvas.height = activeProject.dimensions.height ?? 1080;
+		
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		
+		for (const layer of activeProject.layers) {
+			if (!layer.visible) continue;
+			// Draw layer content here when layer data is available
+		}
 	});
 
-	// Load projects from localStorage on mount
-	function loadProjects() {
-		try {
-			const saved = localStorage.getItem('vm-projects');
-			if (saved) {
-				const parsed = JSON.parse(saved) as ProjectData[];
-				projects = parsed;
-				
-				// Restore selection if exists
-				const savedSelection = localStorage.getItem('vm-selected-project');
-				if (savedSelection && projects.find(p => p.id === savedSelection)) {
-					selectedProjectId = savedSelection;
-					const savedSession = localStorage.getItem('vm-selected-session');
-					if (savedSession && projects.find(p => p.id === savedSelection)?.sessions.find(s => s.id === savedSession)) {
-						selectedSessionId = savedSession;
-					}
-				}
-			}
-		} catch (e) {
-			console.error('[Workspace] Failed to load projects:', e);
-		}
-	}
-
-	// Save projects to localStorage
-	function saveProjects() {
-		try {
-			localStorage.setItem('vm-projects', JSON.stringify(projects));
+	$effect(() => {
+		function handleResize() {
+			const container = document.getElementById('canvas-container');
+			if (!container) return;
 			
-			// Notify parent
-			if (onprojectsupdate) {
-				onprojectsupdate(projects);
-			}
-			
-			// Save selection
-			if (selectedProjectId) {
-				localStorage.setItem('vm-selected-project', selectedProjectId);
-				if (selectedSessionId) {
-					localStorage.setItem('vm-selected-session', selectedSessionId);
-				}
-			}
-		} catch (e) {
-			console.error('[Workspace] Failed to save projects:', e);
+			const rect = container.getBoundingClientRect();
+			const projW = activeProject?.dimensions.width ?? 1920;
+			const projH = activeProject?.dimensions.height ?? 1080;
+			const scaleX = (rect.width - 40) / projW;
+			const scaleY = (rect.height - 40) / projH;
+			zoom = Math.min(scaleX, scaleY, 1);
 		}
-	}
-
-	// Handle session update with proper reactivity
-	function handleSessionUpdate(updatedSession: SessionData) {
-		const currentProject = selectedProject;
-		const currentSession = selectedSession;
 		
-		if (!currentProject || !currentSession) return;
+		window.addEventListener('resize', handleResize);
+		handleResize();
 		
-		const updatedSessions = currentProject.sessions.map(s =>
-			s.id === updatedSession.id ? updatedSession : s
-		);
-		
-		const updatedProject: ProjectData = {
-			...currentProject,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
+		return () => {
+			window.removeEventListener('resize', handleResize);
 		};
-		
-		projects = projects.map(p =>
-			p.id === currentProject.id ? updatedProject : p
-		);
-		saveProjects();
-	}
-
-	// Call load on mount
-	onMount(() => {
-		loadProjects();
 	});
 
-	const defaultTools = [
-		{ id: 'select', label: 'Select', icon: '🔍', hotkey: 'V' },
-		{ id: 'brush', label: 'Brush', icon: '🖌', hotkey: 'B' },
-		{ id: 'eraser', label: 'Eraser', icon: '🧹', hotkey: 'E' },
-		{ id: 'text', label: 'Text', icon: '📝', hotkey: 'T' },
-		{ id: 'shape', label: 'Shape', icon: '⬜', hotkey: 'S' },
-		{ id: 'camera', label: 'Camera', icon: '📷', hotkey: 'C' },
-		{ id: 'gen', label: 'Generate', icon: '✨', hotkey: 'G' },
-		{ id: 'settings', label: 'Settings', icon: '⚙️', hotkey: ',' },
-	];
-
-	// Event handlers
-	function handleLogout() {
-		onlogout?.();
+	function startDrawing(event: MouseEvent) {
+		isDrawing = true;
+		lastPos = { x: event.clientX, y: event.clientY };
 	}
 
-	function handleThemeChange(theme: string) {
-		onthemeChange?.(theme);
+	function draw(event: MouseEvent) {
+		if (!isDrawing || !selectedLayer) return;
+		
+		const canvas = document.getElementById('canvas') as HTMLCanvasElement;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+		
+		const rect = canvas.getBoundingClientRect();
+		const x = (event.clientX - rect.left - panOffset.x) / zoom;
+		const y = (event.clientY - rect.top - panOffset.y) / zoom;
+		
+		ctx.beginPath();
+		ctx.moveTo(lastPos.x, lastPos.y);
+		ctx.lineTo(x, y);
+		ctx.strokeStyle = selectedLayer.strokeColor;
+		ctx.lineWidth = selectedLayer.strokeWidth;
+		ctx.stroke();
+		
+		lastPos = { x, y };
 	}
 
-	function handleLayoutChange(mode: string) {
-		onlayoutChange?.(mode);
+	function stopDrawing() {
+		isDrawing = false;
 	}
 
-	function handleProjectSelect(projectId: string) {
-		selectedProjectId = projectId;
-		selectedSessionId = null;
-		saveProjects();
+	function addLayer() {
+		app.addLayer();
 	}
 
-	function handleSessionSelect(sessionId: string) {
-    console.log('[Workspace] handleSessionSelect called with:', sessionId, 'typeof:', typeof sessionId);
-    console.log('[Workspace] Before update - selectedProjectId:', selectedProjectId, 'selectedSessionId:', selectedSessionId);
-    
-    const foundProject = projects.find(p => 
-      p.sessions.some(s => String(s.id) === String(sessionId))
-    );
-    
-    console.log('[Workspace] Found project:', foundProject ? foundProject.id : 'NOT FOUND');
-    
-    if (foundProject) {
-      selectedProjectId = foundProject.id;
-      selectedSessionId = sessionId;
-      saveProjects();
-      console.log('[Workspace] After update - selectedProjectId:', selectedProjectId, 'selectedSessionId:', selectedSessionId);
-      console.log('[Workspace] selectedProject:', selectedProject ? selectedProject.id : 'null');
-      console.log('[Workspace] selectedSession:', selectedSession ? selectedSession.id : 'null');
-    }
-  }
-
-	function handleCreateProject(input: { name: string; path?: string }) {
-		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
-		const projectPath = `${basePath}\\${input.name}`;
-		
-		const newProject: ProjectData = {
-			id: crypto.randomUUID(),
-			name: input.name,
-			createdAt: Date.now(),
-			directoryPath: projectPath,
-			sessions: [],
-			totalGenerations: 0,
-		};
-		
-		projects = [...projects, newProject];
-		selectedProjectId = newProject.id;
-		saveProjects();
+	function deleteLayer(layerId: string) {
+		app.deleteLayer(layerId);
 	}
 
-	function handleDeleteProject(projectId: string) {
-		projects = projects.filter(p => p.id !== projectId);
-		if (selectedProjectId === projectId) {
-			selectedProjectId = null;
-			selectedSessionId = null;
-		}
-		saveProjects();
+	function toggleLayerVisibility(layerId: string) {
+		app.toggleLayerVisibility(layerId);
 	}
 
-	function handleCreateSession(projectId: string) {
-		const project = projects.find(p => p.id === projectId);
-		if (!project) return;
-		
-		const sessionName = `Session ${project.sessions.length + 1}`;
-		const folderName = `session_${Date.now()}`;
-		const sessionPath = `${project.directoryPath}\\${folderName}`;
-		
-		const newSession: SessionData = {
-			id: crypto.randomUUID(),
-			name: sessionName,
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			directoryPath: sessionPath,
-			pipes: [],
-			fps: 24,
-			resolution: '720p',
-			orientation: 'horizontal',
-			totalGeneratedFrames: 0,
-		};
-		
-		const updatedProject: ProjectData = {
-			...project,
-			sessions: [...project.sessions, newSession],
-		};
-		
-		projects = projects.map(p => 
-			p.id === projectId ? updatedProject : p
-		);
-		
-		selectedSessionId = newSession.id;
-		saveProjects();
-	}
-
-	function handleRenameSession(sessionId: string, newName: string) {
-		if (!selectedProject) return;
-		
-		const updatedSessions = selectedProject.sessions.map(s =>
-			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
-		);
-		
-		const updatedProject: ProjectData = {
-			...selectedProject,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
-		};
-		
-		projects = projects.map(p =>
-			p.id === selectedProject.id ? updatedProject : p
-		);
-		saveProjects();
-	}
-
-	function handleDeleteSession(projectId: string, sessionId: string) {
-		const project = projects.find(p => p.id === projectId);
-		if (!project) return;
-		
-		const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
-		const updatedProject: ProjectData = {
-			...project,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
-		};
-		
-		projects = projects.map(p =>
-			p.id === projectId ? updatedProject : p
-		);
-		
-		if (selectedSessionId === sessionId) {
-			selectedSessionId = null;
-		}
-		saveProjects();
-	}
-
-	function handleToolSelect(id: string) {
-		activeTool = id;
-	}
-
-	function handleGenerate() {
-		// TODO: Implement generation logic
-	}
-
-	function getHomeDir(): string {
-		if (typeof window !== 'undefined') {
-			const user = (window as any).userName || userName || 'User';
-			return `C:\\Users\\${user}`;
-		}
-		return 'C:\\Users';
+	function changeLayerOrder(layerId: string, direction: 'up' | 'down') {
+		app.changeLayerOrder(layerId, direction);
 	}
 </script>
 
-<div class={`workspace ${layoutMode}`}>
-	<Frame
-		{userName}
-		{selectedTheme}
-		{layoutMode}
-		{showWelcome}
-		onlogout={handleLogout}
-		onthemeChange={handleThemeChange}
-		onlayoutChange={handleLayoutChange}
-	/>
+<div class="workspace">
+	<div class="canvas-container" id="canvas-container">
+		<canvas
+			id="canvas"
+			onmousedown={startDrawing}
+			onmousemove={draw}
+			onmouseup={stopDrawing}
+			onmouseleave={stopDrawing}
+			style="transform: scale({zoom}) translate({panOffset.x / zoom}px, {panOffset.y / zoom}px);"
+		></canvas>
+	</div>
 
-	<div class="workspace-body">
-		<!-- Left column: Projects + Profile -->
-		<div class="left-column">
-			{#if layoutMode !== 'single'}
-				<ProjectsPanel
-					{projects}
-					{selectedProjectId}
-					{selectedSessionId}
-					onselectproject={handleProjectSelect}
-					onselectsession={handleSessionSelect}
-					oncreateproject={handleCreateProject}
-					ondeleteproject={handleDeleteProject}
-					oncreatesession={handleCreateSession}
-					onrenamesession={handleRenameSession}
-					ondeletesession={handleDeleteSession}
-				/>
-			{/if}
-
-			<!-- Profile panel at bottom-left -->
-			<ProfilePanel
-				{userName}
-				{storageUsed}
-			/>
+	<div class="layer-panel" role="complementary" aria-label="Layers panel">
+		<div class="panel-header">
+			<h3 id="layer-panel-title">Layers</h3>
+			<button onclick={addLayer} class="btn-add-layer" aria-label="Add new layer">
+				<span class="material-symbols-outlined" aria-hidden="true">add</span>
+				Add Layer
+			</button>
 		</div>
-
-		<!-- Center: Composer (fills available space) -->
-		<div class="composer-area">
-			{#if selectedSession && selectedProject}
-				<ComposerPanel
-					{selectedSession}
-					onupdate={handleSessionUpdate}
-				/>
-			{:else}
-				<div class="composer-empty">
-					<div class="empty-icon">🎬</div>
-					<h2>Select a Session</h2>
-					<p>Create a project and add a session to start editing</p>
+		
+		<div class="layer-list" role="list" aria-labelledby="layer-panel-title">
+			{#each activeProject?.layers ?? [] as layer (layer.id)}
+				<div 
+					class="layer-item {String(layer.id) === String(activeProject?.layers[activeProject?.activeLayerIndex]?.id) ? 'active' : ''}"
+					role="listitem"
+				>
+					<button
+						class="btn-visibility"
+						onclick={() => toggleLayerVisibility(layer.id)}
+						aria-label={layer.visible ? 'Hide layer' : 'Show layer'}
+					>
+						<span class="material-symbols-outlined" aria-hidden="true">
+							{layer.visible ? 'visibility' : 'visibility_off'}
+						</span>
+					</button>
+					<span class="layer-name">{layer.name}</span>
+					<div class="layer-actions">
+						<button onclick={() => changeLayerOrder(layer.id, 'up')} class="btn-order" aria-label="Move layer up">↑</button>
+						<button onclick={() => changeLayerOrder(layer.id, 'down')} class="btn-order" aria-label="Move layer down">↓</button>
+						<button onclick={() => deleteLayer(layer.id)} class="btn-delete" aria-label="Delete layer">
+							<span class="material-symbols-outlined" aria-hidden="true">delete</span>
+						</button>
+					</div>
 				</div>
-			{/if}
+			{/each}
 		</div>
-
-		<!-- Right: Tools -->
-		{#if layoutMode === 'landscape'}
-			<ToolsPanel
-				{selectedSession}
-				{selectedProject}
-				{activeTool}
-				onselect={handleToolSelect}
-				ongenerate={handleGenerate}
-			/>
-		{/if}
 	</div>
 </div>
 
 <style>
 	.workspace {
+		flex: 1;
 		display: flex;
 		flex-direction: column;
-		height: 100vh;
-		width: 100%;
-		overflow: hidden;
-		background: var(--bg-primary, #2B2B2B);
-	}
-
-	.workspace-body {
-		display: flex;
-		flex: 1;
-		overflow: hidden;
-		min-height: 0;
-	}
-
-	.left-column {
-		display: flex;
-		flex-direction: column;
-		width: 240px;
-		min-width: 200px;
-		max-width: 320px;
-		border-right: 1px solid var(--border-color, #4E525A);
-		overflow: hidden;
-		flex-shrink: 0;
-	}
-
-	.composer-area {
-		flex: 1;
 		min-width: 0;
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
+		height: 100%;
 	}
 
-	.composer-empty {
+	.canvas-container {
 		flex: 1;
 		display: flex;
-		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 16px;
-		color: var(--text-muted, #808080);
+		background: var(--canvas-bg, #252525);
+		min-height: 400px;
+		overflow: auto;
+		padding: 20px;
+		position: relative;
 	}
 
-	.composer-empty .empty-icon {
-		font-size: 64px;
-		opacity: 0.5;
+	#canvas {
+		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+		border-radius: 4px;
+		cursor: crosshair;
+		background: white;
 	}
 
-	.composer-empty h2 {
-		font-size: 24px;
-		font-weight: 600;
-		color: var(--text-primary, #EEEEEE);
+	.layer-panel {
+		position: absolute;
+		bottom: 20px;
+		left: 20px;
+		width: 200px;
+		background: var(--sidebar-bg, #2c2c2c);
+		border: 1px solid var(--sidebar-border, #444);
+		border-radius: 8px;
+		padding: 12px;
+		max-height: 300px;
+		overflow-y: auto;
+		z-index: 10;
 	}
 
-	.composer-empty p {
+	.panel-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 12px;
+		padding-bottom: 8px;
+		border-bottom: 1px solid var(--sidebar-border, #444);
+	}
+
+	.panel-header h3 {
+		margin: 0;
 		font-size: 14px;
-		max-width: 400px;
-		text-align: center;
-		line-height: 1.5;
+		font-weight: 600;
+		color: var(--text-primary, #f5f5f5);
+	}
+
+	.btn-add-layer {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 4px 8px;
+		background: var(--accent-color, #4CAF50);
+		border: none;
+		border-radius: 4px;
+		color: white;
+		font-size: 12px;
+		cursor: pointer;
+	}
+
+	.btn-add-layer:hover {
+		background: var(--accent-hover, #45a049);
+	}
+
+	.layer-list {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.layer-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px;
+		background: var(--layer-bg, #3a3a3a);
+		border-radius: 4px;
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
+
+	.layer-item:hover {
+		background: var(--layer-hover, #4a4a4a);
+	}
+
+	.layer-item.active {
+		background: var(--layer-active, #4CAF50);
+		color: white;
+	}
+
+	.btn-visibility {
+		padding: 4px;
+		background: transparent;
+		border: none;
+		color: inherit;
+		cursor: pointer;
+		border-radius: 2px;
+	}
+
+	.btn-visibility:hover {
+		background: rgba(255, 255, 255, 0.1);
+	}
+
+	.layer-name {
+		flex: 1;
+		font-size: 12px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.layer-actions {
+		display: flex;
+		gap: 4px;
+	}
+
+	.btn-order {
+		padding: 2px 6px;
+		background: var(--button-bg, #4a4a4a);
+		border: none;
+		border-radius: 2px;
+		color: inherit;
+		font-size: 10px;
+		cursor: pointer;
+	}
+
+	.btn-order:hover {
+		background: var(--button-hover, #5a5a5a);
+	}
+
+	.btn-delete {
+		padding: 2px;
+		background: transparent;
+		border: none;
+		color: inherit;
+		cursor: pointer;
+		border-radius: 2px;
+	}
+
+	.btn-delete:hover {
+		background: var(--delete-bg, #f44336);
 	}
 </style>

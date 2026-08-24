@@ -1,0 +1,84 @@
+
+> visionmachine-desktop@0.1.2 build
+> vite build
+
+13:19:09 [vite-plugin-svelte] !!! Support for vite 8 beta in vite-plugin-svelte is experimental (rolldown: 1.2.5, vite: 8.2.2) !!!
+	See https://github.com/sveltejs/vite-plugin-svelte/issues/1143 for a list of known issues and to report feedback.
+[33m(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:10:25). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.[39m
+13:19:09 [vite-plugin-svelte] no Svelte config found at D:/work/horizonsMachine/VisionMachine/public - using default configuration.
+[36mvite v8.2.2 [32mbuilding client environment for production...[36m[39m
+transforming...
+13:19:09 [vite-plugin-svelte] src/App.svelte:37:0 noninteractive element cannot have nonnegative tabIndex value
+https://svelte.dev/e/a11y_no_noninteractive_tabindex
+35: </svelte:head>
+36: 
+37: <div class="frame" tabindex="0" onkeydown={(e) => {
+          ^
+38:   if (e.target instanceof HTMLElement) e.target.blur();
+39: }} role="application" aria-label="VisionMachine application">
+13:19:09 [vite-plugin-svelte] src/App.svelte:37:0 Non-interactive element `<div>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions
+35: </svelte:head>
+36: 
+37: <div class="frame" tabindex="0" onkeydown={(e) => {
+          ^
+38:   if (e.target instanceof HTMLElement) e.target.blur();
+39: }} role="application" aria-label="VisionMachine application">
+13:19:09 [vite-plugin-svelte] src/App.svelte:40:38 Redundant role 'complementary'
+https://svelte.dev/e/a11y_no_redundant_roles
+38:   if (e.target instanceof HTMLElement) e.target.blur();
+39: }} role="application" aria-label="VisionMachine application">
+40:   <aside class="project-panel-sidebar" role="complementary" aria-label="Projects panel">
+                                                               ^
+41:     <ProjectsPanel {app} />
+42:   </aside>
+13:19:09 [vite-plugin-svelte] src/App.svelte:44:28 Redundant role 'main'
+https://svelte.dev/e/a11y_no_redundant_roles
+42:   </aside>
+43: 
+44:   <main class="main-content" role="main">
+                                            ^
+45:     <div id="canvas-container">
+46:       <canvas id="canvas"></canvas>
+13:19:10 [vite-plugin-svelte] src/components/ComposerPanel.svelte:150:3 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+148: 
+149:     <div class="config-section">
+150:       <label>Alignment</label>
+                                   ^
+151:       <div class="alignment-buttons" role="group" aria-label="Text alignment">
+152:         <button
+13:19:10 [vite-plugin-svelte] src/components/ComposerPanel.svelte:310:2 A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control
+308: 
+309:   <div class="templates-section">
+310:     <label>Saved Templates</label>
+                                       ^
+311:     {#each app.composerTemplates as template}
+312:       <button 
+13:19:10 [vite-plugin-svelte] src/components/ProjectsPanel.svelte:111:4 noninteractive element cannot have nonnegative tabIndex value
+https://svelte.dev/e/a11y_no_noninteractive_tabindex
+109:     {:else}
+110:       {#each filteredProjects as project (project.id)}
+111:         <div
+                 ^
+112:           class="project-item {project.id === app.activeProjectId ? 'active' : ''}"
+113:           onclick={() => selectProject(project.id)}
+13:19:10 [vite-plugin-svelte] src/components/ProjectsPanel.svelte:111:4 Non-interactive element `<div>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions
+109:     {:else}
+110:       {#each filteredProjects as project (project.id)}
+111:         <div
+                 ^
+112:           class="project-item {project.id === app.activeProjectId ? 'active' : ''}"
+113:           onclick={() => selectProject(project.id)}
+✓ 123 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.64 kB │ gzip:  0.38 kB
+dist/assets/index-hakeZlrL.css  17.90 kB │ gzip:  3.08 kB
+dist/assets/index-CTv8g1gL.js   66.18 kB │ gzip: 23.03 kB
+
+[32m✓ built in 280ms[39m
