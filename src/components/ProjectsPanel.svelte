@@ -1,384 +1,552 @@
 <script lang="ts">
-	import type { Project } from '$types/app';
-	import App from '../App.ts';
+  import type { ProjectData, SessionData } from '$types';
+  import { APP_CONSTANTS } from '$constants';
 
-	let { app }: { app: App } = $props();
+  let { 
+    projects, 
+    selectedProjectId, 
+    selectedSessionId,
+    onselectproject,
+    onselectsession,
+    oncreateproject,
+    ondeleteproject,
+    oncreatesession,
+    onrenamesession,
+    ondeletesession
+  } = $props<{
+    projects: ProjectData[];
+    selectedProjectId: string | null;
+    selectedSessionId: string | null;
+    onselectproject: (projectId: string) => void;
+    onselectsession: (projectId: string, sessionId: string) => void;
+    oncreateproject: (input: { name: string; path?: string }) => void;
+    ondeleteproject: (projectId: string) => void;
+    oncreatesession: (projectId: string) => void;
+    onrenamesession: (sessionId: string, newName: string) => void;
+    ondeletesession: (projectId: string, sessionId: string) => void;
+  }>();
 
-	let searchQuery = $state('');
-	let showNewProjectModal = $state(false);
-	let newProjectName = $state('');
+  // Modal state
+  let showCreateProjectModal = $state(false);
+  let newProjectName = $state('');
+  let specifyPath = $state(false);
+  let customPath = $state('');
 
-	let filteredProjects = $derived(
-		app.projects.filter((p: Project) => 
-			p.name.toLowerCase().includes(searchQuery.toLowerCase())
-		)
-	);
+  function openCreateProject() {
+    showCreateProjectModal = true;
+    newProjectName = '';
+    specifyPath = false;
+    customPath = '';
+  }
 
-	function createProject() {
-		if (!newProjectName.trim()) return;
-		app.createProject(newProjectName.trim());
-		newProjectName = '';
-		showNewProjectModal = false;
-	}
+  function closeCreateProjectModal() {
+    showCreateProjectModal = false;
+  }
 
-	function selectProject(projectId: string) {
-		app.selectProject(projectId);
-	}
+  function confirmCreateProject() {
+    if (!newProjectName.trim()) return;
+    
+    oncreateproject({
+      name: newProjectName.trim(),
+      path: specifyPath ? customPath : undefined,
+    });
+    closeCreateProjectModal();
+  }
 
-	function handleSearch(event: Event) {
-		searchQuery = (event.target as HTMLInputElement).value;
-	}
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      confirmCreateProject();
+    }
+  }
 
-	function handleNewProjectName(event: Event) {
-		newProjectName = (event.target as HTMLInputElement).value;
-	}
+  function handleSelectProject(projectId: string) {
+    onselectproject(projectId);
+  }
 
-	function handleKeyDown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && showNewProjectModal) {
-			createProject();
-		}
-	}
+  function handleSelectSession(sessionId: string) {
+    onselectsession(sessionId);
+  }
+
+  function handleDeleteProject(projectId: string) {
+    ondeleteproject(projectId);
+  }
+
+  function handleAddSession(projectId: string) {
+    oncreatesession(projectId);
+  }
+
+  function handleRenameSession(sessionId: string, newName: string) {
+    onrenamesession(sessionId, newName);
+  }
+
+  function handleDeleteSession(projectId: string, sessionId: string) {
+    ondeletesession(projectId, sessionId);
+  }
 </script>
 
 <div class="projects-panel">
-	<div class="panel-header">
-		<h2>Projects</h2>
-		<button onclick={() => showNewProjectModal = true} class="btn-new" aria-label="Create new project">
-			<span class="material-symbols-outlined">add</span>
-			New
-		</button>
-	</div>
+  <div class="panel-header">
+    <span class="panel-title">{APP_CONSTANTS.strings.project}</span>
+    <button class="add-btn" onclick={openCreateProject} title="Create Project">+</button>
+  </div>
 
-	<div class="search-bar">
-		<span class="material-symbols-outlined" aria-hidden="true">search</span>
-		<input
-			type="text"
-			value={searchQuery}
-			oninput={handleSearch}
-			placeholder="Search projects..."
-			class="search-input"
-			aria-label="Search projects"
-		/>
-	</div>
+  {#if projects.length === 0}
+    <div class="empty-state">
+      <p>No projects yet</p>
+      <button class="btn-create" onclick={openCreateProject}>
+        {APP_CONSTANTS.strings.createProject}
+      </button>
+    </div>
+  {:else}
+    <div class="projects-list">
+      {#each projects as project (project.id)}
+        <div 
+          class="project-item {selectedProjectId === project.id ? 'selected' : ''}"
+          onclick={() => handleSelectProject(project.id)}
+        >
+          <span class="project-icon">📁</span>
+          <span class="project-name">{project.name}</span>
+          <span class="session-count">{project.sessions.length}</span>
+          <button 
+            class="delete-project-btn"
+            onclick={(e) => { e.stopPropagation(); handleDeleteProject(project.id); }}
+            title="Delete Project">×</button>
+        </div>
+        
+        <!-- Sessions for this project -->
+        {#if selectedProjectId === project.id}
+          <div class="sessions-container">
+            {#each project.sessions as session (session.id)}
+              <div 
+                class="session-item {selectedSessionId === session.id ? 'selected' : ''}"
+                onclick={() => handleSelectSession(project.id, session.id)}
+              >
+                <span class="session-icon">🎬</span>
+                <input 
+                  type="text" 
+                  class="session-name-input"
+                  value={session.name}
+                  oninput={(e) => handleRenameSession(session.id, e.currentTarget.value)}
+                  placeholder="Session name"
+                />
+                <button 
+                  class="delete-session-btn"
+                  onclick={(e) => { e.stopPropagation(); handleDeleteSession(project.id, session.id); }}
+                  title="Delete Session">×</button>
+              </div>
+            {/each}
+            
+            <button class="add-session-btn" onclick={() => handleAddSession(project.id)}>
+              + Add Session
+            </button>
+          </div>
+        {/if}
+      {/each}
+    </div>
+  {/if}
 
-	{#if showNewProjectModal}
-		<div class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-			<div class="modal">
-				<h3 id="modal-title">Create New Project</h3>
-				<input
-					type="text"
-					value={newProjectName}
-					oninput={handleNewProjectName}
-					onkeydown={handleKeyDown}
-					placeholder="Project name..."
-					class="project-name-input"
-					aria-label="Project name"
-				/>
-				<div class="modal-actions">
-					<button onclick={() => showNewProjectModal = false} class="btn-cancel">
-						Cancel
-					</button>
-					<button onclick={createProject} class="btn-create">
-						Create
-					</button>
-				</div>
-			</div>
-		</div>
-	{/if}
-
-	<div class="projects-list" role="list" aria-label="Projects list">
-		{#if filteredProjects.length === 0}
-			<div class="empty-state">
-				<span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
-				<p>No projects found</p>
-			</div>
-		{:else}
-			{#each filteredProjects as project (project.id)}
-				<div
-					class="project-item {project.id === app.activeProjectId ? 'active' : ''}"
-					role="listitem"
-				>
-					<button
-						class="project-select-btn"
-						onclick={() => selectProject(project.id)}
-						aria-label={`Select project ${project.name}`}
-						aria-current={project.id === app.activeProjectId ? 'true' : 'false'}
-					>
-						<div class="project-icon">
-							<span class="material-symbols-outlined" aria-hidden="true">picture_as_pdf</span>
-						</div>
-						<div class="project-info">
-							<span class="project-name">{project.name}</span>
-							<span class="project-meta">
-								{project.layers.length} layers · {project.dimensions.width}×{project.dimensions.height}
-							</span>
-						</div>
-					</button>
-					<button
-						class="btn-delete"
-						aria-label={`Delete project ${project.name}`}
-						onclick={() => {
-							if (confirm(`Are you sure you want to delete "${project.name}"?`)) {
-								app.deleteProject(project.id);
-							}
-						}}
-					>
-						<span class="material-symbols-outlined" aria-hidden="true">delete</span>
-					</button>
-				</div>
-			{/each}
-		{/if}
-	</div>
+  <!-- Create Project Modal -->
+  {#if showCreateProjectModal}
+    <div class="modal-backdrop" onclick={closeCreateProjectModal}>
+      <div class="modal" onclick={(e) => e.stopPropagation()}>
+        <div class="modal-header">
+          <span class="modal-title">{APP_CONSTANTS.strings.createProject}</span>
+          <button class="modal-close" onclick={closeCreateProjectModal}>×</button>
+        </div>
+        
+        <div class="modal-body">
+          <label class="form-label">{APP_CONSTANTS.strings.projectName}</label>
+          <input 
+            type="text" 
+            class="modal-input"
+            bind:value={newProjectName}
+            placeholder={APP_CONSTANTS.strings.projectNamePlaceholder}
+            onkeydown={handleKeyDown}
+          />
+          
+          <label class="checkbox-label">
+            <input type="checkbox" bind:checked={specifyPath} />
+            <span>{APP_CONSTANTS.strings.specifyPath}</span>
+          </label>
+          
+          {#if specifyPath}
+            <div class="path-section">
+              <label class="form-label">{APP_CONSTANTS.strings.customPath}</label>
+              <input 
+                type="text" 
+                class="modal-input path-input"
+                bind:value={customPath}
+                placeholder={APP_CONSTANTS.strings.customPathPlaceholder}
+              />
+            </div>
+          {/if}
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick={closeCreateProjectModal}>{APP_CONSTANTS.strings.cancel}</button>
+          <button 
+            class="btn-confirm" 
+            disabled={!newProjectName.trim()}
+            onclick={confirmCreateProject}
+          >
+            {APP_CONSTANTS.strings.create}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
-	.projects-panel {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		overflow: hidden;
-	}
+  .projects-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg-secondary, #2A2A2E);
+  }
 
-	.panel-header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 16px;
-		border-bottom: 1px solid var(--sidebar-border, #444);
-	}
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color, #3A3A3F);
+  }
 
-	.panel-header h2 {
-		margin: 0;
-		font-size: 18px;
-		font-weight: 600;
-		color: var(--text-primary, #f5f5f5);
-	}
+  .panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted, #808080);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
 
-	.btn-new {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 6px 12px;
-		background: var(--accent-color, #4CAF50);
-		border: none;
-		border-radius: 6px;
-		color: white;
-		font-size: 14px;
-		cursor: pointer;
-		transition: all 0.2s ease;
-	}
+  .add-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    background: var(--accent-primary, #59B5FF);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
-	.btn-new:hover {
-		background: var(--accent-hover, #45a049);
-		transform: translateY(-1px);
-	}
+  .add-btn:hover {
+    background: var(--accent-primary-hover, #7EC8FF);
+  }
 
-	.search-bar {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 12px 16px;
-		background: var(--search-bg, #2a2a2a);
-		border-bottom: 1px solid var(--sidebar-border, #444);
-	}
+  /* Projects List */
+  .projects-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+  }
 
-	.search-bar .material-symbols-outlined {
-		color: var(--text-secondary, #aaa);
-		font-size: 20px;
-	}
+  .project-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 4px;
+    transition: all 0.15s;
+    position: relative;
+  }
 
-	.search-input {
-		flex: 1;
-		background: transparent;
-		border: none;
-		color: var(--text-primary, #f5f5f5);
-		font-size: 14px;
-	}
+  .project-item:hover {
+    background: var(--bg-hover, #3A3A3F);
+  }
 
-	.search-input:focus {
-		outline: none;
-	}
+  .project-item.selected {
+    background: rgba(89, 181, 255, 0.15);
+    border-left: 3px solid var(--accent-primary, #59B5FF);
+  }
 
-	.projects-list {
-		flex: 1;
-		overflow-y: auto;
-		padding: 8px;
-	}
+  .project-icon {
+    font-size: 14px;
+  }
 
-	.project-item {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 8px;
-		border-radius: 8px;
-		transition: all 0.2s ease;
-		margin-bottom: 4px;
-	}
+  .project-name {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-primary, #EEEEEE);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
-	.project-item:hover {
-		background: var(--item-hover, #3a3a3a);
-	}
+  .session-count {
+    font-size: 10px;
+    color: var(--text-muted, #606060);
+  }
 
-	.project-item.active {
-		background: var(--item-active, #4CAF50);
-		color: white;
-	}
+  .delete-project-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted, #606060);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 4px;
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
 
-	.project-select-btn {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		padding: 4px;
-		border: none;
-		background: transparent;
-		color: inherit;
-		cursor: pointer;
-		flex: 1;
-		text-align: left;
-		border-radius: 6px;
-	}
+  .project-item:hover .delete-project-btn {
+    opacity: 1;
+  }
 
-	.project-icon {
-		width: 32px;
-		height: 32px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: var(--icon-bg, #555);
-		border-radius: 6px;
-	}
+  .delete-project-btn:hover {
+    background: rgba(220, 38, 38, 0.2);
+    color: #dc2626;
+  }
 
-	.project-info {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		min-width: 0;
-	}
+  /* Sessions Container */
+  .sessions-container {
+    margin-left: 16px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border-color, #3A3A3F);
+  }
 
-	.project-name {
-		font-size: 14px;
-		font-weight: 500;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
+  .session-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 2px;
+    transition: all 0.15s;
+  }
 
-	.project-meta {
-		font-size: 11px;
-		opacity: 0.7;
-	}
+  .session-item:hover {
+    background: var(--bg-hover, #3A3A3F);
+  }
 
-	.btn-delete {
-		padding: 4px;
-		background: transparent;
-		border: none;
-		color: var(--text-secondary, #aaa);
-		cursor: pointer;
-		border-radius: 4px;
-		transition: all 0.2s ease;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
+  .session-item.selected {
+    background: rgba(89, 181, 255, 0.15);
+  }
 
-	.btn-delete:hover {
-		background: var(--delete-bg, #f44336);
-		color: white;
-	}
+  .session-icon {
+    font-size: 12px;
+  }
 
-	.empty-state {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 12px;
-		padding: 40px 20px;
-		color: var(--text-secondary, #aaa);
-		text-align: center;
-	}
+  .session-name-input {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-primary, #EEEEEE);
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 2px 4px;
+  }
 
-	.empty-state .material-symbols-outlined {
-		font-size: 48px;
-		opacity: 0.5;
-	}
+  .session-name-input:focus {
+    background: var(--bg-primary, #1A1A1D);
+    border-radius: 2px;
+  }
 
-	.modal-overlay {
-		position: fixed;
-		top: 0;
-		left: 0;
-		right: 0;
-		bottom: 0;
-		background: rgba(0, 0, 0, 0.7);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 1000;
-	}
+  .delete-session-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted, #606060);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
 
-	.modal {
-		background: var(--modal-bg, #2c2c2c);
-		border-radius: 12px;
-		padding: 24px;
-		min-width: 300px;
-		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-	}
+  .session-item:hover .delete-session-btn {
+    opacity: 1;
+  }
 
-	.modal h3 {
-		margin: 0 0 16px 0;
-		font-size: 18px;
-		color: var(--text-primary, #f5f5f5);
-	}
+  .delete-session-btn:hover {
+    background: rgba(220, 38, 38, 0.2);
+    color: #dc2626;
+  }
 
-	.project-name-input {
-		width: 100%;
-		padding: 10px 12px;
-		background: var(--input-bg, #3a3a3a);
-		border: 1px solid var(--border-color, #555);
-		border-radius: 6px;
-		color: var(--text-primary, #f5f5f5);
-		font-size: 14px;
-		margin-bottom: 16px;
-		box-sizing: border-box;
-	}
+  .add-session-btn {
+    width: 100%;
+    padding: 6px;
+    background: transparent;
+    border: 1px dashed var(--border-color, #3A3A3F);
+    border-radius: 4px;
+    color: var(--text-muted, #808080);
+    cursor: pointer;
+    font-size: 11px;
+    margin-top: 4px;
+    transition: all 0.15s;
+  }
 
-	.project-name-input:focus {
-		outline: none;
-		border-bottom-color: var(--accent-color, #4CAF50);
-	}
+  .add-session-btn:hover {
+    border-color: var(--accent-primary, #59B5FF);
+    color: var(--accent-primary, #59B5FF);
+    background: rgba(89, 181, 255, 0.05);
+  }
 
-	.modal-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 8px;
-	}
+  /* Empty State */
+  .empty-state {
+    padding: 20px;
+    text-align: center;
+  }
 
-	.btn-cancel,
-	.btn-create {
-		padding: 8px 16px;
-		border-radius: 6px;
-		font-size: 14px;
-		cursor: pointer;
-		transition: all 0.2s ease;
-	}
+  .empty-state p {
+    font-size: 12px;
+    color: var(--text-muted, #606060);
+    margin-bottom: 12px;
+  }
 
-	.btn-cancel {
-		background: var(--button-bg, #3a3a3a);
-		border: 1px solid var(--border-color, #555);
-		color: var(--text-primary, #f5f5f5);
-	}
+  .btn-create {
+    padding: 8px 16px;
+    background: var(--accent-primary, #59B5FF);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
 
-	.btn-cancel:hover {
-		background: var(--button-hover, #4a4a4a);
-	}
+  .btn-create:hover {
+    background: var(--accent-primary-hover, #7EC8FF);
+  }
 
-	.btn-create {
-		background: var(--accent-color, #4CAF50);
-		border: none;
-		color: white;
-	}
+  /* Modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
 
-	.btn-create:hover {
-		background: var(--accent-hover, #45a049);
-	}
+  .modal {
+    background: var(--bg-secondary, #2A2A2E);
+    border: 1px solid var(--border-color, #4E525A);
+    border-radius: 8px;
+    width: 400px;
+    max-width: 90vw;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color, #3A3A3F);
+  }
+
+  .modal-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, #EEEEEE);
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted, #808080);
+    font-size: 20px;
+    cursor: pointer;
+  }
+
+  .modal-body {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .form-label {
+    font-size: 11px;
+    color: var(--text-muted, #808080);
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .modal-input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-tertiary, #3A3A3F);
+    border: 1px solid var(--border-color, #3A3A3F);
+    border-radius: 4px;
+    color: var(--text-primary, #EEEEEE);
+    font-size: 13px;
+  }
+
+  .modal-input:focus {
+    outline: none;
+    border-color: var(--accent-primary, #59B5FF);
+  }
+
+  .path-input {
+    font-family: monospace;
+    font-size: 12px;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary, #BFBFBF);
+  }
+
+  .path-section {
+    margin-top: 8px;
+  }
+
+  .modal-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color, #3A3A3F);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .btn-cancel {
+    padding: 8px 18px;
+    background: var(--bg-tertiary, #3A3A3F);
+    color: var(--text-secondary, #BFBFBF);
+    border: 1px solid var(--border-color, #3A3A3F);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .btn-cancel:hover {
+    background: var(--bg-hover, #3A3A3F);
+  }
+
+  .btn-confirm {
+    padding: 8px 18px;
+    background: var(--accent-primary, #59B5FF);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .btn-confirm:hover:not(:disabled) {
+    background: var(--accent-primary-hover, #7EC8FF);
+  }
+
+  .btn-confirm:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 </style>

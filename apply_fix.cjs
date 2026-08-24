@@ -24,15 +24,9 @@ c = c.replace(
 fs.writeFileSync('D:/work/horizonsMachine/VisionMachine/src/components/ProjectsPanel.svelte', c);
 console.log('Fixed ProjectsPanel.svelte');
 
-// Fix Workspace.svelte - accept projectId and sessionId
+// Fix Workspace.svelte - accept projectId and sessionId in handleSessionSelect
 c = fs.readFileSync('D:/work/horizonsMachine/VisionMachine/src/components/Workspace.svelte', 'utf8');
 
-c = c.replace(
-  'onselectsession={handleSessionSelect}',
-  'onselectsession={handleSessionSelect}'
-);
-
-// Update handleSessionSelect signature and implementation
 const oldHandler = `function handleSessionSelect(sessionId: string) {
 		// Find the project containing this session
 		const foundProject = projects.find(p => 
@@ -63,33 +57,6 @@ const newHandler = `function handleSessionSelect(projectId: string, sessionId: s
 	}`;
 
 c = c.replace(oldHandler, newHandler);
-
-// Update derived state to use functions (Svelte 5 proper reactive syntax)
-c = c.replace(
-  'let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);',
-  'let selectedProject = $derived(() => projects.find(p => p.id === selectedProjectId) || null);'
-);
-
-c = c.replace(
-  'let selectedSession = $derived(selectedProject?.sessions.find(s => s.id === selectedSessionId) || null);',
-  'let selectedSession = $derived.by(() => {\n\t\tconst proj = selectedProject();\n\t\tif (!proj) return null;\n\t\treturn proj.sessions.find(s => String(s.id) === String(selectedSessionId)) || null;\n\t});'
-);
-
-// Update the template to call selectedProject() and selectedSession() as functions
-c = c.replace(
-  '{#if selectedSession && selectedProject}',
-  '{#if selectedSession() && selectedProject()}'
-);
-
-c = c.replace(
-  '{selectedSession}',
-  '{selectedSession()}'
-);
-
-c = c.replace(
-  '{selectedProject}',
-  '{selectedProject()}'
-);
 
 fs.writeFileSync('D:/work/horizonsMachine/VisionMachine/src/components/Workspace.svelte', c);
 console.log('Fixed Workspace.svelte');
