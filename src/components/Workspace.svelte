@@ -372,6 +372,9 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
+			<div style="position:fixed;top:0;left:0;background:rgba(0,0,0,0.9);color:#0f0;padding:8px;font-family:monospace;font-size:10px;z-index:9999;pointer-events:none;">
+DEBUG: projects={projects.length} | projId={selectedProjectId||'null'} | sessionId={selectedSessionId||'null'} | hasProj={!!selectedProject} | hasSess={!!selectedSession}
+</div>
 			{#if selectedSession && selectedProject}
 				<ComposerPanel
 					{selectedSession}
