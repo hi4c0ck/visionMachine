@@ -37,7 +37,7 @@
 	let toolsCollapsed = $state(false);
 	let storageUsed = $state(0);
 
-	// Derived state
+	// Derived state - properly reactive
 	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
 	let selectedSession = $derived(
 		selectedProject?.sessions.find(s => s.id === selectedSessionId) || null
@@ -92,22 +92,29 @@
 	}
 
 	// Handle session update with proper reactivity (extracted to avoid stale closures)
+	// Uses derived state which is always current, never stale
 	function handleSessionUpdate(updatedSession: SessionData) {
 		console.log('[Workspace] Session updated:', updatedSession.id);
-		if (!selectedProject || !selectedSession) return;
 		
-		const updatedSessions = selectedProject.sessions.map(s =>
+		// Use derived state which is always current
+		const currentProject = selectedProject;
+		const currentSession = selectedSession;
+		
+		if (!currentProject || !currentSession) return;
+		
+		// Create new array reference to trigger reactivity
+		const updatedSessions = currentProject.sessions.map(s =>
 			s.id === updatedSession.id ? updatedSession : s
 		);
 		
 		const updatedProject: ProjectData = {
-			...selectedProject,
+			...currentProject,
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
 		};
 		
 		projects = projects.map(p =>
-			p.id === selectedProject.id ? updatedProject : p
+			p.id === currentProject.id ? updatedProject : p
 		);
 		saveProjects();
 	}
@@ -284,7 +291,7 @@
 	}
 </script>
 
-<div class="workspace {layoutMode}">
+<div class={`workspace ${layoutMode}`}>
 	<Frame
 		{userName}
 		{selectedTheme}
