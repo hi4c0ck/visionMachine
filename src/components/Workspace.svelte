@@ -7,11 +7,6 @@
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData } from '$types';
 
-	function log(msg: string) {
-		console.log('[Workspace] ' + msg);
-	}
-	log('Component ready');
-
 	let {
 		userName,
 		selectedTheme,
@@ -40,31 +35,9 @@
 	let toolsCollapsed = $state(false);
 	let storageUsed = $state(0);
 
-	// Derived state - properly reactive
-	let selectedProject = $derived(
-		() => {
-			console.log('[Derived] selectedProject recalculating... projects.length:', projects.length, 'selectedProjectId:', selectedProjectId);
-			const p = projects.find(p => p.id === selectedProjectId);
-			console.log('[Derived] selectedProject:', p ? p.name : 'null');
-			return p || null;
-		}
-	);
-	let selectedSession = $derived.by(() => {
-		console.log('[Derived] selectedSession recalculating... selectedProjectId:', selectedProjectId, 'selectedSessionId:', selectedSessionId);
-		if (!selectedProject) {
-			console.log('[Derived] selectedProject is null - returning null');
-			return null;
-		}
-		console.log('[Derived] Checking', selectedProject.sessions.length, 'sessions in project', selectedProject.name);
-		const found = selectedProject.sessions.find(s => {
-			const match = String(s.id) === String(selectedSessionId);
-			if (!match) console.log(`  [Derived] Session ${s.id} (type:${typeof s.id}) !== ${selectedSessionId} (type:${typeof selectedSessionId})`);
-			else console.log(`  [Derived] MATCHED: ${s.id}`);
-			return match;
-		});
-		console.log('[Derived] selectedSession result:', found ? `Found ${found.id}` : 'Not found - returning null');
-		return found || null;
-	});
+	// Derived state
+	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
+	let selectedSession = $derived(selectedProject?.sessions.find(s => s.id === selectedSessionId) || null);
 
 	// Load projects from localStorage on mount
 	function loadProjects() {
@@ -72,7 +45,6 @@
 			const saved = localStorage.getItem('vm-projects');
 			if (saved) {
 				const parsed = JSON.parse(saved) as ProjectData[];
-				console.log('[Workspace] Loaded projects from localStorage:', parsed.length);
 				projects = parsed;
 				
 				// Restore selection if exists
@@ -93,9 +65,7 @@
 	// Save projects to localStorage
 	function saveProjects() {
 		try {
-			console.log('[Workspace] Saving projects to localStorage...');
 			localStorage.setItem('vm-projects', JSON.stringify(projects));
-			console.log('[Workspace] Projects saved, count:', projects.length);
 			
 			// Notify parent
 			if (onprojectsupdate) {
@@ -114,18 +84,13 @@
 		}
 	}
 
-	// Handle session update with proper reactivity (extracted to avoid stale closures)
-	// Uses derived state which is always current, never stale
+	// Handle session update with proper reactivity
 	function handleSessionUpdate(updatedSession: SessionData) {
-		console.log('[Workspace] Session updated:', updatedSession.id);
-		
-		// Use derived state which is always current
 		const currentProject = selectedProject;
 		const currentSession = selectedSession;
 		
 		if (!currentProject || !currentSession) return;
 		
-		// Create new array reference to trigger reactivity
 		const updatedSessions = currentProject.sessions.map(s =>
 			s.id === updatedSession.id ? updatedSession : s
 		);
@@ -160,55 +125,38 @@
 
 	// Event handlers
 	function handleLogout() {
-		console.log('[Workspace] Logout');
 		onlogout?.();
 	}
 
 	function handleThemeChange(theme: string) {
-		console.log('[Workspace] Theme:', theme);
 		onthemeChange?.(theme);
 	}
 
 	function handleLayoutChange(mode: string) {
-		console.log('[Workspace] Layout:', mode);
 		onlayoutChange?.(mode);
 	}
 
 	function handleProjectSelect(projectId: string) {
-		console.log('[Workspace] Project selected:', projectId);
 		selectedProjectId = projectId;
 		selectedSessionId = null;
 		saveProjects();
 	}
 
 	function handleSessionSelect(sessionId: string) {
-		console.log('[Workspace] Session clicked: ' + sessionId + ', project before: ' + selectedProjectId);
-		console.log('[Workspace] Sessions count: ' + projects.reduce((a, p) => a + p.sessions.length, 0));
-		
+		// Find the project containing this session
 		const foundProject = projects.find(p => 
-			p.sessions.some(s => String(s.id) === String(sessionId))
+			p.sessions.some(s => s.id === sessionId)
 		);
 		
-		if (!foundProject) {
-			console.error('[Workspace] Session not found in any project');
-			return;
+		if (foundProject) {
+			// Set both atomically
+			selectedProjectId = foundProject.id;
+			selectedSessionId = sessionId;
+			saveProjects();
 		}
-		
-		console.log('[Workspace] Found project: ' + foundProject.id + ' (' + foundProject.name + ')');
-		console.log('[Workspace] sessions.some() matched: ' + foundProject.sessions.some(s => String(s.id) === String(sessionId)));
-		
-		// Set both atomically to avoid intermediate null state
-		selectedProjectId = foundProject.id;
-		selectedSessionId = sessionId;
-		
-		console.log('[Workspace] State set - project: ' + selectedProjectId + ', session: ' + selectedSessionId);
-		console.log('[Workspace] After set - selectedProject: ' + !!selectedProject + ', selectedSession: ' + !!selectedSession);
-		
-		saveProjects();
 	}
 
 	function handleCreateProject(input: { name: string; path?: string }) {
-		console.log('[Workspace] Create project:', input.name);
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
 		const projectPath = `${basePath}\\${input.name}`;
 		
@@ -224,11 +172,9 @@
 		projects = [...projects, newProject];
 		selectedProjectId = newProject.id;
 		saveProjects();
-		console.log('[Workspace] Project created, total:', projects.length);
 	}
 
 	function handleDeleteProject(projectId: string) {
-		console.log('[Workspace] Delete project:', projectId);
 		projects = projects.filter(p => p.id !== projectId);
 		if (selectedProjectId === projectId) {
 			selectedProjectId = null;
@@ -238,7 +184,6 @@
 	}
 
 	function handleCreateSession(projectId: string) {
-		console.log('[Workspace] Create session for project:', projectId);
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
@@ -270,11 +215,9 @@
 		
 		selectedSessionId = newSession.id;
 		saveProjects();
-		console.log('[Workspace] Session created:', newSession.id);
 	}
 
 	function handleRenameSession(sessionId: string, newName: string) {
-		console.log('[Workspace] Rename session:', sessionId, '->', newName);
 		if (!selectedProject) return;
 		
 		const updatedSessions = selectedProject.sessions.map(s =>
@@ -294,7 +237,6 @@
 	}
 
 	function handleDeleteSession(projectId: string, sessionId: string) {
-		console.log('[Workspace] Delete session:', sessionId);
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
@@ -316,12 +258,10 @@
 	}
 
 	function handleToolSelect(id: string) {
-		console.log('[Workspace] Tool selected:', id);
 		activeTool = id;
 	}
 
 	function handleGenerate() {
-		console.log('[Workspace] Generate clicked');
 		// TODO: Implement generation logic
 	}
 
@@ -372,9 +312,6 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			<div style="position:fixed;top:0;left:0;background:rgba(0,0,0,0.9);color:#0f0;padding:8px;font-family:monospace;font-size:10px;z-index:9999;pointer-events:none;">
-DEBUG: projects={projects.length} | projId={selectedProjectId||'null'} | sessionId={selectedSessionId||'null'} | hasProj={!!selectedProject} | hasSess={!!selectedSession}
-</div>
 			{#if selectedSession && selectedProject}
 				<ComposerPanel
 					{selectedSession}

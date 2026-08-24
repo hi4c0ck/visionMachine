@@ -1,7 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { attachConsole } from '@tauri-apps/plugin-log';
-
 	import Workspace from './components/Workspace.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
@@ -21,8 +19,6 @@
 		try {
 			const savedProjects = localStorage.getItem('vm-projects');
 			if (savedProjects) {
-				console.log('[App] Loaded projects from localStorage:', savedProjects);
-				// This will be passed to Workspace via props
 				return JSON.parse(savedProjects);
 			}
 		} catch (e) {
@@ -39,16 +35,12 @@
 	
 	function handleLogin() {
 		const name = userName.trim();
-		console.log('[App] handleLogin called');
-		
 		if (!name) {
 			error = 'Please enter your name';
 			return;
 		}
-		
 		showWelcome = false;
 		localStorage.setItem('vm-username', name);
-		console.log('[App] Login successful, user:', name);
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
@@ -73,10 +65,8 @@
 	}
 	
 	function handleProjectsUpdate(projects: any[]) {
-		console.log('[App] Projects updated, saving to localStorage...');
 		try {
 			localStorage.setItem('vm-projects', JSON.stringify(projects));
-			console.log('[App] Projects saved successfully');
 		} catch (e) {
 			console.error('[App] Failed to save projects:', e);
 		}
@@ -84,13 +74,9 @@
 	
 	// Lifecycle
 	onMount(() => {
-		console.log('[App] onMount called');
-		attachConsole();
-		
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');
 		if (savedName) {
-			console.log('[App] Restored username from storage:', savedName);
 			userName = savedName;
 			showWelcome = false;
 		}
@@ -153,14 +139,6 @@
 				>
 					{APP_CONSTANTS.strings.getStarted}
 				</button>
-				
-				<div class="debug-info">
-					<span>UserName: "{userName}"</span>
-					<span>| Length: {userName.length}</span>
-					<span>| Trimmed Length: {userName.trim().length}</span>
-					<span>| isNameEmpty: {isNameEmpty}</span>
-					<span>| canLogin: {canLogin}</span>
-				</div>
 			</div>
 		</main>
 	</div>
@@ -322,21 +300,5 @@
 		color: #dc2626;
 		text-align: center;
 		border-bottom: 1px solid rgba(220, 38, 38, 0.3);
-	}
-	
-	.debug-info {
-		margin-top: 20px;
-		padding: 10px;
-		background: rgba(0, 0, 0, 0.2);
-		border-radius: 4px;
-		font-size: 11px;
-		color: var(--text-muted, #606060);
-		font-family: monospace;
-		text-align: left;
-	}
-	
-	.debug-info span {
-		display: block;
-		margin: 2px 0;
 	}
 </style>

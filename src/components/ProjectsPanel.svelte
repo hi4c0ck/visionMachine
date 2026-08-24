@@ -60,12 +60,10 @@
   }
 
   function handleSelectProject(projectId: string) {
-    console.log('[ProjectsPanel] handleSelectProject called:', projectId);
     onselectproject(projectId);
   }
 
   function handleSelectSession(sessionId: string) {
-    console.log('[ProjectsPanel] handleSelectSession called:', sessionId);
     onselectsession(sessionId);
   }
 
@@ -104,10 +102,7 @@
       {#each projects as project (project.id)}
         <div 
           class="project-item {selectedProjectId === project.id ? 'selected' : ''}"
-          onclick={() => {
-            console.log('[ProjectsPanel] Project div clicked:', project.id, 'sessions:', project.sessions.length);
-            handleSelectProject(project.id);
-          }}
+          onclick={() => handleSelectProject(project.id)}
         >
           <span class="project-icon">📁</span>
           <span class="project-name">{project.name}</span>
@@ -124,10 +119,7 @@
             {#each project.sessions as session (session.id)}
               <div 
                 class="session-item {selectedSessionId === session.id ? 'selected' : ''}"
-                onclick={() => {
-                  console.log('[ProjectsPanel] Session div clicked:', session.id);
-                  handleSelectSession(session.id);
-                }}
+                onclick={() => handleSelectSession(session.id)}
               >
                 <span class="session-icon">🎬</span>
                 <input 
