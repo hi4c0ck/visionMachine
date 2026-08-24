@@ -39,9 +39,19 @@
 
 	// Derived state - properly reactive
 	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
-	let selectedSession = $derived(
-		selectedProject?.sessions.find(s => s.id === selectedSessionId) || null
-	);
+	let selectedSession = $derived.by(() => {
+		if (!selectedProject) {
+			console.log('[Derived] selectedProject is null');
+			return null;
+		}
+		const found = selectedProject.sessions.find(s => {
+			const match = String(s.id) === String(selectedSessionId);
+			if (!match) console.log(`[Derived] Session ${s.id} (type:${typeof s.id}) !== ${selectedSessionId} (type:${typeof selectedSessionId})`);
+			return match;
+		});
+		console.log('[Derived] selectedSession:', found ? `Found ${found.id}` : 'Not found');
+		return found || null;
+	});
 
 	// Load projects from localStorage on mount
 	function loadProjects() {
@@ -159,16 +169,17 @@
 	}
 
 	function handleSessionSelect(sessionId: string) {
-		console.log('[Workspace] Session selected:', sessionId);
-		console.log('[Workspace] Current project:', selectedProjectId, 'sessions count:', projects.reduce((a, p) => a + p.sessions.length, 0));
-		selectedSessionId = sessionId;
-		// Also set the parent project if not already set
-		if (!selectedProjectId) {
-			const pid = projects.find(p => p.sessions.some(s => s.id === sessionId))?.id;
-			console.log('[Workspace] Found project:', pid);
-			if (pid) selectedProjectId = pid;
+		console.log('[Workspace] Session clicked:', sessionId);
+		console.log('[Workspace] Current state - project:', selectedProjectId, 'sessions:', projects.reduce((a, p) => a + p.sessions.length, 0));
+		// Find and set both atomically
+		const foundProject = projects.find(p => p.sessions.some(s => String(s.id) === String(sessionId)));
+		if (!foundProject) {
+			console.error('[Workspace] Session not found in any project');
+			return;
 		}
-		console.log('[Workspace] Final selection - project:', selectedProjectId, 'session:', selectedSessionId);
+		selectedProjectId = foundProject.id;
+		selectedSessionId = sessionId;
+		console.log('[Workspace] State updated - project:', selectedProjectId, 'session:', selectedSessionId);
 		saveProjects();
 	}
 
