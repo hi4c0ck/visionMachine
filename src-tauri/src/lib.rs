@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 mod preflight;
 pub use preflight::{run_preflight_checks, PreflightReport};
-mod logger;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -42,12 +41,6 @@ fn get_preflight_report() -> Result<PreflightReport, String> {
     Ok(run_preflight_checks())
 }
 
-#[tauri::command]
-fn log_to_file(message: String) -> Result<(), String> {
-    eprintln!("{}", message);
-    Ok(())
-}
-
 /// Simple database initialization: check if exists, create if not
 fn init_database(app_data_dir: &PathBuf) -> Result<PathBuf, String> {
     let db_path = app_data_dir.join("visionmachine.db");
@@ -71,52 +64,46 @@ fn init_database(app_data_dir: &PathBuf) -> Result<PathBuf, String> {
 }
 
 pub fn run() {
-    // Initialize logging FIRST
-    let mut log = logger::FileLogger::new();
-    log.log("INFO", "Application starting...");
-    
     // Run pre-flight checks
     let report = run_preflight_checks();
     let report_str = report.format_report();
     eprintln!("{}", report_str);
-    log.log("INFO", &format!("Preflight checks: {}", if report.passed { "PASSED" } else { "FAILED" }));
     
     if !report.passed {
         eprintln!("\nCritical environment issues detected. Application cannot start.");
-        log.log("ERROR", "Critical environment issues detected");
         std::process::exit(1);
     }
     
     tauri::Builder::default()
+
         .manage(AppState::new())
         .setup(move |app| {
-            log.log("INFO", "[Setup] Application starting...");
+            log::info!("[Setup] Application starting...");
             
             // Get app data directory
             let app_data_dir = app.path().app_local_data_dir()
                 .map_err(|e| format!("Failed to get app data directory: {}", e))?;
             
-            log.log("INFO", &format!("[Setup] App data directory: {:?}", app_data_dir));
+            log::info!("[Setup] App data directory: {:?}", app_data_dir);
             
             // Initialize database (check if exists, create if not)
             match init_database(&app_data_dir) {
                 Ok(db_path) => {
-                    log.log("INFO", &format!("[Setup] Database initialized at: {:?}", db_path));
+                    log::info!("[Setup] Database initialized at: {:?}", db_path);
                 }
                 Err(e) => {
-                    log.log("WARN", &format!("[Setup] Could not initialize database: {}", e));
+                    log::warn!("[Setup] Could not initialize database: {}", e);
                     // Continue anyway - app can work without DB for now
                 }
             }
             
-            log.log("INFO", "[Setup] Setup complete!");
+            log::info!("[Setup] Setup complete!");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             login_user,
             get_app_info,
             get_preflight_report,
-            log_to_file,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run app");

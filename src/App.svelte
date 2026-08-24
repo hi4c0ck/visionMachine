@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+
 	import Workspace from './components/Workspace.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
