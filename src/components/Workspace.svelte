@@ -1,144 +1,197 @@
 <script lang="ts">
-  import { createEmptyProject, createEmptySession, generateSessionFolderName } from '$types';
-  import type { ProjectData, SessionData } from '$types';
-  import ProjectsPanel from './ProjectsPanel.svelte';
-  import ComposerPanel from './ComposerPanel.svelte';
-  import ToolsPanel from './ToolsPanel.svelte';
+	import Frame from './Frame.svelte';
+	import ProjectsPanel from './ProjectsPanel.svelte';
+	import ComposerPanel from './ComposerPanel.svelte';
+	import ProfilePanel from './ProfilePanel.svelte';
+	import ToolsPanel from './ToolsPanel.svelte';
+	import type { SceneData } from '$types';
 
-  let { userName }: { userName: string } = $props();
+	console.log('[Workspace] Component ready');
 
-  // Use $state for all collections to ensure reactivity
-  let projects = $state<ProjectData[]>([]);
-  let selectedProjectId = $state<string | null>(null);
-  let selectedSessionId = $state<string | null>(null);
+	let {
+		userName,
+		selectedTheme,
+		layoutMode,
+		showWelcome,
+		onlogout,
+		onthemeChange,
+		onlayoutChange
+	} = $props<{
+		userName: string;
+		selectedTheme: string;
+		layoutMode: string;
+		showWelcome: boolean;
+		onlogout?: () => void;
+		onthemeChange?: (theme: string) => void;
+		onlayoutChange?: (mode: string) => void;
+	}>();
 
-  // Derived state - these will automatically update
-  let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
-  let selectedSession = $derived(
-    selectedProject?.sessions.find(s => s.id === selectedSessionId) || null
-  );
+	// State
+	let projects = $state<Array<{ id: string; name: string; thumbnail?: string; sessionId?: string }>>([]);
+	let selectedProjectId = $state<string | null>(null);
+	let activeTool = $state<string | null>(null);
+	let toolsCollapsed = $state(false);
+	let storageUsed = $state(0);
+	let scene = $state<SceneData>({
+		id: crypto.randomUUID(),
+		name: 'Default Scene',
+		pipes: [],
+		totalLength: 601,
+		fps: 24,
+		lengthSeconds: 25.0,
+		resolution: '720p',
+		orientation: 'horizontal',
+	});
 
-  // Handle project selection
-  function handleSelectProject(projectId: string) {
-    selectedProjectId = projectId;
-    selectedSessionId = null;
-  }
+	const defaultTools = [
+		{ id: 'select', label: 'Select', icon: '🔍', hotkey: 'V' },
+		{ id: 'brush', label: 'Brush', icon: '🖌', hotkey: 'B' },
+		{ id: 'eraser', label: 'Eraser', icon: '🧹', hotkey: 'E' },
+		{ id: 'text', label: 'Text', icon: '📝', hotkey: 'T' },
+		{ id: 'shape', label: 'Shape', icon: '⬜', hotkey: 'S' },
+		{ id: 'camera', label: 'Camera', icon: '📷', hotkey: 'C' },
+		{ id: 'gen', label: 'Generate', icon: '✨', hotkey: 'G' },
+		{ id: 'settings', label: 'Settings', icon: '⚙️', hotkey: ',' },
+	];
 
-  // Handle session selection
-  function handleSelectSession(sessionId: string) {
-    selectedSessionId = sessionId;
-  }
+	// Event handlers
+	function handleLogout() {
+		console.log('[Workspace] Logout');
+		onlogout?.();
+	}
 
-  // Handle project creation
-  function handleCreateProject(input: { name: string; path?: string }) {
-    const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
-    const projectPath = `${basePath}\\${input.name}`;
-    
-    const project = createEmptyProject(input.name, projectPath);
-    
-    // Update projects array to trigger reactivity
-    projects = [...projects, project];
-    selectedProjectId = project.id;
-  }
+	function handleThemeChange(theme: string) {
+		console.log('[Workspace] Theme:', theme);
+		onthemeChange?.(theme);
+	}
 
-  // Handle session creation
-  function handleCreateSession(projectId: string) {
-    const project = projects.find(p => p.id === projectId);
-    if (!project) return;
-    
-    const sessionName = `Session ${project.sessions.length + 1}`;
-    const folderName = generateSessionFolderName(sessionName);
-    const sessionPath = `${project.directoryPath}\\${folderName}`;
-    
-    const session = createEmptySession(project.name, sessionPath);
-    
-    // Create new projects array to trigger reactivity
-    const updatedProjects = projects.map(p => {
-      if (p.id === projectId) {
-        return { ...p, sessions: [...p.sessions, session] };
-      }
-      return p;
-    });
-    
-    projects = updatedProjects;
-    selectedSessionId = session.id;
-  }
+	function handleLayoutChange(mode: string) {
+		console.log('[Workspace] Layout:', mode);
+		onlayoutChange?.(mode);
+	}
 
-  // Handle session update (from composer)
-  function handleSessionUpdate(updatedSession: SessionData) {
-    if (!selectedProject || !selectedSession) return;
-    
-    const updatedProjects = projects.map(p => {
-      if (p.id === selectedProject.id) {
-        const updatedSessions = p.sessions.map(s =>
-          s.id === updatedSession.id ? updatedSession : s
-        );
-        return { ...p, sessions: updatedSessions };
-      }
-      return p;
-    });
-    
-    projects = updatedProjects;
-  }
+	function handleProjectSelect(id: string) {
+		console.log('[Workspace] Project selected:', id);
+		selectedProjectId = id;
+	}
 
-  // Handle generation
-  function handleGenerate(sessionId: string) {
-    console.log('Generating session:', sessionId);
-    // TODO: Implement generation logic with Tauri IPC
-  }
+	function handleProjectNew() {
+		console.log('[Workspace] Create new project');
+		const newProject = {
+			id: Date.now().toString(),
+			name: `Project ${projects.length + 1}`,
+			sessionId: undefined
+		};
+		projects = [...projects, newProject];
+		selectedProjectId = newProject.id;
+	}
 
-  // Get user home directory
-  function getHomeDir(): string {
-    if (typeof window !== 'undefined') {
-      const user = (window as any).userName || userName || 'User';
-      return `C:\\Users\\${user}`;
-    }
-    return 'C:\\Users';
-  }
+	function handleProjectDelete(id: string) {
+		console.log('[Workspace] Delete project:', id);
+		projects = projects.filter(p => p.id !== id);
+		if (selectedProjectId === id) {
+			selectedProjectId = null;
+		}
+	}
+
+	function handleToolSelect(id: string) {
+		console.log('[Workspace] Tool selected:', id);
+		activeTool = id;
+	}
+
+	function handleCreateSession() {
+		console.log('[Workspace] Session created');
+		if (selectedProjectId) {
+			projects = projects.map(p =>
+				p.id === selectedProjectId
+					? { ...p, sessionId: Date.now().toString() }
+					: p
+			);
+		}
+	}
 </script>
 
-<div class="workspace-container">
-  <!-- Left: Project/Sessin Sidebar -->
-  <ProjectsPanel
-    {projects}
-    {selectedProjectId}
-    {selectedSessionId}
-    onselectproject={handleSelectProject}
-    onselectsession={handleSelectSession}
-    oncreateproject={handleCreateProject}
-    oncreatesession={handleCreateSession}
-  />
+<div class="workspace {layoutMode}">
+	<Frame
+		{userName}
+		{selectedTheme}
+		{layoutMode}
+		{showWelcome}
+		onlogout={handleLogout}
+		onthemeChange={handleThemeChange}
+		onlayoutChange={handleLayoutChange}
+	/>
 
-  <!-- Center: Composer -->
-  <div class="composer-area">
-    <ComposerPanel
-      {selectedSession}
-      onupdate={handleSessionUpdate}
-    />
-  </div>
+	<div class="workspace-body">
+		<!-- Left column: Projects + Profile -->
+		<div class="left-column">
+			{#if layoutMode !== 'single'}
+				<ProjectsPanel
+					{projects}
+					{selectedProjectId}
+					onselect={handleProjectSelect}
+					onnew={handleProjectNew}
+					ondelete={handleProjectDelete}
+				/>
+			{/if}
 
-  <!-- Right: Tool Sidebar -->
-  <ToolsPanel
-    {selectedSession}
-    {selectedProject}
-    ongenerate={handleGenerate}
-  />
+			<!-- Profile panel at bottom-left -->
+			<ProfilePanel
+				{userName}
+				{storageUsed}
+				oncreateSession={handleCreateSession}
+			/>
+		</div>
+
+		<!-- Center: Composer (fills available space) -->
+		<div class="composer-area">
+			<ComposerPanel {scene} />
+		</div>
+
+		<!-- Right: Tools -->
+		{#if layoutMode === 'landscape'}
+			<ToolsPanel
+				tools={defaultTools}
+				{activeTool}
+				collapsed={toolsCollapsed}
+				onselect={handleToolSelect}
+			/>
+		{/if}
+	</div>
 </div>
 
 <style>
-  .workspace-container {
-    display: flex;
-    height: 100vh;
-    width: 100%;
-    overflow: hidden;
-    background: var(--bg-primary, #1A1A1D);
-  }
+	.workspace {
+		display: flex;
+		flex-direction: column;
+		height: 100vh;
+		width: 100%;
+		overflow: hidden;
+		background: var(--bg-primary, #2B2B2B);
+	}
 
-  .composer-area {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-primary, #1A1A1D);
-  }
+	.workspace-body {
+		display: flex;
+		flex: 1;
+		overflow: hidden;
+		min-height: 0;
+	}
+
+	.left-column {
+		display: flex;
+		flex-direction: column;
+		width: 240px;
+		min-width: 200px;
+		max-width: 320px;
+		border-right: 1px solid var(--border-color, #4E525A);
+		overflow: hidden;
+		flex-shrink: 0;
+	}
+
+	/* Center composer area - fills remaining horizontal space */
+	.composer-area {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+	}
 </style>
