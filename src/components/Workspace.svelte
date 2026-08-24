@@ -41,18 +41,28 @@
 	let storageUsed = $state(0);
 
 	// Derived state - properly reactive
-	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
+	let selectedProject = $derived(
+		() => {
+			console.log('[Derived] selectedProject recalculating... projects.length:', projects.length, 'selectedProjectId:', selectedProjectId);
+			const p = projects.find(p => p.id === selectedProjectId);
+			console.log('[Derived] selectedProject:', p ? p.name : 'null');
+			return p || null;
+		}
+	);
 	let selectedSession = $derived.by(() => {
+		console.log('[Derived] selectedSession recalculating... selectedProjectId:', selectedProjectId, 'selectedSessionId:', selectedSessionId);
 		if (!selectedProject) {
-			console.log('[Derived] selectedProject is null');
+			console.log('[Derived] selectedProject is null - returning null');
 			return null;
 		}
+		console.log('[Derived] Checking', selectedProject.sessions.length, 'sessions in project', selectedProject.name);
 		const found = selectedProject.sessions.find(s => {
 			const match = String(s.id) === String(selectedSessionId);
-			if (!match) console.log(`[Derived] Session ${s.id} (type:${typeof s.id}) !== ${selectedSessionId} (type:${typeof selectedSessionId})`);
+			if (!match) console.log(`  [Derived] Session ${s.id} (type:${typeof s.id}) !== ${selectedSessionId} (type:${typeof selectedSessionId})`);
+			else console.log(`  [Derived] MATCHED: ${s.id}`);
 			return match;
 		});
-		console.log('[Derived] selectedSession:', found ? `Found ${found.id}` : 'Not found');
+		console.log('[Derived] selectedSession result:', found ? `Found ${found.id}` : 'Not found - returning null');
 		return found || null;
 	});
 
