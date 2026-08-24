@@ -36,8 +36,11 @@
 	let storageUsed = $state(0);
 
 	// Derived state
-	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
-	let selectedSession = $derived(selectedProject?.sessions.find(s => s.id === selectedSessionId) || null);
+	let selectedProject = $derived(() => projects.find(p => p.id === selectedProjectId) || null);
+	let selectedSession = $derived.by(() => {
+		if (!selectedProject) return null;
+		return selectedProject.sessions.find(s => String(s.id) === String(selectedSessionId)) || null;
+	});
 
 	// Load projects from localStorage on mount
 	function loadProjects() {
@@ -143,18 +146,24 @@
 	}
 
 	function handleSessionSelect(sessionId: string) {
-		// Find the project containing this session
-		const foundProject = projects.find(p => 
-			p.sessions.some(s => s.id === sessionId)
-		);
-		
-		if (foundProject) {
-			// Set both atomically
-			selectedProjectId = foundProject.id;
-			selectedSessionId = sessionId;
-			saveProjects();
-		}
-	}
+    console.log('[Workspace] handleSessionSelect called with:', sessionId, 'typeof:', typeof sessionId);
+    console.log('[Workspace] Before update - selectedProjectId:', selectedProjectId, 'selectedSessionId:', selectedSessionId);
+    
+    const foundProject = projects.find(p => 
+      p.sessions.some(s => String(s.id) === String(sessionId))
+    );
+    
+    console.log('[Workspace] Found project:', foundProject ? foundProject.id : 'NOT FOUND');
+    
+    if (foundProject) {
+      selectedProjectId = foundProject.id;
+      selectedSessionId = sessionId;
+      saveProjects();
+      console.log('[Workspace] After update - selectedProjectId:', selectedProjectId, 'selectedSessionId:', selectedSessionId);
+      console.log('[Workspace] selectedProject:', selectedProject ? selectedProject.id : 'null');
+      console.log('[Workspace] selectedSession:', selectedSession ? selectedSession.id : 'null');
+    }
+  }
 
 	function handleCreateProject(input: { name: string; path?: string }) {
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;

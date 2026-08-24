@@ -64,7 +64,11 @@
   }
 
   function handleSelectSession(sessionId: string) {
+    console.log('[ProjectsPanel] handleSelectSession called with:', sessionId, 'typeof:', typeof sessionId);
+    console.log('[ProjectsPanel] projects.length:', projects.length);
+    console.log('[ProjectsPanel] selectedProjectId:', selectedProjectId);
     onselectsession(sessionId);
+    console.log('[ProjectsPanel] onselectsession called');
   }
 
   function handleDeleteProject(projectId: string) {
@@ -119,7 +123,7 @@
             {#each project.sessions as session (session.id)}
               <div 
                 class="session-item {selectedSessionId === session.id ? 'selected' : ''}"
-                onclick={() => handleSelectSession(session.id)}
+                onclick={() => handleSelectSession(project.id, session.id)}
               >
                 <span class="session-icon">🎬</span>
                 <input 
