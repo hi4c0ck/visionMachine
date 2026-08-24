@@ -91,6 +91,27 @@
 		}
 	}
 
+	// Handle session update with proper reactivity (extracted to avoid stale closures)
+	function handleSessionUpdate(updatedSession: SessionData) {
+		console.log('[Workspace] Session updated:', updatedSession.id);
+		if (!selectedProject || !selectedSession) return;
+		
+		const updatedSessions = selectedProject.sessions.map(s =>
+			s.id === updatedSession.id ? updatedSession : s
+		);
+		
+		const updatedProject: ProjectData = {
+			...selectedProject,
+			sessions: updatedSessions,
+			updatedAt: Date.now(),
+		};
+		
+		projects = projects.map(p =>
+			p.id === selectedProject.id ? updatedProject : p
+		);
+		saveProjects();
+	}
+
 	// Call load on mount
 	onMount(() => {
 		loadProjects();
@@ -188,7 +209,7 @@
 			totalGeneratedFrames: 0,
 		};
 		
-		const updatedProject = {
+		const updatedProject: ProjectData = {
 			...project,
 			sessions: [...project.sessions, newSession],
 		};
@@ -210,7 +231,7 @@
 			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
 		);
 		
-		const updatedProject = {
+		const updatedProject: ProjectData = {
 			...selectedProject,
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
@@ -228,7 +249,7 @@
 		if (!project) return;
 		
 		const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
-		const updatedProject = {
+		const updatedProject: ProjectData = {
 			...project,
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
@@ -301,24 +322,10 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			{#if selectedSession}
+			{#if selectedSession && selectedProject}
 				<ComposerPanel
 					{selectedSession}
-					onupdate={(session) => {
-						if (!selectedProject) return;
-						const updatedSessions = selectedProject.sessions.map(s =>
-							s.id === session.id ? session : s
-						);
-						const updatedProject = { 
-							...selectedProject, 
-							sessions: updatedSessions,
-							updatedAt: Date.now()
-						};
-						projects = projects.map(p =>
-							p.id === selectedProject.id ? updatedProject : p
-						);
-						saveProjects();
-					}}
+					onupdate={handleSessionUpdate}
 				/>
 			{:else}
 				<div class="composer-empty">
@@ -330,7 +337,7 @@
 		</div>
 
 		<!-- Right: Tools -->
-		{#if layoutMode === 'landscape'}
+		{#if layoutMode === 'landscape' && selectedSession}
 			<ToolsPanel
 				{selectedSession}
 				{selectedProject}
