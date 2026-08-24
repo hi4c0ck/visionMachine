@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { attachConsole } from '@tauri-apps/plugin-log';
 
 	import Workspace from './components/Workspace.svelte';
 	import { APP_CONSTANTS } from '$constants';
@@ -84,6 +85,7 @@
 	// Lifecycle
 	onMount(() => {
 		console.log('[App] onMount called');
+		attachConsole();
 		
 		// Restore from localStorage
 		const savedName = localStorage.getItem('vm-username');

@@ -28,6 +28,7 @@ thiserror = "1.0"
 futures = "0.3"
 sysinfo = "0.30"
 tauri-plugin-dialog = "2.7.2"
+tauri-plugin-log = "2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winbase"] }

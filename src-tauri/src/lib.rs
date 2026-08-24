@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+﻿use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use std::path::PathBuf;
 
@@ -75,7 +75,7 @@ pub fn run() {
     }
     
     tauri::Builder::default()
-
+        
         .manage(AppState::new())
         .setup(move |app| {
             log::info!("[Setup] Application starting...");
