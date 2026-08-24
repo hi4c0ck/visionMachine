@@ -64,7 +64,6 @@
   }
 
   function handleSelectSession(sessionId: string) {
-    console.log('[ProjectsPanel] Session selected:', sessionId);
     onselectsession(sessionId);
   }
 

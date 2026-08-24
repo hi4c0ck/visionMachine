@@ -42,13 +42,18 @@ fn get_preflight_report() -> Result<PreflightReport, String> {
     Ok(run_preflight_checks())
 }
 
+#[tauri::command]
+fn log_to_file(message: String) -> Result<(), String> {
+    eprintln!("{}", message);
+    Ok(())
+}
+
 /// Simple database initialization: check if exists, create if not
-fn init_database(app_data_dir: &PathBuf, log: &mut logger::FileLogger) -> Result<PathBuf, String> {
+fn init_database(app_data_dir: &PathBuf) -> Result<PathBuf, String> {
     let db_path = app_data_dir.join("visionmachine.db");
     
     // Check if database already exists
     if db_path.exists() {
-        log.log("INFO", &format!("[DB] Database already exists at: {:?}", db_path));
         return Ok(db_path);
     }
     
@@ -62,7 +67,6 @@ fn init_database(app_data_dir: &PathBuf, log: &mut logger::FileLogger) -> Result
     std::fs::File::create(&db_path)
         .map_err(|e| format!("Failed to create database: {}", e))?;
     
-    log.log("INFO", &format!("[DB] Created new database at: {:?}", db_path));
     Ok(db_path)
 }
 
@@ -83,39 +87,36 @@ pub fn run() {
         std::process::exit(1);
     }
     
-    // Move log into the closure by using Arc<Mutex<>>
-    let log = std::sync::Mutex::new(log);
-    
     tauri::Builder::default()
         .manage(AppState::new())
         .setup(move |app| {
-            let mut log_guard = log.lock().unwrap();
-            log_guard.log("INFO", "[Setup] Application starting...");
+            log.log("INFO", "[Setup] Application starting...");
             
             // Get app data directory
             let app_data_dir = app.path().app_local_data_dir()
                 .map_err(|e| format!("Failed to get app data directory: {}", e))?;
             
-            log_guard.log("INFO", &format!("[Setup] App data directory: {:?}", app_data_dir));
+            log.log("INFO", &format!("[Setup] App data directory: {:?}", app_data_dir));
             
             // Initialize database (check if exists, create if not)
-            match init_database(&app_data_dir, &mut log_guard) {
+            match init_database(&app_data_dir) {
                 Ok(db_path) => {
-                    log_guard.log("INFO", &format!("[Setup] Database initialized at: {:?}", db_path));
+                    log.log("INFO", &format!("[Setup] Database initialized at: {:?}", db_path));
                 }
                 Err(e) => {
-                    log_guard.log("WARN", &format!("[Setup] Could not initialize database: {}", e));
+                    log.log("WARN", &format!("[Setup] Could not initialize database: {}", e));
                     // Continue anyway - app can work without DB for now
                 }
             }
             
-            log_guard.log("INFO", "[Setup] Setup complete!");
+            log.log("INFO", "[Setup] Setup complete!");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             login_user,
             get_app_info,
             get_preflight_report,
+            log_to_file,
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run app");
