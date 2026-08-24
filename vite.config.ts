@@ -11,6 +11,7 @@ export default defineConfig({
       '$constants': resolve(__dirname, 'src/constants'),
     },
   },
+  root: 'public',
   server: { 
     port: 1420, 
     strictPort: true,
@@ -18,7 +19,7 @@ export default defineConfig({
     cors: true
   },
   build: { 
-    outDir: 'dist', 
+    outDir: '../dist', 
     emptyOutDir: true 
   },
 });
