@@ -16,7 +16,7 @@
 			console.log('[ComposerPanel] No session provided, skipping');
 			return;
 		}
-		if (!session.pipes || !Array.isArray(session.pipes)) {
+		if (!session || !session.pipes || !Array.isArray(session.pipes)) {
 			console.error('[ComposerPanel] Session missing pipes, creating empty pipe:', session?.id);
 			session.pipes = [{
 				id: crypto.randomUUID(),
@@ -82,6 +82,7 @@
 	}
 
 	function confirmAdd() {
+		if (!session?.pipes) return;
 		if (activePipeIndex === null) return;
 		const pipe = session.pipes[activePipeIndex];
 		if (!pipe || pipe.keyframes.length >= MAX_KEYFRAMES) return;
@@ -119,6 +120,7 @@
 	}
 
 	function deleteKeyframe(pipeIndex: number, kfId: string) {
+		if (!session?.pipes) return;
 		try {
 			const pipe = session.pipes[pipeIndex];
 			if (!pipe) return;
@@ -135,6 +137,7 @@
 	}
 
 	function updateQ(pipeIndex: number, val: number) {
+		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session.pipes.map((p, idx) => 
 				idx === pipeIndex ? { ...p, qValue: val } : p
@@ -146,6 +149,7 @@
 	}
 
 	function updateC(pipeIndex: number, val: number) {
+		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session.pipes.map((p, idx) => 
 				idx === pipeIndex ? { ...p, cValue: val } : p
@@ -157,6 +161,7 @@
 	}
 
 	function openSegmentModal(pipeIndex: number, segment: PromptSegment) {
+		if (!session?.pipes) return;
 		try {
 			activeSegmentId = segment.id;
 			activeSegmentPipeIndex = pipeIndex;
@@ -175,6 +180,7 @@
 	}
 
 	function confirmSegmentUpdate() {
+		if (!session?.pipes) return;
 		if (activeSegmentId === null || activeSegmentPipeIndex === null) return;
 		
 		try {
@@ -209,6 +215,7 @@
 	}
 
 	function openTypePicker(pipeIndex: number) {
+		if (!session?.pipes) return;
 		try {
 			activePipeForType = pipeIndex;
 			showTypePicker = true;
@@ -223,6 +230,7 @@
 	}
 
 	function addSegmentWithType(tag: TagType) {
+		if (!session?.pipes) return;
 		if (activePipeForType === null) return;
 		
 		try {
@@ -268,6 +276,7 @@
 	}
 
 	function removeParam(pipeIndex: number, segmentId: string) {
+		if (!session?.pipes) return;
 		try {
 			const pipe = session.pipes[pipeIndex];
 			if (!pipe || pipe.segments.length <= 1) return;
@@ -284,6 +293,7 @@
 	}
 
 	function updateParam(pipeIndex: number, segmentId: string, value: number) {
+		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session.pipes.map((p, idx) => {
 				if (idx !== pipeIndex) return p;
@@ -301,6 +311,7 @@
 	}
 
 	function moveParamFrame(pipeIndex: number, segmentId: string, delta: number) {
+		if (!session?.pipes) return;
 		try {
 			const pipe = session.pipes[pipeIndex];
 			if (!pipe) return;
@@ -331,6 +342,7 @@
 	}
 
 	function updatePipeLength(pipeIndex: number, newLength: number) {
+		if (!session?.pipes) return;
 		try {
 			const snapped = snapTo8nPlus1(newLength);
 			const maxLen = getMaxFramesForResolution(session.resolution);
@@ -351,6 +363,7 @@
 	}
 
 	function openGlobalPromptModal(pipeIndex: number) {
+		if (!session?.pipes) return;
 		try {
 			activeGlobalPipeIndex = pipeIndex;
 			const pipe = session.pipes[pipeIndex];
@@ -367,6 +380,7 @@
 	}
 
 	function confirmGlobalPrompt() {
+		if (!session?.pipes) return;
 		if (activeGlobalPipeIndex === null) return;
 
 		try {
@@ -386,6 +400,7 @@
 	}
 
 	function updateFPS(fps: number) {
+		if (!session?.pipes) return;
 		try {
 			onUpdate({ ...session, fps });
 		} catch (e) {
@@ -394,6 +409,7 @@
 	}
 
 	function updateResolution(resolution: typeof session.resolution) {
+		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session.pipes.map(p => ({
 				...p,
