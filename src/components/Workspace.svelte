@@ -234,6 +234,8 @@
 				totalGeneratedFrames: 0,
 			};
 			
+			console.log('[Workspace] Created session with pipe:', newSession.id, 'pipes:', newSession.pipes?.length);
+			
 			const updatedProject: ProjectData = {
 				...project,
 				sessions: [...project.sessions, newSession],
@@ -377,7 +379,7 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			{#if selectedSession && selectedProject}
+			{#if selectedSession && selectedProject && selectedSession?.pipes && selectedSession.pipes.length > 0}
 				<ComposerPanel
 					{selectedSession}
 					onupdate={handleSessionUpdate}
@@ -387,6 +389,9 @@
 					<div class="empty-icon">🎬</div>
 					<h2>Select a Session</h2>
 					<p>Create a project and add a session to start editing</p>
+					{#if selectedSession && !selectedSession?.pipes}
+						<p style="color: #dc2626; margin-top: 20px;">⚠️ Session has no pipes - this is a bug!</p>
+					{/if}
 				</div>
 			{/if}
 		</div>
