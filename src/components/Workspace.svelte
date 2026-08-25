@@ -150,16 +150,24 @@
 	}
 
 	function handleSessionSelect(sessionId: string) {
+		console.log('[Workspace] Session clicked:', sessionId);
+		
 		// Find the project containing this session
 		const foundProject = projects.find(p => 
 			p.sessions.some(s => s.id === sessionId)
 		);
 		
+		console.log('[Workspace] Found project:', foundProject ? foundProject.id : 'NOT FOUND');
+		
 		if (foundProject) {
-			// Set both atomically
+			// Set project first, then session
 			selectedProjectId = foundProject.id;
 			selectedSessionId = sessionId;
 			saveProjects();
+			console.log('[Workspace] Selection set - project:', selectedProjectId, 'session:', selectedSessionId);
+			console.log('[Workspace] selectedSession:', selectedSession ? selectedSession.id : 'null');
+		} else {
+			console.error('[Workspace] Project not found for session:', sessionId);
 		}
 	}
 

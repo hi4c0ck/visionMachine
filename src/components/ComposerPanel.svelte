@@ -8,7 +8,20 @@
 		getMaxFramesForResolution,
 	} from '$types';
 
-	let { session, onUpdate }: { session: SessionData; onUpdate: (session: SessionData) => void } = $props();
+	let { session, onUpdate }: { session?: SessionData; onUpdate: (session: SessionData) => void } = $props();
+
+	// Validate session data
+	function validateSession() {
+		if (!session) {
+			console.error('[ComposerPanel] No session provided');
+			return false;
+		}
+		if (!session.pipes) {
+			console.error('[ComposerPanel] Session has no pipes array:', session);
+			return false;
+		}
+		return true;
+	}
 
 	const MAX_KEYFRAMES = 3;
 	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
@@ -387,6 +400,12 @@
 	}
 </script>
 
+{#if !validateSession()}
+  <div class="error-state">
+    <p>Error: No valid session data</p>
+    <pre>{JSON.stringify(session, null, 2)}</pre>
+  </div>
+{:else}
 <div class="composer-panel">
   <!-- Scene Header -->
   <div class="scene-header">
@@ -1335,4 +1354,19 @@
     border-radius: 50%;
     flex-shrink: 0;
   }
+  
+  .error-state {
+    padding: 20px;
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+    font-family: monospace;
+    font-size: 12px;
+    overflow: auto;
+  }
+  
+  .error-state pre {
+    margin-top: 10px;
+    white-space: pre-wrap;
+  }
 </style>
+{/if}
