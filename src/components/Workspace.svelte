@@ -6,6 +6,9 @@
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData, PipeRow } from '$types';
+	import { getMaxFramesForResolution } from '$types';
+	import { invoke } from '@tauri-apps/api/core';
+	import { listen } from '@tauri-apps/api/event';
 
 	let {
 		userName,
@@ -33,8 +36,9 @@
 	let selectedSessionId = $state<string | null>(null);
 	let activeTool = $state<string | null>(null);
 	let error = $state<string | null>(null);
+	let loading = $state(false);
 
-	// Derived state - SIMPLE correct syntax
+	// Derived state
 	let selectedProject = $derived(
 		projects.find(p => p.id === selectedProjectId) || null
 	);
@@ -45,16 +49,66 @@
 		return sess || null;
 	});
 
-	// Load projects from localStorage on mount
-	function loadProjects() {
+	// Load projects from backend
+	async function loadProjects() {
 		try {
-			const saved = localStorage.getItem('vm-projects');
+			loading = true;
+			error = null;
+			
+			// Call backend to get projects (note: needs profile_id for real app)
+			// For now, we use a simplified approach
+			const result = await invoke('list_projects');
+			const backendProjects = result as any[];
+			
+			// Convert backend format to frontend format
+			projects = backendProjects.map((p: any) => ({
+				id: p.id,
+				name: p.name,
+				createdAt: new Date(p.created_at).getTime(),
+				directoryPath: p.directory_path || '',
+				sessions: [],
+				totalGenerations: 0,
+				updatedAt: Date.now(),
+				profileId: p.profile_id || ''
+			})) as ProjectData[];
+			
+			// Try to restore selection from localStorage (migration path)
+			const savedProject = localStorage.getItem(`vm-selected-project-${userName}`);
+			const savedSession = localStorage.getItem(`vm-selected-session-${userName}`);
+			
+			if (savedProject && projects.length > 0) {
+				const found = projects.find(p => p.id === savedProject);
+				if (found) {
+					selectedProjectId = savedProject;
+					if (savedSession) {
+						selectedSessionId = savedSession;
+					}
+				}
+			}
+			
+			if (onprojectsupdate) {
+				onprojectsupdate(projects);
+			}
+		} catch (e) {
+			console.error('[Workspace] Failed to load projects:', e);
+			error = `Failed to load projects: ${e}`;
+			// Fallback to localStorage if backend fails
+			await loadFromLocalStorage();
+		} finally {
+			loading = false;
+		}
+	}
+
+	// Fallback: Load from localStorage (for migration)
+	async function loadFromLocalStorage() {
+		try {
+			const saved = localStorage.getItem(`vm-projects-${userName}`);
 			if (saved) {
 				const parsed: ProjectData[] = JSON.parse(saved);
 				projects = parsed;
 				
-				const savedProject = localStorage.getItem('vm-selected-project');
-				const savedSession = localStorage.getItem('vm-selected-session');
+				const savedProject = localStorage.getItem(`vm-selected-project-${userName}`);
+				const savedSession = localStorage.getItem(`vm-selected-session-${userName}`);
 				
 				if (savedProject && projects.length > 0) {
 					const found = projects.find(p => p.id === savedProject);
@@ -65,58 +119,43 @@
 						}
 					}
 				}
+				
+				if (onprojectsupdate) {
+					onprojectsupdate(projects);
+				}
 			}
 		} catch (e) {
-			console.error('[Workspace] Failed to load projects:', e);
+			console.error('[Workspace] Failed to load from localStorage:', e);
 		}
 	}
 
-	// Save projects to localStorage
-	function saveProjects() {
+	// Save projects to backend and localStorage (hybrid approach)
+	async function saveProjects() {
 		try {
-			localStorage.setItem('vm-projects', JSON.stringify(projects));
+			// Save to backend
+			// Note: This would need a proper backend command that handles full project update
+			// For now, we'll just save to localStorage as fallback
+			localStorage.setItem(`vm-projects-${userName}`, JSON.stringify(projects));
+			
+			if (selectedProjectId) {
+				localStorage.setItem(`vm-selected-project-${userName}`, selectedProjectId);
+				if (selectedSessionId) {
+					localStorage.setItem(`vm-selected-session-${userName}`, selectedSessionId);
+				}
+			}
+			
 			if (onprojectsupdate) {
 				onprojectsupdate(projects);
-			}
-			if (selectedProjectId) {
-				localStorage.setItem('vm-selected-project', selectedProjectId);
-				if (selectedSessionId) {
-					localStorage.setItem('vm-selected-session', selectedSessionId);
-				}
 			}
 		} catch (e) {
 			console.error('[Workspace] Failed to save projects:', e);
 		}
 	}
 
-	// Handle session update
-	function handleSessionUpdate(updatedSession: SessionData) {
-		if (!selectedProject || !selectedSession) {
-			return;
-		}
-		
-		const updatedSessions = selectedProject.sessions.map(s =>
-			s.id === updatedSession.id ? updatedSession : s
-		);
-		
-		const updatedProject: ProjectData = {
-			...selectedProject,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
-		};
-		
-		projects = projects.map(p =>
-			p.id === selectedProject.id ? updatedProject : p
-		);
-		saveProjects();
-	}
-
-	onMount(() => {
-		loadProjects();
-	});
-
 	function handleLogout() {
-		onlogout?.();
+		if (onlogout) {
+			onlogout();
+		}
 	}
 
 	function handleThemeChange(theme: string) {
@@ -145,7 +184,46 @@
 		}
 	}
 
-	function handleCreateProject(input: { name: string; path?: string }) {
+	async function handleCreateProject(input: { name: string; path?: string }) {
+		try {
+			loading = true;
+			const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
+			const projectPath = `${basePath}\\${input.name}`;
+			
+			// Create via backend
+			const result = await invoke('create_project', {
+				name: input.name,
+				directoryPath: projectPath
+			});
+			
+			const newProjectId = result as string;
+			
+			// Add to local state
+			const newProject: ProjectData = {
+				id: newProjectId,
+				name: input.name,
+				createdAt: Date.now(),
+				directoryPath: projectPath,
+				sessions: [],
+				totalGenerations: 0,
+				updatedAt: Date.now(),
+				profileId: '' // Would come from backend
+			};
+			
+			projects = [...projects, newProject];
+			selectedProjectId = newProject.id;
+			await saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to create project:', e);
+			error = `Failed to create project: ${e}`;
+			// Fallback
+			handleCreateProjectFallback(input);
+		} finally {
+			loading = false;
+		}
+	}
+
+	function handleCreateProjectFallback(input: { name: string; path?: string }) {
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
 		const projectPath = `${basePath}\\${input.name}`;
 		
@@ -156,6 +234,8 @@
 			directoryPath: projectPath,
 			sessions: [],
 			totalGenerations: 0,
+			updatedAt: Date.now(),
+			profileId: ''
 		};
 		
 		projects = [...projects, newProject];
@@ -172,9 +252,81 @@
 		saveProjects();
 	}
 
-	function handleCreateSession(projectId: string) {
+	async function handleCreateSession(projectId: string) {
+		try {
+			loading = true;
+			const project = projects.find(p => p.id === projectId);
+			if (!project) return;
+
+			const maxFrames = getMaxFramesForResolution('720p');
+			const defaultPipe: PipeRow = {
+				id: crypto.randomUUID(),
+				lengthFrames: maxFrames,
+				keyframes: [],
+				qValue: 18,
+				cValue: 7,
+				segments: [],
+			};
+
+			const sessionName = `Session ${project.sessions.length + 1}`;
+			
+			// Create via backend
+			const pipesJson = JSON.stringify([defaultPipe]);
+			const result = await invoke('create_session', {
+				project_id: projectId,
+				name: sessionName,
+				pipes_json: pipesJson
+			});
+			
+			const newSessionId = result as string;
+			
+			const newSession: SessionData = {
+				id: newSessionId,
+				name: sessionName,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				directoryPath: `${project.directoryPath}\\session_${Date.now()}`,
+				pipes: [defaultPipe],
+				fps: 24,
+				resolution: '720p',
+				orientation: 'horizontal',
+				totalGeneratedFrames: 0,
+			};
+			
+			const updatedProject: ProjectData = {
+				...project,
+				sessions: [...project.sessions, newSession],
+				updatedAt: Date.now(),
+			};
+			
+			projects = projects.map(p => 
+				p.id === projectId ? updatedProject : p
+			);
+			
+			selectedSessionId = newSession.id;
+			await saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to create session:', e);
+			// Fallback
+			createSessionFallback(projectId);
+		} finally {
+			loading = false;
+		}
+	}
+
+	function createSessionFallback(projectId: string) {
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
+		
+		const maxFrames = getMaxFramesForResolution('720p');
+		const defaultPipe: PipeRow = {
+			id: crypto.randomUUID(),
+			lengthFrames: maxFrames,
+			keyframes: [],
+			qValue: 18,
+			cValue: 7,
+			segments: [],
+		};
 		
 		const newSession: SessionData = {
 			id: crypto.randomUUID(),
@@ -182,7 +334,7 @@
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 			directoryPath: `${project.directoryPath}\\session_${Date.now()}`,
-			pipes: [],
+			pipes: [defaultPipe],
 			fps: 24,
 			resolution: '720p',
 			orientation: 'horizontal',
@@ -221,7 +373,14 @@
 		saveProjects();
 	}
 
-	function handleDeleteSession(projectId: string, sessionId: string) {
+	async function handleDeleteSession(projectId: string, sessionId: string) {
+		try {
+			// Delete via backend
+			await invoke('delete_session', { session_id: sessionId });
+		} catch (e) {
+			console.error('[Workspace] Failed to delete session:', e);
+		}
+		
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
@@ -242,17 +401,58 @@
 		saveProjects();
 	}
 
+	// Handle session update from ComposerPanel
+	function handleSessionUpdate(updatedSession: SessionData) {
+		if (!selectedProject || !selectedSession) {
+			return;
+		}
+		
+		// Update locally
+		const updatedProjects = projects.map(p => {
+			if (p.id !== selectedProject.id) return p;
+			return {
+				...p,
+				sessions: p.sessions.map(s => 
+					s.id === updatedSession.id ? updatedSession : s
+				)
+			};
+		});
+		
+		projects = updatedProjects;
+		
+		// Also try to persist to backend
+		try {
+			invoke('update_session', {
+				session_id: updatedSession.id,
+				updates: {
+					name: updatedSession.name,
+					fps: updatedSession.fps,
+					resolution: updatedSession.resolution,
+					orientation: updatedSession.orientation,
+					pipes_json: JSON.stringify(updatedSession.pipes),
+					total_generated_frames: updatedSession.totalGeneratedFrames
+				}
+			}).catch(e => console.error('[Workspace] Backend update failed:', e));
+		} catch (e) {
+			console.error('[Workspace] Failed to update session backend:', e);
+		}
+		
+		saveProjects();
+	}
+
 	function handleToolSelect(id: string) {
 		activeTool = id;
 	}
 
 	function getHomeDir(): string {
-		if (typeof window !== 'undefined') {
-			const user = (window as any).userName || userName || 'User';
-			return `C:\\Users\\${user}`;
-		}
-		return 'C:\\Users';
+		return typeof window !== 'undefined' 
+			? (window as any).navigator?.userContext?.homeDirectory || 'C:\\Users\\user'
+			: 'C:\\Users\\user';
 	}
+
+	onMount(() => {
+		loadProjects();
+	});
 </script>
 
 <div class={`workspace ${layoutMode}`}>
@@ -291,24 +491,12 @@
 			/>
 		</div>
 
-		<div class="composer-area" onerror={(e) => console.error('[Workspace] Error:', e.detail)}>
-			<!-- SAFE: Check session exists AND has pipes defined -->
+		<div class="composer-area">
+			<!-- SAFE: Check session exists AND has project -->
 			{#if selectedSession && selectedProject}
-    {@debug selectedSession selectedProject}
-    <script>
-      console.log('[Workspace] Rendering ComposerPanel', {
-        hasSession: !!selectedSession,
-        hasProject: !!selectedProject,
-        sessionId: selectedSession?.id,
-        hasPipes: !!(selectedSession?.pipes),
-        pipeCount: selectedSession?.pipes?.length
-      });
-    </script>
-    {@debug selectedSession selectedProject}
 				<ComposerPanel
-      onerror={(e) => console.error('[Workspace] ComposerPanel error:', e)}
-					{selectedSession}
-					onupdate={handleSessionUpdate}
+					session={selectedSession}
+					onUpdate={handleSessionUpdate}
 				/>
 			{:else}
 				<div class="composer-empty">
@@ -345,53 +533,49 @@
 		display: flex;
 		flex: 1;
 		overflow: hidden;
-		min-height: 0;
 	}
 
 	.left-column {
+		width: 280px;
+		min-width: 200px;
+		max-width: 400px;
 		display: flex;
 		flex-direction: column;
-		width: 240px;
-		min-width: 200px;
-		max-width: 320px;
-		border-right: 1px solid var(--border-color, #4E525A);
-		overflow: hidden;
-		flex-shrink: 0;
+		background: var(--bg-secondary, #252526);
+		border-right: 1px solid var(--border-color, #3c3c3c);
 	}
 
 	.composer-area {
 		flex: 1;
-		min-width: 0;
+		position: relative;
 		overflow: hidden;
-		display: flex;
-		flex-direction: column;
+		background: var(--bg-primary, #1a1a1a);
 	}
 
 	.composer-empty {
-		flex: 1;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 16px;
+		height: 100%;
 		color: var(--text-muted, #808080);
+		gap: 12px;
 	}
 
-	.composer-empty .empty-icon {
+	.empty-icon {
 		font-size: 64px;
 		opacity: 0.5;
 	}
 
-	.composer-empty h2 {
+	.empty-icon h2 {
 		font-size: 24px;
 		font-weight: 600;
-		color: var(--text-primary, #EEEEEE);
+		color: var(--text-primary, #ffffff);
+		margin: 0;
 	}
 
-	.composer-empty p {
+	.empty-icon p {
 		font-size: 14px;
-		max-width: 400px;
-		text-align: center;
-		line-height: 1.5;
+		margin: 0;
 	}
 </style>
