@@ -12,7 +12,11 @@
 
 	// Ensure session always has pipes - use $effect for side effects
 	$effect(() => {
-		if (session && (!session.pipes || !Array.isArray(session.pipes))) {
+		if (!session) {
+			console.log('[ComposerPanel] No session provided, skipping');
+			return;
+		}
+		if (!session.pipes || !Array.isArray(session.pipes)) {
 			console.error('[ComposerPanel] Session missing pipes, creating empty pipe:', session?.id);
 			session.pipes = [{
 				id: crypto.randomUUID(),
