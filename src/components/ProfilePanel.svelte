@@ -1,21 +1,33 @@
 <script lang="ts">
+	import type { ProjectData, SessionData } from '$types';
+
 	let {
 		userName,
-		storageUsed,
-		oncreateSession
+		projects,
+		selectedProjectId,
+		selectedSessionId
 	} = $props<{
 		userName: string;
-		storageUsed: number;
-		oncreateSession?: () => void;
+		projects: ProjectData[];
+		selectedProjectId: string | null;
+		selectedSessionId: string | null;
 	}>();
 
-	function handleCreateSession() {
-		oncreateSession?.();
-	}
+	// Calculate real stats from projects
+	let totalSessions = $derived(
+		projects.reduce((acc, p) => acc + p.sessions.length, 0)
+	);
 
-	function handleShortcut(toolId: string) {
-		console.log(`[Profile] Quick tool shortcut: ${toolId}`);
-	}
+	let totalGenerations = $derived(
+		projects.reduce((acc, p) => acc + p.totalGenerations, 0)
+	);
+
+	let storageUsed = $derived(
+		Math.round(projects.reduce((acc, p) => {
+			// Rough estimate: each project/session metadata is ~1KB
+			return acc + (1 + p.sessions.length) * 1;
+		}, 0))
+	);
 </script>
 
 <div class="profile-panel" role="complementary" aria-label="User profile">
@@ -32,42 +44,16 @@
 	<div class="profile-sections">
 		<div class="section-item">
 			<span class="section-label">Sessions</span>
-			<span class="section-value">3</span>
+			<span class="section-value">{totalSessions}</span>
 		</div>
 		<div class="section-item">
 			<span class="section-label">Projects</span>
-			<span class="section-value">5</span>
+			<span class="section-value">{projects.length}</span>
 		</div>
-	</div>
-
-	<!-- Create session button -->
-	<button class="btn-create-session" onclick={handleCreateSession}>
-		Create Session
-	</button>
-
-	<!-- Diamond tool shortcuts at bottom -->
-	<div class="shortcuts-diamonds">
-		<button 
-			class="diamond-shortcut" 
-			onclick={() => handleShortcut('brush')}
-			title="Quick Brush Tool"
-		>
-			◊
-		</button>
-		<button 
-			class="diamond-shortcut" 
-			onclick={() => handleShortcut('eraser')}
-			title="Quick Eraser Tool"
-		>
-			◊
-		</button>
-		<button 
-			class="diamond-shortcut" 
-			onclick={() => handleShortcut('shape')}
-			title="Quick Shape Tool"
-		>
-			◊
-		</button>
+		<div class="section-item">
+			<span class="section-label">Generations</span>
+			<span class="section-value">{totalGenerations}</span>
+		</div>
 	</div>
 </div>
 
@@ -80,6 +66,8 @@
 		gap: 12px;
 		padding: 12px;
 		border-top: 1px solid var(--border-color, #4E525A);
+		flex: 1;
+		overflow: hidden;
 	}
 
 	/* ── Header ── */
@@ -132,6 +120,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		overflow-y: auto;
 	}
 
 	.section-item {
@@ -152,54 +141,5 @@
 		font-size: 0.8rem;
 		color: var(--text-primary, #EEEEEE);
 		font-weight: 500;
-	}
-
-	/* ── Create Session Button ── */
-	.btn-create-session {
-		padding: 8px;
-		background: var(--accent-primary, #59B5FF);
-		border: none;
-		border-radius: 6px;
-		color: white;
-		font-size: 0.8rem;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.15s;
-	}
-
-	.btn-create-session:hover {
-		background: var(--accent-primary-hover, #7EC8FF);
-	}
-
-	/* ── Diamond Shortcuts ── */
-	.shortcuts-diamonds {
-		display: flex;
-		justify-content: center;
-		gap: 8px;
-		padding-top: 8px;
-		border-top: 1px solid var(--border-color, #4E525A);
-		margin-top: auto;
-	}
-
-	.diamond-shortcut {
-		width: 32px;
-		height: 32px;
-		background: var(--bg-tertiary, #4E525A);
-		border: 1px solid var(--border-color, #4E525A);
-		border-radius: 4px;
-		color: var(--text-muted, #808080);
-		cursor: pointer;
-		font-size: 1rem;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: all 0.15s;
-	}
-
-	.diamond-shortcut:hover {
-		background: var(--accent-primary, #59B5FF);
-		color: white;
-		border-color: var(--accent-primary, #59B5FF);
-		transform: rotate(45deg);
 	}
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Workspace from './components/Workspace.svelte';
+	import ErrorHandler from './components/ErrorHandler.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
 	// State declarations - explicit reactive state
@@ -9,6 +10,7 @@
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
 	let error = $state<string | null>(null);
+	let runtimeError = $state<Error | null>(null);
 	
 	// Derived state - properly reactive
 	let isNameEmpty = $derived(!userName.trim().length);
@@ -23,6 +25,7 @@
 			}
 		} catch (e) {
 			console.error('[App] Failed to load projects:', e);
+			runtimeError = e instanceof Error ? e : new Error('Failed to load saved data');
 		}
 		return null;
 	}
@@ -40,7 +43,12 @@
 			return;
 		}
 		showWelcome = false;
-		localStorage.setItem('vm-username', name);
+		try {
+			localStorage.setItem('vm-username', name);
+		} catch (e) {
+			console.error('[App] Failed to save username:', e);
+			error = 'Failed to save user data';
+		}
 	}
 	
 	function handleKeyDown(e: KeyboardEvent) {
@@ -61,7 +69,11 @@
 	
 	function handleLayoutChange(mode: string) {
 		layoutMode = mode;
-		localStorage.setItem('vm-layout', mode);
+		try {
+			localStorage.setItem('vm-layout', mode);
+		} catch (e) {
+			console.error('[App] Failed to save layout:', e);
+		}
 	}
 	
 	function handleProjectsUpdate(projects: any[]) {
@@ -69,93 +81,101 @@
 			localStorage.setItem('vm-projects', JSON.stringify(projects));
 		} catch (e) {
 			console.error('[App] Failed to save projects:', e);
+			runtimeError = e instanceof Error ? e : new Error('Failed to save projects');
 		}
 	}
 	
 	// Lifecycle
 	onMount(() => {
-		// Restore from localStorage
-		const savedName = localStorage.getItem('vm-username');
-		if (savedName) {
-			userName = savedName;
-			showWelcome = false;
+		try {
+			// Restore from localStorage
+			const savedName = localStorage.getItem('vm-username');
+			if (savedName) {
+				userName = savedName;
+				showWelcome = false;
+			}
+			
+			const savedTheme = localStorage.getItem('vm-theme');
+			if (savedTheme) {
+				selectedTheme = savedTheme;
+			}
+			
+			const savedLayout = localStorage.getItem('vm-layout');
+			if (savedLayout) {
+				layoutMode = savedLayout;
+			}
+			
+			applyTheme(selectedTheme);
+		} catch (e) {
+			console.error('[App] Failed to restore state:', e);
+			runtimeError = e instanceof Error ? e : new Error('Failed to restore application state');
 		}
-		
-		const savedTheme = localStorage.getItem('vm-theme');
-		if (savedTheme) {
-			selectedTheme = savedTheme;
-		}
-		
-		const savedLayout = localStorage.getItem('vm-layout');
-		if (savedLayout) {
-			layoutMode = savedLayout;
-		}
-		
-		applyTheme(selectedTheme);
 	});
 </script>
 
-{#if showWelcome}
-	<div class="app">
-		<header class="header">
-			<div class="logo-section">
-				<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
-				<span class="version-badge">v{APP_CONSTANTS.version}</span>
-			</div>
-			
-			<div class="controls">
-				<select class="theme-select" value={selectedTheme} onchange={(e) => applyTheme(e.currentTarget.value)}>
-					{#each APP_CONSTANTS.themes as theme}
-						<option value={theme.id}>{theme.name}</option>
-					{/each}
-				</select>
-			</div>
-		</header>
-
-		{#if error}
-			<div class="error-banner">
-				<span>{error}</span>
-			</div>
-		{/if}
-
-		<main class="main">
-			<div class="welcome-card">
-				<h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
-				<p class="hint">{APP_CONSTANTS.strings.enterName}</p>
+<ErrorHandler {runtimeError}>
+	{#if showWelcome}
+		<div class="app">
+			<header class="header">
+				<div class="logo-section">
+					<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
+					<span class="version-badge">v{APP_CONSTANTS.version}</span>
+				</div>
 				
-				<input 
-					value={userName}
-					oninput={(e) => userName = e.currentTarget.value}
-					placeholder={APP_CONSTANTS.strings.namePlaceholder} 
-					class="input"
-					type="text"
-					onkeydown={handleKeyDown}
-				/>
-				
-				<button 
-					class="btn btn-primary" 
-					disabled={isNameEmpty}
-					onclick={handleLogin}
-				>
-					{APP_CONSTANTS.strings.getStarted}
-				</button>
-			</div>
-		</main>
-	</div>
-{:else}
-	<div id="workspace-container">
-		<Workspace
-			{userName}
-			{selectedTheme}
-			{layoutMode}
-			showWelcome={showWelcome}
-			onlogout={handleLogout}
-			onthemeChange={handleThemeChange}
-			onlayoutChange={handleLayoutChange}
-			onprojectsupdate={handleProjectsUpdate}
-		/>
-	</div>
-{/if}
+				<div class="controls">
+					<select class="theme-select" value={selectedTheme} onchange={(e) => applyTheme(e.currentTarget.value)}>
+						{#each APP_CONSTANTS.themes as theme}
+							<option value={theme.id}>{theme.name}</option>
+						{/each}
+					</select>
+				</div>
+			</header>
+
+			{#if error}
+				<div class="error-banner">
+					<span>{error}</span>
+				</div>
+			{/if}
+
+			<main class="main">
+				<div class="welcome-card">
+					<h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
+					<p class="hint">{APP_CONSTANTS.strings.enterName}</p>
+					
+					<input 
+						value={userName}
+						oninput={(e) => userName = e.currentTarget.value}
+						placeholder={APP_CONSTANTS.strings.namePlaceholder} 
+						class="input"
+						type="text"
+						onkeydown={handleKeyDown}
+					/>
+					
+					<button 
+						class="btn btn-primary" 
+						disabled={isNameEmpty}
+						onclick={handleLogin}
+					>
+						{APP_CONSTANTS.strings.getStarted}
+					</button>
+				</div>
+			</main>
+		</div>
+	{:else}
+		<div id="workspace-container">
+			<Workspace
+				{userName}
+				{selectedTheme}
+				{layoutMode}
+				showWelcome={showWelcome}
+				onlogout={handleLogout}
+				onthemeChange={handleThemeChange}
+				onlayoutChange={handleLayoutChange}
+				onprojectsupdate={handleProjectsUpdate}
+			/>
+		</div>
+	{/if}
+</ErrorHandler>
 
 <style>
 	* { margin: 0; padding: 0; box-sizing: border-box; }

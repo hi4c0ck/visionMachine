@@ -33,7 +33,7 @@
 	let selectedSessionId = $state<string | null>(null);
 	let activeTool = $state<string | null>(null);
 	let toolsCollapsed = $state(false);
-	let storageUsed = $state(0);
+	let error = $state<string | null>(null);
 
 	// Derived state
 	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
@@ -59,6 +59,7 @@
 			}
 		} catch (e) {
 			console.error('[Workspace] Failed to load projects:', e);
+			error = 'Failed to load saved projects';
 		}
 	}
 
@@ -81,6 +82,7 @@
 			}
 		} catch (e) {
 			console.error('[Workspace] Failed to save projects:', e);
+			error = 'Failed to save projects';
 		}
 	}
 
@@ -91,20 +93,25 @@
 		
 		if (!currentProject || !currentSession) return;
 		
-		const updatedSessions = currentProject.sessions.map(s =>
-			s.id === updatedSession.id ? updatedSession : s
-		);
-		
-		const updatedProject: ProjectData = {
-			...currentProject,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
-		};
-		
-		projects = projects.map(p =>
-			p.id === currentProject.id ? updatedProject : p
-		);
-		saveProjects();
+		try {
+			const updatedSessions = currentProject.sessions.map(s =>
+				s.id === updatedSession.id ? updatedSession : s
+			);
+			
+			const updatedProject: ProjectData = {
+				...currentProject,
+				sessions: updatedSessions,
+				updatedAt: Date.now(),
+			};
+			
+			projects = projects.map(p =>
+				p.id === currentProject.id ? updatedProject : p
+			);
+			saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to update session:', e);
+			error = 'Failed to update session';
+		}
 	}
 
 	// Call load on mount
@@ -160,18 +167,23 @@
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
 		const projectPath = `${basePath}\\${input.name}`;
 		
-		const newProject: ProjectData = {
-			id: crypto.randomUUID(),
-			name: input.name,
-			createdAt: Date.now(),
-			directoryPath: projectPath,
-			sessions: [],
-			totalGenerations: 0,
-		};
-		
-		projects = [...projects, newProject];
-		selectedProjectId = newProject.id;
-		saveProjects();
+		try {
+			const newProject: ProjectData = {
+				id: crypto.randomUUID(),
+				name: input.name,
+				createdAt: Date.now(),
+				directoryPath: projectPath,
+				sessions: [],
+				totalGenerations: 0,
+			};
+			
+			projects = [...projects, newProject];
+			selectedProjectId = newProject.id;
+			saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to create project:', e);
+			error = 'Failed to create project';
+		}
 	}
 
 	function handleDeleteProject(projectId: string) {
@@ -187,74 +199,89 @@
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
-		const sessionName = `Session ${project.sessions.length + 1}`;
-		const folderName = `session_${Date.now()}`;
-		const sessionPath = `${project.directoryPath}\\${folderName}`;
-		
-		const newSession: SessionData = {
-			id: crypto.randomUUID(),
-			name: sessionName,
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			directoryPath: sessionPath,
-			pipes: [],
-			fps: 24,
-			resolution: '720p',
-			orientation: 'horizontal',
-			totalGeneratedFrames: 0,
-		};
-		
-		const updatedProject: ProjectData = {
-			...project,
-			sessions: [...project.sessions, newSession],
-		};
-		
-		projects = projects.map(p => 
-			p.id === projectId ? updatedProject : p
-		);
-		
-		selectedSessionId = newSession.id;
-		saveProjects();
+		try {
+			const sessionName = `Session ${project.sessions.length + 1}`;
+			const folderName = `session_${Date.now()}`;
+			const sessionPath = `${project.directoryPath}\\${folderName}`;
+			
+			const newSession: SessionData = {
+				id: crypto.randomUUID(),
+				name: sessionName,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				directoryPath: sessionPath,
+				pipes: [],
+				fps: 24,
+				resolution: '720p',
+				orientation: 'horizontal',
+				totalGeneratedFrames: 0,
+			};
+			
+			const updatedProject: ProjectData = {
+				...project,
+				sessions: [...project.sessions, newSession],
+			};
+			
+			projects = projects.map(p => 
+				p.id === projectId ? updatedProject : p
+			);
+			
+			selectedSessionId = newSession.id;
+			saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to create session:', e);
+			error = 'Failed to create session';
+		}
 	}
 
 	function handleRenameSession(sessionId: string, newName: string) {
 		if (!selectedProject) return;
 		
-		const updatedSessions = selectedProject.sessions.map(s =>
-			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
-		);
-		
-		const updatedProject: ProjectData = {
-			...selectedProject,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
-		};
-		
-		projects = projects.map(p =>
-			p.id === selectedProject.id ? updatedProject : p
-		);
-		saveProjects();
+		try {
+			const updatedSessions = selectedProject.sessions.map(s =>
+				s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
+			);
+			
+			const updatedProject: ProjectData = {
+				...selectedProject,
+				sessions: updatedSessions,
+				updatedAt: Date.now(),
+			};
+			
+			projects = projects.map(p =>
+				p.id === selectedProject.id ? updatedProject : p
+			);
+			saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to rename session:', e);
+			error = 'Failed to rename session';
+		}
 	}
 
 	function handleDeleteSession(projectId: string, sessionId: string) {
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
-		const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
-		const updatedProject: ProjectData = {
-			...project,
-			sessions: updatedSessions,
-			updatedAt: Date.now(),
-		};
-		
-		projects = projects.map(p =>
-			p.id === projectId ? updatedProject : p
-		);
-		
-		if (selectedSessionId === sessionId) {
-			selectedSessionId = null;
+		try {
+			const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
+			const updatedProject: ProjectData = {
+				...project,
+				sessions: updatedSessions,
+				updatedAt: Date.now(),
+			};
+			
+			projects = projects.map(p =>
+				p.id === projectId ? updatedProject : p
+			);
+			
+			if (selectedSessionId === sessionId) {
+				selectedSessionId = null;
+			}
+			saveProjects();
+		} catch (e) {
+			console.error('[Workspace] Failed to delete session:', e);
+			error = 'Failed to delete session';
 		}
-		saveProjects();
 	}
 
 	function handleToolSelect(id: string) {
@@ -263,6 +290,25 @@
 
 	function handleGenerate() {
 		// TODO: Implement generation logic
+		console.log('[Workspace] Generate button clicked');
+	}
+
+	function handleFPSChange(fps: number) {
+		if (!selectedSession || !selectedProject) return;
+		const updatedSession = { ...selectedSession, fps };
+		handleSessionUpdate(updatedSession);
+	}
+
+	function handleResolutionChange(resolution: string) {
+		if (!selectedSession || !selectedProject) return;
+		const updatedSession = { ...selectedSession, resolution: resolution as any };
+		handleSessionUpdate(updatedSession);
+	}
+
+	function handleOrientationChange(orientation: string) {
+		if (!selectedSession || !selectedProject) return;
+		const updatedSession = { ...selectedSession, orientation: orientation as any };
+		handleSessionUpdate(updatedSession);
 	}
 
 	function getHomeDir(): string {
@@ -306,7 +352,9 @@
 			<!-- Profile panel at bottom-left -->
 			<ProfilePanel
 				{userName}
-				{storageUsed}
+				{projects}
+				{selectedProjectId}
+				{selectedSessionId}
 			/>
 		</div>
 
@@ -334,6 +382,9 @@
 				{activeTool}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
+				onfpschange={handleFPSChange}
+				onresolutionchange={handleResolutionChange}
+				onorientationchange={handleOrientationChange}
 			/>
 		{/if}
 	</div>

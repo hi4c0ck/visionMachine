@@ -1,322 +1,390 @@
 <script lang="ts">
-  import type { SessionData, PipeRow, PromptSegment, TagType } from '$types';
-  import { 
-    snapTo8nPlus1, 
-    validatePromptSegments,
-    TAG_SPECIFICATIONS,
-    FPS_PRESETS,
-    getMaxFramesForResolution,
-  } from '$types';
+	import type { SessionData, PipeRow, PromptSegment, TagType, ProjectData } from '$types';
+	import { 
+		snapTo8nPlus1, 
+		validatePromptSegments,
+		TAG_SPECIFICATIONS,
+		FPS_PRESETS,
+		getMaxFramesForResolution,
+	} from '$types';
 
-  let { session, onUpdate }: { session: SessionData; onUpdate: (session: SessionData) => void } = $props();
+	let { session, onUpdate }: { session: SessionData; onUpdate: (session: SessionData) => void } = $props();
 
-  const MAX_KEYFRAMES = 3;
-  const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
-  const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
-  const MIN_PIPE_LENGTH = 41;
+	const MAX_KEYFRAMES = 3;
+	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
+	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
+	const MIN_PIPE_LENGTH = 41;
 
-  // Modal state
-  let showAddModal = $state(false);
-  let activePipeIndex = $state<number | null>(null);
-  let activeKfIndex = $state<number | null>(null);
-  let addMode = $state<'url' | 'txt2img' | 'img2img'>('url');
-  let modalUrl = $state('');
-  let modalPrompt = $state('');
-  let modalImg2Img = $state('');
+	// Modal state
+	let showAddModal = $state(false);
+	let activePipeIndex = $state<number | null>(null);
+	let activeKfIndex = $state<number | null>(null);
+	let addMode = $state<'url' | 'txt2img' | 'img2img'>('url');
+	let modalUrl = $state('');
+	let modalPrompt = $state('');
+	let modalImg2Img = $state('');
 
-  // Segment modal state
-  let showSegmentModal = $state(false);
-  let activeSegmentId = $state<string | null>(null);
-  let activeSegmentPipeIndex = $state<number | null>(null);
-  let segmentValue = $state(0);
-  let segmentPrompt = $state('');
+	// Segment modal state
+	let showSegmentModal = $state(false);
+	let activeSegmentId = $state<string | null>(null);
+	let activeSegmentPipeIndex = $state<number | null>(null);
+	let segmentValue = $state(0);
+	let segmentPrompt = $state('');
 
-  // Global prompt modal state
-  let showGlobalModal = $state(false);
-  let activeGlobalPipeIndex = $state<number | null>(null);
-  let globalPromptText = $state('');
+	// Global prompt modal state
+	let showGlobalModal = $state(false);
+	let activeGlobalPipeIndex = $state<number | null>(null);
+	let globalPromptText = $state('');
 
-  // Add segment type picker
-  let showTypePicker = $state(false);
-  let activePipeForType = $state<number | null>(null);
-  const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
+	// Add segment type picker
+	let showTypePicker = $state(false);
+	let activePipeForType = $state<number | null>(null);
+	const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
 
-  // Modal functions
-  function closeModal() {
-    showAddModal = false;
-    activePipeIndex = null;
-    activeKfIndex = null;
-    addMode = 'url';
-    modalUrl = '';
-    modalPrompt = '';
-    modalImg2Img = '';
-  }
+	// Modal functions
+	function closeModal() {
+		showAddModal = false;
+		activePipeIndex = null;
+		activeKfIndex = null;
+		addMode = 'url';
+		modalUrl = '';
+		modalPrompt = '';
+		modalImg2Img = '';
+	}
 
-  function openAddModal(pipeIndex: number, kfIndex?: number) {
-    activePipeIndex = pipeIndex;
-    activeKfIndex = kfIndex ?? null;
-    showAddModal = true;
-  }
+	function openAddModal(pipeIndex: number, kfIndex?: number) {
+		try {
+			activePipeIndex = pipeIndex;
+			activeKfIndex = kfIndex ?? null;
+			showAddModal = true;
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to open add modal:', e);
+		}
+	}
 
-  function confirmAdd() {
-    if (activePipeIndex === null) return;
-    const pipe = session.pipes[activePipeIndex];
-    if (!pipe || pipe.keyframes.length >= MAX_KEYFRAMES) return;
+	function confirmAdd() {
+		if (activePipeIndex === null) return;
+		const pipe = session.pipes[activePipeIndex];
+		if (!pipe || pipe.keyframes.length >= MAX_KEYFRAMES) return;
 
-    let baseFrame = 0;
-    if (pipe.keyframes.length > 0) {
-      const lastFrame = Math.max(...pipe.keyframes.map(k => k.frame));
-      baseFrame = snapTo8nPlus1(lastFrame + 60);
-      if (baseFrame >= pipe.lengthFrames) {
-        baseFrame = snapTo8nPlus1(pipe.lengthFrames - 60);
-      }
-    }
+		try {
+			let baseFrame = 0;
+			if (pipe.keyframes.length > 0) {
+				const lastFrame = Math.max(...pipe.keyframes.map(k => k.frame));
+				baseFrame = snapTo8nPlus1(lastFrame + 60);
+				if (baseFrame >= pipe.lengthFrames) {
+					baseFrame = snapTo8nPlus1(pipe.lengthFrames - 60);
+				}
+			}
 
-    const newKeyframe = {
-      id: crypto.randomUUID(),
-      frame: baseFrame,
-      type: addMode as any,
-      imageSrc: addMode === 'url' ? modalUrl || undefined : undefined,
-      prompt: addMode === 'txt2img' ? modalPrompt : undefined,
-      referenceUrl: addMode === 'img2img' ? modalImg2Img || undefined : undefined,
-      status: 'done' as const,
-    };
+			const newKeyframe = {
+				id: crypto.randomUUID(),
+				frame: baseFrame,
+				type: addMode, // Fixed: removed 'as any' coercion
+				imageSrc: addMode === 'url' ? modalUrl || undefined : undefined,
+				prompt: addMode === 'txt2img' ? modalPrompt : undefined,
+				referenceUrl: addMode === 'img2img' ? modalImg2Img || undefined : undefined,
+				status: 'done' as const,
+			};
 
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== activePipeIndex) return p;
-      return { ...p, keyframes: [...p.keyframes, newKeyframe] };
-    });
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== activePipeIndex) return p;
+				return { ...p, keyframes: [...p.keyframes, newKeyframe] };
+			});
 
-    onUpdate({ ...session, pipes: updatedPipes });
-    closeModal();
-  }
+			onUpdate({ ...session, pipes: updatedPipes });
+			closeModal();
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to add keyframe:', e);
+		}
+	}
 
-  function deleteKeyframe(pipeIndex: number, kfId: string) {
-    const pipe = session.pipes[pipeIndex];
-    if (!pipe) return;
-    
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== pipeIndex) return p;
-      return { ...p, keyframes: p.keyframes.filter(k => k.id !== kfId) };
-    });
-    
-    onUpdate({ ...session, pipes: updatedPipes });
-  }
+	function deleteKeyframe(pipeIndex: number, kfId: string) {
+		try {
+			const pipe = session.pipes[pipeIndex];
+			if (!pipe) return;
+			
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== pipeIndex) return p;
+				return { ...p, keyframes: p.keyframes.filter(k => k.id !== kfId) };
+			});
+			
+			onUpdate({ ...session, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to delete keyframe:', e);
+		}
+	}
 
-  function updateQ(pipeIndex: number, val: number) {
-    const updatedPipes = session.pipes.map((p, idx) => 
-      idx === pipeIndex ? { ...p, qValue: val } : p
-    );
-    onUpdate({ ...session, pipes: updatedPipes });
-  }
+	function updateQ(pipeIndex: number, val: number) {
+		try {
+			const updatedPipes = session.pipes.map((p, idx) => 
+				idx === pipeIndex ? { ...p, qValue: val } : p
+			);
+			onUpdate({ ...session, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update Q:', e);
+		}
+	}
 
-  function updateC(pipeIndex: number, val: number) {
-    const updatedPipes = session.pipes.map((p, idx) => 
-      idx === pipeIndex ? { ...p, cValue: val } : p
-    );
-    onUpdate({ ...session, pipes: updatedPipes });
-  }
+	function updateC(pipeIndex: number, val: number) {
+		try {
+			const updatedPipes = session.pipes.map((p, idx) => 
+				idx === pipeIndex ? { ...p, cValue: val } : p
+			);
+			onUpdate({ ...session, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update C:', e);
+		}
+	}
 
-  function openSegmentModal(pipeIndex: number, segment: PromptSegment) {
-    activeSegmentId = segment.id;
-    activeSegmentPipeIndex = pipeIndex;
-    segmentValue = segment.value;
-    segmentPrompt = segment.prompt || '';
-    showSegmentModal = true;
-  }
+	function openSegmentModal(pipeIndex: number, segment: PromptSegment) {
+		try {
+			activeSegmentId = segment.id;
+			activeSegmentPipeIndex = pipeIndex;
+			segmentValue = segment.value;
+			segmentPrompt = segment.prompt || '';
+			showSegmentModal = true;
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to open segment modal:', e);
+		}
+	}
 
-  function closeSegmentModal() {
-    showSegmentModal = false;
-    activeSegmentId = null;
-    activeSegmentPipeIndex = null;
-  }
+	function closeSegmentModal() {
+		showSegmentModal = false;
+		activeSegmentId = null;
+		activeSegmentPipeIndex = null;
+	}
 
-  function confirmSegmentUpdate() {
-    if (activeSegmentId === null || activeSegmentPipeIndex === null) return;
-    
-    const pipe = session.pipes[activeSegmentPipeIndex];
-    if (!pipe) return;
+	function confirmSegmentUpdate() {
+		if (activeSegmentId === null || activeSegmentPipeIndex === null) return;
+		
+		try {
+			const pipe = session.pipes[activeSegmentPipeIndex];
+			if (!pipe) return;
 
-    const segment = pipe.segments.find(s => s.id === activeSegmentId);
-    if (!segment) return;
+			const segment = pipe.segments.find(s => s.id === activeSegmentId);
+			if (!segment) return;
 
-    const spec = TAG_SPECIFICATIONS[segment.tag];
+			const spec = TAG_SPECIFICATIONS[segment.tag];
 
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== activeSegmentPipeIndex) return p;
-      return {
-        ...p,
-        segments: p.segments.map(s => {
-          if (s.id !== activeSegmentId) return s;
-          return {
-            ...s,
-            value: spec.usePrompt ? s.value : segmentValue,
-            prompt: spec.usePrompt ? segmentPrompt : undefined,
-          };
-        }),
-      };
-    });
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== activeSegmentPipeIndex) return p;
+				return {
+					...p,
+					segments: p.segments.map(s => {
+						if (s.id !== activeSegmentId) return s;
+						return {
+							...s,
+							value: spec.usePrompt ? s.value : segmentValue,
+							prompt: spec.usePrompt ? segmentPrompt : undefined,
+						};
+					}),
+				};
+			});
 
-    onUpdate({ ...session, pipes: updatedPipes });
-    closeSegmentModal();
-  }
+			onUpdate({ ...session, pipes: updatedPipes });
+			closeSegmentModal();
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update segment:', e);
+		}
+	}
 
-  function openTypePicker(pipeIndex: number) {
-    activePipeForType = pipeIndex;
-    showTypePicker = true;
-  }
+	function openTypePicker(pipeIndex: number) {
+		try {
+			activePipeForType = pipeIndex;
+			showTypePicker = true;
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to open type picker:', e);
+		}
+	}
 
-  function closeTypePicker() {
-    showTypePicker = false;
-    activePipeForType = null;
-  }
+	function closeTypePicker() {
+		showTypePicker = false;
+		activePipeForType = null;
+	}
 
-  function addSegmentWithType(tag: TagType) {
-    if (activePipeForType === null) return;
-    
-    const pipe = session.pipes[activePipeForType];
-    if (!pipe) return;
+	function addSegmentWithType(tag: TagType) {
+		if (activePipeForType === null) return;
+		
+		try {
+			const pipe = session.pipes[activePipeForType];
+			if (!pipe) return;
 
-    const maxFrame = pipe.segments.length > 0
-      ? Math.max(...pipe.segments.map(s => s.frameEnd))
-      : 0;
-    const frameStart = maxFrame;
-    const frameEnd = Math.min(maxFrame + 60, pipe.lengthFrames);
+			const maxFrame = pipe.segments.length > 0
+				? Math.max(...pipe.segments.map(s => s.frameEnd))
+				: 0;
+			const frameStart = maxFrame;
+			const frameEnd = Math.min(maxFrame + 60, pipe.lengthFrames);
 
-    const spec = TAG_SPECIFICATIONS[tag];
-    let value = 0;
-    if (spec.min !== undefined && spec.max !== undefined) {
-      value = Math.floor((spec.min + spec.max) / 2);
-    }
+			const spec = TAG_SPECIFICATIONS[tag];
+			let value = 0;
+			if (spec.min !== undefined && spec.max !== undefined) {
+				value = Math.floor((spec.min + spec.max) / 2);
+			}
 
-    const newSegment: PromptSegment = {
-      id: crypto.randomUUID(),
-      frameStart,
-      frameEnd,
-      tag,
-      value,
-      spec,
-    };
+			const newSegment: PromptSegment = {
+				id: crypto.randomUUID(),
+				frameStart,
+				frameEnd,
+				tag,
+				value,
+				spec,
+			};
 
-    const testSegments = [...pipe.segments, newSegment];
-    const validation = validatePromptSegments(testSegments);
+			const testSegments = [...pipe.segments, newSegment];
+			const validation = validatePromptSegments(testSegments);
 
-    if (validation.valid) {
-      const updatedPipes = session.pipes.map((p, idx) => {
-        if (idx !== activePipeForType) return p;
-        return { ...p, segments: testSegments };
-      });
-      onUpdate({ ...session, pipes: updatedPipes });
-    }
+			if (validation.valid) {
+				const updatedPipes = session.pipes.map((p, idx) => {
+					if (idx !== activePipeForType) return p;
+					return { ...p, segments: testSegments };
+				});
+				onUpdate({ ...session, pipes: updatedPipes });
+			}
 
-    closeTypePicker();
-  }
+			closeTypePicker();
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to add segment:', e);
+		}
+	}
 
-  function removeParam(pipeIndex: number, segmentId: string) {
-    const pipe = session.pipes[pipeIndex];
-    if (!pipe || pipe.segments.length <= 1) return;
+	function removeParam(pipeIndex: number, segmentId: string) {
+		try {
+			const pipe = session.pipes[pipeIndex];
+			if (!pipe || pipe.segments.length <= 1) return;
 
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== pipeIndex) return p;
-      return { ...p, segments: p.segments.filter(s => s.id !== segmentId) };
-    });
-    
-    onUpdate({ ...session, pipes: updatedPipes });
-  }
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== pipeIndex) return p;
+				return { ...p, segments: p.segments.filter(s => s.id !== segmentId) };
+			});
+			
+			onUpdate({ ...session, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to remove param:', e);
+		}
+	}
 
-  function updateParam(pipeIndex: number, segmentId: string, value: number) {
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== pipeIndex) return p;
-      return {
-        ...p,
-        segments: p.segments.map(s => 
-          s.id === segmentId ? { ...s, value } : s
-        ),
-      };
-    });
-    onUpdate({ ...session, pipes: updatedPipes });
-  }
+	function updateParam(pipeIndex: number, segmentId: string, value: number) {
+		try {
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== pipeIndex) return p;
+				return {
+					...p,
+					segments: p.segments.map(s => 
+						s.id === segmentId ? { ...s, value } : s
+					),
+				};
+			});
+			onUpdate({ ...session, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update param:', e);
+		}
+	}
 
-  function moveParamFrame(pipeIndex: number, segmentId: string, delta: number) {
-    const pipe = session.pipes[pipeIndex];
-    if (!pipe) return;
+	function moveParamFrame(pipeIndex: number, segmentId: string, delta: number) {
+		try {
+			const pipe = session.pipes[pipeIndex];
+			if (!pipe) return;
 
-    const segment = pipe.segments.find(s => s.id === segmentId);
-    if (!segment) return;
+			const segment = pipe.segments.find(s => s.id === segmentId);
+			if (!segment) return;
 
-    const newStart = snapTo8nPlus1(segment.frameStart + delta);
-    const newEnd = snapTo8nPlus1(segment.frameEnd + delta);
+			const newStart = snapTo8nPlus1(segment.frameStart + delta);
+			const newEnd = snapTo8nPlus1(segment.frameEnd + delta);
 
-    if (newStart < 0 || newEnd > pipe.lengthFrames) return;
+			if (newStart < 0 || newEnd > pipe.lengthFrames) return;
 
-    const testSegments = pipe.segments.map(s => 
-      s.id === segmentId ? { ...s, frameStart: newStart, frameEnd: newEnd } : s
-    );
-    const validation = validatePromptSegments(testSegments);
+			const testSegments = pipe.segments.map(s => 
+				s.id === segmentId ? { ...s, frameStart: newStart, frameEnd: newEnd } : s
+			);
+			const validation = validatePromptSegments(testSegments);
 
-    if (validation.valid) {
-      const updatedPipes = session.pipes.map((p, idx) => {
-        if (idx !== pipeIndex) return p;
-        return { ...p, segments: testSegments };
-      });
-      onUpdate({ ...session, pipes: updatedPipes });
-    }
-  }
+			if (validation.valid) {
+				const updatedPipes = session.pipes.map((p, idx) => {
+					if (idx !== pipeIndex) return p;
+					return { ...p, segments: testSegments };
+				});
+				onUpdate({ ...session, pipes: updatedPipes });
+			}
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to move param:', e);
+		}
+	}
 
-  function updatePipeLength(pipeIndex: number, newLength: number) {
-    const snapped = snapTo8nPlus1(newLength);
-    const maxLen = getMaxFramesForResolution(session.resolution);
+	function updatePipeLength(pipeIndex: number, newLength: number) {
+		try {
+			const snapped = snapTo8nPlus1(newLength);
+			const maxLen = getMaxFramesForResolution(session.resolution);
 
-    if (snapped < MIN_PIPE_LENGTH) return;
-    if (snapped > maxLen) return;
+			if (snapped < MIN_PIPE_LENGTH) return;
+			if (snapped > maxLen) return;
 
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== pipeIndex) return p;
-      const truncatedSegments = p.segments.filter(s => s.frameEnd <= snapped);
-      return { ...p, lengthFrames: snapped, segments: truncatedSegments };
-    });
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== pipeIndex) return p;
+				const truncatedSegments = p.segments.filter(s => s.frameEnd <= snapped);
+				return { ...p, lengthFrames: snapped, segments: truncatedSegments };
+			});
 
-    onUpdate({ ...session, pipes: updatedPipes });
-  }
+			onUpdate({ ...session, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update pipe length:', e);
+		}
+	}
 
-  function openGlobalPromptModal(pipeIndex: number) {
-    activeGlobalPipeIndex = pipeIndex;
-    const pipe = session.pipes[pipeIndex];
-    globalPromptText = pipe?.globalPrompt?.text || '';
-    showGlobalModal = true;
-  }
+	function openGlobalPromptModal(pipeIndex: number) {
+		try {
+			activeGlobalPipeIndex = pipeIndex;
+			const pipe = session.pipes[pipeIndex];
+			globalPromptText = pipe?.globalPrompt?.text || '';
+			showGlobalModal = true;
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to open global prompt modal:', e);
+		}
+	}
 
-  function closeGlobalPromptModal() {
-    showGlobalModal = false;
-    activeGlobalPipeIndex = null;
-  }
+	function closeGlobalPromptModal() {
+		showGlobalModal = false;
+		activeGlobalPipeIndex = null;
+	}
 
-  function confirmGlobalPrompt() {
-    if (activeGlobalPipeIndex === null) return;
+	function confirmGlobalPrompt() {
+		if (activeGlobalPipeIndex === null) return;
 
-    const updatedPipes = session.pipes.map((p, idx) => {
-      if (idx !== activeGlobalPipeIndex) return p;
-      return {
-        ...p,
-        globalPrompt: { text: globalPromptText },
-      };
-    });
+		try {
+			const updatedPipes = session.pipes.map((p, idx) => {
+				if (idx !== activeGlobalPipeIndex) return p;
+				return {
+					...p,
+					globalPrompt: { text: globalPromptText },
+				};
+			});
 
-    onUpdate({ ...session, pipes: updatedPipes });
-    closeGlobalPromptModal();
-  }
+			onUpdate({ ...session, pipes: updatedPipes });
+			closeGlobalPromptModal();
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update global prompt:', e);
+		}
+	}
 
-  function updateFPS(fps: number) {
-    onUpdate({ ...session, fps });
-  }
+	function updateFPS(fps: number) {
+		try {
+			onUpdate({ ...session, fps });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update FPS:', e);
+		}
+	}
 
-  function updateResolution(resolution: typeof session.resolution) {
-    const updatedPipes = session.pipes.map(p => ({
-      ...p,
-      lengthFrames: Math.min(p.lengthFrames, getMaxFramesForResolution(resolution)),
-    }));
-    onUpdate({ ...session, resolution, pipes: updatedPipes });
-  }
+	function updateResolution(resolution: typeof session.resolution) {
+		try {
+			const updatedPipes = session.pipes.map(p => ({
+				...p,
+				lengthFrames: Math.min(p.lengthFrames, getMaxFramesForResolution(resolution)),
+			}));
+			onUpdate({ ...session, resolution, pipes: updatedPipes });
+		} catch (e) {
+			console.error('[ComposerPanel] Failed to update resolution:', e);
+		}
+	}
 </script>
 
 <div class="composer-panel">

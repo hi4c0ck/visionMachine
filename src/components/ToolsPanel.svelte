@@ -1,66 +1,72 @@
 <script lang="ts">
-  import type { SessionData, ProjectData } from '$types';
-  import { APP_CONSTANTS } from '$constants';
+	import type { SessionData, ProjectData } from '$types';
+	import { APP_CONSTANTS } from '$constants';
 
-  let { 
-    session, 
-    project, 
-    activeTool,
-    onselect,
-    ongenerate 
-  } = $props<{
-    session: SessionData | null;
-    project: ProjectData | null;
-    activeTool: string | null;
-    onselect: (toolId: string) => void;
-    ongenerate: () => void;
-  }>();
+	let { 
+		session, 
+		project, 
+		activeTool,
+		onselect,
+		ongenerate,
+		onfpschange,
+		onresolutionchange,
+		onorientationchange
+	} = $props<{
+		session: SessionData | null;
+		project: ProjectData | null;
+		activeTool: string | null;
+		onselect: (toolId: string) => void;
+		ongenerate: () => void;
+		onfpschange?: (fps: number) => void;
+		onresolutionchange?: (resolution: string) => void;
+		onorientationchange?: (orientation: string) => void;
+	}>();
 
-  let showModal = $state(false);
-  let newSessionName = $state('');
+	let showModal = $state(false);
+	let newSessionName = $state('');
 
-  function openNewSessionModal() {
-    if (!project) return;
-    newSessionName = '';
-    showModal = true;
-  }
+	function openNewSessionModal() {
+		if (!project) return;
+		newSessionName = '';
+		showModal = true;
+	}
 
-  function closeNewSessionModal() {
-    showModal = false;
-  }
+	function closeNewSessionModal() {
+		showModal = false;
+	}
 
-  function confirmNewSession() {
-    if (!newSessionName.trim() || !project) return;
-    // This will be handled by the parent
-    console.log('[ToolsPanel] Create session:', newSessionName);
-    closeNewSessionModal();
-  }
+	function confirmNewSession() {
+		if (!newSessionName.trim() || !project) return;
+		// This will be handled by the parent
+		console.log('[ToolsPanel] Create session:', newSessionName);
+		closeNewSessionModal();
+	}
 
-  function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-      confirmNewSession();
-    }
-  }
+	function handleKeyDown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			confirmNewSession();
+		}
+	}
 
-  function getStats() {
-    if (!session) {
-      return {
-        sessions: project?.sessions.length || 0,
-        pipes: 0,
-        frames: 0,
-        generations: project?.totalGenerations || 0,
-      };
-    }
-    
-    return {
-      sessions: project?.sessions.length || 0,
-      pipes: session.pipes.length,
-      frames: session.pipes.reduce((acc, p) => acc + p.lengthFrames, 0),
-      generations: session.totalGeneratedFrames,
-    };
-  }
+	function getStats() {
+		if (!session) {
+			return {
+				sessions: project?.sessions.length || 0,
+				pipes: 0,
+				frames: 0,
+				generations: project?.totalGenerations || 0,
+			};
+		}
+		
+		return {
+			sessions: project?.sessions.length || 0,
+			pipes: session.pipes.length,
+			frames: session.pipes.reduce((acc, p) => acc + p.lengthFrames, 0),
+			generations: session.totalGeneratedFrames,
+		};
+	}
 
-  const stats = $derived(getStats());
+	const stats = $derived(getStats());
 </script>
 
 <div class="tools-panel">
@@ -104,7 +110,7 @@
           <select 
             class="setting-select"
             value={session.fps}
-            onchange={(e) => console.log('FPS changed:', e.currentTarget.value)}
+            onchange={(e) => onfpschange?.(Number(e.currentTarget.value))}
           >
             <option value="24">24 fps</option>
             <option value="30">30 fps</option>
@@ -117,7 +123,7 @@
           <select 
             class="setting-select"
             value={session.resolution}
-            onchange={(e) => console.log('Resolution changed:', e.currentTarget.value)}
+            onchange={(e) => onresolutionchange?.(e.currentTarget.value)}
           >
             <option value="480p">480p</option>
             <option value="720p">720p</option>
@@ -130,7 +136,7 @@
           <select 
             class="setting-select"
             value={session.orientation}
-            onchange={(e) => console.log('Orientation changed:', e.currentTarget.value)}
+            onchange={(e) => onorientationchange?.(e.currentTarget.value)}
           >
             <option value="horizontal">Horizontal</option>
             <option value="vertical">Vertical</option>
