@@ -10,18 +10,20 @@
 
 	let { session, onUpdate }: { session?: SessionData; onUpdate: (session: SessionData) => void } = $props();
 
-	// Ensure session always has pipes
-	$: if (session && (!session.pipes || !Array.isArray(session.pipes))) {
-		console.error('[ComposerPanel] Session missing pipes, creating empty pipe:', session?.id);
-		session.pipes = [{
-			id: crypto.randomUUID(),
-			lengthFrames: 121,
-			keyframes: [],
-			qValue: 18,
-			cValue: 7,
-			segments: [],
-		}];
-	}
+	// Ensure session always has pipes - use $effect for side effects
+	$effect(() => {
+		if (session && (!session.pipes || !Array.isArray(session.pipes))) {
+			console.error('[ComposerPanel] Session missing pipes, creating empty pipe:', session?.id);
+			session.pipes = [{
+				id: crypto.randomUUID(),
+				lengthFrames: 121,
+				keyframes: [],
+				qValue: 18,
+				cValue: 7,
+				segments: [],
+			}];
+		}
+	});
 
 	const MAX_KEYFRAMES = 3;
 	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
