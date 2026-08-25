@@ -91,7 +91,17 @@
 		const currentProject = selectedProject;
 		const currentSession = selectedSession;
 		
-		if (!currentProject || !currentSession) return;
+		console.log('[Workspace] handleSessionUpdate called', {
+			hasProject: !!currentProject,
+			hasSession: !!currentSession,
+			sessionId: updatedSession.id,
+			currentSessionId: currentSession?.id
+		});
+		
+		if (!currentProject || !currentSession) {
+			console.error('[Workspace] Cannot update session - project or session missing');
+			return;
+		}
 		
 		try {
 			const updatedSessions = currentProject.sessions.map(s =>
@@ -379,19 +389,24 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			{#if selectedSession && selectedProject && selectedSession?.pipes && selectedSession.pipes.length > 0}
-				<ComposerPanel
-					{selectedSession}
-					onupdate={handleSessionUpdate}
-				/>
+			{#if selectedSession && selectedProject}
+				{#if selectedSession.pipes && selectedSession.pipes.length > 0}
+					<ComposerPanel
+						{selectedSession}
+						onupdate={handleSessionUpdate}
+					/>
+				{:else}
+					<div class="composer-empty">
+						<div class="empty-icon">⚠️</div>
+						<h2>Session Has No Pipes</h2>
+						<p>This session was created without any pipes. Please create a new session.</p>
+					</div>
+				{/if}
 			{:else}
 				<div class="composer-empty">
 					<div class="empty-icon">🎬</div>
 					<h2>Select a Session</h2>
 					<p>Create a project and add a session to start editing</p>
-					{#if selectedSession && !selectedSession?.pipes}
-						<p style="color: #dc2626; margin-top: 20px;">⚠️ Session has no pipes - this is a bug!</p>
-					{/if}
 				</div>
 			{/if}
 		</div>
