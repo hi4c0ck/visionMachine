@@ -34,9 +34,9 @@
 	let activeTool = $state<string | null>(null);
 	let error = $state<string | null>(null);
 
-	// Helper to ensure pipes exist
+	// Helper to ensure pipes exist - called everywhere
 	function ensurePipes(session: SessionData): SessionData {
-		if (!session.pipes || !Array.isArray(session.pipes) || session.pipes.length === 0) {
+		if (!session?.pipes || !Array.isArray(session.pipes) || session.pipes.length === 0) {
 			const defaultPipe: PipeRow = {
 				id: crypto.randomUUID(),
 				lengthFrames: 121,
@@ -50,17 +50,15 @@
 		return session;
 	}
 
-	// Derived state
-	let selectedProject = $derived(() => {
-		if (!selectedProjectId || projects.length === 0) return null;
-		const proj = projects.find(p => p.id === selectedProjectId);
-		return proj || null;
-	});
-
+	// Derived state - SIMPLE, correct Svelte 5 syntax
+	let selectedProject = $derived(
+		projects.find(p => p.id === selectedProjectId) || null
+	);
+	
 	let selectedSession = $derived(() => {
-		const proj = selectedProject();
-		if (!proj || !selectedSessionId) return null;
-		const sess = proj.sessions.find(s => s.id === selectedSessionId);
+		// GUARANTEED to return a valid session with pipes or null
+		if (!selectedProject || !selectedSessionId) return null;
+		const sess = selectedProject.sessions.find(s => s.id === selectedSessionId);
 		if (!sess) return null;
 		return ensurePipes(sess);
 	});
@@ -71,30 +69,30 @@
 			const saved = localStorage.getItem('vm-projects');
 			if (saved) {
 				const parsed: ProjectData[] = JSON.parse(saved);
-				// Ensure all sessions have pipes
+				// MIGRATE: ensure ALL sessions have pipes on load
 				const migrated = parsed.map(p => ({
 					...p,
 					sessions: p.sessions.map(s => ensurePipes(s))
 				}));
 				projects = migrated;
 				
-				// Restore selection if exists
+				// Restore selection
 				const savedProject = localStorage.getItem('vm-selected-project');
 				const savedSession = localStorage.getItem('vm-selected-session');
 				
 				if (savedProject && projects.length > 0) {
-					const foundProject = projects.find(p => p.id === savedProject);
-					if (foundProject) {
+					const found = projects.find(p => p.id === savedProject);
+					if (found) {
 						selectedProjectId = savedProject;
-						if (savedSession && foundProject.sessions.some(s => s.id === savedSession)) {
+						if (savedSession) {
 							selectedSessionId = savedSession;
 						}
 					}
 				}
+				console.log('[Workspace] Loaded', projects.length, 'projects');
 			}
 		} catch (e) {
 			console.error('[Workspace] Failed to load projects:', e);
-			error = 'Failed to load saved projects';
 		}
 	}
 
@@ -113,32 +111,28 @@
 			}
 		} catch (e) {
 			console.error('[Workspace] Failed to save projects:', e);
-			error = 'Failed to save projects';
 		}
 	}
 
 	// Handle session update
 	function handleSessionUpdate(updatedSession: SessionData) {
-		const currentProject = selectedProject();
-		const currentSession = selectedSession();
-		
-		if (!currentProject || !currentSession) {
-			console.error('[Workspace] Cannot update: missing project or session');
+		if (!selectedProject || !selectedSession) {
+			console.error('[Workspace] Cannot update: missing data');
 			return;
 		}
 		
-		const updatedSessions = currentProject.sessions.map(s =>
-			s.id === updatedSession.id ? ensurePipes(updatedSession) : s
+		const updatedSessions = selectedProject.sessions.map(s =>
+			s.id === updatedSession.id ? updatedSession : s
 		);
 		
 		const updatedProject: ProjectData = {
-			...currentProject,
+			...selectedProject,
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
 		};
 		
 		projects = projects.map(p =>
-			p.id === currentProject.id ? updatedProject : p
+			p.id === selectedProject.id ? updatedProject : p
 		);
 		saveProjects();
 	}
@@ -181,7 +175,7 @@
 			selectedProjectId = foundProject.id;
 			selectedSessionId = sessionId;
 			saveProjects();
-			console.log('[Workspace] Selection set successfully');
+			console.log('[Workspace] Selection set - project:', selectedProjectId, 'session:', selectedSessionId);
 		} else {
 			console.error('[Workspace] Project not found for session:', sessionId);
 		}
@@ -262,21 +256,20 @@
 	}
 
 	function handleRenameSession(sessionId: string, newName: string) {
-		const proj = selectedProject();
-		if (!proj) return;
+		if (!selectedProject) return;
 		
-		const updatedSessions = proj.sessions.map(s =>
+		const updatedSessions = selectedProject.sessions.map(s =>
 			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
 		);
 		
 		const updatedProject: ProjectData = {
-			...proj,
+			...selectedProject,
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
 		};
 		
 		projects = projects.map(p =>
-			p.id === proj.id ? updatedProject : p
+			p.id === selectedProject.id ? updatedProject : p
 		);
 		saveProjects();
 	}
@@ -359,9 +352,10 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			{#if selectedSession() && selectedProject()}
+			<!-- SAFE CHECK: both must exist AND session must have pipes -->
+			{#if selectedSession && selectedProject && selectedSession.pipes && selectedSession.pipes.length > 0}
 				<ComposerPanel
-					{selectedSession()}
+					{selectedSession}
 					onupdate={handleSessionUpdate}
 				/>
 			{:else}
@@ -376,8 +370,8 @@
 		<!-- Right: Tools -->
 		{#if layoutMode === 'landscape'}
 			<ToolsPanel
-				{selectedSession()}
-				{selectedProject()}
+				{selectedSession}
+				{selectedProject}
 				{activeTool}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
