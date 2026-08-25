@@ -45,7 +45,7 @@
 			const saved = localStorage.getItem('vm-projects');
 			if (saved) {
 				const parsed = JSON.parse(saved) as ProjectData[];
-				projects = parsed.map(p => ({
+				projects = [{\n\t\t\t\t...parsed[0],\n\t\t\t\tsessions: parsed[0]?.sessions?.map(s => ({\n\t\t\t\t\t...s,\n\t\t\t\t\tpipes: s.pipes && s.pipes.length > 0 ? s.pipes : [{\n\t\t\t\t\t\tid: crypto.randomUUID(),\n\t\t\t\t\t\tlengthFrames: 121,\n\t\t\t\t\t\tkeyframes: [],\n\t\t\t\t\t\tqValue: 18,\n\t\t\t\t\t\tcValue: 7,\n\t\t\t\t\t\tsegments: [],\n\t\t\t\t\t}],\n\t\t\t\t})) || []\n\t\t\t}];(p => ({
     ...p,
     sessions: p.sessions.map(s => ({
       ...s,
@@ -402,7 +402,7 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			{#if selectedSession && selectedProject}
+			{#if selectedSession && selectedProject && selectedSession.pipes}
 				{#if selectedSession?.pipes && selectedSession.pipes.length > 0}
 					<ComposerPanel
 						{selectedSession}
