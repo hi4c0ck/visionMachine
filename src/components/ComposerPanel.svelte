@@ -16,9 +16,9 @@
 			console.log('[ComposerPanel] No session provided, skipping');
 			return;
 		}
-		if (!session || !session.pipes || !Array.isArray(session.pipes)) {
+		if (!session || !session?.pipes || !Array.isArray(session?.pipes)) {
 			console.error('[ComposerPanel] Session missing pipes, creating empty pipe:', session?.id);
-			session.pipes = [{
+			session?.pipes = [{
 				id: crypto.randomUUID(),
 				lengthFrames: 121,
 				keyframes: [],
@@ -84,7 +84,7 @@
 	function confirmAdd() {
 		if (!session?.pipes) return;
 		if (activePipeIndex === null) return;
-		const pipe = session.pipes[activePipeIndex];
+		const pipe = session?.pipes[activePipeIndex];
 		if (!pipe || pipe.keyframes.length >= MAX_KEYFRAMES) return;
 
 		try {
@@ -107,7 +107,7 @@
 				status: 'done' as const,
 			};
 
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== activePipeIndex) return p;
 				return { ...p, keyframes: [...p.keyframes, newKeyframe] };
 			});
@@ -122,10 +122,10 @@
 	function deleteKeyframe(pipeIndex: number, kfId: string) {
 		if (!session?.pipes) return;
 		try {
-			const pipe = session.pipes[pipeIndex];
+			const pipe = session?.pipes[pipeIndex];
 			if (!pipe) return;
 			
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== pipeIndex) return p;
 				return { ...p, keyframes: p.keyframes.filter(k => k.id !== kfId) };
 			});
@@ -139,7 +139,7 @@
 	function updateQ(pipeIndex: number, val: number) {
 		if (!session?.pipes) return;
 		try {
-			const updatedPipes = session.pipes.map((p, idx) => 
+			const updatedPipes = session?.pipes.map((p, idx) => 
 				idx === pipeIndex ? { ...p, qValue: val } : p
 			);
 			onUpdate({ ...session, pipes: updatedPipes });
@@ -151,7 +151,7 @@
 	function updateC(pipeIndex: number, val: number) {
 		if (!session?.pipes) return;
 		try {
-			const updatedPipes = session.pipes.map((p, idx) => 
+			const updatedPipes = session?.pipes.map((p, idx) => 
 				idx === pipeIndex ? { ...p, cValue: val } : p
 			);
 			onUpdate({ ...session, pipes: updatedPipes });
@@ -184,7 +184,7 @@
 		if (activeSegmentId === null || activeSegmentPipeIndex === null) return;
 		
 		try {
-			const pipe = session.pipes[activeSegmentPipeIndex];
+			const pipe = session?.pipes[activeSegmentPipeIndex];
 			if (!pipe) return;
 
 			const segment = pipe.segments.find(s => s.id === activeSegmentId);
@@ -192,7 +192,7 @@
 
 			const spec = TAG_SPECIFICATIONS[segment.tag];
 
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== activeSegmentPipeIndex) return p;
 				return {
 					...p,
@@ -234,7 +234,7 @@
 		if (activePipeForType === null) return;
 		
 		try {
-			const pipe = session.pipes[activePipeForType];
+			const pipe = session?.pipes[activePipeForType];
 			if (!pipe) return;
 
 			const maxFrame = pipe.segments.length > 0
@@ -262,7 +262,7 @@
 			const validation = validatePromptSegments(testSegments);
 
 			if (validation.valid) {
-				const updatedPipes = session.pipes.map((p, idx) => {
+				const updatedPipes = session?.pipes.map((p, idx) => {
 					if (idx !== activePipeForType) return p;
 					return { ...p, segments: testSegments };
 				});
@@ -278,10 +278,10 @@
 	function removeParam(pipeIndex: number, segmentId: string) {
 		if (!session?.pipes) return;
 		try {
-			const pipe = session.pipes[pipeIndex];
+			const pipe = session?.pipes[pipeIndex];
 			if (!pipe || pipe.segments.length <= 1) return;
 
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== pipeIndex) return p;
 				return { ...p, segments: p.segments.filter(s => s.id !== segmentId) };
 			});
@@ -295,7 +295,7 @@
 	function updateParam(pipeIndex: number, segmentId: string, value: number) {
 		if (!session?.pipes) return;
 		try {
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== pipeIndex) return p;
 				return {
 					...p,
@@ -313,7 +313,7 @@
 	function moveParamFrame(pipeIndex: number, segmentId: string, delta: number) {
 		if (!session?.pipes) return;
 		try {
-			const pipe = session.pipes[pipeIndex];
+			const pipe = session?.pipes[pipeIndex];
 			if (!pipe) return;
 
 			const segment = pipe.segments.find(s => s.id === segmentId);
@@ -330,7 +330,7 @@
 			const validation = validatePromptSegments(testSegments);
 
 			if (validation.valid) {
-				const updatedPipes = session.pipes.map((p, idx) => {
+				const updatedPipes = session?.pipes.map((p, idx) => {
 					if (idx !== pipeIndex) return p;
 					return { ...p, segments: testSegments };
 				});
@@ -345,12 +345,12 @@
 		if (!session?.pipes) return;
 		try {
 			const snapped = snapTo8nPlus1(newLength);
-			const maxLen = getMaxFramesForResolution(session.resolution);
+			const maxLen = getMaxFramesForResolution(session?.resolution);
 
 			if (snapped < MIN_PIPE_LENGTH) return;
 			if (snapped > maxLen) return;
 
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== pipeIndex) return p;
 				const truncatedSegments = p.segments.filter(s => s.frameEnd <= snapped);
 				return { ...p, lengthFrames: snapped, segments: truncatedSegments };
@@ -366,7 +366,7 @@
 		if (!session?.pipes) return;
 		try {
 			activeGlobalPipeIndex = pipeIndex;
-			const pipe = session.pipes[pipeIndex];
+			const pipe = session?.pipes[pipeIndex];
 			globalPromptText = pipe?.globalPrompt?.text || '';
 			showGlobalModal = true;
 		} catch (e) {
@@ -384,7 +384,7 @@
 		if (activeGlobalPipeIndex === null) return;
 
 		try {
-			const updatedPipes = session.pipes.map((p, idx) => {
+			const updatedPipes = session?.pipes.map((p, idx) => {
 				if (idx !== activeGlobalPipeIndex) return p;
 				return {
 					...p,
@@ -408,10 +408,10 @@
 		}
 	}
 
-	function updateResolution(resolution: typeof session.resolution) {
+	function updateResolution(resolution: typeof session?.resolution) {
 		if (!session?.pipes) return;
 		try {
-			const updatedPipes = session.pipes.map(p => ({
+			const updatedPipes = session?.pipes.map(p => ({
 				...p,
 				lengthFrames: Math.min(p.lengthFrames, getMaxFramesForResolution(resolution)),
 			}));
@@ -428,7 +428,7 @@
     <pre>{JSON.stringify(session, null, 2)}</pre>
   </div>
 {:else}
-{#if !session || !session.pipes}
+{#if !session || !session?.pipes}
     <div class="error-state">
       <p><strong>Error: Missing session data</strong></p>
       <p>session: {session ? JSON.stringify(session, null, 2) : 'undefined'}</p>
@@ -445,12 +445,12 @@
       </span>
     </div>
     <div class="scene-controls">
-      <select class="fps-select" value={session.fps} onchange={(e) => updateFPS(Number(e.currentTarget.value))}>
+      <select class="fps-select" value={session?.fps} onchange={(e) => updateFPS(Number(e.currentTarget.value))}>
         {#each FPS_PRESETS as fps}
           <option value={fps}>{fps} fps</option>
         {/each}
       </select>
-      <select class="resolution-select" value={session.resolution} onchange={(e) => updateResolution(e.currentTarget.value)}>
+      <select class="resolution-select" value={session?.resolution} onchange={(e) => updateResolution(e.currentTarget.value)}>
         <option value="480p">480p</option>
         <option value="720p">720p</option>
         <option value="1080p">1080p</option>
@@ -460,8 +460,8 @@
 
   <!-- Pipes List -->
   <div class="pipes-list">
-    {#if session?.pipes && session.pipes.length > 0}
-      {#each session.pipes as pipe, pipeIdx (pipe.id)}
+    {#if session?.pipes && session?.pipes.length > 0}
+      {#each session?.pipes as pipe, pipeIdx (pipe.id)}
       <div class="pipe-row">
         <!-- Pipe Header -->
         <div class="pipe-header">
@@ -521,7 +521,7 @@
             class="length-input"
             value={pipe.lengthFrames}
             min={MIN_PIPE_LENGTH}
-            max={getMaxFramesForResolution(session.resolution)}
+            max={getMaxFramesForResolution(session?.resolution)}
             step="9"
             onchange={(e) => updatePipeLength(pipeIdx, Number(e.currentTarget.value))}
           />
@@ -623,7 +623,7 @@
         </div>
         
         <div class="modal-body">
-          {#each session.pipes[activeSegmentPipeIndex || 0]?.segments as segment (segment.id)}
+          {#each session?.pipes[activeSegmentPipeIndex || 0]?.segments as segment (segment.id)}
             {#if segment.id === activeSegmentId}
               <div class="segment-info">
                 <span class="segment-tag" style="color: {segment.spec.color}">[{segment.spec.name}]</span>
