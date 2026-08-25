@@ -10,17 +10,17 @@
 
 	let { session, onUpdate }: { session?: SessionData; onUpdate: (session: SessionData) => void } = $props();
 
-	// Validate session data
-	function validateSession() {
-		if (!session) {
-			console.error('[ComposerPanel] No session provided');
-			return false;
-		}
-		if (!session.pipes) {
-			console.error('[ComposerPanel] Session has no pipes array:', session);
-			return false;
-		}
-		return true;
+	// Ensure session always has pipes
+	$: if (session && (!session.pipes || !Array.isArray(session.pipes))) {
+		console.error('[ComposerPanel] Session missing pipes, creating empty pipe:', session?.id);
+		session.pipes = [{
+			id: crypto.randomUUID(),
+			lengthFrames: 121,
+			keyframes: [],
+			qValue: 18,
+			cValue: 7,
+			segments: [],
+		}];
 	}
 
 	const MAX_KEYFRAMES = 3;
