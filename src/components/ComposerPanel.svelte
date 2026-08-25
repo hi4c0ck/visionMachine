@@ -412,7 +412,14 @@
     <pre>{JSON.stringify(session, null, 2)}</pre>
   </div>
 {:else}
-<div class="composer-panel">
+{#if !session || !session.pipes}
+    <div class="error-state">
+      <p><strong>Error: Missing session data</strong></p>
+      <p>session: {session ? JSON.stringify(session, null, 2) : 'undefined'}</p>
+      <p>Expected structure: { id: string, name: string, pipes: PipeRow[], fps: number, resolution: string }</p>
+    </div>
+  {:else}
+  <div class="composer-panel">
   <!-- Scene Header -->
   <div class="scene-header">
     <div class="scene-info">
@@ -693,6 +700,7 @@
     </div>
   {/if}
 </div>
+{/if}</div>
 
 <style>
   .composer-panel {
