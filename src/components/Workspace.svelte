@@ -390,7 +390,7 @@
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
 			{#if selectedSession && selectedProject}
-				{#if selectedSession.pipes && selectedSession.pipes.length > 0}
+				{#if selectedSession?.pipes && selectedSession.pipes.length > 0}
 					<ComposerPanel
 						{selectedSession}
 						onupdate={handleSessionUpdate}
