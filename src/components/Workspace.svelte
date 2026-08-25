@@ -204,13 +204,22 @@
 			const folderName = `session_${Date.now()}`;
 			const sessionPath = `${project.directoryPath}\\${folderName}`;
 			
+			const newPipe: PipeRow = {
+				id: crypto.randomUUID(),
+				lengthFrames: 121,
+				keyframes: [],
+				qValue: 18,
+				cValue: 7,
+				segments: [],
+			};
+			
 			const newSession: SessionData = {
 				id: crypto.randomUUID(),
 				name: sessionName,
 				createdAt: Date.now(),
 				updatedAt: Date.now(),
 				directoryPath: sessionPath,
-				pipes: [],
+				pipes: [newPipe],
 				fps: 24,
 				resolution: '720p',
 				orientation: 'horizontal',

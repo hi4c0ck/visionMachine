@@ -391,9 +391,9 @@
   <!-- Scene Header -->
   <div class="scene-header">
     <div class="scene-info">
-      <span class="scene-name">{session.name}</span>
+      <span class="scene-name">{session?.name || 'Untitled Session'}</span>
       <span class="scene-meta">
-        {session.pipes[0]?.lengthFrames || 121}f @ {session.fps}fps
+        {session?.pipes?.[0]?.lengthFrames || 121}f @ {session?.fps || 24}fps
       </span>
     </div>
     <div class="scene-controls">
@@ -412,7 +412,8 @@
 
   <!-- Pipes List -->
   <div class="pipes-list">
-    {#each session.pipes as pipe, pipeIdx (pipe.id)}
+    {#if session?.pipes && session.pipes.length > 0}
+      {#each session.pipes as pipe, pipeIdx (pipe.id)}
       <div class="pipe-row">
         <!-- Pipe Header -->
         <div class="pipe-header">
