@@ -60,8 +60,8 @@
 		
 		return {
 			sessions: project?.sessions.length || 0,
-			pipes: session.pipes.length,
-			frames: session.pipes.reduce((acc, p) => acc + p.lengthFrames, 0),
+			pipes: session?.pipes?.length ?? 0,
+			frames: (session?.pipes ?? []).reduce((acc, p) => acc + (p?.lengthFrames || 0), 0),
 			generations: session.totalGeneratedFrames,
 		};
 	}
@@ -85,7 +85,7 @@
         <div class="preview-active">
           <div class="preview-icon">🎬</div>
           <p class="preview-name">{session.name}</p>
-          <p class="preview-meta">{session.pipes.length} pipes · {stats.frames}f</p>
+          <p class="preview-meta">{session?.pipes?.length ?? 0} pipes · {stats.frames}f</p>
         </div>
       {:else}
         <div class="preview-empty">

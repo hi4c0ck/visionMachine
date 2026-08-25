@@ -81,7 +81,8 @@
 		}
 	}
 
-	function confirmAdd() {
+	confirmAdd(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		if (activePipeIndex === null) return;
 		const pipe = session?.pipes[activePipeIndex];
@@ -119,7 +120,8 @@
 		}
 	}
 
-	function deleteKeyframe(pipeIndex: number, kfId: string) {
+	deleteKeyframe(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const pipe = session?.pipes[pipeIndex];
@@ -136,7 +138,8 @@
 		}
 	}
 
-	function updateQ(pipeIndex: number, val: number) {
+	updateQ(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session?.pipes.map((p, idx) => 
@@ -148,7 +151,8 @@
 		}
 	}
 
-	function updateC(pipeIndex: number, val: number) {
+	updateC(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session?.pipes.map((p, idx) => 
@@ -160,7 +164,8 @@
 		}
 	}
 
-	function openSegmentModal(pipeIndex: number, segment: PromptSegment) {
+	openSegmentModal(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			activeSegmentId = segment.id;
@@ -179,7 +184,8 @@
 		activeSegmentPipeIndex = null;
 	}
 
-	function confirmSegmentUpdate() {
+	confirmSegmentUpdate(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		if (activeSegmentId === null || activeSegmentPipeIndex === null) return;
 		
@@ -214,7 +220,8 @@
 		}
 	}
 
-	function openTypePicker(pipeIndex: number) {
+	openTypePicker(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			activePipeForType = pipeIndex;
@@ -229,7 +236,8 @@
 		activePipeForType = null;
 	}
 
-	function addSegmentWithType(tag: TagType) {
+	addSegmentWithType(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		if (activePipeForType === null) return;
 		
@@ -275,7 +283,8 @@
 		}
 	}
 
-	function removeParam(pipeIndex: number, segmentId: string) {
+	removeParam(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const pipe = session?.pipes[pipeIndex];
@@ -292,7 +301,8 @@
 		}
 	}
 
-	function updateParam(pipeIndex: number, segmentId: string, value: number) {
+	updateParam(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const updatedPipes = session?.pipes.map((p, idx) => {
@@ -310,7 +320,8 @@
 		}
 	}
 
-	function moveParamFrame(pipeIndex: number, segmentId: string, delta: number) {
+	moveParamFrame(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const pipe = session?.pipes[pipeIndex];
@@ -341,7 +352,8 @@
 		}
 	}
 
-	function updatePipeLength(pipeIndex: number, newLength: number) {
+	updatePipeLength(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			const snapped = snapTo8nPlus1(newLength);
@@ -362,7 +374,8 @@
 		}
 	}
 
-	function openGlobalPromptModal(pipeIndex: number) {
+	openGlobalPromptModal(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			activeGlobalPipeIndex = pipeIndex;
@@ -379,7 +392,8 @@
 		activeGlobalPipeIndex = null;
 	}
 
-	function confirmGlobalPrompt() {
+	confirmGlobalPrompt(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		if (activeGlobalPipeIndex === null) return;
 
@@ -399,7 +413,8 @@
 		}
 	}
 
-	function updateFPS(fps: number) {
+	updateFPS(...) if (!session?.pipes) return;
+		
 		if (!session?.pipes) return;
 		try {
 			onUpdate({ ...session, fps });
