@@ -45,7 +45,20 @@
 			const saved = localStorage.getItem('vm-projects');
 			if (saved) {
 				const parsed = JSON.parse(saved) as ProjectData[];
-				projects = parsed;
+				projects = parsed.map(p => ({
+    ...p,
+    sessions: p.sessions.map(s => ({
+      ...s,
+      pipes: s.pipes && s.pipes.length > 0 ? s.pipes : [{
+        id: crypto.randomUUID(),
+        lengthFrames: 121,
+        keyframes: [],
+        qValue: 18,
+        cValue: 7,
+        segments: [],
+      }],
+    })),
+  }));
 				
 				// Restore selection if exists
 				const savedSelection = localStorage.getItem('vm-selected-project');
