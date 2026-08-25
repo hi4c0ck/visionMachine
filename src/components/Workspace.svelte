@@ -291,10 +291,22 @@
 			/>
 		</div>
 
-		<div class="composer-area">
+		<div class="composer-area" onerror={(e) => console.error('[Workspace] Error:', e.detail)}>
 			<!-- SAFE: Check session exists AND has pipes defined -->
 			{#if selectedSession && selectedProject}
+    {@debug selectedSession selectedProject}
+    <script>
+      console.log('[Workspace] Rendering ComposerPanel', {
+        hasSession: !!selectedSession,
+        hasProject: !!selectedProject,
+        sessionId: selectedSession?.id,
+        hasPipes: !!(selectedSession?.pipes),
+        pipeCount: selectedSession?.pipes?.length
+      });
+    </script>
+    {@debug selectedSession selectedProject}
 				<ComposerPanel
+      onerror={(e) => console.error('[Workspace] ComposerPanel error:', e)}
 					{selectedSession}
 					onupdate={handleSessionUpdate}
 				/>
