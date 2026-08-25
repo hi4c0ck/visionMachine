@@ -5,7 +5,7 @@
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import type { ProjectData, SessionData } from '$types';
+	import type { ProjectData, SessionData, PipeRow } from '$types';
 
 	let {
 		userName,
@@ -27,46 +27,68 @@
 		onprojectsupdate?: (projects: ProjectData[]) => void;
 	}>();
 
-	// State - Using proper data models
+	// State
 	let projects = $state<ProjectData[]>([]);
 	let selectedProjectId = $state<string | null>(null);
 	let selectedSessionId = $state<string | null>(null);
 	let activeTool = $state<string | null>(null);
-	let toolsCollapsed = $state(false);
 	let error = $state<string | null>(null);
 
+	// Helper to ensure pipes exist
+	function ensurePipes(session: SessionData): SessionData {
+		if (!session.pipes || !Array.isArray(session.pipes) || session.pipes.length === 0) {
+			const defaultPipe: PipeRow = {
+				id: crypto.randomUUID(),
+				lengthFrames: 121,
+				keyframes: [],
+				qValue: 18,
+				cValue: 7,
+				segments: [],
+			};
+			return { ...session, pipes: [defaultPipe] };
+		}
+		return session;
+	}
+
 	// Derived state
-	let selectedProject = $derived(projects.find(p => p.id === selectedProjectId) || null);
-	let selectedSession = $derived(selectedProject?.sessions.find(s => s.id === selectedSessionId) || null);
+	let selectedProject = $derived(() => {
+		if (!selectedProjectId || projects.length === 0) return null;
+		const proj = projects.find(p => p.id === selectedProjectId);
+		return proj || null;
+	});
+
+	let selectedSession = $derived(() => {
+		const proj = selectedProject();
+		if (!proj || !selectedSessionId) return null;
+		const sess = proj.sessions.find(s => s.id === selectedSessionId);
+		if (!sess) return null;
+		return ensurePipes(sess);
+	});
 
 	// Load projects from localStorage on mount
 	function loadProjects() {
 		try {
 			const saved = localStorage.getItem('vm-projects');
 			if (saved) {
-				const parsed = JSON.parse(saved) as ProjectData[];
-				projects = [{\n\t\t\t\t...parsed[0],\n\t\t\t\tsessions: parsed[0]?.sessions?.map(s => ({\n\t\t\t\t\t...s,\n\t\t\t\t\tpipes: s.pipes && s.pipes.length > 0 ? s.pipes : [{\n\t\t\t\t\t\tid: crypto.randomUUID(),\n\t\t\t\t\t\tlengthFrames: 121,\n\t\t\t\t\t\tkeyframes: [],\n\t\t\t\t\t\tqValue: 18,\n\t\t\t\t\t\tcValue: 7,\n\t\t\t\t\t\tsegments: [],\n\t\t\t\t\t}],\n\t\t\t\t})) || []\n\t\t\t}];(p => ({
-    ...p,
-    sessions: p.sessions.map(s => ({
-      ...s,
-      pipes: s.pipes && s.pipes.length > 0 ? s.pipes : [{
-        id: crypto.randomUUID(),
-        lengthFrames: 121,
-        keyframes: [],
-        qValue: 18,
-        cValue: 7,
-        segments: [],
-      }],
-    })),
-  }));
+				const parsed: ProjectData[] = JSON.parse(saved);
+				// Ensure all sessions have pipes
+				const migrated = parsed.map(p => ({
+					...p,
+					sessions: p.sessions.map(s => ensurePipes(s))
+				}));
+				projects = migrated;
 				
 				// Restore selection if exists
-				const savedSelection = localStorage.getItem('vm-selected-project');
-				if (savedSelection && projects.find(p => p.id === savedSelection)) {
-					selectedProjectId = savedSelection;
-					const savedSession = localStorage.getItem('vm-selected-session');
-					if (savedSession && projects.find(p => p.id === savedSelection)?.sessions.find(s => s.id === savedSession)) {
-						selectedSessionId = savedSession;
+				const savedProject = localStorage.getItem('vm-selected-project');
+				const savedSession = localStorage.getItem('vm-selected-session');
+				
+				if (savedProject && projects.length > 0) {
+					const foundProject = projects.find(p => p.id === savedProject);
+					if (foundProject) {
+						selectedProjectId = savedProject;
+						if (savedSession && foundProject.sessions.some(s => s.id === savedSession)) {
+							selectedSessionId = savedSession;
+						}
 					}
 				}
 			}
@@ -80,13 +102,9 @@
 	function saveProjects() {
 		try {
 			localStorage.setItem('vm-projects', JSON.stringify(projects));
-			
-			// Notify parent
 			if (onprojectsupdate) {
 				onprojectsupdate(projects);
 			}
-			
-			// Save selection
 			if (selectedProjectId) {
 				localStorage.setItem('vm-selected-project', selectedProjectId);
 				if (selectedSessionId) {
@@ -99,59 +117,36 @@
 		}
 	}
 
-	// Handle session update with proper reactivity
+	// Handle session update
 	function handleSessionUpdate(updatedSession: SessionData) {
-		const currentProject = selectedProject;
-		const currentSession = selectedSession;
-		
-		console.log('[Workspace] handleSessionUpdate called', {
-			hasProject: !!currentProject,
-			hasSession: !!currentSession,
-			sessionId: updatedSession.id,
-			currentSessionId: currentSession?.id
-		});
+		const currentProject = selectedProject();
+		const currentSession = selectedSession();
 		
 		if (!currentProject || !currentSession) {
-			console.error('[Workspace] Cannot update session - project or session missing');
+			console.error('[Workspace] Cannot update: missing project or session');
 			return;
 		}
 		
-		try {
-			const updatedSessions = currentProject.sessions.map(s =>
-				s.id === updatedSession.id ? updatedSession : s
-			);
-			
-			const updatedProject: ProjectData = {
-				...currentProject,
-				sessions: updatedSessions,
-				updatedAt: Date.now(),
-			};
-			
-			projects = projects.map(p =>
-				p.id === currentProject.id ? updatedProject : p
-			);
-			saveProjects();
-		} catch (e) {
-			console.error('[Workspace] Failed to update session:', e);
-			error = 'Failed to update session';
-		}
+		const updatedSessions = currentProject.sessions.map(s =>
+			s.id === updatedSession.id ? ensurePipes(updatedSession) : s
+		);
+		
+		const updatedProject: ProjectData = {
+			...currentProject,
+			sessions: updatedSessions,
+			updatedAt: Date.now(),
+		};
+		
+		projects = projects.map(p =>
+			p.id === currentProject.id ? updatedProject : p
+		);
+		saveProjects();
 	}
 
 	// Call load on mount
 	onMount(() => {
 		loadProjects();
 	});
-
-	const defaultTools = [
-		{ id: 'select', label: 'Select', icon: '🔍', hotkey: 'V' },
-		{ id: 'brush', label: 'Brush', icon: '🖌', hotkey: 'B' },
-		{ id: 'eraser', label: 'Eraser', icon: '🧹', hotkey: 'E' },
-		{ id: 'text', label: 'Text', icon: '📝', hotkey: 'T' },
-		{ id: 'shape', label: 'Shape', icon: '⬜', hotkey: 'S' },
-		{ id: 'camera', label: 'Camera', icon: '📷', hotkey: 'C' },
-		{ id: 'gen', label: 'Generate', icon: '✨', hotkey: 'G' },
-		{ id: 'settings', label: 'Settings', icon: '⚙️', hotkey: ',' },
-	];
 
 	// Event handlers
 	function handleLogout() {
@@ -180,15 +175,13 @@
 			p.sessions.some(s => s.id === sessionId)
 		);
 		
-		console.log('[Workspace] Found project:', foundProject ? foundProject.id : 'NOT FOUND');
+		console.log('[Workspace] Found project:', foundProject?.id || 'NOT FOUND');
 		
 		if (foundProject) {
-			// Set project first, then session
 			selectedProjectId = foundProject.id;
 			selectedSessionId = sessionId;
 			saveProjects();
-			console.log('[Workspace] Selection set - project:', selectedProjectId, 'session:', selectedSessionId);
-			console.log('[Workspace] selectedSession:', selectedSession ? selectedSession.id : 'null');
+			console.log('[Workspace] Selection set successfully');
 		} else {
 			console.error('[Workspace] Project not found for session:', sessionId);
 		}
@@ -198,23 +191,18 @@
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
 		const projectPath = `${basePath}\\${input.name}`;
 		
-		try {
-			const newProject: ProjectData = {
-				id: crypto.randomUUID(),
-				name: input.name,
-				createdAt: Date.now(),
-				directoryPath: projectPath,
-				sessions: [],
-				totalGenerations: 0,
-			};
-			
-			projects = [...projects, newProject];
-			selectedProjectId = newProject.id;
-			saveProjects();
-		} catch (e) {
-			console.error('[Workspace] Failed to create project:', e);
-			error = 'Failed to create project';
-		}
+		const newProject: ProjectData = {
+			id: crypto.randomUUID(),
+			name: input.name,
+			createdAt: Date.now(),
+			directoryPath: projectPath,
+			sessions: [],
+			totalGenerations: 0,
+		};
+		
+		projects = [...projects, newProject];
+		selectedProjectId = newProject.id;
+		saveProjects();
 	}
 
 	function handleDeleteProject(projectId: string) {
@@ -228,102 +216,90 @@
 
 	function handleCreateSession(projectId: string) {
 		const project = projects.find(p => p.id === projectId);
-		if (!project) return;
-		
-		try {
-			const sessionName = `Session ${project.sessions.length + 1}`;
-			const folderName = `session_${Date.now()}`;
-			const sessionPath = `${project.directoryPath}\\${folderName}`;
-			
-			const newPipe: PipeRow = {
-				id: crypto.randomUUID(),
-				lengthFrames: 121,
-				keyframes: [],
-				qValue: 18,
-				cValue: 7,
-				segments: [],
-			};
-			
-			const newSession: SessionData = {
-				id: crypto.randomUUID(),
-				name: sessionName,
-				createdAt: Date.now(),
-				updatedAt: Date.now(),
-				directoryPath: sessionPath,
-				pipes: [newPipe],
-				fps: 24,
-				resolution: '720p',
-				orientation: 'horizontal',
-				totalGeneratedFrames: 0,
-			};
-			
-			console.log('[Workspace] Created session with pipe:', newSession.id, 'pipes:', newSession.pipes?.length);
-			
-			const updatedProject: ProjectData = {
-				...project,
-				sessions: [...project.sessions, newSession],
-			};
-			
-			projects = projects.map(p => 
-				p.id === projectId ? updatedProject : p
-			);
-			
-			selectedSessionId = newSession.id;
-			saveProjects();
-		} catch (e) {
-			console.error('[Workspace] Failed to create session:', e);
-			error = 'Failed to create session';
+		if (!project) {
+			console.error('[Workspace] Cannot create session: project not found');
+			return;
 		}
+		
+		const sessionName = `Session ${project.sessions.length + 1}`;
+		const folderName = `session_${Date.now()}`;
+		const sessionPath = `${project.directoryPath}\\${folderName}`;
+		
+		const defaultPipe: PipeRow = {
+			id: crypto.randomUUID(),
+			lengthFrames: 121,
+			keyframes: [],
+			qValue: 18,
+			cValue: 7,
+			segments: [],
+		};
+		
+		const newSession: SessionData = {
+			id: crypto.randomUUID(),
+			name: sessionName,
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			directoryPath: sessionPath,
+			pipes: [defaultPipe],
+			fps: 24,
+			resolution: '720p',
+			orientation: 'horizontal',
+			totalGeneratedFrames: 0,
+		};
+		
+		const updatedProject: ProjectData = {
+			...project,
+			sessions: [...project.sessions, newSession],
+		};
+		
+		projects = projects.map(p => 
+			p.id === projectId ? updatedProject : p
+		);
+		
+		selectedSessionId = newSession.id;
+		saveProjects();
+		console.log('[Workspace] Session created with pipe:', newSession.id);
 	}
 
 	function handleRenameSession(sessionId: string, newName: string) {
-		if (!selectedProject) return;
+		const proj = selectedProject();
+		if (!proj) return;
 		
-		try {
-			const updatedSessions = selectedProject.sessions.map(s =>
-				s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
-			);
-			
-			const updatedProject: ProjectData = {
-				...selectedProject,
-				sessions: updatedSessions,
-				updatedAt: Date.now(),
-			};
-			
-			projects = projects.map(p =>
-				p.id === selectedProject.id ? updatedProject : p
-			);
-			saveProjects();
-		} catch (e) {
-			console.error('[Workspace] Failed to rename session:', e);
-			error = 'Failed to rename session';
-		}
+		const updatedSessions = proj.sessions.map(s =>
+			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
+		);
+		
+		const updatedProject: ProjectData = {
+			...proj,
+			sessions: updatedSessions,
+			updatedAt: Date.now(),
+		};
+		
+		projects = projects.map(p =>
+			p.id === proj.id ? updatedProject : p
+		);
+		saveProjects();
 	}
 
 	function handleDeleteSession(projectId: string, sessionId: string) {
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
-		try {
-			const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
-			const updatedProject: ProjectData = {
-				...project,
-				sessions: updatedSessions,
-				updatedAt: Date.now(),
-			};
-			
-			projects = projects.map(p =>
-				p.id === projectId ? updatedProject : p
-			);
-			
-			if (selectedSessionId === sessionId) {
-				selectedSessionId = null;
-			}
-			saveProjects();
-		} catch (e) {
-			console.error('[Workspace] Failed to delete session:', e);
-			error = 'Failed to delete session';
+		const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
+		const updatedProject: ProjectData = {
+			...project,
+			sessions: updatedSessions,
+			updatedAt: Date.now(),
+		};
+		
+		projects = projects.map(p =>
+			p.id === projectId ? updatedProject : p
+		);
+		
+		if (selectedSessionId === sessionId) {
+			selectedSessionId = null;
 		}
+		saveProjects();
 	}
 
 	function handleToolSelect(id: string) {
@@ -331,26 +307,7 @@
 	}
 
 	function handleGenerate() {
-		// TODO: Implement generation logic
 		console.log('[Workspace] Generate button clicked');
-	}
-
-	function handleFPSChange(fps: number) {
-		if (!selectedSession || !selectedProject) return;
-		const updatedSession = { ...selectedSession, fps };
-		handleSessionUpdate(updatedSession);
-	}
-
-	function handleResolutionChange(resolution: string) {
-		if (!selectedSession || !selectedProject) return;
-		const updatedSession = { ...selectedSession, resolution: resolution as any };
-		handleSessionUpdate(updatedSession);
-	}
-
-	function handleOrientationChange(orientation: string) {
-		if (!selectedSession || !selectedProject) return;
-		const updatedSession = { ...selectedSession, orientation: orientation as any };
-		handleSessionUpdate(updatedSession);
 	}
 
 	function getHomeDir(): string {
@@ -402,19 +359,11 @@
 
 		<!-- Center: Composer (fills available space) -->
 		<div class="composer-area">
-			{#if selectedSession && selectedProject && selectedSession.pipes}
-				{#if selectedSession?.pipes && selectedSession.pipes.length > 0}
-					<ComposerPanel
-						{selectedSession}
-						onupdate={handleSessionUpdate}
-					/>
-				{:else}
-					<div class="composer-empty">
-						<div class="empty-icon">⚠️</div>
-						<h2>Session Has No Pipes</h2>
-						<p>This session was created without any pipes. Please create a new session.</p>
-					</div>
-				{/if}
+			{#if selectedSession() && selectedProject()}
+				<ComposerPanel
+					{selectedSession()}
+					onupdate={handleSessionUpdate}
+				/>
 			{:else}
 				<div class="composer-empty">
 					<div class="empty-icon">🎬</div>
@@ -427,14 +376,11 @@
 		<!-- Right: Tools -->
 		{#if layoutMode === 'landscape'}
 			<ToolsPanel
-				{selectedSession}
-				{selectedProject}
+				{selectedSession()}
+				{selectedProject()}
 				{activeTool}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
-				onfpschange={handleFPSChange}
-				onresolutionchange={handleResolutionChange}
-				onorientationchange={handleOrientationChange}
 			/>
 		{/if}
 	</div>
