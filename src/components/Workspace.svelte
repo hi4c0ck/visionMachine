@@ -183,16 +183,17 @@
 	}
 
 	function handleSessionSelect(sessionId: string) {
-		const foundProject = projects.find(p => 
-			p.sessions.some(s => s.id === sessionId)
-		);
-		
-		if (foundProject) {
-			selectedProjectId = foundProject.id;
-			selectedSessionId = sessionId;
-			saveProjects();
+			const foundProject = projects.find(p =>
+				p.sessions.some(s => s.id === sessionId)
+			);
+
+			if (foundProject) {
+				selectedProjectId = foundProject.id;
+				selectedSessionId = sessionId;
+				hydrateSessions(foundProject.sessions);
+				saveProjects();
+			}
 		}
-	}
 
 	async function handleCreateProject(input: { name: string; path?: string }) {
 		try {
@@ -259,8 +260,10 @@
 			selectedProjectId = null;
 			selectedSessionId = null;
 		}
-		saveProjects();
-	}
+		// Clear store for deleted project's sessions
+			hydrateSessions(projects.flatMap(p => p.sessions));
+			saveProjects();
+		}
 
 	async function handleCreateSession(projectId: string) {
 		try {
@@ -314,6 +317,7 @@
 			);
 			
 			selectedSessionId = newSession.id;
+			hydrateSessions([newSession]);
 			await saveProjects();
 		} catch (e) {
 			console.error('[Workspace] Failed to create session:', e);
@@ -408,6 +412,8 @@
 		if (selectedSessionId === sessionId) {
 			selectedSessionId = null;
 		}
+		// Remove deleted session from store
+		hydrateSessions(updatedSessions);
 		saveProjects();
 	}
 
