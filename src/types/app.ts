@@ -116,7 +116,17 @@ export interface PromptSegment {
 }
 
 /**
- * Global prompt for entire pipe
+ * Global node for two-layer prompt hierarchy (R1)
+ */
+export interface GlobalNode {
+  id: string;
+  tag: 'global_style';
+  value: string;
+  enabled: boolean;
+}
+
+/**
+ * Global prompt for entire pipe (deprecated alias, use globalNodes instead)
  */
 export interface PipeGlobalPrompt {
   text: string;
@@ -128,6 +138,7 @@ export interface PipeGlobalPrompt {
 export interface PipeKeyframe {
   id: string;
   frame: number;
+  slot_index: number;  // 1, 2, or 3
   type: KeyframeType;
   imageSrc?: string;
   prompt?: string;
@@ -144,8 +155,26 @@ export interface PipeRow {
   keyframes: PipeKeyframe[];
   qValue: number;
   cValue: number;
-  globalPrompt?: PipeGlobalPrompt;
+  globalPrompt?: PipeGlobalPrompt;           // deprecated - use globalNodes
+  globalNodes?: GlobalNode[];                // two-layer hierarchy (R1)
   segments: PromptSegment[];
+}
+
+/**
+ * Migrate old sessions with globalPrompt to new globalNodes format
+ */
+export function migratePipeToTwoLayer(pipe: PipeRow): PipeRow {
+  if (pipe.globalNodes && pipe.globalNodes.length > 0) {
+    return pipe; // already migrated
+  }
+  const newNode: GlobalNode = pipe.globalPrompt
+    ? { id: crypto.randomUUID(), tag: 'global_style', value: pipe.globalPrompt.text, enabled: true }
+    : null;
+  return {
+    ...pipe,
+    globalNodes: newNode ? [newNode] : [],
+    globalPrompt: undefined,
+  };
 }
 
 /**

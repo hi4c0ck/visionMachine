@@ -20,7 +20,7 @@ pub async fn create_session(
     input: CreateSessionInput,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let db = state.db.as_ref();
+    let db = state.db.lock().await;
     db.create_session(&input.project_id, &input.name, input.pipes_json.as_deref())
         .await
         .map_err(|e| e.to_string())
@@ -31,10 +31,8 @@ pub async fn list_sessions(
     project_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let db = state.db.as_ref();
-    db.list_sessions(&project_id)
-        .await
-        .map_err(|e| e.to_string())
+    let db = state.db.lock().await;
+    db.list_sessions(&project_id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -42,7 +40,7 @@ pub async fn update_session(
     input: UpdateSessionInput,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.as_ref();
+    let db = state.db.lock().await;
     db.update_session(&input.session_id, &input.updates)
         .await
         .map_err(|e| e.to_string())
@@ -53,8 +51,6 @@ pub async fn delete_session(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.as_ref();
-    db.delete_session(&session_id)
-        .await
-        .map_err(|e| e.to_string())
+    let db = state.db.lock().await;
+    db.delete_session(&session_id).await.map_err(|e| e.to_string())
 }

@@ -1,12 +1,12 @@
 {
   "productName": "VisionMachine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "com.visionmachine.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "withGlobalTauri": true,

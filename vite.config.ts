@@ -9,17 +9,18 @@ export default defineConfig({
     alias: {
       '$types': resolve(__dirname, 'src/types'),
       '$constants': resolve(__dirname, 'src/constants'),
+      '$lib': resolve(__dirname, 'src/lib'),
     },
   },
   root: 'public',
-  server: { 
-    port: 1420, 
+  server: {
+    port: 1420,
     strictPort: true,
     host: true,
     cors: true
   },
-  build: { 
-    outDir: '../dist', 
-    emptyOutDir: true 
+  build: {
+    outDir: '../dist',
+    emptyOutDir: true
   },
 });

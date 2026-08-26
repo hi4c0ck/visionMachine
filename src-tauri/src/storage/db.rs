@@ -1,8 +1,9 @@
-use sqlx::{sqlite::{SqlitePool, SqlitePoolOptions}, Row};
+use sqlx::{sqlite::SqlitePool, Row};
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct Database {
-    pool: SqlitePool,
+    pub pool: SqlitePool,
 }
 
 impl Database {
@@ -23,9 +24,8 @@ impl Database {
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
         }
         
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&format!("sqlite://{}", path))
+        // Connect with ?mode=rwc to allow creating/connecting to existing DB
+        let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", path))
             .await
             .map_err(|e| format!("Failed to connect to database: {}", e))?;
         
@@ -33,44 +33,119 @@ impl Database {
     }
     
     pub async fn migrate(&self) -> Result<(), String> {
-        sqlx::query("CREATE TABLE IF NOT EXISTS profiles (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )").execute(&self.pool).await.map_err(|e| e.to_string())?;
+        // Run migrations from SQL files - execute each file as a whole
+        self.execute_migration_sql(include_str!("../../migrations/0001_create_schema.sql"))
+            .await?;
+        self.execute_migration_sql(include_str!("../../migrations/0002_composer_schema.sql"))
+            .await?;
+        self.run_additive_columns().await?;
         
-        sqlx::query("CREATE TABLE IF NOT EXISTS projects (
-            id TEXT PRIMARY KEY,
-            profile_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            directory_path TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
-        )").execute(&self.pool).await.map_err(|e| e.to_string())?;
+        log::info!("[DB] All migrations completed");
+        Ok(())
+    }
+    
+    /// Execute a complete SQL migration file - split by statement boundaries
+    async fn execute_migration_sql(&self, sql: &str) -> Result<(), String> {
+        // Split the SQL into individual statements by looking for semicolons
+        // that are not inside parentheses
+        let mut statements = Vec::new();
+        let mut current = String::new();
+        let mut paren_depth = 0;
         
-        sqlx::query("CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            project_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            fps INTEGER DEFAULT 24,
-            resolution TEXT DEFAULT '720p',
-            orientation TEXT DEFAULT 'horizontal',
-            pipes_json TEXT,
-            total_generated_frames INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-        )").execute(&self.pool).await.map_err(|e| e.to_string())?;
+        for line in sql.lines() {
+            let trimmed = line.trim();
+            
+            // Skip empty lines and full-line comments
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+            
+            // Process character by character to track parentheses
+            for ch in trimmed.chars() {
+                match ch {
+                    '(' => {
+                        paren_depth += 1;
+                        current.push(ch);
+                    }
+                    ')' => {
+                        paren_depth -= 1;
+                        current.push(ch);
+                    }
+                    ';' if paren_depth == 0 => {
+                        // End of statement
+                        if !current.trim().is_empty() {
+                            statements.push(current.trim().to_string());
+                        }
+                        current.clear();
+                    }
+                    _ => {
+                        current.push(ch);
+                    }
+                }
+            }
+            
+            // Add newline to preserve formatting
+            if !trimmed.is_empty() && !trimmed.starts_with("--") {
+                current.push('\n');
+            }
+        }
         
-        // Create indexes
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_projects_profile ON projects(profile_id)")
-            .execute(&self.pool)
+        // Handle any remaining text
+        if !current.trim().is_empty() {
+            statements.push(current.trim().to_string());
+        }
+        
+        // Execute each statement
+        for stmt in statements {
+            if stmt.is_empty() {
+                continue;
+            }
+            
+            log::debug!("[DB] Executing: {}", stmt);
+            
+            sqlx::query(&stmt)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("Migration error: {}", e))?;
+        }
+        
+        Ok(())
+    }
+    
+    async fn run_additive_columns(&self) -> Result<(), String> {
+        // Add columns that live code writes but migration files don't have
+        let columns = [
+            "ALTER TABLE sessions ADD COLUMN fps INTEGER DEFAULT 24",
+            "ALTER TABLE sessions ADD COLUMN resolution TEXT DEFAULT '720p'",
+            "ALTER TABLE sessions ADD COLUMN orientation TEXT DEFAULT 'horizontal'",
+            "ALTER TABLE sessions ADD COLUMN pipes_json TEXT",
+            "ALTER TABLE sessions ADD COLUMN total_generated_frames INTEGER DEFAULT 0",
+        ];
+        
+        for sql in columns {
+            // Ignore "duplicate column" errors
+            let _ = sqlx::query(sql).execute(&self.pool).await;
+        }
+        
+        Ok(())
+    }
+    
+    /// Seed default profile if missing (Phase 1.4)
+    pub async fn seed_default_profile(&self) -> Result<(), String> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE id = ?")
+            .bind("default")
+            .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
         
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)")
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        if count == 0 {
+            sqlx::query("INSERT INTO profiles (id, name) VALUES (?, ?)")
+                .bind("default")
+                .bind("Default User")
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
         
         Ok(())
     }
@@ -80,112 +155,174 @@ impl Database {
         let id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO profiles (id, name) VALUES (?, ?)")
             .bind(&id).bind(name)
-            .execute(&self.pool).await.map_err(|e| e.to_string())?;
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        
         Ok(id)
     }
     
     pub async fn list_profiles(&self) -> Result<Vec<serde_json::Value>, String> {
-        let rows = sqlx::query("SELECT * FROM profiles ORDER BY created_at DESC")
-            .fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT id, name, created_at FROM profiles ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         
-        Ok(rows.iter().map(|row| {
-            serde_json::json!({
-                "id": row.get::<String, _>("id"),
-                "name": row.get::<String, _>("name"),
-                "created_at": row.get::<String, _>("created_at")
+        let profiles: Vec<serde_json::Value> = rows.iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.get::<String, usize>(0),
+                    "name": row.get::<String, usize>(1),
+                    "created_at": row.get::<String, usize>(2),
+                })
             })
-        }).collect())
+            .collect();
+        
+        Ok(profiles)
     }
     
     // Project operations
     pub async fn create_project(&self, profile_id: &str, name: &str, directory_path: Option<&str>) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO projects (id, profile_id, name, directory_path) VALUES (?, ?, ?, ?)")
-            .bind(&id).bind(profile_id).bind(name).bind(directory_path)
-            .execute(&self.pool).await.map_err(|e| e.to_string())?;
+            .bind(&id)
+            .bind(profile_id)
+            .bind(name)
+            .bind(directory_path)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        
         Ok(id)
     }
     
     pub async fn list_projects(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, String> {
-        let rows = sqlx::query("SELECT * FROM projects WHERE profile_id = ? ORDER BY created_at DESC")
+        let rows = sqlx::query("SELECT id, profile_id, name, directory_path, created_at FROM projects WHERE profile_id = ? ORDER BY created_at DESC")
             .bind(profile_id)
-            .fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         
-        Ok(rows.iter().map(|row| {
-            serde_json::json!({
-                "id": row.get::<String, _>("id"),
-                "profile_id": row.get::<String, _>("profile_id"),
-                "name": row.get::<String, _>("name"),
-                "directory_path": row.get::<Option<String>, _>("directory_path"),
-                "created_at": row.get::<String, _>("created_at")
+        let projects: Vec<serde_json::Value> = rows.iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.get::<String, usize>(0),
+                    "profile_id": row.get::<String, usize>(1),
+                    "name": row.get::<String, usize>(2),
+                    "directory_path": row.get::<Option<String>, usize>(3),
+                    "created_at": row.get::<String, usize>(4),
+                })
             })
-        }).collect())
+            .collect();
+        
+        Ok(projects)
     }
     
     // Session operations
     pub async fn create_session(&self, project_id: &str, name: &str, pipes_json: Option<&str>) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO sessions (id, project_id, name, pipes_json) VALUES (?, ?, ?, ?)")
-            .bind(&id).bind(project_id).bind(name).bind(pipes_json)
-            .execute(&self.pool).await.map_err(|e| e.to_string())?;
+            .bind(&id)
+            .bind(project_id)
+            .bind(name)
+            .bind(pipes_json)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        
         Ok(id)
     }
     
     pub async fn list_sessions(&self, project_id: &str) -> Result<Vec<serde_json::Value>, String> {
-        let rows = sqlx::query("SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
+        let rows = sqlx::query("SELECT id, project_id, name, fps, resolution, orientation, pipes_json, total_generated_frames, created_at FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
             .bind(project_id)
-            .fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         
-        Ok(rows.iter().map(|row| {
-            serde_json::json!({
-                "id": row.get::<String, _>("id"),
-                "project_id": row.get::<String, _>("project_id"),
-                "name": row.get::<String, _>("name"),
-                "fps": row.get::<i64, _>("fps"),
-                "resolution": row.get::<String, _>("resolution"),
-                "orientation": row.get::<String, _>("orientation"),
-                "pipes_json": row.get::<Option<String>, _>("pipes_json"),
-                "total_generated_frames": row.get::<i64, _>("total_generated_frames"),
-                "created_at": row.get::<String, _>("created_at")
+        let sessions: Vec<serde_json::Value> = rows.iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.get::<String, usize>(0),
+                    "project_id": row.get::<String, usize>(1),
+                    "name": row.get::<String, usize>(2),
+                    "fps": row.get::<i64, usize>(3),
+                    "resolution": row.get::<String, usize>(4),
+                    "orientation": row.get::<String, usize>(5),
+                    "pipes_json": row.get::<Option<String>, usize>(6),
+                    "total_generated_frames": row.get::<i64, usize>(7),
+                    "created_at": row.get::<String, usize>(8),
+                })
             })
-        }).collect())
+            .collect();
+        
+        Ok(sessions)
     }
     
     pub async fn update_session(&self, session_id: &str, updates: &serde_json::Value) -> Result<(), String> {
-        let mut set_clauses: Vec<String> = vec![];
-        let mut args: Vec<String> = vec![];
+        // Build dynamic update query
+        let mut set_clauses = Vec::new();
+        let mut params: Vec<serde_json::Value> = Vec::new();
         
-        if let Some(name) = updates.get("name").and_then(|v| v.as_str()) {
-            set_clauses.push("name = ?".to_string());
-            args.push(name.to_string());
+        if let Some(val) = updates.get("name") {
+            if val.as_str().is_some() {
+                set_clauses.push("name = ?");
+                params.push(val.clone());
+            }
         }
-        if let Some(fps) = updates.get("fps").and_then(|v| v.as_i64()) {
-            set_clauses.push("fps = ?".to_string());
-            args.push(fps.to_string());
+        if let Some(val) = updates.get("fps") {
+            if val.as_i64().is_some() {
+                set_clauses.push("fps = ?");
+                params.push(val.clone());
+            }
         }
-        if let Some(resolution) = updates.get("resolution").and_then(|v| v.as_str()) {
-            set_clauses.push("resolution = ?".to_string());
-            args.push(resolution.to_string());
+        if let Some(val) = updates.get("resolution") {
+            if val.as_str().is_some() {
+                set_clauses.push("resolution = ?");
+                params.push(val.clone());
+            }
         }
-        if let Some(orientation) = updates.get("orientation").and_then(|v| v.as_str()) {
-            set_clauses.push("orientation = ?".to_string());
-            args.push(orientation.to_string());
+        if let Some(val) = updates.get("orientation") {
+            if val.as_str().is_some() {
+                set_clauses.push("orientation = ?");
+                params.push(val.clone());
+            }
         }
-        if let Some(pipes_json) = updates.get("pipes_json").and_then(|v| v.as_str()) {
-            set_clauses.push("pipes_json = ?".to_string());
-            args.push(pipes_json.to_string());
+        if let Some(val) = updates.get("pipes_json") {
+            if val.as_str().is_some() {
+                set_clauses.push("pipes_json = ?");
+                params.push(val.clone());
+            }
+        }
+        if let Some(val) = updates.get("total_generated_frames") {
+            if val.as_i64().is_some() {
+                set_clauses.push("total_generated_frames = ?");
+                params.push(val.clone());
+            }
         }
         
-        set_clauses.push("updated_at = CURRENT_TIMESTAMP".to_string());
-        args.push(session_id.to_string());
+        if set_clauses.is_empty() {
+            return Ok(());
+        }
         
-        let sql = format!("UPDATE sessions SET {} WHERE id = ?", set_clauses.join(", "));
+        let sql = format!(
+            "UPDATE sessions SET {} WHERE id = ?",
+            set_clauses.join(", ")
+        );
         
+        // Bind params individually
         let mut query = sqlx::query(&sql);
-        for arg in &args {
-            query = query.bind(arg);
+        for value in &params {
+            if let Some(s) = value.as_str() {
+                query = query.bind(s);
+            } else if let Some(n) = value.as_i64() {
+                query = query.bind(n);
+            }
         }
-        query.execute(&self.pool).await.map_err(|e| e.to_string())?;
+        query = query.bind(session_id);
+        query.execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         
         Ok(())
     }
@@ -196,6 +333,7 @@ impl Database {
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
+        
         Ok(())
     }
 }

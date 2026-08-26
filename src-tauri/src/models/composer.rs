@@ -25,7 +25,11 @@ impl Resolution {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum AspectRatio { R16x9, R9x16, R1x1 }
-impl Default for AspectRatio { Self::R16x9 }
+impl Default for AspectRatio {
+    fn default() -> Self {
+        Self::R16x9
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSettings {

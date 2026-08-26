@@ -1,5 +1,6 @@
-use crate::{models, storage};
+use crate::AppState;
 use serde::{Deserialize, Serialize};
+use tauri::State;
 
 // ── Request types ────────────────────────────────────────────────────────────
 
@@ -85,8 +86,11 @@ pub struct PromptNodeResponse {
 
 /// Get the full composer configuration for a session
 #[tauri::command]
-pub async fn get_composer(session_id: String) -> Result<serde_json::Value, String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn get_composer(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = &state.db.lock().await;
     
     let composer = db.get_composer(&session_id).await.map_err(|e| e.to_string())?;
     let settings = db.get_or_create_session_settings(&session_id).await.map_err(|e| e.to_string())?;
@@ -94,10 +98,10 @@ pub async fn get_composer(session_id: String) -> Result<serde_json::Value, Strin
     
     let pipes_json: Vec<serde_json::Value> = pipes.iter().map(|pipe| {
         let status_str = match &pipe.status {
-            models::PipeStatus::Idle => "idle",
-            models::PipeStatus::Generating => "generating",
-            models::PipeStatus::Completed => "completed",
-            models::PipeStatus::Error(e) => format!("error: {}", e),
+            crate::models::PipeStatus::Idle => "idle",
+            crate::models::PipeStatus::Generating => "generating",
+            crate::models::PipeStatus::Completed => "completed",
+            crate::models::PipeStatus::Error(_) => "error",
         };
         
         serde_json::json!({
@@ -151,17 +155,23 @@ pub async fn get_composer(session_id: String) -> Result<serde_json::Value, Strin
 
 /// Save the entire composer configuration
 #[tauri::command]
-pub async fn save_composer(config: serde_json::Value) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
-    let composer: models::ComposerConfig = serde_json::from_value(config)
+pub async fn save_composer(
+    config: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
+    let composer: crate::models::ComposerConfig = serde_json::from_value(config)
         .map_err(|e| format!("Invalid composer config: {}", e))?;
     db.save_composer(&composer).await.map_err(|e| e.to_string())
 }
 
 /// Add a new pipe
 #[tauri::command]
-pub async fn add_pipe(req: CreatePipeRequest) -> Result<PipeRowResponse, String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn add_pipe(
+    req: CreatePipeRequest,
+    state: State<'_, AppState>,
+) -> Result<PipeRowResponse, String> {
+    let db = &state.db.lock().await;
     
     let name = req.name.unwrap_or_else(|| format!("Pipe {}", chrono::Utc::now().timestamp()));
     let pipe = db.add_pipe(&req.composer_id, &req.session_id, &name, 0)
@@ -188,8 +198,11 @@ pub async fn add_pipe(req: CreatePipeRequest) -> Result<PipeRowResponse, String>
 
 /// Update pipe configuration
 #[tauri::command]
-pub async fn update_pipe_config(req: UpdatePipeConfigRequest) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn update_pipe_config(
+    req: UpdatePipeConfigRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
     
     let updates = serde_json::json!({
         "num_inference_steps": req.num_inference_steps.unwrap_or(20),
@@ -202,15 +215,21 @@ pub async fn update_pipe_config(req: UpdatePipeConfigRequest) -> Result<(), Stri
 
 /// Remove a pipe
 #[tauri::command]
-pub async fn remove_pipe(pipe_id: String) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn remove_pipe(
+    pipe_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
     db.delete_pipe(&pipe_id).await.map_err(|e| e.to_string())
 }
 
 /// Set a keyframe image
 #[tauri::command]
-pub async fn set_keyframe(req: SetKeyframeRequest) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn set_keyframe(
+    req: SetKeyframeRequest,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
     db.add_keyframe(
         &req.pipe_id, req.slot_index, &req.source_type,
         &req.source_value, req.description.as_deref(),
@@ -220,29 +239,39 @@ pub async fn set_keyframe(req: SetKeyframeRequest) -> Result<(), String> {
 
 /// Clear a keyframe
 #[tauri::command]
-pub async fn clear_keyframe(pipe_id: String, slot_index: u8) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn clear_keyframe(
+    pipe_id: String,
+    slot_index: u8,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
     db.remove_keyframe(&pipe_id, slot_index).await.map_err(|e| e.to_string())
 }
 
 /// List keyframes for a pipe
 #[tauri::command]
-pub async fn list_keyframes(pipe_id: String) -> Result<Vec<KeyframeSlotResponse>, String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn list_keyframes(
+    pipe_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<KeyframeSlotResponse>, String> {
+    let db = &state.db.lock().await;
     let keyframes = db.list_keyframes(&pipe_id).await.map_err(|e| e.to_string())?;
     Ok(keyframes.into_iter().map(|kf| KeyframeSlotResponse {
         slot_index: kf.slot_index,
-        source_type: kf.source_type,
-        source_value: kf.source_value,
-        description: kf.description,
+        source_type: kf.source_type.clone(),
+        source_value: kf.source_value.clone(),
+        description: kf.description.clone(),
         has_image: kf.has_image(),
     }).collect())
 }
 
 /// Add a prompt node to a pipe with one-type-per-row validation
 #[tauri::command]
-pub async fn add_prompt_node(req: AddPromptNodeRequest) -> Result<String, String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn add_prompt_node(
+    req: AddPromptNodeRequest,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let db = &state.db.lock().await;
     
     // Validate parent-child tag compatibility
     if let Some(parent_id) = &req.parent_id {
@@ -253,7 +282,7 @@ pub async fn add_prompt_node(req: AddPromptNodeRequest) -> Result<String, String
         if let Some(parent) = parent {
             // If parent exists, check that we're adding allowed child types
             // Only segments can have children (movement, rotation, etc.)
-            if parent.tag != models::PromptTag::Segment && parent.tag != models::PromptTag::GlobalStyle {
+            if parent.tag != crate::models::PromptTag::Segment && parent.tag != crate::models::PromptTag::GlobalStyle {
                 return Err(format!(
                     "Cannot add {} under {}. Only segments and global_style can have children.",
                     req.tag, format!("{:?}", parent.tag).to_lowercase()
@@ -261,22 +290,22 @@ pub async fn add_prompt_node(req: AddPromptNodeRequest) -> Result<String, String
             }
             
             // For segments, validate child type is allowed
-            if parent.tag == models::PromptTag::Segment {
+            if parent.tag == crate::models::PromptTag::Segment {
                 let allowed_children = [
-                    models::PromptTag::Movement,
-                    models::PromptTag::Rotation,
-                    models::PromptTag::FocalPoint,
-                    models::PromptTag::Lighting,
-                    models::PromptTag::Exposure,
-                    models::PromptTag::LensEffect,
+                    crate::models::PromptTag::Movement,
+                    crate::models::PromptTag::Rotation,
+                    crate::models::PromptTag::FocalPoint,
+                    crate::models::PromptTag::Lighting,
+                    crate::models::PromptTag::Exposure,
+                    crate::models::PromptTag::LensEffect,
                 ];
                 let requested_tag = match req.tag.as_str() {
-                    "movement" => models::PromptTag::Movement,
-                    "rotation" => models::PromptTag::Rotation,
-                    "focal_point" => models::PromptTag::FocalPoint,
-                    "lighting" => models::PromptTag::Lighting,
-                    "exposure" => models::PromptTag::Exposure,
-                    "lens_effect" => models::PromptTag::LensEffect,
+                    "movement" => crate::models::PromptTag::Movement,
+                    "rotation" => crate::models::PromptTag::Rotation,
+                    "focal_point" => crate::models::PromptTag::FocalPoint,
+                    "lighting" => crate::models::PromptTag::Lighting,
+                    "exposure" => crate::models::PromptTag::Exposure,
+                    "lens_effect" => crate::models::PromptTag::LensEffect,
                     _ => return Err(format!("Invalid child tag '{}' under segment", req.tag)),
                 };
                 if !allowed_children.contains(&requested_tag) {
@@ -305,8 +334,9 @@ pub async fn update_prompt_node(
     value: Option<String>,
     frame_start: Option<u32>,
     frame_end: Option<u32>,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+    let db = &state.db.lock().await;
     db.update_prompt_node(
         &node_id,
         value.as_deref(),
@@ -317,40 +347,50 @@ pub async fn update_prompt_node(
 
 /// Toggle prompt node enabled state
 #[tauri::command]
-pub async fn toggle_prompt_node(node_id: String, enabled: bool) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn toggle_prompt_node(
+    node_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
     db.toggle_prompt_node(&node_id, enabled).await.map_err(|e| e.to_string())
 }
 
 /// Remove a prompt node and its children
 #[tauri::command]
-pub async fn remove_prompt_node(node_id: String) -> Result<(), String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn remove_prompt_node(
+    node_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = &state.db.lock().await;
     db.remove_prompt_node(&node_id).await.map_err(|e| e.to_string())
 }
 
 /// Update session settings
 #[tauri::command]
-pub async fn update_session_settings(req: UpdateSessionSettingsRequest) -> Result<serde_json::Value, String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn update_session_settings(
+    req: UpdateSessionSettingsRequest,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = &state.db.lock().await;
     
     let mut settings = db.get_or_create_session_settings(&req.session_id)
         .await.map_err(|e| e.to_string())?;
     
     if let Some(resolution) = &req.resolution {
         settings.resolution = match resolution.as_str() {
-            "480p" => models::Resolution::P480,
-            "720p" => models::Resolution::P720,
-            "1080p" => models::Resolution::P1080,
+            "480p" => crate::models::Resolution::P480,
+            "720p" => crate::models::Resolution::P720,
+            "1080p" => crate::models::Resolution::P1080,
             _ => return Err(format!("Invalid resolution: {}", resolution)),
         };
     }
     
     if let Some(aspect_ratio) = &req.aspect_ratio {
         settings.aspect_ratio = match aspect_ratio.as_str() {
-            "9:16" => models::AspectRatio::R9x16,
-            "1:1" => models::AspectRatio::R1x1,
-            _ => models::AspectRatio::R16x9,
+            "9:16" => crate::models::AspectRatio::R9x16,
+            "1:1" => crate::models::AspectRatio::R1x1,
+            _ => crate::models::AspectRatio::R16x9,
         };
     }
     
@@ -383,8 +423,11 @@ pub async fn update_session_settings(req: UpdateSessionSettingsRequest) -> Resul
 
 /// Get session settings
 #[tauri::command]
-pub async fn get_session_settings(session_id: String) -> Result<serde_json::Value, String> {
-    let db = storage::Database::new("data").await.map_err(|e| e.to_string())?;
+pub async fn get_session_settings(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = &state.db.lock().await;
     let settings = db.get_or_create_session_settings(&session_id)
         .await.map_err(|e| e.to_string())?;
     
@@ -399,11 +442,12 @@ pub async fn get_session_settings(session_id: String) -> Result<serde_json::Valu
     }))
 }
 
-/// Trigger generation from composer configuration
+/// Trigger generation from composer configuration (stub - backend not yet implemented)
 #[tauri::command]
 pub async fn generate_from_composer(
     session_id: String,
     composer_id: String,
+    state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let task_id = uuid::Uuid::new_v4().to_string();
     
@@ -412,6 +456,6 @@ pub async fn generate_from_composer(
         "session_id": session_id,
         "composer_id": composer_id,
         "status": "queued",
-        "message": "Generation task created",
+        "message": "Generation task created - backend integration pending",
     }))
 }

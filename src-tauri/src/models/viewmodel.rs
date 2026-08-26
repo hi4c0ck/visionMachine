@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use super::tool::ToolDefinition;
 use tokio::sync::{Mutex, watch};
 
 /// Base ViewModel class implementing MVI (Model-View-Intent) pattern
