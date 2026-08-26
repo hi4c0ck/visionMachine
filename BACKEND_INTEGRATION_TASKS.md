@@ -92,6 +92,126 @@ transition #FF6B35 plain. Route colors through CSS custom properties (--tag-*) f
 
 ---
 
+## Timeline Architecture: Nested Segments with Multi-Thumb Sliders
+
+### Visual Structure
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  FRAME RULER (0..lengthFrames, snaps to 8-grid)             │
+│  [0]...[8]...[16]...[24]...[32]...[40]...[48]...[56]...   │
+└─────────────────────────────────────────────────────────────┘
+│  GLOBAL NODES (layer 1: R1)                                 │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│  [● global_style: "film noir" ●]                            │
+└─────────────────────────────────────────────────────────────┘
+│  PIPE KEYFRAMES (max 3 slots, wide chips ~72px)             │
+│  [k1][k2][k3][+]  ← left edge = frame position on ruler     │
+└─────────────────────────────────────────────────────────────┘
+│  SEGMENT TRACKS (layer 2: R1, per-tag rows)                 │
+│                                                             │
+│  Scene (red #FF6B6B)                                        │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ●═══════════════●           ●══════●                │    │
+│  │  segment A       segment B      segment C            │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+│  Camera (yellow #FFE66D)                                    │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │         ●══════════════●                           │    │
+│  │          segment D                                   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+│  Rotation (cyan #4ECDC4)                                    │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ●═════●                                             │    │
+│  │  segment E                                           │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+│  [+Scene] [+Camera] [+Rotation] [+Lighting] ...             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Multi-Thumb Slider Behavior
+
+**Component:** `MultiThumbSlider.svelte` (367 lines)
+**Props:** `values=[start, end]`, `min=0`, `max=pipe.lengthFrames`, `step=8`, `color=tagColor`
+
+Each segment renders as one `<MultiThumbSlider>` on its tag track:
+
+1. **Thumb dragging** — grab either thumb, drag horizontally along the track
+2. **Frame snapping** — positions snap to multiples of 8 (0, 8, 16, 24...)
+3. **Minimum span** — `MIN_GAP = 8` enforced: `end - start >= 8`
+4. **Boundary validation** — after drag release:
+   - `frameStart % 8 === 0` ✓ (valid boundary)
+   - `frameEnd % 8 === 0` ✓ (valid boundary)
+   - `(frameEnd - frameStart) >= 8` ✓ (min span)
+   - `frameEnd <= lengthFrames - 1` ✓ (within pipe bounds)
+5. **Overlap rejection** — same-tag overlaps cause revert + toast
+
+**Critical distinction (8n+1 vs multiple of 8):**
+```
+Pipe length (totalFrames):    121 = 8×15 + 1  (8n+1 rule)
+Valid segment boundaries:     0, 8, 16, 24...  (multiples of 8)
+Last valid segment end:       120 = 121 - 1
+```
+
+The 8n+1 rule applies to **pipe length** (total frames), NOT to segment boundaries. Segments use multiples of 8 for both start and end.
+
+### Adding Segments via Frame Ruler Interaction
+
+**Primary path (Type Picker button):**
+1. User clicks `[+Scene]` on a tag row
+2. `openTypePicker(pipeIndex)` opens the type picker modal
+3. User selects tag → `confirmTypeSelection()` called
+4. Segment created at `frameStart=0, frameEnd=snapTo8(lengthFrames-1)`
+5. Validation runs: overlap check + boundary check
+6. If valid → `onUpdate` persists; if invalid → toast error
+
+**Secondary path (click on ruler):**
+1. User clicks on frame ruler position
+2. `handleTimelineFrameSelect(frame)` fires
+3. Opens type picker at that frame position
+4. Same validation as above
+
+**Removing segments:**
+1. Click trash icon on segment chip
+2. `removeSegmentAction(sessionId, pipeId, segmentId)`
+3. Re-validates remaining segments for overlaps
+4. Persists via `onUpdate`
+
+### Pipe Scope Constraint
+
+All segment operations are scoped to a single pipe:
+- `frameStart`, `frameEnd` are relative to `pipe.lengthFrames`
+- Different pipes have independent timelines (no cross-pipe segments)
+- `lengthFrames` can differ per pipe (valid 8n+1 values: 41, 49, 57... up to resolution cap)
+
+Resolution caps:
+- `480p`: max 441 frames
+- `720p`: max 241 frames  
+- `1080p`: max 121 frames
+
+### Frame Ruler Coordination
+
+The `FrameRuler.svelte` component (224 lines) provides:
+- Visual tick marks at `markerInterval` (default 8)
+- Zoom level affects marker density
+- Click handler: `onframeSelect(frame)` fires with snapped frame
+- Used by composer to open add-segment at clicked position
+
+### Validation Rules Summary
+
+| Check | Rule | Error Message |
+|-------|------|---------------|
+| Boundary | `frameStart % 8 === 0` | "frameStart must be a multiple of 8" |
+| Boundary | `frameEnd % 8 === 0` | "frameEnd must be a multiple of 8" |
+| Span | `frameEnd - frameStart >= 8` | "minimum span is 8 frames" |
+| Bounds | `frameEnd <= lengthFrames - 1` | "frameEnd exceeds max usable frame" |
+| Overlap | No same-tag overlap | "Overlap detected for <tag>" |
+
+---
+
 ## Canonical Data Contract
 
 Single JSON shape agreed between frontend store and backend commands:
