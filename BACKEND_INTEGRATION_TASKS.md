@@ -410,6 +410,9 @@ Keep `git tag v0.3.0-phase-N` after each gate passes.
 
 ## Revision History
 
+- 2026-08-26 v3: Added timeline architecture docs — nested segments with multi-thumb sliders,
+  frame ruler coordination, adding/removing segments via ruler interaction, pipe scope constraints,
+  validation rules summary (8n+1 vs multiple-of-8 distinction).
 - 2026-08-26 v2: Full saturation rewrite. Added: regression warning + Task 0 recovery from 3514cd3;
   design rules R1/R2/R3; canonical PipePayload contract; phases reordered (schema truth before CRUD,
   timeline before normalization); composer_db get_conn fix; 0003 additive migration; plugin-log;
