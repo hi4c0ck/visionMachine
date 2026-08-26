@@ -205,34 +205,34 @@ describe('validateSegments', () => {
 // ── validateKeyframe ─────────────────────────────────────────────────────────
 
 describe('validateKeyframe', () => {
-  it('should accept valid url keyframe at frame 9', () => {
-    const kf = { id: '1', frame: 9, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
+  it('should accept valid url keyframe at frame 8', () => {
+    const kf = { id: '1', frame: 8, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
     expect(validateKeyframe(kf).valid).toBe(true);
   });
 
   it('should reject url keyframe without source', () => {
-    const kf = { id: '1', frame: 9, type: 'url' as const, status: 'pending' };
+    const kf = { id: '1', frame: 8, type: 'url' as const, status: 'pending' };
     expect(validateKeyframe(kf).valid).toBe(false);
   });
 
   it('should reject img2img keyframe without referenceUrl', () => {
-    const kf = { id: '1', frame: 9, type: 'img2img' as const, status: 'pending' };
+    const kf = { id: '1', frame: 8, type: 'img2img' as const, status: 'pending' };
     expect(validateKeyframe(kf).valid).toBe(false);
   });
 
-  it('should reject keyframe at invalid frame (not 8n+1)', () => {
-    // Frame 10 is not 8n+1 (valid are 1,9,17,...)
-    const kf = { id: '1', frame: 10, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
+  it('should reject keyframe at invalid frame (not multiple of 8)', () => {
+    // Frame 9 is NOT a multiple of 8 (valid are 0, 8, 16, 24, ...)
+    const kf = { id: '1', frame: 9, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
     expect(validateKeyframe(kf).valid).toBe(false);
   });
 
-  it('should accept keyframe at frame 1', () => {
-    const kf = { id: '1', frame: 1, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
+  it('should accept keyframe at frame 0', () => {
+    const kf = { id: '1', frame: 0, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
     expect(validateKeyframe(kf).valid).toBe(true);
   });
 
-  it('should accept keyframe at frame 241', () => {
-    const kf = { id: '1', frame: 241, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
+  it('should accept keyframe at frame 240 (multiple of 8)', () => {
+    const kf = { id: '1', frame: 240, type: 'url' as const, imageSrc: 'https://example.com/img.jpg', status: 'pending' };
     expect(validateKeyframe(kf).valid).toBe(true);
   });
 });
