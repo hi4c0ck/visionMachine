@@ -102,16 +102,23 @@
 	}
 
 	async function confirmAddPipe() {
-		if (!session?.id) return;
-		try {
-			await addPipe(session.id);
-			closeAddPipeModal();
-			showToast('Pipe added', 'success');
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to add pipe:', e);
-			showToast('Failed to add pipe', 'error');
+			if (!session?.id) {
+				showToast('No active session', 'error');
+				return;
+			}
+			try {
+				const result = await addPipe(session.id);
+				if (result.errors.length > 0) {
+					showToast(result.errors[0], 'error');
+					return;
+				}
+				closeAddPipeModal();
+				showToast('Pipe added', 'success');
+			} catch (e) {
+				console.error('[ComposerPanel] Failed to add pipe:', e);
+				showToast('Failed to add pipe', 'error');
+			}
 		}
-	}
 
 	function closeSegmentModal() {
 		showSegmentModal = false;
@@ -162,20 +169,24 @@
 		if (!pipe) return;
 
 		try {
-			// Use globalNodes if available, otherwise fall back to globalPrompt
-			if (pipe.globalNodes && pipe.globalNodes.length > 0) {
-				// Add as first global node
-				const newNodes = [...pipe.globalNodes, { id: crypto.randomUUID(), tag: 'global_style', value: globalPromptText, enabled: true }];
-				onUpdate({ ...session, pipes: pipes.map((p, idx) => idx === activeGlobalPipeIndex ? { ...p, globalNodes: newNodes } : p) });
-			} else {
-				await setGlobalPrompt(session.id, pipe.id, globalPromptText);
-			}
-			closeGlobalPromptModal();
-			showToast('Global prompt saved', 'success');
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to save global prompt:', e);
-			showToast('Failed to save global prompt', 'error');
-		}
+					// Use globalNodes if available, otherwise fall back to globalPrompt
+					if (pipe.globalNodes && pipe.globalNodes.length > 0) {
+						// Add as first global node
+						const newNodes = [...pipe.globalNodes, { id: crypto.randomUUID(), tag: 'global_style', value: globalPromptText, enabled: true }];
+						onUpdate({ ...session, pipes: pipes.map((p, idx) => idx === activeGlobalPipeIndex ? { ...p, globalNodes: newNodes } : p) });
+					} else {
+						const result = await setGlobalPrompt(session.id, pipe.id, globalPromptText);
+						if (result.errors.length > 0) {
+							showToast(result.errors[0], 'error');
+							return;
+						}
+					}
+					closeGlobalPromptModal();
+					showToast('Global prompt saved', 'success');
+				} catch (e) {
+					console.error('[ComposerPanel] Failed to save global prompt:', e);
+					showToast('Failed to save global prompt', 'error');
+				}
 	}
 
 	let activeGlobalNodeIndex = $state<number | null>(null);
@@ -439,10 +450,13 @@
 		if (!pipe || pipes.length <= 1) return;
 
 		try {
-			await removePipe(session.id, pipe.id);
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to delete pipe:', e);
-		}
+					const result = await removePipe(session.id, pipe.id);
+					if (result.errors.length > 0) {
+						showToast(result.errors[0], 'error');
+					}
+				} catch (e) {
+					console.error('[ComposerPanel] Failed to delete pipe:', e);
+				}
 	}
 
 	function editParam(segment: PromptSegment, field: 'value' | 'prompt', newValue: any) {
@@ -450,9 +464,16 @@
 	}
 
 	async function updateParam(pipeIndex: number, segmentId: string, value: number) {
-		// Store doesn't have this specific action, do inline
+		if (!session?.id || pipeIndex < 0) return;
 		const pipe = pipes[pipeIndex];
 		if (!pipe) return;
+		
+		const result = await moveSegment(session.id, pipe.id, segmentId, 0);
+		if (result.errors.length > 0) {
+			showToast(result.errors[0], 'error');
+			return;
+		}
+		
 		const updatedPipes = pipes.map((p, idx) => {
 			if (idx !== pipeIndex) return p;
 			return {
@@ -547,17 +568,16 @@
 		}
 	}
 
-	function deleteKeyframe(pipeIndex: number, keyframeId: string) {
+	async function deleteKeyframe(pipeIndex: number, keyframeId: string) {
+		if (!session?.id || pipeIndex < 0) return;
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return;
+
 		try {
-			const pipe = pipes[pipeIndex];
-			if (!pipe) return;
-
-			const updatedPipes = pipes.map((p, idx) => {
-				if (idx !== pipeIndex) return p;
-				return { ...p, keyframes: p.keyframes.filter(k => k.id !== keyframeId) };
-			});
-
-			onUpdate({ ...session, pipes: updatedPipes });
+			const result = await removeKeyframe(session.id, pipe.id, keyframeId);
+			if (result.errors.length > 0) {
+				showToast(result.errors[0], 'error');
+			}
 		} catch (e) {
 			console.error('[ComposerPanel] Failed to delete keyframe:', e);
 		}
@@ -569,23 +589,29 @@
 		if (!pipe) return;
 
 		try {
-			await updateQAction(session.id, pipe.id, value);
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to update Q:', e);
-		}
+					const result = await updateQAction(session.id, pipe.id, value);
+					if (result.errors.length > 0) {
+						showToast(result.errors[0], 'error');
+					}
+				} catch (e) {
+					console.error('[ComposerPanel] Failed to update Q:', e);
+				}
 	}
 
 	async function updateC(pipeIndex: number, value: number) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
+			if (!session?.id || pipeIndex < 0) return;
+			const pipe = pipes[pipeIndex];
+			if (!pipe) return;
 
-		try {
-			await updateCAction(session.id, pipe.id, value);
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to update C:', e);
+			try {
+				const result = await updateCAction(session.id, pipe.id, value);
+				if (result.errors.length > 0) {
+					showToast(result.errors[0], 'error');
+				}
+			} catch (e) {
+				console.error('[ComposerPanel] Failed to update C:', e);
+			}
 		}
-	}
 
 	async function updatePipeLength(pipeIndex: number, newLength: number) {
 		if (!session?.id || pipeIndex < 0) return;
@@ -607,13 +633,16 @@
 	}
 
 	async function handleUpdateFPS(fps: number) {
-		if (!session?.id) return;
-		try {
-			await storeUpdateFPS(session.id, fps);
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to update FPS:', e);
+			if (!session?.id) return;
+			try {
+				const result = await storeUpdateFPS(session.id, fps);
+				if (result.errors.length > 0) {
+					showToast(result.errors[0], 'error');
+				}
+			} catch (e) {
+				console.error('[ComposerPanel] Failed to update FPS:', e);
+			}
 		}
-	}
 
 	async function handleUpdateResolution(resolution: '480p' | '720p' | '1080p') {
 		if (!session?.id) return;
@@ -671,6 +700,71 @@
 			dragKeyframePipeIndex = null;
 		}
 	}
+
+	function handleSegmentBodyDragStart(pipeIndex: number, segmentId: string, e: PointerEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return;
+		const segment = pipe.segments.find(s => s.id === segmentId);
+		if (!segment) return;
+
+		dragSegmentPipeIndex = pipeIndex;
+		dragSegmentId = segmentId;
+		dragSegmentStartX = e.clientX;
+		dragSegmentStartFrame = segment.frameStart;
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+	}
+
+	function handleSegmentBodyDragMove(e: PointerEvent) {
+		// Track movement for live preview
+	}
+
+	async function handleSegmentBodyDragEnd(e: PointerEvent) {
+		if (dragSegmentPipeIndex === null || dragSegmentId === null) return;
+		const pipe = pipes[dragSegmentPipeIndex];
+		if (!pipe) return;
+
+		const deltaPx = e.clientX - dragSegmentStartX;
+		if (Math.abs(deltaPx) < 4) {
+			// Treated as click, not drag
+			dragSegmentPipeIndex = null;
+			dragSegmentId = null;
+			return;
+		}
+
+		const trackWidth = (e.currentTarget as HTMLElement)?.parentElement?.offsetWidth || 1;
+		const deltaFrames = Math.round((deltaPx / trackWidth) * pipe.lengthFrames / 8) * 8;
+		const newStart = snapTo8nPlus1(dragSegmentStartFrame + deltaFrames);
+		const segment = pipe.segments.find(s => s.id === dragSegmentId);
+		if (!segment) {
+			dragSegmentPipeIndex = null;
+			dragSegmentId = null;
+			return;
+		}
+		const segLength = segment.frameEnd - segment.frameStart;
+		const newEnd = newStart + segLength;
+
+		if (newStart < 0 || newEnd > pipe.lengthFrames) {
+			showToast('Segment position out of bounds', 'error');
+			dragSegmentPipeIndex = null;
+			dragSegmentId = null;
+			return;
+		}
+
+		try {
+			const result = await moveSegmentAction(session!.id, pipe.id, dragSegmentId, deltaFrames);
+			if (result.errors.length > 0) {
+				showToast(result.errors.join(', '), 'error');
+			}
+		} catch (err) {
+			showToast(`Failed to move segment: ${String(err)}`, 'error');
+		} finally {
+			dragSegmentPipeIndex = null;
+			dragSegmentId = null;
+		}
+	}
+
 
 	function movePipeUp(pipeIndex: number) {
 		try {
@@ -1009,7 +1103,7 @@
 						<button class="btn-confirm" onclick={confirmAdd} disabled={
 							(addMode === 'url' && !modalUrl.trim()) ||
 							(addMode === 'txt2img' && !modalPrompt.trim()) ||
-							(addMode === 'img2img' && (!modalImg2Img.trim() || !modalPrompt.trim()))
+							(addMode === 'img2img' && !modalImg2Img.trim())
 						}>Add</button>
 					</div>
 				</div>

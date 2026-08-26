@@ -6,7 +6,8 @@
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData, PipeRow } from '$types';
-	import { getMaxFramesForResolution } from '$types';
+	import { getMaxFramesForResolution, migratePipeToTwoLayer } from '$types';
+	import { hydrateSessions } from '$lib/composerStore';
 	import { invoke } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -104,8 +105,17 @@
 		try {
 			const saved = localStorage.getItem(`vm-projects-${userName}`);
 			if (saved) {
-				const parsed: ProjectData[] = JSON.parse(saved);
+				let parsed: ProjectData[] = JSON.parse(saved);
+				// Migrate old globalPrompt -> globalNodes format for each pipe in each session
+				parsed = parsed.map(project => ({
+					...project,
+					sessions: project.sessions.map(session => ({
+						...session,
+						pipes: (session.pipes || []).map(p => migratePipeToTwoLayer(p))
+					}))
+				}));
 				projects = parsed;
+				hydrateSessions(parsed.flatMap(p => p.sessions));
 				
 				const savedProject = localStorage.getItem(`vm-selected-project-${userName}`);
 				const savedSession = localStorage.getItem(`vm-selected-session-${userName}`);
@@ -579,3 +589,4 @@
 		margin: 0;
 	}
 </style>
+

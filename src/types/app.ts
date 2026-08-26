@@ -167,7 +167,7 @@ export function migratePipeToTwoLayer(pipe: PipeRow): PipeRow {
   if (pipe.globalNodes && pipe.globalNodes.length > 0) {
     return pipe; // already migrated
   }
-  const newNode: GlobalNode = pipe.globalPrompt
+  const newNode: GlobalNode | null = pipe.globalPrompt
     ? { id: crypto.randomUUID(), tag: 'global_style', value: pipe.globalPrompt.text, enabled: true }
     : null;
   return {
