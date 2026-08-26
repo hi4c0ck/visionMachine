@@ -261,9 +261,9 @@
 			selectedSessionId = null;
 		}
 		// Clear store for deleted project's sessions
-			hydrateSessions(projects.flatMap(p => p.sessions));
-			saveProjects();
-		}
+		hydrateSessions(projects.flatMap(p => p.sessions));
+		saveProjects();
+	}
 
 	async function handleCreateSession(projectId: string) {
 		try {
