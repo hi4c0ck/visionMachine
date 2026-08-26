@@ -411,16 +411,17 @@
 		const validation = validatePromptSegments(testSegments);
 
 		// Validate segment boundaries using frameMath rules
+		// Segments use multiples of 8, NOT 8n+1 (that's for total frame counts)
 		for (const seg of testSegments) {
-			const startValid = (seg.frameStart - 1) % 8 === 0;
-			const endValid = (seg.frameEnd - 1) % 8 === 0;
+			const startValid = seg.frameStart % 8 === 0;
+			const endValid = seg.frameEnd % 8 === 0;
 			if (!startValid) {
 				validation.valid = false;
-				validation.errors.push(`frameStart must be 8n+1 (got ${seg.frameStart})`);
+				validation.errors.push(`frameStart must be a multiple of 8 (got ${seg.frameStart})`);
 			}
 			if (!endValid) {
 				validation.valid = false;
-				validation.errors.push(`frameEnd must be 8n+1 (got ${seg.frameEnd})`);
+				validation.errors.push(`frameEnd must be a multiple of 8 (got ${seg.frameEnd})`);
 			}
 			if (seg.frameEnd > maxEnd) {
 				validation.valid = false;
