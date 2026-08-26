@@ -182,6 +182,19 @@
 	let globalNodeModalOpen = $state(false);
 	let editingGlobalNodeValue = $state('');
 
+	// Segment body drag state (T4)
+	let dragSegmentPipeIndex = $state<number | null>(null);
+	let dragSegmentId = $state<string | null>(null);
+	let dragSegmentStartX = $state(0);
+	let dragSegmentStartFrame = $state(0);
+
+	// Keyframe drag repositioning (T3 - R3)
+	let isDraggingKeyframe = $state(false);
+	let dragKeyframeStartX = $state(0);
+	let dragKeyframeStartFrame = $state(0);
+	let dragKeyframeId = $state<string | null>(null);
+	let dragKeyframePipeIndex = $state<number | null>(null);
+
 	function openGlobalNodeModal(pipeIndex: number, nodeIndex: number) {
 		activeGlobalPipeIndex = pipeIndex;
 		activeGlobalNodeIndex = nodeIndex;
@@ -614,6 +627,51 @@
 		}
 	}
 
+	// Keyframe drag repositioning (T3 - R3)
+	function handleKeyframePointerDown(pipeIndex: number, kfId: string, frame: number, e: PointerEvent) {
+		e.preventDefault();
+		isDraggingKeyframe = true;
+		dragKeyframeStartX = e.clientX;
+		dragKeyframeStartFrame = frame;
+		dragKeyframeId = kfId;
+		dragKeyframePipeIndex = pipeIndex;
+		// Prevent click handler from firing during drag
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+	}
+
+	function handleKeyframePointerMove(e: PointerEvent) {
+		if (!isDraggingKeyframe || dragKeyframePipeIndex === null || dragKeyframeId === null) return;
+		// Live preview would require a separate state for drag offset
+		// For now we just track the movement; actual commit happens on pointerup
+	}
+
+	async function handleKeyframePointerUp(e: PointerEvent) {
+		if (!isDraggingKeyframe || dragKeyframePipeIndex === null || dragKeyframeId === null) return;
+		isDraggingKeyframe = false;
+		const deltaPx = e.clientX - dragKeyframeStartX;
+		if (Math.abs(deltaPx) < 4) {
+			// Treated as click, not drag — allow modal to open
+			return;
+		}
+		const pipe = pipes[dragKeyframePipeIndex];
+		if (!pipe) return;
+		const trackWidth = (e.currentTarget as HTMLElement)?.offsetWidth || 1;
+		const deltaFrames = Math.round((deltaPx / trackWidth) * pipe.lengthFrames / 8) * 8;
+		const newFrame = snapTo8nPlus1(dragKeyframeStartFrame + deltaFrames);
+		if (newFrame < 0 || newFrame >= pipe.lengthFrames) {
+			showToast('Keyframe position out of bounds', 'error');
+			return;
+		}
+		try {
+			await moveKeyframe(session!.id, pipe.id, dragKeyframeId, deltaFrames);
+		} catch (err) {
+			showToast(`Failed to move keyframe: ${String(err)}`, 'error');
+		} finally {
+			dragKeyframeId = null;
+			dragKeyframePipeIndex = null;
+		}
+	}
+
 	function movePipeUp(pipeIndex: number) {
 		try {
 			if (!session?.id || pipeIndex <= 0) return;
@@ -782,7 +840,17 @@
 								<span class="track-label">KF</span>
 								<div class="track-canvas">
 									{#each pipe.keyframes as kf, kfIdx (kf.id)}
-										<div class="keyframe-chip {kf.imageSrc ? 'has-image' : ''}" style="left: calc({kf.frame} / {pipe.lengthFrames} * 100%);" onclick={() => openAddModal(pipeIdx, kfIdx)} role="button" tabindex="0" title="Keyframe {kfIdx + 1}">
+										<div
+											class="keyframe-chip {kf.imageSrc ? 'has-image' : ''} {isDraggingKeyframe && dragKeyframeId === kf.id ? 'dragging' : ''}"
+											style="left: calc({kf.frame} / {pipe.lengthFrames} * 100%); cursor: grab;"
+											onpointerdown={(e) => handleKeyframePointerDown(pipeIdx, kf.id, kf.frame, e)}
+											onpointermove={(e) => handleKeyframePointerMove(e)}
+											onpointerup={(e) => handleKeyframePointerUp(e)}
+											onclick={(e) => { if (!isDraggingKeyframe) openAddModal(pipeIdx, kfIdx); }}
+											role="button"
+											tabindex="0"
+											title="Keyframe {kfIdx + 1}"
+										>
 											{#if kf.imageSrc}
 												<img src={kf.imageSrc} alt="KF" class="kf-timeline-thumb" />
 											{:else}
@@ -799,26 +867,32 @@
 
 							<!-- Segment Tracks by Tag Type - rendered as MultiThumbSlider -->
 							{#each allTags as tagType}
-								{#if pipe.segments.some(s => s.tag === tagType)}
-									<div class="track-row">
-										<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
-											{TAG_SPECIFICATIONS[tagType].name}
-										</span>
-										<div class="track-canvas">
-											{#each pipe.segments.filter(s => s.tag === tagType) as segment (segment.id)}
-												<MultiThumbSlider
-													values={[segment.frameStart, segment.frameEnd]}
-													min={0}
-													max={pipe.lengthFrames}
-													step={8}
-													color={segment.spec.color}
-													onchange={(vals) => resizeSegment(pipeIdx, segment.id, vals)}
-													ondblclick={(e) => { e.stopPropagation(); openSegmentModal(pipeIdx, segment); }}
-												/>
-											{/each}
-										</div>
+								<div class="track-row">
+									<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
+										{TAG_SPECIFICATIONS[tagType].name}
+									</span>
+									<div class="track-canvas">
+										{#each pipe.segments.filter(s => s.tag === tagType) as segment (segment.id)}
+											<MultiThumbSlider
+												values={[segment.frameStart, segment.frameEnd]}
+												min={0}
+												max={pipe.lengthFrames}
+												step={8}
+												color={segment.spec.color}
+												onchange={(vals) => resizeSegment(pipeIdx, segment.id, vals)}
+												ondblclick={(e) => { e.stopPropagation(); openSegmentModal(pipeIdx, segment); }}
+											/>
+											<!-- Body drag overlay (T4) -->
+											<div
+												class="segment-body-drag"
+												onpointerdown={(e) => handleSegmentBodyDragStart(pipeIdx, segment.id, e)}
+												onpointermove={(e) => handleSegmentBodyDragMove(e)}
+												onpointerup={(e) => handleSegmentBodyDragEnd(e)}
+												style="left: calc({segment.frameStart / pipe.lengthFrames * 100}%); width: calc({(segment.frameEnd - segment.frameStart) / pipe.lengthFrames * 100}%);"
+											></div>
+										{/each}
 									</div>
-								{/if}
+								</div>
 							{/each}
 
 							<!-- Add Segment Row -->
