@@ -1,61 +1,46 @@
-# Task: Fix "session is invalid" errors in ComposerPanel
+# Task: Fix "session is invalid" silent failures in ComposerPanel
 
 **Date:** 2026-08-26
-**Severity:** High — blocks all composer pipe/segment/keyframe operations
-**Files affected:** `src/lib/composerStore.ts`, `src/components/ComposerPanel.svelte`
+**Status:** Ready for implementation
+**Severity:** High — blocks pipe/segment/keyframe operations
 
 ---
 
 ## Root Cause
 
-Three issues combine to cause silent failures when composer actions are invoked:
+**Two bugs combine:**
 
-### Issue 1: Store actions lack input validation + error handling
+1. **composerStore.ts** — 10 actions silently return `undefined` when session not found
+2. **Workspace.svelte** — never calls `hydrateSessions()` to seed the store
 
-`composerStore.ts` actions (addPipe, removePipe, addSegment, resizeSegment, etc.) check `if (!session) return` and **return undefined** — but ComposerPanel calls them without checking the return value or wrapping in try/catch with user feedback.
-
-Example in ComposerPanel.svelte (line 107):
-```ts
-await addPipe(session.id);  // silent no-op if session not in store
-closeAddPipeModal();         // closes modal anyway
-showToast('Pipe added', 'success');  // shows success toast even on failure
-```
-
-Result: user clicks "Add Pipe", nothing happens, but toast says "success".
-
-### Issue 2: Workspace never hydrates composerStore
-
-`Workspace.svelte` loads projects/sessions into its own state (`projects`, `selectedProject`, `selectedSession`), but never calls `hydrateSessions()` to populate `composerStore.sessions`. The store's Map stays empty.
-
-ComposerPanel imports `addPipeAction` and other functions from composerStore — but since the store has no sessions loaded, every action hits `if (!session) return undefined`.
-
-### Issue 3: Wrong function signatures
-
-`setGlobalPrompt` in composerStore.ts is called as:
-```ts
-setGlobalPrompt(session.id, pipe.id, globalPromptText)
-```
-But the function signature (line 409) is:
-```ts
-async function setGlobalPrompt(sessionId: string, pipeId: string, text: string)
-```
-This one actually works — but other calls may have mismatched arg counts.
+Result: ComposerPanel calls `addPipe(session.id)` → session undefined in store → silent no-op → toast says "success" → nothing happens.
 
 ---
 
-## Fix: Update composerStore.ts action return types
+## Fix 1: Update composerStore.ts actions to return errors
 
-All actions must return `{ errors: string[] }` or throw on invalid session.
+### Actions needing fix (return `Promise<void>` with silent `return`):
 
-### Change 1: Return type for addPipe
+| Line | Function | Current | Fix |
+|------|----------|---------|-----|
+| 16 | `addPipe` | `return;` | `return { errors: ['Session not found'] }` |
+| 39 | `removePipe` | `return;` | `return { errors: ['Session not found'] }` |
+| 52 | `movePipe` | `return;` | `return { errors: ['Session not found'] }` |
+| 75 | `duplicatePipe` | `return;` | `return { errors: ['Session not found'] }` |
+| 101 | `updateQ` | `return;` | `return { errors: ['Session not found'] }` |
+| 118 | `updateC` | `return;` | `return { errors: ['Session not found'] }` |
+| 207 | `removeSegment` | `return;` | `return { errors: ['Session not found'] }` |
+| 358 | `removeKeyframe` | `return;` | `return { errors: ['Session not found'] }` |
+| 413 | `setGlobalPrompt` | `return;` | `return { errors: ['Session not found'] }` |
+| 433 | `updateFPS` | `return;` | `return { errors: ['Session not found'] }` |
 
-**File:** `src/lib/composerStore.ts` (~line 16-37)
+### Pattern to apply to each:
 
 **Before:**
 ```ts
 export async function addPipe(sessionId: string): Promise<void> {
   const session = sessions.get(sessionId);
-  if (!session) return;  // silent failure
+  if (!session) return;
   ...
 }
 ```
@@ -65,61 +50,17 @@ export async function addPipe(sessionId: string): Promise<void> {
 export async function addPipe(sessionId: string): Promise<{ errors: string[] }> {
   const session = sessions.get(sessionId);
   if (!session) return { errors: ['Session not found'] };
-  
-  const maxFrames = getMaxFrames(session.resolution);
-  const defaultPipe: PipeRow = {
-    id: crypto.randomUUID(),
-    lengthFrames: maxFrames,
-    keyframes: [],
-    qValue: 18,
-    cValue: 7,
-    segments: [],
-  };
-  
-  sessions.set(sessionId, {
-    ...session,
-    pipes: [...session.pipes, defaultPipe],
-    updatedAt: Date.now(),
-  });
-  
-  await persistToBackend(sessionId);
-  return { errors: [] };
+  ...
 }
 ```
 
-### Change 2: Same pattern for ALL actions
-
-Apply the same return type and guard to:
-- `removePipe` (line 39)
-- `movePipe` (line 52)
-- `duplicatePipe` (line 75)
-- `updateQ` (line 102)
-- `updateC` (line 119)
-- `setPipeLength` (line 135)
-- `addSegment` (line 166)
-- `moveSegment` (line 228)
-- `resizeSegment` (line 269)
-- `addKeyframe` (line 303)
-- `removeKeyframe` (line 354)
-- `moveKeyframe` (line 375)
-- `setGlobalPrompt` (line 409)
-- `updateFPS` (line 430)
-- `updateResolution` (line 443)
-
-Each becomes:
-```ts
-export async function actionName(...args): Promise<{ errors: string[] }> {
-  const session = sessions.get(sessionId);
-  if (!session) return { errors: ['Session not found'] };
-  // ... rest unchanged
-}
-```
+**Note:** Change `Promise<void>` to `Promise<{ errors: string[] }>` in return type, and change `return;` to `return { errors: [...] }` at guard points.
 
 ---
 
-## Fix: Update ComposerPanel to handle action results
+## Fix 2: Update ComposerPanel to check results
 
-### Change 3: AddPipe confirmation handler (~line 104-112)
+### 2a. confirmAddPipe (~line 104-112)
 
 **Before:**
 ```ts
@@ -157,7 +98,7 @@ async function confirmAddPipe() {
 }
 ```
 
-### Change 4: RemoveSegment handler (~line 468-475)
+### 2b. removeSegment handler (~line 468-475)
 
 **Before:**
 ```ts
@@ -174,7 +115,7 @@ if (!session?.id || !pipe) return;
 try {
   const result = await removeSegment(session.id, pipe.id, segmentId);
   if (result.errors.length > 0) {
-    showToast(result.errors.join(', '), 'error');
+    showToast(result.errors[0], 'error');
   }
 } catch (e) {
   console.error('[ComposerPanel] Failed to remove param:', e);
@@ -182,84 +123,79 @@ try {
 }
 ```
 
-### Change 5: ResizeSegment handler (~line 478-510)
+### 2c. Other handlers to update (same pattern):
 
-Already validates UI-side, but needs to check result:
-```ts
-const result = await resizeSegmentAction(session.id, pipe.id, segId, newStart, newEnd);
-if (result.errors.length > 0) {
-  showToast(`Resize failed: ${result.errors.join(', ')}`, 'error');
-  return;
-}
-```
+- `removePipe` (~line 439-445) — check result.errors
+- `movePipeUp/Down` (~line 675+) — check result.errors
+- `duplicatePipe` — check result.errors
+- `setGlobalPrompt` (~line 171) — check result.errors
+- `updateFPS` / `updateResolution` — check result.errors
 
-### Change 6: All other action calls (addSegment, addKeyframe, removeKeyframe, moveKeyframe, setGlobalPrompt, etc.)
-
-Apply the same pattern: check result.errors, show toast, don't close modals on error.
+Pattern: `const result = await action(...)` → `if (result.errors.length) { showToast; return; }`
 
 ---
 
-## Fix: Hydrate composerStore from Workspace data
+## Fix 3: Hydrate store from Workspace
 
-### Change 7: Import hydrateSessions in Workspace.svelte
+### 3a. Add import
 
-**File:** `src/components/Workspace.svelte`
+**File:** `src/components/Workspace.svelte`, near top imports:
 
-**Add import near top:**
 ```ts
 import { hydrateSessions } from '$lib/composerStore';
 ```
 
-### Change 8: Call hydrateSessions after project load
+### 3b. Call after loadProjects
 
-**Find `loadProjects` function (~line 53-100)** and add at the end:
+**Find:** `loadProjects()` function (~line 53-100), end of try block:
+
 ```ts
-// Hydrate composer store with loaded sessions
+// After populating `projects` state, hydrate composer store
 const allSessions: SessionData[] = projects.flatMap(p => p.sessions);
 hydrateSessions(allSessions);
 ```
 
-Also in `handleCreateSession` (~line 255-300), after creating the session:
+### 3c. Call after createSession
+
+**Find:** `handleCreateSession()` (~line 255-300), after creating newSession:
+
 ```ts
 const newSession: SessionData = { ... };
 sessions.push(newSession);
-hydrateSessions([newSession]);  // add single new session to store
+hydrateSessions([newSession]);
 ```
 
-### Change 9: Handle session selection
+### 3d. Call on session select
 
-In `handleSessionSelect` (~line 175-183), after selecting session:
+**Find:** `handleSessionSelect()` (~line 175-183), after setting selectedSessionId:
+
 ```ts
 selectedSessionId = sessionId;
 localStorage.setItem(`vm-selected-session-${userName}`, selectedSessionId);
-// Re-hydrate store with fresh project data
-const allSessions = selectedProject.sessions;
-hydrateSessions(allSessions);
+hydrateSessions(selectedProject.sessions);
 ```
 
 ---
 
 ## Verification
 
-After applying all changes:
-
-1. `npm run build` passes (no TS errors)
-2. Open app, create project, create session
-3. Click "Add Pipe" → modal closes, pipe appears, toast says "Pipe added"
+1. `npm run build` passes
+2. Launch app, create project + session
+3. Click "Add Pipe" → modal closes, toast "Pipe added", pipe appears
 4. Add segment → validates, persists
-5. Resize segment with sliders → validates overlap
-6. Toggle FPS/resolution → clamp lengths, update pipes
-7. Reload page → data persists from localStorage/backend
+5. Resize segment → no overlap, snaps to 8-grid
+6. Delete pipe → toast success
+7. Reload page → data persists
 
 ---
 
 ## Files to modify
 
-| File | Changes |
-|------|---------|
-| `src/lib/composerStore.ts` | Add return types + session guards to all 15 actions |
-| `src/components/ComposerPanel.svelte` | Update all 12 action call sites to check results |
-| `src/components/Workspace.svelte` | Import + call hydrateSessions |
+| File | Lines | Changes |
+|------|-------|---------|
+| `src/lib/composerStore.ts` | 16-433 | Return types + guards on 10 actions |
+| `src/components/ComposerPanel.svelte` | 104-510 | Check results, show toasts |
+| `src/components/Workspace.svelte` | 1-500 | Import + call hydrateSessions |
 
-**Total estimated time:** 45 minutes
-**Risk:** Low — pure plumbing changes, no logic modifications
+**Estimated time:** 30 minutes
+**Risk:** Low — plumbing only
