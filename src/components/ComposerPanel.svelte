@@ -417,11 +417,11 @@
 			const endValid = seg.frameEnd % 8 === 0;
 			if (!startValid) {
 				validation.valid = false;
-				validation.errors.push(`frameStart must be a multiple of 8 (got ${seg.frameStart})`);
+				validation.errors.push(`frameStart POSITION must be a multiple of 8 (got ${seg.frameStart})`);
 			}
 			if (!endValid) {
 				validation.valid = false;
-				validation.errors.push(`frameEnd must be a multiple of 8 (got ${seg.frameEnd})`);
+				validation.errors.push(`frameEnd POSITION must be a multiple of 8 (got ${seg.frameEnd})`);
 			}
 			if (seg.frameEnd > maxEnd) {
 				validation.valid = false;
