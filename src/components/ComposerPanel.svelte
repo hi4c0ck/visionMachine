@@ -334,7 +334,10 @@
 		if (pipe.keyframes.length > 0) {
 			const lastFrame = Math.max(...pipe.keyframes.map(k => k.frame));
 			baseFrame = snapTo8nPlus1(lastFrame + 60);
-			if (baseFrame >= pipe.lengthFrames) return;
+			if (baseFrame >= pipe.lengthFrames) {
+				showToast('No space left for another keyframe', 'error');
+				return;
+			}
 		}
 
 		const addModeType = addMode;
@@ -407,23 +410,25 @@
 		// Re-validate with frame-boundary rules using maxEnd
 		const validation = validatePromptSegments(testSegments);
 
-		// Also check segment boundary validity via frameMath
+		// Validate segment boundaries using frameMath rules
 		for (const seg of testSegments) {
-			if (seg.frameStart % 8 !== 0) {
+			const startValid = (seg.frameStart - 1) % 8 === 0;
+			const endValid = (seg.frameEnd - 1) % 8 === 0;
+			if (!startValid) {
 				validation.valid = false;
-				validation.errors.push(`frameStart must be a multiple of 8`);
+				validation.errors.push(`frameStart must be 8n+1 (got ${seg.frameStart})`);
 			}
-			if (seg.frameEnd % 8 !== 0) {
+			if (!endValid) {
 				validation.valid = false;
-				validation.errors.push(`frameEnd must be a multiple of 8`);
+				validation.errors.push(`frameEnd must be 8n+1 (got ${seg.frameEnd})`);
 			}
 			if (seg.frameEnd > maxEnd) {
 				validation.valid = false;
 				validation.errors.push(`frameEnd exceeds max usable frame (${maxEnd})`);
 			}
-			if (seg.frameEnd - seg.frameStart < 8) {
+			if (seg.frameEnd - seg.frameStart < 9) {
 				validation.valid = false;
-				validation.errors.push(`minimum span is 8 frames`);
+				validation.errors.push(`minimum span is 9 frames (8n+1 rule)`);
 			}
 		}
 
@@ -654,6 +659,10 @@
 		} catch (e) {
 			console.error('[ComposerPanel] Failed to update resolution:', e);
 		}
+	}
+
+	function handleZoomChange(newZoom: number) {
+		timelineZoom = newZoom;
 	}
 
 	// Keyframe drag repositioning (T3 - R3)
