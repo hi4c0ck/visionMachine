@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { SessionData, ProjectData } from '$types';
 	import { APP_CONSTANTS } from '$constants';
+	import { compilePrompt } from '$lib/compiler';
 
 	let { 
 		session, 
@@ -67,6 +68,13 @@
 	}
 
 	const stats = $derived(getStats());
+
+	// T6: Compiled prompt output (T6)
+	const compiledOutput = $derived.by(() => {
+		if (!session?.pipes?.length) return '';
+		// Use first pipe for compilation preview
+		return compilePrompt(session.pipes[0]);
+	});
 </script>
 
 <div class="tools-panel">
@@ -539,8 +547,55 @@
     background: var(--accent-primary-hover, #7EC8FF);
   }
 
-  .btn-confirm:disabled {
+    .btn-confirm:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  /* T6: Compiled Panel */
+  .compiled-section {
+    border-bottom: 1px solid var(--border-color, #3A3A3F);
+  }
+
+  .compiled-panel {
+    padding: 12px;
+  }
+
+  .compiled-panel summary {
+    font-size: 12px;
+    color: var(--text-muted, #808080);
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+
+  .compiled-output {
+    font-family: monospace;
+    font-size: 11px;
+    background: var(--bg-primary, #1A1A1D);
+    padding: 10px;
+    border-radius: 4px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    color: var(--text-primary, #EEEEEE);
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+  }
+
+  .btn-copy {
+    width: 100%;
+    padding: 6px 12px;
+    background: var(--bg-input, #3c3c3c);
+    color: var(--text-muted, #808080);
+    border: 1px solid var(--border-color, #555);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+
+  .btn-copy:hover {
+    background: var(--bg-hover, #454545);
+    color: var(--text-primary, #fff);
   }
 </style>

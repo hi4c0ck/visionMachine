@@ -961,7 +961,7 @@
 
 							<!-- Segment Tracks by Tag Type - rendered as MultiThumbSlider -->
 							{#each allTags as tagType}
-								<div class="track-row">
+								<div class="track-row {pipe.segments.filter(s => s.tag === tagType).length === 0 ? 'empty' : ''}">
 									<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
 										{TAG_SPECIFICATIONS[tagType].name}
 									</span>
