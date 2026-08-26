@@ -150,13 +150,17 @@ Each segment renders as one `<MultiThumbSlider>` on its tag track:
 5. **Overlap rejection** — same-tag overlaps cause revert + toast
 
 **Critical distinction (8n+1 vs multiple of 8):**
+
+⚠️ **THIS IS A COMMON BUG SOURCE** ⚠️
+
 ```
 Pipe length (totalFrames):    121 = 8×15 + 1  (8n+1 rule)
 Valid segment boundaries:     0, 8, 16, 24...  (multiples of 8)
+Valid keyframe positions:     0, 8, 16, 24...  (multiples of 8)
 Last valid segment end:       120 = 121 - 1
 ```
 
-The 8n+1 rule applies to **pipe length** (total frames), NOT to segment boundaries. Segments use multiples of 8 for both start and end.
+The 8n+1 rule applies ONLY to **pipe length** (total frames). Segments and keyframes use multiples of 8.
 
 ### Adding Segments via Frame Ruler Interaction
 
