@@ -278,7 +278,7 @@
 				keyframes: [],
 				qValue: 18,
 				cValue: 7,
-				segments: [],
+				elements: [],
 			};
 
 			const sessionName = `Session ${project.sessions.length + 1}`;
@@ -339,7 +339,7 @@
 			keyframes: [],
 			qValue: 18,
 			cValue: 7,
-			segments: [],
+			elements: [],
 		};
 		
 		const newSession: SessionData = {
