@@ -253,8 +253,40 @@ impl Database {
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        
+
         Ok(id)
+    }
+
+    /// Get or create a profile for a given ID (uses upsert logic)
+    pub async fn get_or_create_profile(&self, profile_id: &str, name: &str) -> Result<serde_json::Value, String> {
+        // Try to get existing profile
+        let row = sqlx::query("SELECT id, name, created_at FROM profiles WHERE id = ?")
+            .bind(profile_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if let Some(row) = row {
+            return Ok(serde_json::json!({
+                "id": row.get::<String, usize>(0),
+                "name": row.get::<String, usize>(1),
+                "created_at": row.get::<String, usize>(2),
+            }));
+        }
+
+        // Create new profile
+        sqlx::query("INSERT INTO profiles (id, name) VALUES (?, ?)")
+            .bind(profile_id)
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(serde_json::json!({
+            "id": profile_id,
+            "name": name,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+        }))
     }
     
     pub async fn list_profiles(&self) -> Result<Vec<serde_json::Value>, String> {

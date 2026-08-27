@@ -92,6 +92,7 @@ pub fn run() {
             commands::auth::logout_user,
             commands::profiles::create_profile,
             commands::profiles::list_profiles,
+            commands::profiles::get_user_profile,
             commands::projects::create_project,
             commands::projects::list_projects,
             commands::sessions::create_session,

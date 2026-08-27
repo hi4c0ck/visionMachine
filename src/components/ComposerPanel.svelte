@@ -1074,8 +1074,8 @@
 	}
 	
 	:global(.view-mode-btn.active) {
-		background: var(--accent-color);
-		color: var(--text-inverse);
+		background: var(--accent-primary, #59B5FF);
+		color: var(--text-inverse, #FFFFFF);
 	}
 	
 	:global(.pipes-list) {
@@ -1359,7 +1359,7 @@
 		justify-content: center;
 		font-size: 0.75rem;
 		cursor: pointer;
-		border: 2px solid var(--accent-color);
+		border: 2px solid var(--accent-primary, #59B5FF);
 		background: var(--bg-secondary);
 	}
 	
@@ -1494,9 +1494,9 @@
 	}
 	
 	:global(.mode-buttons button.active) {
-		background: var(--accent-color);
-		color: var(--text-inverse);
-		border-color: var(--accent-color);
+		background: var(--accent-primary, #59B5FF);
+		color: var(--text-inverse, #FFFFFF);
+		border-color: var(--accent-primary, #59B5FF);
 	}
 	
 	:global(.modal-footer) {
@@ -1522,9 +1522,9 @@
 	}
 
 	:global(.btn-confirm) {
-		background: var(--accent-color);
-		color: var(--text-inverse);
-		border-color: var(--accent-color);
+		background: var(--accent-primary, #59B5FF);
+		color: var(--text-inverse, #FFFFFF);
+		border-color: var(--accent-primary, #59B5FF);
 	}
 
 	:global(.btn-confirm:disabled) {
