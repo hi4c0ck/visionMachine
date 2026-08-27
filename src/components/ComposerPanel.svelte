@@ -898,10 +898,10 @@
 						<label class="form-label">Pipe Name</label>
 						<input type="text" bind:value={newPipeName} placeholder="Enter pipe name..." />
 					</div>
-					<div class="modal-actions">
-						<button class="btn-cancel" onclick={closeAddPipeModal}>Cancel</button>
-						<button class="btn-confirm" onclick={confirmAddPipe}>Add</button>
 					</div>
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={closeAddPipeModal}>Cancel</button>
+					<button class="btn-confirm" onclick={confirmAddPipe}>Add</button>
 				</div>
 			</div>
 		</div>
@@ -976,10 +976,10 @@
 						<label class="form-label">End Frame</label>
 						<input type="number" bind:value={newSegmentEnd} step="8" min={newSegmentStart} max={pipes[activeSegmentAddPipeIndex]?.lengthFrames ?? 121} />
 					</div>
-					<div class="modal-actions">
-						<button class="btn-cancel" onclick={closeAddSegmentModal}>Cancel</button>
-						<button class="btn-confirm" onclick={confirmAddSegment}>Add</button>
 					</div>
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={closeAddSegmentModal}>Cancel</button>
+					<button class="btn-confirm" onclick={confirmAddSegment}>Add</button>
 				</div>
 			</div>
 		</div>
@@ -998,10 +998,10 @@
 						<label class="form-label">Style Description</label>
 						<textarea bind:value={globalPromptText} placeholder="Describe the global style..."></textarea>
 					</div>
-					<div class="modal-actions">
-						<button class="btn-cancel" onclick={closeGlobalModal}>Cancel</button>
-						<button class="btn-confirm" onclick={confirmGlobalEdit}>Save</button>
 					</div>
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={closeGlobalModal}>Cancel</button>
+					<button class="btn-confirm" onclick={confirmGlobalEdit}>Save</button>
 				</div>
 			</div>
 		</div>
@@ -1034,14 +1034,15 @@
 							{/if}
 						{/each}
 					{/each}
-					<div class="modal-actions">
-						<button class="btn-cancel" onclick={closeTagModal}>Cancel</button>
-						<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
 					</div>
-				</div>
+			</div>
+			<div class="modal-footer">
+				<button class="btn-cancel" onclick={closeTagModal}>Cancel</button>
+				<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
 			</div>
 		</div>
-	{/if}
+	</div>
+{/if}
 </div>
 
 <style>
