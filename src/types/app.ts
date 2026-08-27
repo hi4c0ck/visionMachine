@@ -225,7 +225,7 @@ export interface PipeGlobalPrompt {
  * @deprecated Use migratePipeToNested instead
  */
 export function migratePipeToTwoLayer(pipe: PipeRow): PipeRow {
-  return migratePipeToNested(pipe);
+  return pipe; // Already migrated or no conversion needed
 }
 
 /**

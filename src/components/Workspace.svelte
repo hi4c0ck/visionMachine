@@ -203,8 +203,10 @@
 			
 			// Create via backend
 			const result = await invoke('create_project', {
-				name: input.name,
-				directoryPath: projectPath
+				input: {
+					name: input.name,
+					directory_path: projectPath
+				}
 			});
 			
 			const newProjectId = result as string;
