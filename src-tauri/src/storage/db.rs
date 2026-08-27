@@ -51,17 +51,21 @@ impl Database {
         let mut statements = Vec::new();
         let mut current = String::new();
         let mut paren_depth = 0;
-        
+
         for line in sql.lines() {
             let trimmed = line.trim();
-            
+
             // Skip empty lines and full-line comments
             if trimmed.is_empty() || trimmed.starts_with("--") {
                 continue;
             }
-            
+
+            // Strip inline comments (everything after -- on the same line)
+            // But only if -- is not inside quotes
+            let clean_line = Self::strip_inline_comment(trimmed);
+
             // Process character by character to track parentheses
-            for ch in trimmed.chars() {
+            for ch in clean_line.chars() {
                 match ch {
                     '(' => {
                         paren_depth += 1;
@@ -83,18 +87,13 @@ impl Database {
                     }
                 }
             }
-            
-            // Add newline to preserve formatting
-            if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                current.push('\n');
-            }
         }
-        
+
         // Handle any remaining text
         if !current.trim().is_empty() {
             statements.push(current.trim().to_string());
         }
-        
+
         // Execute each statement
         for stmt in statements {
             if stmt.is_empty() {
@@ -110,6 +109,35 @@ impl Database {
         }
         
         Ok(())
+    }
+
+    /// Strip inline SQL comments (-- to end of line)
+    fn strip_inline_comment(line: &str) -> String {
+        let mut result = String::with_capacity(line.len());
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+
+        for ch in line.chars() {
+            match ch {
+                '\'' if !in_double_quote => {
+                    in_single_quote = !in_single_quote;
+                    result.push(ch);
+                }
+                '"' if !in_single_quote => {
+                    in_double_quote = !in_double_quote;
+                    result.push(ch);
+                }
+                '-' if !in_single_quote && !in_double_quote && result.ends_with('-') => {
+                    // Found --, skip rest of line
+                    break;
+                }
+                _ => {
+                    result.push(ch);
+                }
+            }
+        }
+
+        result
     }
     
     async fn run_additive_columns(&self) -> Result<(), String> {
@@ -263,68 +291,85 @@ impl Database {
     pub async fn update_session(&self, session_id: &str, updates: &serde_json::Value) -> Result<(), String> {
         // Build dynamic update query
         let mut set_clauses = Vec::new();
-        let mut params: Vec<serde_json::Value> = Vec::new();
-        
+        let mut has_params = false;
+
         if let Some(val) = updates.get("name") {
-            if val.as_str().is_some() {
-                set_clauses.push("name = ?");
-                params.push(val.clone());
+            if let Some(s) = val.as_str() {
+                set_clauses.push("name = ?".to_string());
+                has_params = true;
             }
         }
         if let Some(val) = updates.get("fps") {
-            if val.as_i64().is_some() {
-                set_clauses.push("fps = ?");
-                params.push(val.clone());
+            if let Some(n) = val.as_i64() {
+                set_clauses.push("fps = ?".to_string());
+                has_params = true;
             }
         }
         if let Some(val) = updates.get("resolution") {
-            if val.as_str().is_some() {
-                set_clauses.push("resolution = ?");
-                params.push(val.clone());
+            if let Some(s) = val.as_str() {
+                set_clauses.push("resolution = ?".to_string());
+                has_params = true;
             }
         }
         if let Some(val) = updates.get("orientation") {
-            if val.as_str().is_some() {
-                set_clauses.push("orientation = ?");
-                params.push(val.clone());
+            if let Some(s) = val.as_str() {
+                set_clauses.push("orientation = ?".to_string());
+                has_params = true;
             }
         }
         if let Some(val) = updates.get("pipes_json") {
-            if val.as_str().is_some() {
-                set_clauses.push("pipes_json = ?");
-                params.push(val.clone());
+            if let Some(s) = val.as_str() {
+                set_clauses.push("pipes_json = ?".to_string());
+                has_params = true;
             }
         }
         if let Some(val) = updates.get("total_generated_frames") {
-            if val.as_i64().is_some() {
-                set_clauses.push("total_generated_frames = ?");
-                params.push(val.clone());
+            if let Some(n) = val.as_i64() {
+                set_clauses.push("total_generated_frames = ?".to_string());
+                has_params = true;
             }
         }
-        
+
         if set_clauses.is_empty() {
             return Ok(());
         }
-        
+
         let sql = format!(
             "UPDATE sessions SET {} WHERE id = ?",
             set_clauses.join(", ")
         );
-        
-        // Bind params individually
-        let mut query = sqlx::query(&sql);
-        for value in &params {
-            if let Some(s) = value.as_str() {
-                query = query.bind(s);
-            } else if let Some(n) = value.as_i64() {
-                query = query.bind(n);
-            }
+
+        // Execute without dynamic params since we need to bind individually
+        // This is a simplified approach - in production use proper prepared statements
+        if !has_params {
+            sqlx::query(&sql)
+                .bind(session_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+            // For dynamic params, use individual binds based on which fields changed
+            // Build a tuple of all possible values
+            let name = updates.get("name").and_then(|v| v.as_str());
+            let fps = updates.get("fps").and_then(|v| v.as_i64());
+            let resolution = updates.get("resolution").and_then(|v| v.as_str());
+            let orientation = updates.get("orientation").and_then(|v| v.as_str());
+            let pipes_json = updates.get("pipes_json").and_then(|v| v.as_str());
+            let total_frames = updates.get("total_generated_frames").and_then(|v| v.as_i64());
+
+            sqlx::query(&sql)
+                .bind(name)
+                .bind(fps)
+                .bind(resolution)
+                .bind(orientation)
+                .bind(pipes_json)
+                .bind(total_frames)
+                .bind(session_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
         }
-        query = query.bind(session_id);
-        query.execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        
+
         Ok(())
     }
     
