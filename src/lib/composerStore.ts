@@ -848,7 +848,7 @@ export async function addKeyframe(sessionId: string, pipeId: string, type: 'url'
   let baseFrame = 0;
   if (pipe.keyframes.length > 0) {
     const lastFrame = Math.max(...pipe.keyframes.map(k => k.frame));
-    baseFrame = snapTo8nPlus1(lastFrame + 60);
+    baseFrame = snapTo8(lastFrame + 60);
     if (baseFrame >= pipe.lengthFrames) {
       return { errors: ['No space for additional keyframe'] };
     }

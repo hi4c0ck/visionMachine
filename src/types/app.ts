@@ -148,6 +148,7 @@ export interface GlobalElement {
  */
 export interface TimelineElement {
   id: string;
+  tag: 'timeline';
   segments: Segment[];
 }
 
