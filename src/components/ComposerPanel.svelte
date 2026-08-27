@@ -118,6 +118,17 @@
 	// All tag types
 	const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
 
+	// Helper to collect tags of a specific type across all segments in a pipe
+	function getTagsForType(pipe: PipeRow, tagType: TagType): Array<{ tag: TagElement; segment: Segment; segmentIndex: number }> {
+	  const timeline = pipe.elements.find(e => e.tag === 'timeline') as TimelineElement | undefined;
+	  if (!timeline) return [];
+	  return timeline.segments.flatMap((segment, segIdx) =>
+	    segment.tags
+	      .filter(tag => tag.tag === tagType)
+	      .map(tag => ({ tag, segment, segmentIndex: segIdx }))
+	  );
+	}
+
 	function getGlobalElement(pipe: PipeRow): GlobalElement | undefined {
 		return pipe.elements.find(e => e.tag === 'global_style') as GlobalElement | undefined;
 	}
@@ -836,29 +847,27 @@
 
 							<!-- Tag Tracks -->
 							{#each allTags as tagType}
-								
-									{#if tagData.length > 0}
-										<div class="track-row">
-											<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
-												{TAG_SPECIFICATIONS[tagType].name}
-											</span>
-											<div class="track-canvas">
-												{#each tagData as {tag, segment, segmentIndex} (tag.id)}
-													<MultiThumbSlider
-														values={[tag.frameStart, tag.frameEnd]}
-														min={segment.frameStart}
-														max={segment.frameEnd}
-														step={8}
-														color={tag.spec.color}
-														onchange={(vals) => resizeTag(pipeIdx, segment.id, tag.id, vals)}
-														ondblclick={(e) => { e.stopPropagation(); openTagModal(pipeIdx, segmentIndex, tag); }}
-													/>
-												{/each}
-											</div>
+								{#if getTagsForType(pipe, tagType).length > 0}
+									<div class="track-row">
+										<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
+											{TAG_SPECIFICATIONS[tagType].name}
+										</span>
+										<div class="track-canvas">
+											{#each getTagsForType(pipe, tagType) as {tag, segment, segmentIndex} (tag.id)}
+												<MultiThumbSlider
+													values={[tag.frameStart, tag.frameEnd]}
+													min={segment.frameStart}
+													max={segment.frameEnd}
+													step={8}
+													color={tag.spec.color}
+													onchange={(vals) => resizeTag(pipeIdx, segment.id, tag.id, vals)}
+													ondblclick={(e) => { e.stopPropagation(); openTagModal(pipeIdx, segmentIndex, tag); }}
+												/>
+											{/each}
 										</div>
-									{/if}
-									
-								{/each}
+									</div>
+								{/if}
+							{/each}
 
 							<!-- Add Segment Row -->
 							<div class="add-segment-row">
