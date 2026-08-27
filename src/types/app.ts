@@ -102,23 +102,40 @@ export function snapTo8nPlus1(frames: number): number {
   return Math.floor((frames - 1) / 8) * 8 + 1;
 }
 
+// ============================================================================
+// NESTED PIPE STRUCTURE
+// ============================================================================
+
 /**
- * Segment timeline range within a pipe
+ * A single tag within a segment timeline
+ * Each tag has its own frame range (bounded by parent segment)
  */
-export interface PromptSegment {
+export interface TagElement {
   id: string;
+  tag: TagType;
   frameStart: number;
   frameEnd: number;
-  tag: TagType;
   value: number;
-  spec: TagSpecification;
   prompt?: string;
+  spec: TagSpecification;
 }
 
 /**
- * Global node for two-layer prompt hierarchy (R1)
+ * A segment in the timeline — contains multiple tags for the same time range
+ * Acts as a parent container for tags
  */
-export interface GlobalNode {
+export interface Segment {
+  id: string;
+  frameStart: number;
+  frameEnd: number;
+  tags: TagElement[];
+}
+
+/**
+ * Global style element — applies to entire pipe (top tier)
+ * Only one allowed per pipe
+ */
+export interface GlobalElement {
   id: string;
   tag: 'global_style';
   value: string;
@@ -126,11 +143,19 @@ export interface GlobalNode {
 }
 
 /**
- * Global prompt for entire pipe (deprecated alias, use globalNodes instead)
+ * Timeline element — contains segments (mid tier)
+ * Only one allowed per pipe
  */
-export interface PipeGlobalPrompt {
-  text: string;
+export interface TimelineElement {
+  id: string;
+  segments: Segment[];
 }
+
+/**
+ * Pipe element — top-level abstraction in a pipe
+ * Can be either Global or Timeline (mutually exclusive at pipe level)
+ */
+export type PipeElement = GlobalElement | TimelineElement;
 
 /**
  * Single keyframe in a pipe
@@ -148,6 +173,7 @@ export interface PipeKeyframe {
 
 /**
  * A single pipe row in the composer
+ * Contains: keyframes, settings, and pipeline elements (Global and/or Timeline)
  */
 export interface PipeRow {
   id: string;
@@ -155,26 +181,70 @@ export interface PipeRow {
   keyframes: PipeKeyframe[];
   qValue: number;
   cValue: number;
-  globalPrompt?: PipeGlobalPrompt;           // deprecated - use globalNodes
-  globalNodes?: GlobalNode[];                // two-layer hierarchy (R1)
-  segments: PromptSegment[];
+  elements: PipeElement[];  // Array of GlobalElement and/or TimelineElement
+  // Backward compatibility — will be deprecated
+  globalNodes?: GlobalNode[];
+  segments?: PromptSegment[];
 }
 
 /**
- * Migrate old sessions with globalPrompt to new globalNodes format
+ * Legacy prompt segment for backward compatibility
+ * @deprecated Use Segment + TagElement instead
+ */
+export interface PromptSegment {
+  id: string;
+  frameStart: number;
+  frameEnd: number;
+  tag: TagType;
+  value: number;
+  spec: TagSpecification;
+  prompt?: string;
+}
+
+/**
+ * Legacy global node for backward compatibility
+ * @deprecated Use GlobalElement instead
+ */
+export interface GlobalNode {
+  id: string;
+  tag: 'global_style';
+  value: string;
+  enabled: boolean;
+}
+
+/**
+ * Legacy global prompt for backward compatibility
+ * @deprecated Use GlobalElement instead
+ */
+export interface PipeGlobalPrompt {
+  text: string;
+}
+
+/**
+ * Migrate old pipe to new nested structure
+ * @deprecated Use migratePipeToNested instead
  */
 export function migratePipeToTwoLayer(pipe: PipeRow): PipeRow {
-  if (pipe.globalNodes && pipe.globalNodes.length > 0) {
-    return pipe; // already migrated
-  }
-  const newNode: GlobalNode | null = pipe.globalPrompt
-    ? { id: crypto.randomUUID(), tag: 'global_style', value: pipe.globalPrompt.text, enabled: true }
-    : null;
-  return {
-    ...pipe,
-    globalNodes: newNode ? [newNode] : [],
-    globalPrompt: undefined,
-  };
+  return migratePipeToNested(pipe);
+}
+
+/**
+ * Alias for backward compatibility
+ * @deprecated Use validateTagElements or validateTimelineSegments instead
+ */
+export function validatePromptSegments(segments: PromptSegment[]): { valid: boolean; errors: string[] } {
+  // Convert legacy segments to tag elements and validate
+  const tags: TagElement[] = segments.map(s => ({
+    id: s.id,
+    tag: s.tag,
+    frameStart: s.frameStart,
+    frameEnd: s.frameEnd,
+    value: s.value,
+    prompt: s.prompt,
+    spec: s.spec,
+  }));
+  
+  return validateTagElements(tags);
 }
 
 /**
@@ -230,16 +300,20 @@ export function createEmptyProject(name: string, directoryPath: string): Project
 }
 
 /**
- * Create empty session with default pipe
+ * Create empty session with default pipe (nested structure)
  */
 export function createEmptySession(projectName: string, directoryPath: string): SessionData {
+  // Create default pipe with empty Timeline
   const pipe: PipeRow = {
     id: crypto.randomUUID(),
     lengthFrames: 121,
     keyframes: [],
     qValue: 18,
     cValue: 7,
-    segments: [],
+    elements: [{
+      id: crypto.randomUUID(),
+      segments: [],
+    }],
   };
   
   return {
@@ -257,17 +331,17 @@ export function createEmptySession(projectName: string, directoryPath: string): 
 }
 
 /**
- * Validate prompt segments have no overlapping ranges for same tag type
+ * Validate tag elements have no overlapping ranges for same tag type within a segment
  */
-export function validatePromptSegments(segments: PromptSegment[]): { valid: boolean; errors: string[] } {
+export function validateTagElements(tags: TagElement[]): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
   const tagRanges = new Map<TagType, Array<{ start: number; end: number; index: number }>>();
 
-  segments.forEach((seg, idx) => {
-    if (!tagRanges.has(seg.tag)) {
-      tagRanges.set(seg.tag, []);
+  tags.forEach((tag, idx) => {
+    if (!tagRanges.has(tag.tag)) {
+      tagRanges.set(tag.tag, []);
     }
-    tagRanges.get(seg.tag)!.push({ start: seg.frameStart, end: seg.frameEnd, index: idx });
+    tagRanges.get(tag.tag)!.push({ start: tag.frameStart, end: tag.frameEnd, index: idx });
   });
 
   // Check for overlaps within each tag type
@@ -279,10 +353,59 @@ export function validatePromptSegments(segments: PromptSegment[]): { valid: bool
         // Check overlap: a.start < b.end && b.start < a.end
         if (a.start < b.end && b.start < a.end) {
           errors.push(
-            `Overlap detected for <${tag}> between segments ${a.index} (${a.start}-${a.end}) and ${b.index} (${b.start}-${b.end})`
+            `Overlap detected for <${tag}> between tags ${a.index} (${a.start}-${a.end}) and ${b.index} (${b.start}-${b.end})`
           );
         }
       }
+    }
+  });
+
+  // Validate frame bounds
+  tags.forEach((tag, idx) => {
+    if (tag.frameStart < 0 || tag.frameEnd < 0) {
+      errors.push(`Tag ${idx}: frames must be non-negative`);
+    }
+    if (tag.frameEnd <= tag.frameStart) {
+      errors.push(`Tag ${idx}: frameEnd must be greater than frameStart`);
+    }
+    if (tag.frameEnd - tag.frameStart < 8) {
+      errors.push(`Tag ${idx}: minimum span is 8 frames`);
+    }
+    if (tag.frameStart % 8 !== 0 || tag.frameEnd % 8 !== 0) {
+      errors.push(`Tag ${idx}: frame positions must be multiples of 8`);
+    }
+  });
+
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * Validate segment timeline — segments should not overlap
+ */
+export function validateTimelineSegments(segments: Segment[]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  for (let i = 0; i < segments.length; i++) {
+    for (let j = i + 1; j < segments.length; j++) {
+      const a = segments[i];
+      const b = segments[j];
+      // Check overlap
+      if (a.frameStart < b.frameEnd && b.frameStart < a.frameEnd) {
+        errors.push(
+          `Overlap detected between segments ${i} (${a.frameStart}-${a.frameEnd}) and ${j} (${b.frameStart}-${b.frameEnd})`
+        );
+      }
+    }
+  }
+  
+  // Validate each segment's tags
+  segments.forEach((seg, segIdx) => {
+    const tagValidation = validateTagElements(seg.tags);
+    if (!tagValidation.valid) {
+      errors.push(...tagValidation.errors.map(e => `Segment ${segIdx}: ${e}`));
     }
   });
 
@@ -297,5 +420,5 @@ export function validatePromptSegments(segments: PromptSegment[]): { valid: bool
  */
 export function generateSessionFolderName(baseName: string): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `${baseName.replace(/[^a-zA-Z0-9]/g, '_')}_${timestamp}`;
+  return `${baseName}_${timestamp}`;
 }
