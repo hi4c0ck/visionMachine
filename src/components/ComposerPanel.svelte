@@ -1499,13 +1499,15 @@
 		border-color: var(--accent-color);
 	}
 	
-	:global(.modal-actions) {
+	:global(.modal-footer) {
 		display: flex;
 		justify-content: flex-end;
 		gap: 0.5rem;
 		margin-top: 1rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--border-color);
 	}
-	
+
 	:global(.btn-cancel),
 	:global(.btn-confirm) {
 		padding: 0.5rem 1rem;
@@ -1513,18 +1515,18 @@
 		border-radius: 4px;
 		cursor: pointer;
 	}
-	
+
 	:global(.btn-cancel) {
 		background: var(--bg-secondary);
 		color: var(--text-primary);
 	}
-	
+
 	:global(.btn-confirm) {
 		background: var(--accent-color);
 		color: var(--text-inverse);
 		border-color: var(--accent-color);
 	}
-	
+
 	:global(.btn-confirm:disabled) {
 		opacity: 0.5;
 		cursor: not-allowed;
