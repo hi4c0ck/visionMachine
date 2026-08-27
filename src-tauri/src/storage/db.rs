@@ -44,28 +44,61 @@ impl Database {
         Ok(())
     }
     
+    /// Strip inline SQL comments (-- to end of line)
+    fn strip_inline_comment(line: &str) -> String {
+        let mut result = String::with_capacity(line.len());
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut prev_char = '\0';
+
+        for ch in line.chars() {
+            // Check for comment start (-- not inside quotes)
+            if ch == '-' && prev_char == '-' && !in_single_quote && !in_double_quote {
+                break; // Skip rest of line
+            }
+
+            match ch {
+                '\'' if !in_double_quote => {
+                    in_single_quote = !in_single_quote;
+                    result.push(ch);
+                }
+                '"' if !in_single_quote => {
+                    in_double_quote = !in_double_quote;
+                    result.push(ch);
+                }
+                _ => {
+                    result.push(ch);
+                }
+            }
+            prev_char = ch;
+        }
+
+        result
+    }
+    
     /// Execute a complete SQL migration file - split by statement boundaries
     async fn execute_migration_sql(&self, sql: &str) -> Result<(), String> {
+        // First, strip all comments from the SQL
+        let sql_no_comments = Self::strip_all_comments(sql);
+        
+        log::info!("[DB] SQL after comment stripping (first 500 chars):\n{}", &sql_no_comments[..sql_no_comments.len().min(500)]);
+        
         // Split the SQL into individual statements by looking for semicolons
         // that are not inside parentheses
         let mut statements = Vec::new();
         let mut current = String::new();
         let mut paren_depth = 0;
 
-        for line in sql.lines() {
+        for line in sql_no_comments.lines() {
             let trimmed = line.trim();
-
-            // Skip empty lines and full-line comments
-            if trimmed.is_empty() || trimmed.starts_with("--") {
+            
+            // Skip empty lines
+            if trimmed.is_empty() {
                 continue;
             }
 
-            // Strip inline comments (everything after -- on the same line)
-            // But only if -- is not inside quotes
-            let clean_line = Self::strip_inline_comment(trimmed);
-
             // Process character by character to track parentheses
-            for ch in clean_line.chars() {
+            for ch in trimmed.chars() {
                 match ch {
                     '(' => {
                         paren_depth += 1;
@@ -87,56 +120,89 @@ impl Database {
                     }
                 }
             }
+            
+            // Add newline to preserve formatting
+            if !trimmed.is_empty() {
+                current.push('\n');
+            }
         }
-
+        
         // Handle any remaining text
         if !current.trim().is_empty() {
             statements.push(current.trim().to_string());
         }
 
+        log::info!("[DB] Parsed {} statements from migration SQL", statements.len());
+        
         // Execute each statement
         for stmt in statements {
             if stmt.is_empty() {
                 continue;
             }
-            
-            log::debug!("[DB] Executing: {}", stmt);
-            
-            sqlx::query(&stmt)
+
+            log::info!("[DB] Executing: {}", stmt);
+            let r = sqlx::query(&stmt)
                 .execute(&self.pool)
-                .await
-                .map_err(|e| format!("Migration error: {}", e))?;
+                .await;
+            if let Err(e) = r {
+                log::error!("[DB] Failed to execute: {:?}, error: {}", stmt, e);
+                return Err(format!("Migration error: {}", e));
+            }
         }
         
         Ok(())
     }
-
-    /// Strip inline SQL comments (-- to end of line)
-    fn strip_inline_comment(line: &str) -> String {
-        let mut result = String::with_capacity(line.len());
-        let mut in_single_quote = false;
-        let mut in_double_quote = false;
-
-        for ch in line.chars() {
-            match ch {
-                '\'' if !in_double_quote => {
-                    in_single_quote = !in_single_quote;
-                    result.push(ch);
-                }
-                '"' if !in_single_quote => {
-                    in_double_quote = !in_double_quote;
-                    result.push(ch);
-                }
-                '-' if !in_single_quote && !in_double_quote && result.ends_with('-') => {
-                    // Found --, skip rest of line
-                    break;
-                }
-                _ => {
-                    result.push(ch);
+    
+    /// Strip all SQL comments (both inline and multi-line)
+    fn strip_all_comments(sql: &str) -> String {
+        let mut result = String::with_capacity(sql.len());
+        let mut chars = sql.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            // Check for -- comment
+            if ch == '-' {
+                if let Some(&next) = chars.peek() {
+                    if next == '-' {
+                        // Skip until end of line
+                        for c in &mut chars {
+                            if c == '\n' {
+                                result.push(c);
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                 }
             }
+            
+            // Check for /* */ multi-line comment
+            if ch == '/' {
+                if let Some(&next) = chars.peek() {
+                    if next == '*' {
+                        // Skip until */
+                        chars.next(); // consume *
+                        loop {
+                            match chars.next() {
+                                Some('*') => {
+                                    if let Some(&next) = chars.peek() {
+                                        if next == '/' {
+                                            chars.next(); // consume /
+                                            break;
+                                        }
+                                    }
+                                }
+                                Some(_) => continue,
+                                None => break,
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+            
+            result.push(ch);
         }
-
+        
         result
     }
     
@@ -294,37 +360,37 @@ impl Database {
         let mut has_params = false;
 
         if let Some(val) = updates.get("name") {
-            if let Some(s) = val.as_str() {
+            if let Some(_s) = val.as_str() {
                 set_clauses.push("name = ?".to_string());
                 has_params = true;
             }
         }
         if let Some(val) = updates.get("fps") {
-            if let Some(n) = val.as_i64() {
+            if let Some(_n) = val.as_i64() {
                 set_clauses.push("fps = ?".to_string());
                 has_params = true;
             }
         }
         if let Some(val) = updates.get("resolution") {
-            if let Some(s) = val.as_str() {
+            if let Some(_s) = val.as_str() {
                 set_clauses.push("resolution = ?".to_string());
                 has_params = true;
             }
         }
         if let Some(val) = updates.get("orientation") {
-            if let Some(s) = val.as_str() {
+            if let Some(_s) = val.as_str() {
                 set_clauses.push("orientation = ?".to_string());
                 has_params = true;
             }
         }
         if let Some(val) = updates.get("pipes_json") {
-            if let Some(s) = val.as_str() {
+            if let Some(_s) = val.as_str() {
                 set_clauses.push("pipes_json = ?".to_string());
                 has_params = true;
             }
         }
         if let Some(val) = updates.get("total_generated_frames") {
-            if let Some(n) = val.as_i64() {
+            if let Some(_n) = val.as_i64() {
                 set_clauses.push("total_generated_frames = ?".to_string());
                 has_params = true;
             }
