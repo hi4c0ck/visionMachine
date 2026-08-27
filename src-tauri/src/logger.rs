@@ -16,8 +16,8 @@ impl FileLogger {
     
     fn init(&mut self) {
         if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
-            let log_dir = PathBuf::from(app_data).join("com.visionmachine.desktop").join("logs");
-            let log_file = log_dir.join(format!("visionmachine_{}.log", Local::now().format("%Y%m%d")));
+            let log_dir = PathBuf::from(app_data).join("com.visionstudio.desktop").join("logs");
+            let log_file = log_dir.join(format!("studio_{}.log", Local::now().format("%Y%m%d")));
             
             if let Some(parent) = log_file.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {

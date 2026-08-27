@@ -28,7 +28,7 @@ impl Database {
         let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", path))
             .await
             .map_err(|e| format!("Failed to connect to database: {}", e))?;
-        
+
         Ok(Self { pool })
     }
     
@@ -215,13 +215,24 @@ impl Database {
             "ALTER TABLE sessions ADD COLUMN pipes_json TEXT",
             "ALTER TABLE sessions ADD COLUMN total_generated_frames INTEGER DEFAULT 0",
             "ALTER TABLE projects ADD COLUMN directory_path TEXT",
+            "ALTER TABLE sessions ADD COLUMN files_metadata TEXT",
+            "CREATE TABLE IF NOT EXISTS project_files (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT DEFAULT 'other',
+                file_size INTEGER DEFAULT 0,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )",
         ];
-        
+
         for sql in columns {
             // Ignore "duplicate column" errors
             let _ = sqlx::query(sql).execute(&self.pool).await;
         }
-        
+
         Ok(())
     }
     
@@ -346,17 +357,18 @@ impl Database {
     }
     
     // Session operations
-    pub async fn create_session(&self, project_id: &str, name: &str, pipes_json: Option<&str>) -> Result<String, String> {
+    pub async fn create_session(&self, project_id: &str, name: &str, pipes_json: Option<&str>, files_metadata: Option<&str>) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO sessions (id, project_id, name, pipes_json) VALUES (?, ?, ?, ?)")
+        sqlx::query("INSERT INTO sessions (id, project_id, name, pipes_json, files_metadata) VALUES (?, ?, ?, ?, ?)")
             .bind(&id)
             .bind(project_id)
             .bind(name)
             .bind(pipes_json)
+            .bind(files_metadata)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        
+
         Ok(id)
     }
     
@@ -477,7 +489,69 @@ impl Database {
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        
+
+        Ok(())
+    }
+
+    // File operations
+    pub async fn add_file(
+        &self,
+        project_id: &str,
+        file_name: &str,
+        file_path: &str,
+        file_type: &str,
+        file_size: i64,
+    ) -> Result<String, String> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO project_files (id, project_id, file_name, file_path, file_type, file_size) VALUES (?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&id)
+        .bind(project_id)
+        .bind(file_name)
+        .bind(file_path)
+        .bind(file_type)
+        .bind(file_size)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(id)
+    }
+
+    pub async fn list_files(&self, project_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, file_name, file_path, file_type, file_size, added_at FROM project_files WHERE project_id = ? ORDER BY added_at DESC"
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let files: Vec<serde_json::Value> = rows.iter()
+            .map(|row| {
+                serde_json::json!({
+                    "id": row.get::<String, usize>(0),
+                    "project_id": row.get::<String, usize>(1),
+                    "file_name": row.get::<String, usize>(2),
+                    "file_path": row.get::<String, usize>(3),
+                    "file_type": row.get::<String, usize>(4),
+                    "file_size": row.get::<i64, usize>(5),
+                    "added_at": row.get::<String, usize>(6),
+                })
+            })
+            .collect();
+
+        Ok(files)
+    }
+
+    pub async fn delete_file(&self, file_id: &str) -> Result<(), String> {
+        sqlx::query("DELETE FROM project_files WHERE id = ?")
+            .bind(file_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
         Ok(())
     }
 }

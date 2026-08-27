@@ -273,6 +273,17 @@ export interface ProjectData {
   directoryPath: string;
   sessions: SessionData[];
   totalGenerations: number;
+  profileId?: string;
+  files?: ProjectFile[];
+}
+
+export interface ProjectFile {
+  id: string;
+  fileName: string;
+  filePath: string;
+  fileType: string;
+  fileSize: number;
+  addedAt: number;
 }
 
 /**

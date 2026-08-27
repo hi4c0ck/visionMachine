@@ -1,7 +1,7 @@
--- VisionMachine Schema (Migration 0001)
+-- Studio Schema (Migration 0001)
 -- Core tables: profiles, projects, sessions, generated_frames
 
--- Profiles: users/account
+-- Profiles: users/accounts
 CREATE TABLE IF NOT EXISTS profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,

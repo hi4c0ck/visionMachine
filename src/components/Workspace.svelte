@@ -31,6 +31,10 @@
 		onprojectsupdate?: (projects: ProjectData[]) => void;
 	}>();
 
+	// User profile
+	let userProfileId = $state<string | null>(null);
+	let userProjectsFiles = $state<Record<string, ProjectFile[]>>({});
+
 	// State
 	let projects = $state<ProjectData[]>([]);
 	let selectedProjectId = $state<string | null>(null);
@@ -55,12 +59,21 @@
 		try {
 			loading = true;
 			error = null;
-			
-			// Call backend to get projects (note: needs profile_id for real app)
-			// For now, we use a simplified approach
-			const result = await invoke('list_projects');
+
+			// Get user profile first
+			if (!userProfileId) {
+				const profileResult = await invoke('get_user_profile', {
+					userName: userName
+				});
+				userProfileId = profileResult as string;
+			}
+
+			// Call backend to get projects with profile_id
+			const result = await invoke('list_projects', {
+				profileId: userProfileId
+			});
 			const backendProjects = result as any[];
-			
+
 			// Convert backend format to frontend format
 			projects = backendProjects.map((p: any) => ({
 				id: p.id,
@@ -72,11 +85,31 @@
 				updatedAt: Date.now(),
 				profileId: p.profile_id || ''
 			})) as ProjectData[];
-			
+
+			// Fetch files for each project
+			for (const proj of projects) {
+				try {
+					const filesResult = await invoke('list_project_files', {
+						projectId: proj.id
+					});
+					const files = (filesResult as any[]).map((f: any) => ({
+						id: f.id,
+						fileName: f.file_name,
+						filePath: f.file_path,
+						fileType: f.file_type,
+						fileSize: f.file_size,
+						addedAt: new Date(f.added_at).getTime()
+					}));
+					userProjectsFiles = { ...userProjectsFiles, [proj.id]: files };
+				} catch (e) {
+					console.error(`[Workspace] Failed to load files for project ${proj.id}:`, e);
+				}
+			}
+
 			// Try to restore selection from localStorage (migration path)
 			const savedProject = localStorage.getItem(`vm-selected-project-${userName}`);
 			const savedSession = localStorage.getItem(`vm-selected-session-${userName}`);
-			
+
 			if (savedProject && projects.length > 0) {
 				const found = projects.find(p => p.id === savedProject);
 				if (found) {
@@ -86,7 +119,7 @@
 					}
 				}
 			}
-			
+
 			if (onprojectsupdate) {
 				onprojectsupdate(projects);
 			}
@@ -196,45 +229,54 @@
 		}
 
 	async function handleCreateProject(input: { name: string; path?: string }) {
-		try {
-			loading = true;
-			const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
-			const projectPath = `${basePath}\\${input.name}`;
-			
-			// Create via backend
-			const result = await invoke('create_project', {
-				input: {
-					name: input.name,
-					directory_path: projectPath
+			try {
+				loading = true;
+				const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
+				const projectPath = `${basePath}\\${input.name}`;
+
+				// Get user profile if not loaded
+				if (!userProfileId) {
+					const profileResult = await invoke('get_user_profile', {
+						userName: userName
+					});
+					userProfileId = profileResult as string;
 				}
-			});
-			
-			const newProjectId = result as string;
-			
-			// Add to local state
-			const newProject: ProjectData = {
-				id: newProjectId,
-				name: input.name,
-				createdAt: Date.now(),
-				directoryPath: projectPath,
-				sessions: [],
-				totalGenerations: 0,
-				updatedAt: Date.now(),
-				profileId: '' // Would come from backend
-			};
-			
-			projects = [...projects, newProject];
-			selectedProjectId = newProject.id;
-			await saveProjects();
-		} catch (e) {
-			console.error('[Workspace] Failed to create project:', e);
-			error = `Failed to create project: ${e}`;
-			// Fallback
-			handleCreateProjectFallback(input);
-		} finally {
-			loading = false;
+
+				// Create via backend
+					const result = await invoke('create_project', {
+						input: {
+							name: input.name,
+							directory_path: projectPath,
+							profile_id: userProfileId
+						}
+					});
+
+				const newProjectId = result as string;
+
+				// Add to local state
+				const newProject: ProjectData = {
+					id: newProjectId,
+					name: input.name,
+					createdAt: Date.now(),
+					directoryPath: projectPath,
+					sessions: [],
+					totalGenerations: 0,
+					updatedAt: Date.now(),
+					profileId: userProfileId || ''
+				};
+
+				projects = [...projects, newProject];
+				selectedProjectId = newProject.id;
+				await saveProjects();
+			} catch (e) {
+				console.error('[Workspace] Failed to create project:', e);
+				error = `Failed to create project: ${e}`;
+				// Fallback
+				handleCreateProjectFallback(input);
+			} finally {
+				loading = false;
+			}
 		}
-	}
 
 	function handleCreateProjectFallback(input: { name: string; path?: string }) {
 		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
@@ -284,17 +326,27 @@
 			};
 
 			const sessionName = `Session ${project.sessions.length + 1}`;
-			
-			// Create via backend
+
+			// Auto-include project files in session
+			const projectFiles = userProjectsFiles[projectId] || [];
+			const filesMetadata = projectFiles.map(f => ({
+				id: f.id,
+				fileName: f.fileName,
+				filePath: f.filePath,
+				fileType: f.fileType,
+				fileSize: f.fileSize
+			}));
+
 			const pipesJson = JSON.stringify([defaultPipe]);
 			const result = await invoke('create_session', {
 				input: {
 					project_id: projectId,
 					name: sessionName,
-					pipes_json: pipesJson
+					pipes_json: pipesJson,
+					files_metadata: filesMetadata.length > 0 ? JSON.stringify(filesMetadata) : null
 				}
 			});
-			
+
 			const newSessionId = result as string;
 			
 			const newSession: SessionData = {
