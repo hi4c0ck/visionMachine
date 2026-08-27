@@ -70,7 +70,7 @@
 
 			// Call backend to get projects with profile_id
 			const result = await invoke('list_projects', {
-				profileId: userProfileId
+				profile_id: userProfileId
 			});
 			const backendProjects = result as any[];
 
