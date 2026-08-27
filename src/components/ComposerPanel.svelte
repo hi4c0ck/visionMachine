@@ -1041,8 +1041,7 @@
 				<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
 			</div>
 		</div>
-	</div>
-{/if}
+	{/if}
 </div>
 
 <style>
