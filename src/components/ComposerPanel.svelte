@@ -831,32 +831,29 @@
 
 							<!-- Tag Tracks -->
 							{#each allTags as tagType}
-								{#let tagsOfType = getTimelineElement(pipe)?.segments.flatMap(s => s.tags.filter(t => t.tag === tagType)) ?? []}
-								{#if tagsOfType.length > 0}
-									<div class="track-row">
-										<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
-											{TAG_SPECIFICATIONS[tagType].name}
-										</span>
-										<div class="track-canvas">
-											{#each tagsOfType as tag (tag.id)}
-												{#let seg = getTimelineElement(pipe)?.segments.find(s => s.tags.some(t => t.id === tag.id))}
-													{#if seg}
-														<MultiThumbSlider
-															values={[tag.frameStart, tag.frameEnd]}
-															min={seg.frameStart}
-															max={seg.frameEnd}
-															step={8}
-															color={tag.spec.color}
-															onchange={(vals) => resizeTag(pipeIdx, seg.id, tag.id, vals)}
-															ondblclick={(e) => { e.stopPropagation(); openTagModal(pipeIdx, getTimelineElement(pipe)!.segments.indexOf(seg), tag); }}
-														/>
-													{/if}
-												{/let}
-											{/each}
+								
+									{#if tagData.length > 0}
+										<div class="track-row">
+											<span class="track-label" style="color: {TAG_SPECIFICATIONS[tagType].color}">
+												{TAG_SPECIFICATIONS[tagType].name}
+											</span>
+											<div class="track-canvas">
+												{#each tagData as {tag, segment, segmentIndex} (tag.id)}
+													<MultiThumbSlider
+														values={[tag.frameStart, tag.frameEnd]}
+														min={segment.frameStart}
+														max={segment.frameEnd}
+														step={8}
+														color={tag.spec.color}
+														onchange={(vals) => resizeTag(pipeIdx, segment.id, tag.id, vals)}
+														ondblclick={(e) => { e.stopPropagation(); openTagModal(pipeIdx, segmentIndex, tag); }}
+													/>
+												{/each}
+											</div>
 										</div>
-									</div>
-								{/if}
-							{/each}
+									{/if}
+									
+								{/each}
 
 							<!-- Add Segment Row -->
 							<div class="add-segment-row">
@@ -1014,32 +1011,24 @@
 					<button class="modal-close" onclick={closeTagModal}>×</button>
 				</div>
 				<div class="modal-body">
-					{#if activeTagPipeIndex !== null && activeTagSegmentIndex !== null}
-						{#let pipe = pipes[activeTagPipeIndex]}
-							{#if pipe}
-								{#let timeline = getTimelineElement(pipe)}
-									{#if timeline}
-										{#let segment = timeline.segments[activeTagSegmentIndex]}
-											{#if segment}
-												{#let tag = segment.tags.find(t => t.id === activeTagId)}
-													{#if tag}
-														<div class="form-group">
-															<label class="form-label">{TAG_SPECIFICATIONS[tag.tag].name} Value</label>
-															{#if TAG_SPECIFICATIONS[tag.tag].usePrompt}
-																<textarea bind:value={tagPrompt} placeholder="Enter prompt..."></textarea>
-															{:else}
-																<input type="number" bind:value={tagValue} min={tag.spec.min ?? 0} max={tag.spec.max ?? 100} step="1" />
-															{/if}
-														</div>
-													{/if}
-												{/let}
+					{#each pipes as pipe}
+						{#each getTimelineElement(pipe)?.segments ?? [] as segment, segIdx (segment.id)}
+							{#if segIdx === activeTagSegmentIndex}
+								{#each segment.tags as tag (tag.id)}
+									{#if tag.id === activeTagId}
+										<div class="form-group">
+											<label class="form-label">{TAG_SPECIFICATIONS[tag.tag].name} Value</label>
+											{#if TAG_SPECIFICATIONS[tag.tag].usePrompt}
+												<textarea bind:value={tagPrompt} placeholder="Enter prompt..."></textarea>
+											{:else}
+												<input type="number" bind:value={tagValue} min={tag.spec.min ?? 0} max={tag.spec.max ?? 100} step="1" />
 											{/if}
-										{/let}
+										</div>
 									{/if}
-								{/let}
+								{/each}
 							{/if}
-						{/let}
-					{/if}
+						{/each}
+					{/each}
 					<div class="modal-actions">
 						<button class="btn-cancel" onclick={closeTagModal}>Cancel</button>
 						<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
