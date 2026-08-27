@@ -186,26 +186,34 @@
 	}
 
 	async function confirmGlobalEdit() {
-		if (!session?.id || activeGlobalPipeIndex === null || !activeGlobalElementId) return;
+		if (!session?.id || activeGlobalPipeIndex === null) return;
 		const pipe = pipes[activeGlobalPipeIndex];
 		if (!pipe) return;
 
 		try {
-			const result = await updateGlobalElementAction(
-				session.id, 
-				pipe.id, 
-				activeGlobalElementId, 
-				globalPromptText
-			);
+			let result;
+			if (activeGlobalElementId) {
+				// Update existing global
+				result = await updateGlobalElementAction(
+					session.id,
+					pipe.id,
+					activeGlobalElementId,
+					globalPromptText
+				);
+			} else {
+				// Create new global
+				result = await addGlobalElementAction(session.id, pipe.id, globalPromptText);
+			}
+
 			if (result.errors.length > 0) {
 				showToast(result.errors[0], 'error');
 			} else {
-				showToast('Global style updated', 'success');
+				showToast(activeGlobalElementId ? 'Global style updated' : 'Global style added', 'success');
 			}
 			closeGlobalModal();
 		} catch (e) {
-			console.error('[ComposerPanel] Failed to update global:', e);
-			showToast('Failed to update global', 'error');
+			console.error('[ComposerPanel] Failed to save global:', e);
+			showToast('Failed to save global', 'error');
 		}
 	}
 
