@@ -137,6 +137,11 @@
 		newPipeName = '';
 	}
 
+	function openAddPipeModal() {
+		showAddPipeModal = true;
+		newPipeName = '';
+	}
+
 	async function confirmAddPipe() {
 		if (!session?.id) {
 			showToast('No active session', 'error');
