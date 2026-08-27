@@ -669,15 +669,15 @@
 
 						<!-- Global Element -->
 						{#if getGlobalElement(pipe)}
-							{#each getGlobalElement(pipe) as global}
-								<div class="global-element-row">
-									<span class="global-label">GLOBAL:</span>
-									<div class="global-chip {global.enabled ? '' : 'disabled'}" onclick={() => openGlobalModal(pipeIdx)}>
+							<div class="global-element-row">
+								<span class="global-label">GLOBAL:</span>
+								{#each [getGlobalElement(pipe)] as global}
+									<div class="global-chip {global.enabled ? '' : 'disabled'}" onclick={() => openGlobalModal(pipeIdx)} role="button" tabindex="0" title="Edit global style">
 										<span>{global.enabled ? '●' : '○'}</span>
 										<span class="global-text">{global.value.substring(0, 30)}{global.value.length > 30 ? '...' : ''}</span>
 									</div>
-								</div>
-							{/each}
+								{/each}
+							</div>
 						{:else}
 							<div class="global-element-row">
 								<span class="global-label">GLOBAL:</span>
@@ -822,8 +822,8 @@
 								<span class="track-label">GLOBAL</span>
 								<div class="track-canvas">
 									{#if getGlobalElement(pipe)}
-										{#each getGlobalElement(pipe) as global}
-											<div class="global-chip-tl {global.enabled ? '' : 'disabled'}" onclick={() => openGlobalModal(pipeIdx)} role="button" tabindex="0">
+										{#each [getGlobalElement(pipe)] as global}
+											<div class="global-chip-tl {global.enabled ? '' : 'disabled'}" onclick={() => openGlobalModal(pipeIdx)} role="button" tabindex="0" title="Edit global style">
 												<span>{global.enabled ? '●' : '○'}</span>
 												<span class="global-text-tl">{global.value.substring(0, 20)}{global.value.length > 20 ? '...' : ''}</span>
 											</div>

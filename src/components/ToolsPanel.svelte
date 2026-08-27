@@ -196,13 +196,13 @@
     </div>
   </div>
 
-  <!-- New Session Modal -->
+  <!-- Modal for new session -->
   {#if showModal && project}
-    <div class="modal-backdrop" onclick={closeNewSessionModal}>
-      <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="modal-backdrop" onclick={closeNewSessionModal} role="presentation">
+      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-session-title">
         <div class="modal-header">
-          <span class="modal-title">Create New Session</span>
-          <button class="modal-close" onclick={closeNewSessionModal}>×</button>
+          <span class="modal-title" id="new-session-title">{APP_CONSTANTS.strings.createSessionModal}</span>
+          <button class="modal-close" onclick={closeNewSessionModal} aria-label="Close">×</button>
         </div>
         
         <div class="modal-body">

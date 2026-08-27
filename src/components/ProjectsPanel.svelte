@@ -100,9 +100,12 @@
   {:else}
     <div class="projects-list">
       {#each projects as project (project.id)}
-        <div 
+        <div
           class="project-item {selectedProjectId === project.id ? 'selected' : ''}"
           onclick={() => handleSelectProject(project.id)}
+          role="button"
+          tabindex="0"
+          onkeydown={(e) => e.key === 'Enter' && handleSelectProject(project.id)}
         >
           <span class="project-icon">📁</span>
           <span class="project-name">{project.name}</span>
@@ -117,9 +120,12 @@
         {#if selectedProjectId === project.id}
           <div class="sessions-container">
             {#each project.sessions as session (session.id)}
-              <div 
+              <div
                 class="session-item {selectedSessionId === session.id ? 'selected' : ''}"
                 onclick={() => handleSelectSession(session.id)}
+                role="button"
+                tabindex="0"
+                onkeydown={(e) => e.key === 'Enter' && handleSelectSession(session.id)}
               >
                 <span class="session-icon">🎬</span>
                 <input 
@@ -147,11 +153,11 @@
 
   <!-- Create Project Modal -->
   {#if showCreateProjectModal}
-    <div class="modal-backdrop" onclick={closeCreateProjectModal}>
-      <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="modal-backdrop" onclick={closeCreateProjectModal} role="presentation">
+      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-project-title">
         <div class="modal-header">
-          <span class="modal-title">{APP_CONSTANTS.strings.createProject}</span>
-          <button class="modal-close" onclick={closeCreateProjectModal}>×</button>
+          <span class="modal-title" id="create-project-title">{APP_CONSTANTS.strings.createProject}</span>
+          <button class="modal-close" onclick={closeCreateProjectModal} aria-label="Close">×</button>
         </div>
         
         <div class="modal-body">
