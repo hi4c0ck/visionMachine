@@ -1035,13 +1035,13 @@
 						{/each}
 					{/each}
 					</div>
-			</div>
-			<div class="modal-footer">
-				<button class="btn-cancel" onclick={closeTagModal}>Cancel</button>
-				<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
-			</div>
-		</div>
-	{/if}
+					<div class="modal-footer">
+						<button class="btn-cancel" onclick={closeTagModal}>Cancel</button>
+						<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
+					</div>
+					</div>
+					</div>
+					{/if}
 </div>
 
 <style>
