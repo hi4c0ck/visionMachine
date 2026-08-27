@@ -160,8 +160,23 @@ pub async fn save_composer(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = &state.db.lock().await;
-    let composer: crate::models::ComposerConfig = serde_json::from_value(config)
-        .map_err(|e| format!("Invalid composer config: {}", e))?;
+    // If config is wrapped in { sessionId, sessionData }, unwrap it
+    let composer: crate::models::ComposerConfig = if config.get("sessionId").is_some() && config.get("sessionData").is_some() {
+        let session_data = config.get("sessionData").unwrap();
+        serde_json::from_value(serde_json::json!({
+            "id": session_data.get("id").unwrap_or(&serde_json::Value::Null),
+            "session_id": session_data.get("id").unwrap_or(&serde_json::Value::Null),
+            "name": session_data.get("name").unwrap_or(&serde_json::Value::Null),
+            "pipes": session_data.get("pipes").unwrap_or(&serde_json::Value::Array(vec![])),
+            "session_settings": session_data.get("settings"),
+            "state": "ready",
+            "version": 1,
+        }))
+        .map_err(|e| format!("Invalid session data: {}", e))?
+    } else {
+        serde_json::from_value(config)
+            .map_err(|e| format!("Invalid composer config: {}", e))?
+    };
     db.save_composer(&composer).await.map_err(|e| e.to_string())
 }
 

@@ -946,14 +946,14 @@
 						</div>
 					{/if}
 
-					<div class="modal-actions">
-						<button class="btn-cancel" onclick={closeModal}>Cancel</button>
-						<button class="btn-confirm" onclick={confirmAdd} disabled={
-							(addMode === 'url' && !modalUrl.trim()) ||
-							(addMode === 'txt2img' && !modalPrompt.trim()) ||
-							(addMode === 'img2img' && !modalImg2Img.trim())
-						}>Add</button>
-					</div>
+				</div>
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={closeModal}>Cancel</button>
+					<button class="btn-confirm" onclick={confirmAdd} disabled={
+						(addMode === 'url' && !modalUrl.trim()) ||
+						(addMode === 'txt2img' && !modalPrompt.trim()) ||
+						(addMode === 'img2img' && !modalImg2Img.trim())
+					}>Add</button>
 				</div>
 			</div>
 		</div>
