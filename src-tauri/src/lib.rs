@@ -31,7 +31,7 @@ fn init_database_sync(app_data_dir: &std::path::Path) -> Result<Database, String
         .map_err(|e| format!("Failed to create Tokio runtime: {}", e))?;
 
     rt.block_on(async {
-        let db_path = app_data_dir.join("studiodb.db");
+        let db_path = app_data_dir.join("visionmachine.db");
 
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
@@ -68,8 +68,8 @@ pub fn run() {
 
     // Get app data directory early (before Tauri builder)
     let app_data_dir = dirs::data_local_dir()
-        .map(|d| d.join("com.visionstudio.desktop"))
-        .unwrap_or_else(|| std::env::temp_dir().join("studio"));
+        .map(|d| d.join("com.visionmachine.desktop"))
+        .unwrap_or_else(|| std::env::temp_dir().join("visionmachine"));
 
     log::info!("[Setup] App data directory: {:?}", app_data_dir);
 

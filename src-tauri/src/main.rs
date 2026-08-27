@@ -1,4 +1,4 @@
 // Minimal entry point
 fn main() {
-    vision_studio::run();
+    vision_machine::run();
 }

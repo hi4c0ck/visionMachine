@@ -40,7 +40,7 @@
 	<div class="frame-top">
 		<div class="logo">
 			<span class="logo-icon">◆</span>
-			<span class="logo-text">Studio</span>
+			<span class="logo-text">VisionMachine</span>
 			{#if showWelcome}
 				<span class="welcome-badge">✨ New</span>
 			{/if}

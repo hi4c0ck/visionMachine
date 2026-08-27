@@ -1,7 +1,7 @@
 {
-  "productName": "Studio",
+  "productName": "VisionMachine",
   "version": "0.4.0",
-  "identifier": "com.visionstudio.desktop",
+  "identifier": "com.visionmachine.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Studio",
+        "title": "VisionMachine",
         "width": 1280,
         "height": 800,
         "resizable": true,
