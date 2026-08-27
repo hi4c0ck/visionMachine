@@ -288,9 +288,11 @@
 			// Create via backend
 			const pipesJson = JSON.stringify([defaultPipe]);
 			const result = await invoke('create_session', {
-				project_id: projectId,
-				name: sessionName,
-				pipes_json: pipesJson
+				input: {
+					project_id: projectId,
+					name: sessionName,
+					pipes_json: pipesJson
+				}
 			});
 			
 			const newSessionId = result as string;
