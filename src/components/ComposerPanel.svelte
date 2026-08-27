@@ -760,7 +760,7 @@
 						<FrameRuler
 							{totalFrames}
 							markerInterval={8}
-							{zoomLevel}
+							{timelineZoom}
 							{selectedFrame}
 							onframeSelect={handleTimelineFrameSelect}
 							onzoomChange={handleZoomChange}
