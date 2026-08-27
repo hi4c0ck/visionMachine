@@ -163,16 +163,11 @@ pub async fn save_composer(
     // If config is wrapped in { sessionId, sessionData }, unwrap it
     let composer: crate::models::ComposerConfig = if config.get("sessionId").is_some() && config.get("sessionData").is_some() {
         let session_data = config.get("sessionData").unwrap();
-        serde_json::from_value(serde_json::json!({
-            "id": session_data.get("id").unwrap_or(&serde_json::Value::Null),
-            "session_id": session_data.get("id").unwrap_or(&serde_json::Value::Null),
-            "name": session_data.get("name").unwrap_or(&serde_json::Value::Null),
-            "pipes": session_data.get("pipes").unwrap_or(&serde_json::Value::Array(vec![])),
-            "session_settings": session_data.get("settings"),
-            "state": "ready",
-            "version": 1,
-        }))
-        .map_err(|e| format!("Invalid session data: {}", e))?
+        // Parse as frontend format and convert to backend
+        let frontend: crate::models::frontend_conversion::FrontendComposerConfig =
+            serde_json::from_value(session_data.clone())
+                .map_err(|e| format!("Invalid frontend session data: {}", e))?;
+        frontend.to_backend()
     } else {
         serde_json::from_value(config)
             .map_err(|e| format!("Invalid composer config: {}", e))?

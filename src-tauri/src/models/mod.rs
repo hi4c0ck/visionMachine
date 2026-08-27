@@ -3,11 +3,12 @@ pub mod composer;
 pub mod async_writer;
 pub mod tool;
 pub mod profile;
+pub mod frontend_conversion;
 
 // Re-export all from composer (priority over viewmodel to avoid ambiguity)
 pub use composer::{
     PipeStatus, PipeRow, KeyframeSlot, SessionSettings, PromptNode, PromptTag, ComposerConfig,
-    pipe_status_from_db, Resolution, AspectRatio,
+    pipe_status_from_db, Resolution, AspectRatio, ComposerState,
     PromptNodeDbRow, KeyframeDbRow, SessionSettingsDbRow, ComposerDbRow, PipeDbRow,
 };
 
