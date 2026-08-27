@@ -11,13 +11,14 @@ CREATE TABLE IF NOT EXISTS profiles (
     settings JSON
 );
 
--- Projects table at top-level
+|-- Projects table at top-level
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     profile_id TEXT NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
     logo_path TEXT,
+    directory_path TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE

@@ -120,6 +120,7 @@ impl Database {
             "ALTER TABLE sessions ADD COLUMN orientation TEXT DEFAULT 'horizontal'",
             "ALTER TABLE sessions ADD COLUMN pipes_json TEXT",
             "ALTER TABLE sessions ADD COLUMN total_generated_frames INTEGER DEFAULT 0",
+            "ALTER TABLE projects ADD COLUMN directory_path TEXT",
         ];
         
         for sql in columns {
