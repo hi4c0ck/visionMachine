@@ -20,6 +20,17 @@ import type {
 
 let sessions = new Map<string, SessionData>();
 let unsynced = new Set<string>();
+let onUpdateCallback: ((sessionId: string) => void) | null = null;
+
+export function setOnUpdate(callback: (sessionId: string) => void) {
+  onUpdateCallback = callback;
+}
+
+function notifyUpdate(sessionId: string) {
+  if (onUpdateCallback) {
+    onUpdateCallback(sessionId);
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -118,7 +129,7 @@ export async function addPipe(sessionId: string): Promise<{ errors: string[] }> 
     pipes: [...session.pipes, defaultPipe],
     updatedAt: Date.now(),
   });
-  
+
   await persistToBackend(sessionId);
 }
 
@@ -1024,9 +1035,11 @@ async function persistToBackend(sessionId: string): Promise<void> {
   try {
     const session = sessions.get(sessionId);
     if (!session) return;
-    
+
     await invoke('save_composer', { sessionId, sessionData: session });
     unsynced.delete(sessionId);
+    // Notify Workspace to update UI
+    notifyUpdate(sessionId);
   } catch (e) {
     console.error('[ComposerStore] Failed to persist:', e);
     unsynced.add(sessionId);

@@ -7,7 +7,7 @@
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData, PipeRow } from '$types';
 	import { getMaxFramesForResolution, migratePipeToTwoLayer } from '$types';
-	import { hydrateSessions } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate } from '$lib/composerStore';
 	import { invoke } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -171,6 +171,19 @@
 			console.error('[Workspace] Failed to load from localStorage:', e);
 		}
 	}
+
+	// Register store update callback - reload session from backend when changed
+	setOnUpdate(async (sessionId) => {
+		if (selectedSessionId === sessionId) {
+			// Reload from backend to get fresh data
+			await loadSession(sessionId);
+			// Update local selected session
+			const session = sessions.get(sessionId);
+			if (session && selectedProject) {
+				selectedSession = session;
+			}
+		}
+	});
 
 	// Save projects to backend and localStorage (hybrid approach)
 	async function saveProjects() {
