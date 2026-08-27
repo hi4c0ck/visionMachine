@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [svelte()],
   resolve: {
     alias: {
+      '/src/main.ts': resolve(__dirname, 'src/main.ts'),
       '$types': resolve(__dirname, 'src/types'),
       '$constants': resolve(__dirname, 'src/constants'),
       '$lib': resolve(__dirname, 'src/lib'),
