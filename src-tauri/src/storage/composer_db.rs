@@ -4,6 +4,7 @@ use crate::models::{
     PromptTag, pipe_status_from_db,
 };
 use chrono::Utc;
+use sqlx::Row;
 
 impl Database {
     // ── Composer CRUD ────────────────────────────────────────────────────────
