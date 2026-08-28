@@ -181,12 +181,20 @@
 	// Register store update callback - reload session from backend when changed
 	setOnUpdate(async (sessionId) => {
 		if (selectedSessionId === sessionId) {
-			// Reload from backend to get fresh data
-			await loadSession(sessionId);
-			// Update local selected session
-			const session = sessions.get(sessionId);
-			if (session && selectedProject) {
-				selectedSession = session;
+			// Get fresh data from store (which was just updated by the action)
+			const freshSession = sessions.get(sessionId);
+			if (freshSession && selectedProject) {
+				// Update the project's session directly to trigger reactive update
+				const updatedProjects = projects.map(p => {
+					if (p.id !== selectedProject.id) return p;
+					return {
+						...p,
+						sessions: p.sessions.map(s =>
+							s.id === sessionId ? { ...freshSession } : s
+						)
+					};
+				});
+				projects = updatedProjects;
 			}
 		}
 	});
