@@ -46,19 +46,44 @@ impl Database {
     }
 
     pub async fn save_composer(&self, composer: &ComposerConfig) -> Result<(), String> {
+        // First, try to get existing composer by session_id
+        let existing = sqlx::query("SELECT id FROM composers WHERE session_id = ?")
+            .bind(&composer.session_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
         let config_json = serde_json::to_string(composer)
             .map_err(|e| format!("Failed to serialize composer: {}", e))?;
-        
-        sqlx::query(
-            "UPDATE composers SET config_json = ?, version = version + 1, updated_at = ? WHERE session_id = ?",
-        )
-        .bind(&config_json)
-        .bind(Utc::now().to_rfc3339())
-        .bind(&composer.session_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-        
+
+        if let Some(row) = existing {
+            // Update existing
+            sqlx::query(
+                "UPDATE composers SET config_json = ?, version = version + 1, updated_at = ? WHERE id = ?",
+            )
+            .bind(&config_json)
+            .bind(Utc::now().to_rfc3339())
+            .bind(row.get::<String, _>(0))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        } else {
+            // Create new composer
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO composers (id, session_id, name, config_json, version, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&composer.session_id)
+            .bind(&composer.name)
+            .bind(&config_json)
+            .bind(Utc::now().to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
