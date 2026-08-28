@@ -1,5 +1,5 @@
 use crate::AppState;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 #[derive(Deserialize)]
@@ -14,6 +14,25 @@ pub struct CreateSessionInput {
 pub struct UpdateSessionInput {
     pub session_id: String,
     pub updates: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteSessionInput {
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+pub struct SessionResponse {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub directory_path: String,
+    pub pipes_json: Option<String>,
+    pub fps: f64,
+    pub resolution: String,
+    pub orientation: String,
+    pub total_generated_frames: u32,
 }
 
 #[tauri::command]
@@ -53,9 +72,9 @@ pub async fn update_session(
 
 #[tauri::command]
 pub async fn delete_session(
-    session_id: String,
+    input: DeleteSessionInput,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = state.db.lock().await;
-    db.delete_session(&session_id).await.map_err(|e| e.to_string())
+    db.delete_session(&input.session_id).await.map_err(|e| e.to_string())
 }

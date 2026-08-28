@@ -78,25 +78,51 @@
 			const result = await invoke('list_projects', {
 				input: { profile_id: userProfileId }
 			});
-			const backendProjects = result as any[];
+			const backendProjectsResult = result as any[];
 
 			// Convert backend format to frontend format
-			projects = backendProjects.map((p: any) => ({
+			let backendProjects = backendProjectsResult.map((p: any) => ({
 				id: p.id,
 				name: p.name,
 				createdAt: new Date(p.created_at).getTime(),
 				directoryPath: p.directory_path || '',
-				sessions: [],
+				sessions: [], // Will be populated below
 				totalGenerations: 0,
 				updatedAt: Date.now(),
 				profileId: p.profile_id || ''
 			})) as ProjectData[];
 
+			// Fetch sessions for each project
+			for (const proj of backendProjects) {
+				try {
+					const sessionsResult = await invoke('list_sessions', {
+						input: { project_id: proj.id }
+					});
+					const backendSessions = (sessionsResult as any[]).map((s: any) => ({
+						id: s.id,
+						name: s.name,
+						createdAt: s.created_at ? new Date(s.created_at).getTime() : Date.now(),
+						updatedAt: s.updated_at ? new Date(s.updated_at).getTime() : Date.now(),
+						directoryPath: s.directory_path || '',
+						pipes: s.pipes_json ? JSON.parse(s.pipes_json) : [],
+						fps: s.fps || 24,
+						resolution: s.resolution || '720p',
+						orientation: s.orientation || 'horizontal',
+						totalGeneratedFrames: s.total_generated_frames || 0
+					}));
+					proj.sessions = backendSessions;
+				} catch (e) {
+					console.error(`[Workspace] Failed to load sessions for project ${proj.id}:`, e);
+				}
+			}
+
+			projects = backendProjects;
+
 			// Fetch files for each project
 			for (const proj of projects) {
 				try {
 					const filesResult = await invoke('list_project_files', {
-						input: { projectId: proj.id }
+						input: { project_id: proj.id }
 					});
 					const files = (filesResult as any[]).map((f: any) => ({
 						id: f.id,
@@ -349,7 +375,11 @@
 				keyframes: [],
 				qValue: 18,
 				cValue: 7,
-				elements: [],
+				elements: [{
+					id: crypto.randomUUID(),
+					tag: 'timeline',
+					segments: [],
+				}],
 			};
 
 			const sessionName = `Session ${project.sessions.length + 1}`;
@@ -422,7 +452,11 @@
 			keyframes: [],
 			qValue: 18,
 			cValue: 7,
-			elements: [],
+			elements: [{
+				id: crypto.randomUUID(),
+				tag: 'timeline',
+				segments: [],
+			}],
 		};
 		
 		const newSession: SessionData = {

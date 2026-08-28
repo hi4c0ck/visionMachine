@@ -121,7 +121,11 @@ export async function addPipe(sessionId: string): Promise<{ errors: string[] }> 
     keyframes: [],
     qValue: 18,
     cValue: 7,
-    elements: [],
+    elements: [{
+      id: crypto.randomUUID(),
+      tag: 'timeline',
+      segments: [],
+    }],
   };
   
   sessions.set(sessionId, {
@@ -421,71 +425,65 @@ export async function addTimelineElement(sessionId: string, pipeId: string): Pro
 }
 
 export async function addSegment(
-  sessionId: string, 
-  pipeId: string, 
-  frameStart: number, 
+  sessionId: string,
+  pipeId: string,
+  frameStart: number,
   frameEnd: number
 ): Promise<{ errors: string[] }> {
   const session = sessions.get(sessionId);
   if (!session) return { errors: ['Session not found'] };
-  
+
   const pipe = session.pipes.find(p => p.id === pipeId);
   if (!pipe) return { errors: ['Pipe not found'] };
-  
+
+  // Snap frames
+  const snappedStart = snapTo8(frameStart);
+  const snappedEnd = snapTo8(frameEnd);
+
+  if (snappedEnd - snappedStart < 8) {
+    return { errors: ['Minimum segment span is 8 frames'] };
+  }
+
+  if (snappedStart < 0 || snappedEnd > pipe.lengthFrames) {
+    return { errors: ['Segment out of bounds'] };
+  }
+
   // Ensure timeline exists
   let timeline = pipe.elements.find(e => e.tag === 'timeline') as TimelineElement | undefined;
   if (!timeline) {
     timeline = { id: crypto.randomUUID(), tag: 'timeline', segments: [] };
-    // Add new timeline to pipe elements
-    const newPipe: PipeRow = { ...pipe, elements: [...pipe.elements, timeline] };
-    const newPipes = session.pipes.map(p => p.id === pipeId ? newPipe : p);
-    sessions.set(sessionId, { ...session, pipes: newPipes, updatedAt: Date.now() });
-    await persistToBackend(sessionId);
-    return { errors: [] };
   }
-  
-  // Snap frames
-  const snappedStart = snapTo8(frameStart);
-  const snappedEnd = snapTo8(frameEnd);
-  
-  if (snappedEnd - snappedStart < 8) {
-    return { errors: ['Minimum segment span is 8 frames'] };
-  }
-  
-  if (snappedStart < 0 || snappedEnd > pipe.lengthFrames) {
-    return { errors: ['Segment out of bounds'] };
-  }
-  
+
   // Check for overlaps with existing segments
-  const overlappingSegments = timeline.segments.filter(s => 
+  const overlappingSegments = timeline.segments.filter(s =>
     snappedStart < s.frameEnd && snappedEnd > s.frameStart
   );
-  
+
   if (overlappingSegments.length > 0) {
     return { errors: ['Segment overlaps with existing segment'] };
   }
-  
+
   const newSegment: Segment = {
     id: crypto.randomUUID(),
     frameStart: snappedStart,
     frameEnd: snappedEnd,
     tags: [],
   };
-  
+
   const newSegments = [...timeline.segments, newSegment];
   const newTimeline = { ...timeline, segments: newSegments };
   const newElements = pipe.elements.map(e => e.tag === 'timeline' ? newTimeline : e);
-  
+
   const newPipes = session.pipes.map(p =>
     p.id === pipeId ? { ...p, elements: newElements } : p
   );
-  
+
   sessions.set(sessionId, {
     ...session,
     pipes: newPipes,
     updatedAt: Date.now(),
   });
-  
+
   await persistToBackend(sessionId);
   return { errors: [] };
 }

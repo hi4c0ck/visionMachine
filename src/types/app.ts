@@ -315,7 +315,7 @@ export function createEmptyProject(name: string, directoryPath: string): Project
  * Create empty session with default pipe (nested structure)
  */
 export function createEmptySession(projectName: string, directoryPath: string): SessionData {
-  // Create default pipe with empty Timeline
+  // Create default pipe with empty Timeline element
   const pipe: PipeRow = {
     id: crypto.randomUUID(),
     lengthFrames: 121,
@@ -324,6 +324,7 @@ export function createEmptySession(projectName: string, directoryPath: string): 
     cValue: 7,
     elements: [{
       id: crypto.randomUUID(),
+      tag: 'timeline',
       segments: [],
     }],
   };
