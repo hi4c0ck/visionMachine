@@ -1034,7 +1034,17 @@ async function persistToBackend(sessionId: string): Promise<void> {
     const session = sessions.get(sessionId);
     if (!session) return;
 
-    await invoke('save_composer', { sessionId, sessionData: session });
+    await invoke('save_composer', {
+      input: {
+        sessionId: session.id,
+        sessionData: {
+          id: session.id,
+          session_id: session.id,
+          name: session.name,
+          pipes: session.pipes,
+        }
+      }
+    });
     unsynced.delete(sessionId);
     // Notify Workspace to update UI
     notifyUpdate(sessionId);
