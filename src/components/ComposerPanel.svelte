@@ -122,6 +122,14 @@
 		return pipe.elements.find(e => e.tag === 'timeline') as TimelineElement | undefined;
 	}
 
+	function getTagById(pipeIndex: number, segmentIndex: number, tagId: string): TagElement | undefined {
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return undefined;
+		const timeline = getTimelineElement(pipe);
+		if (!timeline || !timeline.segments[segmentIndex]) return undefined;
+		return timeline.segments[segmentIndex].tags.find(t => t.id === tagId);
+	}
+
 	function showToast(message: string, type: 'success' | 'error' = 'success') {
 		toastMessage = message;
 		toastType = type;
@@ -886,31 +894,26 @@
 					<button class="modal-close" onclick={closeTagModal}>×</button>
 				</div>
 				<div class="modal-body">
-					{#if activeTagPipeIndex !== null && activeTagSegmentIndex !== null}
-						{#const pipe = pipes[activeTagPipeIndex]}
-						{#if pipe}
-							{#const timeline = getTimelineElement(pipe)}
-							{#if timeline && timeline.segments[activeTagSegmentIndex]}
-								{#const tag = timeline.segments[activeTagSegmentIndex].tags.find(t => t.id === activeTagId)}
-								{#if tag}
-									<div class="form-group">
-										<label class="form-label">Tag Type</label>
-										<span class="tag-type-display" style="color: {tag.spec.color}">[{tag.spec.name}]</span>
-									</div>
-									{#if tag.spec.usePrompt}
-										<div class="form-group">
-											<label class="form-label">Prompt</label>
-											<textarea bind:value={tagPrompt} placeholder="Enter prompt..."></textarea>
-										</div>
-									{:else}
-										<div class="form-group">
-											<label class="form-label">Value</label>
-											<input type="number" bind:value={tagValue} step="0.1" />
-										</div>
-									{/if}
-								{/if}
+					{#if activeTagPipeIndex !== null && activeTagSegmentIndex !== null && activeTagId}
+						{#each [getTagById(activeTagPipeIndex, activeTagSegmentIndex, activeTagId)] as tag}
+						{#if tag}
+							<div class="form-group">
+								<label class="form-label">Tag Type</label>
+								<span class="tag-type-display" style="color: {tag.spec.color}">[{tag.spec.name}]</span>
+							</div>
+							{#if tag.spec.usePrompt}
+								<div class="form-group">
+									<label class="form-label">Prompt</label>
+									<textarea bind:value={tagPrompt} placeholder="Enter prompt..."></textarea>
+								</div>
+							{:else}
+								<div class="form-group">
+									<label class="form-label">Value</label>
+									<input type="number" bind:value={tagValue} step="0.1" />
+								</div>
 							{/if}
 						{/if}
+						{/each}
 					{/if}
 				</div>
 				<div class="modal-footer">
