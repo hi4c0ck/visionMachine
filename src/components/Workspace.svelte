@@ -63,14 +63,14 @@
 			// Get user profile first
 			if (!userProfileId) {
 				const profileResult = await invoke('get_user_profile', {
-					userName: userName
+					input: { userName }
 				});
 				userProfileId = profileResult as string;
 			}
 
 			// Call backend to get projects with profile_id
 			const result = await invoke('list_projects', {
-				profile_id: userProfileId
+				input: { profile_id: userProfileId }
 			});
 			const backendProjects = result as any[];
 
@@ -90,7 +90,7 @@
 			for (const proj of projects) {
 				try {
 					const filesResult = await invoke('list_project_files', {
-						projectId: proj.id
+						input: { projectId: proj.id }
 					});
 					const files = (filesResult as any[]).map((f: any) => ({
 						id: f.id,
@@ -250,7 +250,7 @@
 				// Get user profile if not loaded
 				if (!userProfileId) {
 					const profileResult = await invoke('get_user_profile', {
-						userName: userName
+						input: { userName }
 					});
 					userProfileId = profileResult as string;
 				}
@@ -459,7 +459,9 @@
 	async function handleDeleteSession(projectId: string, sessionId: string) {
 		try {
 			// Delete via backend
-			await invoke('delete_session', { session_id: sessionId });
+				await invoke('delete_session', {
+					input: { session_id: sessionId }
+				});
 		} catch (e) {
 			console.error('[Workspace] Failed to delete session:', e);
 		}
@@ -506,18 +508,20 @@
 		projects = updatedProjects;
 		
 		// Also try to persist to backend
-		try {
-			invoke('update_session', {
-				session_id: updatedSession.id,
-				updates: {
-					name: updatedSession.name,
-					fps: updatedSession.fps,
-					resolution: updatedSession.resolution,
-					orientation: updatedSession.orientation,
-					pipes_json: JSON.stringify(updatedSession.pipes),
-					total_generated_frames: updatedSession.totalGeneratedFrames
-				}
-			}).catch(e => console.error('[Workspace] Backend update failed:', e));
+			try {
+				invoke('update_session', {
+					input: {
+						session_id: updatedSession.id,
+						updates: {
+							name: updatedSession.name,
+							fps: updatedSession.fps,
+							resolution: updatedSession.resolution,
+							orientation: updatedSession.orientation,
+							pipes_json: JSON.stringify(updatedSession.pipes),
+							total_generated_frames: updatedSession.totalGeneratedFrames
+						}
+					}
+				}).catch(e => console.error('[Workspace] Backend update failed:', e));
 		} catch (e) {
 			console.error('[Workspace] Failed to update session backend:', e);
 		}
@@ -535,8 +539,10 @@
 			: 'C:\\Users\\user';
 	}
 
-	onMount(() => {
-		loadProjects();
+	onMount(async () => {
+		// Wait for Tauri to be ready before loading projects
+		await new Promise(resolve => setTimeout(resolve, 100));
+		await loadProjects();
 	});
 </script>
 

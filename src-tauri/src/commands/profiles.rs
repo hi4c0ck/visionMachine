@@ -6,6 +6,7 @@ use tauri::State;
 
 #[derive(Deserialize)]
 pub struct GetProfileInput {
+    #[serde(rename = "userName")]
     pub user_name: String,
 }
 

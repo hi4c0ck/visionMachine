@@ -1048,7 +1048,7 @@ async function persistToBackend(sessionId: string): Promise<void> {
 
 export async function loadSession(sessionId: string): Promise<{ errors: string[] }> {
   try {
-    const result = await invoke('get_composer', { sessionId });
+    const result = await invoke('get_composer', { input: { session_id: sessionId } });
     // Backend returns pipes with prompt_nodes, not elements
     // Convert to our nested structure
     const backendPipes = (result as any).pipes || [];
