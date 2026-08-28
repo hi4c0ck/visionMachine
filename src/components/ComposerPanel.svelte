@@ -719,7 +719,7 @@
 											{#if kf.imageSrc}
 												<img src={kf.imageSrc} alt="kf{kfSlot+1}" class="kf-img" />
 											{:else}
-												<span>k{kfSlot + 1}</span>
+												<span class="kf-label">k{kfSlot + 1}</span>
 											{/if}
 										</div>
 									{/each}
@@ -1090,11 +1090,19 @@
 		}
 
 		.kf-img {
-			width: 100%;
-			height: 100%;
-			object-fit: cover;
-			border-radius: 3px;
-		}
+				width: 100%;
+				height: 100%;
+				object-fit: cover;
+				border-radius: 3px;
+				display: block;
+			}
+
+			.kf-label {
+				font-size: 0.6rem;
+				font-family: 'JetBrains Mono', monospace;
+				color: var(--accent);
+				font-weight: 700;
+			}
 
 		@keyframes kfPulse {
 			0%, 100% { box-shadow: 0 0 0 0 rgba(89, 181, 255, 0.4); }
