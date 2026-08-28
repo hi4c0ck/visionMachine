@@ -8,7 +8,7 @@
 	import type { ProjectData, SessionData, PipeRow } from '$types';
 	import { getMaxFramesForResolution, migratePipeToTwoLayer } from '$types';
 	import { hydrateSessions, setOnUpdate } from '$lib/composerStore';
-	import { invoke } from '@tauri-apps/api/core';
+	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
 	let {
@@ -59,6 +59,12 @@
 		try {
 			loading = true;
 			error = null;
+
+			// Check if we're in Tauri environment
+			if (!isTauri()) {
+				console.warn('[Workspace] Not running in Tauri, skipping backend load');
+				return;
+			}
 
 			// Get user profile first
 			if (!userProfileId) {
