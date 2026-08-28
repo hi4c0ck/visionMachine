@@ -179,63 +179,73 @@
 
 <style>
 	* { margin: 0; padding: 0; box-sizing: border-box; }
-	
+
 	.app {
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
 		height: 100vh;
 		width: 100%;
-		background: var(--bg-primary, #2B2B2B);
+		background: var(--bg-primary);
 	}
-	
+
 	.header {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
 		padding: 16px 24px;
-		background: var(--bg-secondary, #3C3F46);
-		border-bottom: 1px solid var(--border-color, #4E525A);
+		background: var(--bg-secondary);
+		border-bottom: 1px solid var(--border);
 		height: 60px;
 		flex-shrink: 0;
 	}
-	
+
 	.logo-section {
 		display: flex;
 		align-items: center;
 		gap: 12px;
 	}
-	
+
 	.logo-text {
 		font-size: 1.2rem;
-		font-weight: bold;
-		color: var(--text-primary, #EEEEEE);
+		font-weight: 700;
+		color: var(--text-primary);
+		letter-spacing: -0.02em;
 	}
-	
+
 	.version-badge {
-		font-size: 0.75rem;
+		font-size: 0.7rem;
 		padding: 2px 8px;
-		background: var(--bg-tertiary, #4E525A);
+		background: var(--bg-tertiary);
 		border-radius: 12px;
-		color: var(--text-muted, #808080);
+		color: var(--text-muted);
+		border: 1px solid var(--border);
 	}
-	
+
 	.controls {
 		display: flex;
 		gap: 16px;
 		align-items: center;
 	}
-	
+
 	.theme-select {
-		padding: 8px 12px;
-		background: var(--bg-tertiary, #4E525A);
-		color: var(--text-primary, #EEEEEE);
-		border: 1px solid var(--border-color, #4E525A);
-		border-radius: 4px;
+		padding: 6px 12px;
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+		border: 1px solid var(--border);
+		border-radius: 6px;
 		cursor: pointer;
-		font-size: 0.9rem;
+		font-size: 0.85rem;
+		font-family: inherit;
+		transition: all var(--transition-fast);
 	}
-	
+
+	.theme-select:focus {
+		outline: none;
+		border-color: var(--accent);
+		box-shadow: 0 0 0 2px var(--accent-glow);
+	}
+
 	.main {
 		flex: 1;
 		display: flex;
@@ -243,82 +253,92 @@
 		justify-content: center;
 		padding: 32px;
 		overflow: auto;
-		background: var(--bg-primary, #2B2B2B);
+		background: var(--bg-primary);
 	}
-	
+
 	.welcome-card {
 		text-align: center;
 		max-width: 400px;
 		width: 100%;
 		padding: 40px;
-		background: var(--bg-secondary, #3C3F46);
-		border-radius: 12px;
-		border: 1px solid var(--border-color, #4E525A);
+		background: var(--bg-secondary);
+		border-radius: 14px;
+		border: 1px solid var(--border);
+		box-shadow: var(--shadow-md);
 	}
-	
+
 	.welcome-title {
-		font-size: 2rem;
+		font-size: 1.8rem;
 		margin-bottom: 16px;
-		color: var(--text-primary, #EEEEEE);
+		color: var(--text-primary);
+		font-weight: 700;
+		letter-spacing: -0.02em;
 	}
-	
+
 	.hint {
 		font-size: 0.9rem;
-		color: var(--text-muted, #808080);
+		color: var(--text-muted);
 		margin-bottom: 24px;
 	}
-	
+
 	.input {
 		width: 100%;
 		padding: 12px 16px;
 		margin-bottom: 16px;
-		background: var(--bg-primary, #2B2B2B);
-		border: 1px solid var(--border-color, #4E525A);
-		border-radius: 6px;
-		color: var(--text-primary, #EEEEEE);
+		background: var(--bg-primary);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		color: var(--text-primary);
 		font-size: 1rem;
+		font-family: inherit;
+		transition: all var(--transition-fast);
 	}
-	
+
 	.input:focus {
 		outline: none;
-		border-color: var(--accent-primary, #59B5FF);
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px var(--accent-glow);
 	}
-	
+
 	.btn {
 		padding: 12px 32px;
 		font-size: 1rem;
-		font-weight: 500;
-		border-radius: 6px;
+		font-weight: 600;
+		border-radius: 8px;
 		cursor: pointer;
-		transition: all 0.2s;
+		transition: all var(--transition-fast);
 		border: none;
+		font-family: inherit;
 	}
-	
+
 	.btn-primary {
-		background: var(--accent-primary, #59B5FF);
-		color: var(--text-inverse, #FFFFFF);
+		background: var(--gradient-accent);
+		color: #fff;
+		box-shadow: 0 4px 16px var(--accent-glow);
 	}
-	
+
 	.btn-primary:hover:not(:disabled) {
-		background: var(--accent-primary-hover, #7EC8FF);
+		box-shadow: 0 6px 24px var(--accent-glow);
 		transform: translateY(-1px);
 	}
-	
+
 	.btn-primary:active:not(:disabled) {
 		transform: translateY(0);
 	}
-	
+
 	.btn-primary:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
 		transform: none;
+		box-shadow: none;
 	}
-	
+
 	.error-banner {
 		padding: 12px;
 		background: rgba(220, 38, 38, 0.1);
-		color: #dc2626;
+		color: #ff6b6b;
 		text-align: center;
 		border-bottom: 1px solid rgba(220, 38, 38, 0.3);
+		font-size: 13px;
 	}
 </style>

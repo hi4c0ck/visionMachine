@@ -611,7 +611,7 @@
 		height: 100vh;
 		width: 100%;
 		overflow: hidden;
-		background: var(--bg-primary, #2B2B2B);
+		background: var(--bg-primary);
 	}
 
 	.workspace-body {
@@ -621,20 +621,23 @@
 	}
 
 	.left-column {
-		width: 280px;
+		width: 240px;
 		min-width: 200px;
-		max-width: 400px;
+		max-width: 320px;
 		display: flex;
 		flex-direction: column;
-		background: var(--bg-secondary, #252526);
-		border-right: 1px solid var(--border-color, #3c3c3c);
+		background: var(--bg-secondary);
+		border-right: 1px solid var(--panel-left-border);
+		box-shadow: var(--shadow-panel-left);
 	}
 
 	.composer-area {
 		flex: 1;
 		position: relative;
 		overflow: hidden;
-		background: var(--bg-primary, #1a1a1a);
+		background: var(--panel-center-bg);
+		border-left: 1px solid var(--panel-center-border);
+		border-right: 1px solid var(--panel-right-border);
 	}
 
 	.composer-empty {
@@ -643,25 +646,30 @@
 		align-items: center;
 		justify-content: center;
 		height: 100%;
-		color: var(--text-muted, #808080);
-		gap: 12px;
+		color: var(--text-muted);
+		gap: 16px;
 	}
 
 	.empty-icon {
 		font-size: 64px;
-		opacity: 0.5;
+		opacity: 0.4;
+		filter: drop-shadow(0 0 20px var(--accent-glow));
 	}
 
 	.empty-icon h2 {
-		font-size: 24px;
+		font-size: 22px;
 		font-weight: 600;
-		color: var(--text-primary, #ffffff);
+		color: var(--text-primary);
 		margin: 0;
+		letter-spacing: -0.02em;
 	}
 
 	.empty-icon p {
-		font-size: 14px;
-		margin: 0;
+		font-size: 13px;
+		color: var(--text-secondary);
+		max-width: 280px;
+		text-align: center;
+		line-height: 1.5;
 	}
 </style>
 

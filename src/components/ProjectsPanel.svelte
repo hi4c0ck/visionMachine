@@ -208,7 +208,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: var(--bg-secondary, #2A2A2E);
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--panel-left-border);
   }
 
   .panel-header {
@@ -216,71 +217,81 @@
     justify-content: space-between;
     align-items: center;
     padding: 10px 12px;
-    border-bottom: 1px solid var(--border-color, #3A3A3F);
+    border-bottom: 1px solid var(--panel-left-border);
+    background: var(--panel-left-bg);
   }
 
   .panel-title {
     font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted, #808080);
+    font-weight: 700;
+    color: var(--panel-left-text);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.12em;
   }
 
   .add-btn {
-    width: 24px;
-    height: 24px;
-    border-radius: 4px;
-    background: var(--accent-primary, #59B5FF);
-    color: #fff;
-    border: none;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    background: var(--panel-left-border);
+    color: var(--panel-left-text);
+    border: 1px solid var(--panel-left-border);
     cursor: pointer;
-    font-size: 16px;
+    font-size: 14px;
+    font-weight: 600;
     display: flex;
     align-items: center;
     justify-content: center;
+    transition: all var(--transition-fast);
   }
 
   .add-btn:hover {
-    background: var(--accent-primary-hover, #7EC8FF);
+    background: var(--panel-left-active);
+    border-color: var(--panel-left-text);
+    box-shadow: 0 0 8px var(--panel-left-border);
   }
 
   /* Projects List */
   .projects-list {
     flex: 1;
     overflow-y: auto;
-    padding: 8px;
+    padding: 6px;
   }
 
   .project-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
-    border-radius: 4px;
+    padding: 7px 10px;
+    border-radius: 6px;
     cursor: pointer;
-    margin-bottom: 4px;
-    transition: all 0.15s;
+    margin-bottom: 2px;
+    transition: all var(--transition-fast);
     position: relative;
+    border: 1px solid transparent;
   }
 
   .project-item:hover {
-    background: var(--bg-hover, #3A3A3F);
+    background: var(--panel-left-active);
+    border-color: var(--panel-left-border);
   }
 
   .project-item.selected {
-    background: rgba(89, 181, 255, 0.15);
-    border-left: 3px solid var(--accent-primary, #59B5FF);
+    background: var(--panel-left-active);
+    border-left: 2px solid var(--panel-left-text);
+    border-color: var(--panel-left-border);
   }
 
   .project-icon {
-    font-size: 14px;
+    font-size: 13px;
+    opacity: 0.8;
   }
 
   .project-name {
     flex: 1;
     font-size: 12px;
-    color: var(--text-primary, #EEEEEE);
+    color: var(--text-primary);
+    font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -288,19 +299,25 @@
 
   .session-count {
     font-size: 10px;
-    color: var(--text-muted, #606060);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    padding: 1px 5px;
+    border-radius: 8px;
+    min-width: 18px;
+    text-align: center;
   }
 
   .delete-project-btn {
     background: none;
     border: none;
-    color: var(--text-muted, #606060);
+    color: var(--text-muted);
     cursor: pointer;
-    font-size: 14px;
+    font-size: 13px;
     padding: 2px 4px;
-    border-radius: 2px;
+    border-radius: 3px;
     opacity: 0;
-    transition: opacity 0.15s;
+    transition: opacity var(--transition-fast);
+    line-height: 1;
   }
 
   .project-item:hover .delete-project-btn {
@@ -309,64 +326,70 @@
 
   .delete-project-btn:hover {
     background: rgba(220, 38, 38, 0.2);
-    color: #dc2626;
+    color: #ff6b6b;
   }
 
   /* Sessions Container */
   .sessions-container {
-    margin-left: 16px;
+    margin-left: 12px;
     padding-left: 8px;
-    border-left: 1px solid var(--border-color, #3A3A3F);
+    border-left: 1px solid var(--panel-left-border);
   }
 
   .session-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-radius: 4px;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 5px;
     cursor: pointer;
-    margin-bottom: 2px;
-    transition: all 0.15s;
+    margin-bottom: 1px;
+    transition: all var(--transition-fast);
+    border: 1px solid transparent;
   }
 
   .session-item:hover {
-    background: var(--bg-hover, #3A3A3F);
+    background: var(--panel-left-active);
+    border-color: var(--panel-left-border);
   }
 
   .session-item.selected {
-    background: rgba(89, 181, 255, 0.15);
+    background: var(--panel-left-active);
+    border-color: var(--panel-left-border);
   }
 
   .session-icon {
-    font-size: 12px;
+    font-size: 11px;
+    opacity: 0.7;
   }
 
   .session-name-input {
     flex: 1;
-    font-size: 12px;
-    color: var(--text-primary, #EEEEEE);
+    font-size: 11px;
+    color: var(--text-primary);
     background: transparent;
     border: none;
     outline: none;
     padding: 2px 4px;
+    font-family: inherit;
   }
 
   .session-name-input:focus {
-    background: var(--bg-primary, #1A1A1D);
-    border-radius: 2px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
   }
 
   .delete-session-btn {
     background: none;
     border: none;
-    color: var(--text-muted, #606060);
+    color: var(--text-muted);
     cursor: pointer;
-    font-size: 12px;
-    padding: 2px 4px;
+    font-size: 11px;
+    padding: 1px 3px;
     border-radius: 2px;
     opacity: 0;
-    transition: opacity 0.15s;
+    transition: opacity var(--transition-fast);
+    line-height: 1;
   }
 
   .session-item:hover .delete-session-btn {
@@ -375,59 +398,63 @@
 
   .delete-session-btn:hover {
     background: rgba(220, 38, 38, 0.2);
-    color: #dc2626;
+    color: #ff6b6b;
   }
 
   .add-session-btn {
     width: 100%;
-    padding: 6px;
+    padding: 5px;
     background: transparent;
-    border: 1px dashed var(--border-color, #3A3A3F);
-    border-radius: 4px;
-    color: var(--text-muted, #808080);
+    border: 1px dashed var(--panel-left-border);
+    border-radius: 5px;
+    color: var(--panel-left-text);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 10px;
     margin-top: 4px;
-    transition: all 0.15s;
+    transition: all var(--transition-fast);
+    font-family: inherit;
   }
 
   .add-session-btn:hover {
-    border-color: var(--accent-primary, #59B5FF);
-    color: var(--accent-primary, #59B5FF);
-    background: rgba(89, 181, 255, 0.05);
+    border-color: var(--panel-left-text);
+    background: var(--panel-left-active);
   }
 
   /* Empty State */
   .empty-state {
-    padding: 20px;
+    padding: 24px 16px;
     text-align: center;
   }
 
   .empty-state p {
     font-size: 12px;
-    color: var(--text-muted, #606060);
+    color: var(--text-muted);
     margin-bottom: 12px;
   }
 
   .btn-create {
     padding: 8px 16px;
-    background: var(--accent-primary, #59B5FF);
-    color: #fff;
-    border: none;
-    border-radius: 4px;
+    background: var(--panel-left-border);
+    color: var(--panel-left-text);
+    border: 1px solid var(--panel-left-border);
+    border-radius: 6px;
     cursor: pointer;
     font-size: 12px;
+    font-weight: 500;
+    transition: all var(--transition-fast);
   }
 
   .btn-create:hover {
-    background: var(--accent-primary-hover, #7EC8FF);
+    background: var(--panel-left-active);
+    box-shadow: 0 0 12px var(--panel-left-border);
   }
 
   /* Modal */
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -435,15 +462,15 @@
   }
 
   .modal {
-    background: var(--bg-secondary, #2A2A2E);
-    border: 1px solid var(--border-color, #4E525A);
-    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-light);
+    border-radius: 12px;
     width: 400px;
     max-width: 90vw;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-lg);
   }
 
   .modal-header {
@@ -451,54 +478,63 @@
     justify-content: space-between;
     align-items: center;
     padding: 14px 16px;
-    border-bottom: 1px solid var(--border-color, #3A3A3F);
+    border-bottom: 1px solid var(--border);
   }
 
   .modal-title {
     font-size: 14px;
     font-weight: 600;
-    color: var(--text-primary, #EEEEEE);
+    color: var(--text-primary);
   }
 
   .modal-close {
     background: none;
     border: none;
-    color: var(--text-muted, #808080);
+    color: var(--text-muted);
     font-size: 20px;
     cursor: pointer;
+    padding: 4px;
+    line-height: 1;
+  }
+
+  .modal-close:hover {
+    color: var(--text-primary);
   }
 
   .modal-body {
-    padding: 14px 16px;
+    padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
   .form-label {
-    font-size: 11px;
-    color: var(--text-muted, #808080);
+    font-size: 10px;
+    color: var(--text-muted);
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   .modal-input {
     width: 100%;
     padding: 10px 12px;
-    background: var(--bg-tertiary, #3A3A3F);
-    border: 1px solid var(--border-color, #3A3A3F);
-    border-radius: 4px;
-    color: var(--text-primary, #EEEEEE);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
     font-size: 13px;
+    font-family: inherit;
   }
 
   .modal-input:focus {
     outline: none;
-    border-color: var(--accent-primary, #59B5FF);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
   }
 
   .path-input {
-    font-family: monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
   }
 
@@ -508,51 +544,60 @@
     gap: 8px;
     cursor: pointer;
     font-size: 12px;
-    color: var(--text-secondary, #BFBFBF);
+    color: var(--text-secondary);
   }
 
   .path-section {
-    margin-top: 8px;
+    margin-top: 4px;
   }
 
   .modal-footer {
     padding: 12px 16px;
-    border-top: 1px solid var(--border-color, #3A3A3F);
+    border-top: 1px solid var(--border);
     display: flex;
     justify-content: flex-end;
     gap: 10px;
   }
 
   .btn-cancel {
-    padding: 8px 18px;
-    background: var(--bg-tertiary, #3A3A3F);
-    color: var(--text-secondary, #BFBFBF);
-    border: 1px solid var(--border-color, #3A3A3F);
-    border-radius: 4px;
+    padding: 8px 16px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
     cursor: pointer;
     font-size: 13px;
+    font-family: inherit;
+    transition: all var(--transition-fast);
   }
 
   .btn-cancel:hover {
-    background: var(--bg-hover, #3A3A3F);
+    background: var(--bg-hover);
+    border-color: var(--border-light);
   }
 
   .btn-confirm {
-    padding: 8px 18px;
-    background: var(--accent-primary, #59B5FF);
+    padding: 8px 16px;
+    background: var(--gradient-accent);
     color: #fff;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    transition: all var(--transition-fast);
   }
 
   .btn-confirm:hover:not(:disabled) {
-    background: var(--accent-primary-hover, #7EC8FF);
+    box-shadow: var(--shadow-glow);
+    transform: translateY(-1px);
   }
 
   .btn-confirm:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
   }
 </style>
