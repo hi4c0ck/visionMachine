@@ -59,6 +59,8 @@
 	let pipes = $derived(session?.pipes ?? []);
 	let totalFrames = $derived(pipes[0]?.lengthFrames ?? 121);
 
+	// Force reactivity by tracking session updatedAt
+	let sessionVersion = $derived(session?.updatedAt ?? 0);
 	// Toast/notification state
 	let toastMessage = $state<string | null>(null);
 	let toastType = $state<'success' | 'error'>('success');
@@ -256,6 +258,18 @@
 		activeSegmentAddPipeIndex = null;
 		newSegmentStart = 0;
 		newSegmentEnd = 121;
+	}
+
+	// Open tag modal for a specific segment
+	function openAddTagForSegment(pipeIndex: number, segmentIndex: number) {
+		const pipe = pipes[pipeIndex];
+		if (!pipe) return;
+		const timeline = getTimelineElement(pipe);
+		if (!timeline || !timeline.segments[segmentIndex]) return;
+		// Open the tag modal to add a new tag to this segment
+		activeSegmentAddPipeIndex = pipeIndex;
+		showTagModal = true;
+		// We'll handle this in the tag modal
 	}
 
 	async function removeSegmentAction(pipeIndex: number, segmentId: string) {
@@ -758,9 +772,33 @@
 													{/each}
 												</div>
 											</div>
+										{:else}
+											<!-- Empty track for this tag type -->
+											<div class="track-row track-empty">
+												<span class="track-tag" style="color: {TAG_SPECIFICATIONS[tagType].color}">
+													{TAG_SPECIFICATIONS[tagType].name}
+												</span>
+												<div class="track-bar-wrap track-bar-empty">
+													<span class="empty-hint">No {TAG_SPECIFICATIONS[tagType].name} tags</span>
+												</div>
+											</div>
 										{/if}
 									{/each}
 								{/each}
+
+								<!-- Show all segments even without tags -->
+								{#if timeline.segments.length > 0}
+									<div class="segments-summary">
+										<span class="summary-label">Segments ({timeline.segments.length}):</span>
+										{#each timeline.segments as segment, segIdx (segment.id)}
+											<div class="segment-chip" onclick={() => openAddTagForSegment(pipeIdx, segIdx)}>
+												<span class="seg-range">{segment.frameStart}-{segment.frameEnd}</span>
+												<span class="seg-tags-count">{segment.tags.length} tags</span>
+												<button class="add-tag-mini" title="Add tag">+</button>
+											</div>
+										{/each}
+									</div>
+								{/if}
 
 								<!-- Add segment button -->
 								<div class="add-segment-row">
@@ -1192,6 +1230,86 @@
 		}
 
 		.add-seg-btn:hover {
+			border-color: var(--accent);
+			color: var(--accent);
+		}
+
+		/* ── Empty track hints ─────────────────────────────────────────── */
+		.track-empty {
+			opacity: 0.6;
+		}
+
+		.track-bar-empty {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.empty-hint {
+			font-size: 0.55rem;
+			color: var(--text-muted);
+			font-style: italic;
+		}
+
+		/* ── Segments summary ──────────────────────────────────────────── */
+		.segments-summary {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 6px;
+			align-items: center;
+			margin-top: 8px;
+			padding-top: 8px;
+			border-top: 1px solid var(--border);
+		}
+
+		.summary-label {
+			font-size: 0.6rem;
+			color: var(--text-muted);
+			font-weight: 600;
+		}
+
+		.segment-chip {
+			display: flex;
+			align-items: center;
+			gap: 4px;
+			padding: 4px 8px;
+			background: var(--bg-primary);
+			border: 1px solid var(--border);
+			border-radius: 4px;
+			font-size: 0.6rem;
+			cursor: pointer;
+			transition: all 0.15s;
+		}
+
+		.segment-chip:hover {
+			border-color: var(--accent);
+		}
+
+		.seg-range {
+			color: var(--text-primary);
+			font-family: 'JetBrains Mono', monospace;
+		}
+
+		.seg-tags-count {
+			color: var(--text-muted);
+		}
+
+		.add-tag-mini {
+			width: 14px;
+			height: 14px;
+			border-radius: 50%;
+			border: 1px solid var(--border);
+			background: transparent;
+			color: var(--text-muted);
+			font-size: 10px;
+			cursor: pointer;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			transition: all 0.15s;
+		}
+
+		.add-tag-mini:hover {
 			border-color: var(--accent);
 			color: var(--accent);
 		}
