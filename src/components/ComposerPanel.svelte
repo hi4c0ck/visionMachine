@@ -588,6 +588,13 @@
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeGlobal:', result.errors);
 	}
 
+	async function handleRemoveSegment(idx: number, segId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeSegmentAction(session.id, pipe.id, segId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeSegment:', result.errors);
+	}
+
 	async function handleToggleGlobal(idx: number, globalId: string) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
