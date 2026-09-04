@@ -80,7 +80,7 @@ export interface KeyframeService {
   move(sessionId: string, pipeId: string, keyframeId: string, newFrame: number): Promise<ServiceResult>;
 }
 
-// ── Subject Reference Service Interface ───────────────────────────────────────
+// ── Subject Reference Service Interface ──────────────────────────────────────
 
 export interface SubjectReferenceService {
   add(sessionId: string, pipeId: string, imageUrl: string, useFrames: boolean, frameStart?: number, frameEnd?: number): Promise<ServiceResult>;

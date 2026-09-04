@@ -274,9 +274,9 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   // Subject reference operations
-  async addSubjectRef(sessionId: string, pipeId: string, name: string, imageUrl: string, frameStart: number, frameEnd: number): Promise<ServiceResult> {
+  async addSubjectRef(sessionId: string, pipeId: string, imageUrl: string, useFrames: boolean, frameStart?: number, frameEnd?: number): Promise<ServiceResult> {
     const s = this.getService(sessionId);
-    const result = await s.subjectRefs.add(sessionId, pipeId, name, imageUrl, frameStart, frameEnd);
+    const result = await s.subjectRefs.add(sessionId, pipeId, imageUrl, useFrames, frameStart, frameEnd);
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }

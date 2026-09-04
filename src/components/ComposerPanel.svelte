@@ -284,7 +284,7 @@
 			await updateSubjectRefUrlAction(session.id, pipe.id, editingSubjectRefId, srImageUrl);
 			await updateSubjectRefUseFramesAction(session.id, pipe.id, editingSubjectRefId, srUseFrames);
 		} else {
-			result = await addSubjectRefAction(session.id, pipe.id, '', srImageUrl, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
+			result = await addSubjectRefAction(session.id, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
 		}
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] confirmSubjectRef:', result.errors);
