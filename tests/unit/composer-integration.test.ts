@@ -234,9 +234,11 @@ describe('Composer Integration', () => {
       await addSegment(session.id, session.pipes[0].id, 0, 120);
 
       const pipe = session.pipes[0];
+      // Try to add overlapping segment - should fail
       const result = await addSegment(session.id, pipe.id, 5, 125);
 
-      expect(result.errors).toHaveLength(0);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(pipe.elements[0].segments).toHaveLength(1);
       expect(pipe.elements[0].segments[0].frameStart).toBe(0);
       expect(pipe.elements[0].segments[0].frameEnd).toBe(120);
     });

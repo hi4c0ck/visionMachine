@@ -1,13 +1,13 @@
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { resolve } from 'path';
+import type { PluginOption } from 'vite';
 
 export default defineConfig({
-  plugins: [svelte({
-    compilerOptions: {
-      dev: false,
-    },
-  })],
+  plugins: [
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    svelte({ compilerOptions: { dev: false } }) as any,
+  ],
   test: {
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],

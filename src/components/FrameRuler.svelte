@@ -32,8 +32,8 @@
 	// Segment positions for visualization on ruler
 	let segmentPositions = $derived(
 		(segments || []).map((seg: any) => ({
-			start: (seg.frameStart / totalFrames) * 100,
-			end: (seg.frameEnd / totalFrames) * 100,
+			start: (seg.frameStart / (totalFrames - 1)) * 100,
+			end: (seg.frameEnd / (totalFrames - 1)) * 100,
 			color: seg.tags?.length > 0 ? seg.tags[0]?.spec?.color ?? '#59B5FF' : '#59B5FF'
 		}))
 	);
@@ -85,14 +85,14 @@
 			</div>
 		{/each}
 
-		<div class="playhead" style="left: {(selectedFrame / totalFrames) * 100}%">
+		<div class="playhead" style="left: {(selectedFrame / (totalFrames - 1)) * 100}%">
 			<div class="playhead-tip"></div>
 			<div class="playhead-line"></div>
 		</div>
 	</div>
 
 	{#if hoveredFrame !== null}
-		<div class="tooltip" style="left: {(hoveredFrame / totalFrames) * 100}%">
+		<div class="tooltip" style="left: {(hoveredFrame / (totalFrames - 1)) * 100}%">
 			<span>Frame {hoveredFrame}</span>
 		</div>
 	{/if}

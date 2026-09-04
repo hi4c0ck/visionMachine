@@ -354,13 +354,8 @@
 				{#if global}
 					<div class="global-track">
 						<div class="global-bar" title="Global style — spans frames 0–{totalFrames - 1}">
-							{#if global.value}
-								<span class="global-text">{global.value}</span>
-							{:else}
-								<span class="global-placeholder">—</span>
-							{/if}
-							<button class="btn-icon-sm" onclick={() => { /* edit global */ }} title="Edit global">✎</button>
-							<button class="btn-icon-sm btn-del-sm" onclick={() => handleRemoveGlobal(pipeIdx, global.id)}>×</button>
+							<span class="global-text">{global.value || '—'}</span>
+							<button class="btn-icon-sm btn-del-sm" onclick={() => handleRemoveGlobal(pipeIdx, global.id)} title="Remove global">×</button>
 						</div>
 					</div>
 				{/if}

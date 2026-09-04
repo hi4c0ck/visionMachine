@@ -15,8 +15,8 @@ import {
   clampLength,
   validateSegments,
   validateKeyframe,
-  frameToX,
-  xToFrame,
+  frameToPercent,
+  percentToFrame,
   getMaxFrames,
   getMaxSegmentEnd,
   isValidSegmentBoundary,
@@ -156,7 +156,7 @@ describe('validateSegments', () => {
     ];
     const result = validateSegments(segments, maxEnd121);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('240') || e.includes('max usable'))).toBe(true);
+    expect(result.errors.some(e => e.includes('120') || e.includes('max usable'))).toBe(true);
   });
 
   it('should reject non-multiple-of-8 boundaries', () => {
@@ -237,22 +237,22 @@ describe('validateKeyframe', () => {
   });
 });
 
-// ── frameToX / xToFrame ──────────────────────────────────────────────────────
+// ── frameToPercent / percentToFrame ───────────────────────────────────────────
 
-describe('frameToX / xToFrame', () => {
+describe('frameToPercent / percentToFrame', () => {
   it('should convert frame to percentage using totalFrames-1 as denominator', () => {
     // frame 0 → 0%, frame 120 → 100% (for totalFrames=121, denom=120)
-    expect(frameToX(0, 121)).toBe(0);
-    expect(frameToX(120, 121)).toBe(100);
-    expect(frameToX(60, 121)).toBeCloseTo(50, 1);
+    expect(frameToPercent(0, 121)).toBe(0);
+    expect(frameToPercent(120, 121)).toBe(100);
+    expect(frameToPercent(60, 121)).toBeCloseTo(50, 1);
   });
 
   it('should convert percentage back to snapped multiple of 8', () => {
-    // xToFrame snaps to snapTo8 (multiple of 8)
-    expect(xToFrame(0, 121)).toBe(0);
+    // percentToFrame snaps to snapTo8 (multiple of 8)
+    expect(percentToFrame(0, 121)).toBe(0);
     // 50% of 120 = 60 → snapTo8(60) = 56
-    expect(xToFrame(50, 121)).toBe(56);
-    expect(xToFrame(100, 121)).toBe(120);
+    expect(percentToFrame(50, 121)).toBe(56);
+    expect(percentToFrame(100, 121)).toBe(120);
   });
 });
 
