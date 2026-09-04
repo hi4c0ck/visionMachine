@@ -133,14 +133,19 @@ export interface Segment {
 }
 
 /**
- * Global style element — applies to entire pipe (top tier)
- * Only one allowed per pipe
+ * Global style element — temporal range spanning part or all of the pipe.
+ * Uses MultiThumbSlider for draggable/resizable range.
  */
 export interface GlobalElement {
   id: string;
   tag: 'global_style';
-  value: string;
+  /** Start frame (multiple of 8) */
+  frameStart: number;
+  /** End frame (multiple of 8, ≤ totalFrames - 1) */
+  frameEnd: number;
   enabled: boolean;
+  /** Legacy text value — kept for backward compat, not used in new UI */
+  value?: string;
 }
 
 /**
@@ -173,9 +178,23 @@ export interface PipeKeyframe {
   status: GenerationStatus;
 }
 
+export interface SubjectReference {
+  id: string;
+  /** Image URL for the reference */
+  imageUrl: string;
+  /** Whether to use frame range for this reference */
+  useFrames: boolean;
+  /** Start frame (multiple of 8) — only used when useFrames=true */
+  frameStart?: number;
+  /** End frame (multiple of 8) — only used when useFrames=true */
+  frameEnd?: number;
+  /** Visible toggle */
+  visible: boolean;
+}
+
 /**
  * A single pipe row in the composer
- * Contains: keyframes, settings, and pipeline elements (Global and/or Timeline)
+ * Contains: keyframes, subject references, settings, and pipeline elements (Global OR Timeline)
  */
 export interface PipeRow {
   id: string;
@@ -184,6 +203,8 @@ export interface PipeRow {
   qValue: number;    // num_inference_steps
   cValue: number;    // cfg_scale
   keyframes: PipeKeyframe[];
+  /** Subject references — max 5, each with its own temporal range */
+  subjectReferences: SubjectReference[];
   elements: PipeElement[];
   orderIndex: number;
 }

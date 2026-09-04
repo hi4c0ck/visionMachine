@@ -1,14 +1,16 @@
 <script lang="ts">
-	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment } from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, SubjectReference } from '$types';
 	import { TAG_SPECIFICATIONS } from '$types';
 	import FrameRuler from './FrameRuler.svelte';
+	import MultiThumbSlider from './MultiThumbSlider.svelte';
 	import {
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
 		addKeyframe as addKeyframeAction,
 		removeKeyframe as removeKeyframeAction,
 		addGlobalElement as addGlobalElementAction,
-		updateGlobalElement as updateGlobalElementAction,
+		updateGlobalRange as updateGlobalRangeAction,
+		toggleGlobalElement as toggleGlobalElementAction,
 		removeGlobalElement as removeGlobalElementAction,
 		addTimelineElement as addTimelineElementAction,
 		addSegment as addSegmentAction,
@@ -16,12 +18,19 @@
 		addTagElement as addTagElementAction,
 		removeTagElement as removeTagElementAction,
 		updateTagPrompt as updateTagPromptAction,
+		addSubjectRef as addSubjectRefAction,
+		updateSubjectRefRange as updateSubjectRefRangeAction,
+		removeSubjectRef as removeSubjectRefAction,
+		toggleSubjectRef as toggleSubjectRefAction,
+		updateSubjectRefUrl as updateSubjectRefUrlAction,
+		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 	} from '$lib/composerStore';
 	import { snapTo8 } from '$lib/frameMath';
 
 	let { session }: { session?: SessionData } = $props();
 
 	const MAX_KEYFRAMES = 3;
+	const MAX_SUBJECT_REFS = 5;
 	const DEFAULT_FRAME_COUNT = 241;
 
 	// ── Derived state ────────────────────────────────────────────────────────
@@ -38,6 +47,14 @@
 	let kfValue = $state('');
 	let kfFrame = $state(0);
 
+	// Subject reference modal
+	let showSubjectRefModal = $state(false);
+	let editingSubjectRefId = $state<string | null>(null);
+	let srImageUrl = $state('');
+	let srUseFrames = $state(false);
+	let srStart = $state(0);
+	let srEnd = $state(8);
+
 	// Segment modal
 	let showSegmentModal = $state(false);
 	let segStart = $state(0);
@@ -51,9 +68,6 @@
 
 	// [+] menu
 	let showAddMenu = $state(false);
-	let addMenuRef = $state<{ x: number; y: number } | null>(null);
-
-	// [+] menu position tracking (relative to window)
 	let addMenuX = $state(0);
 	let addMenuY = $state(0);
 
@@ -72,7 +86,7 @@
 
 	// ── Helpers ─────────────────────────────────────────────────────────────
 
-	/** Check if a keyframe at a given slot is "configured" (has the required data) */
+	/** Check if a keyframe at a given slot is "configured" */
 	function isKeyframeConfigured(pipe: PipeRow, slotIndex: number): boolean {
 		const kf = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === slotIndex);
 		if (!kf) return false;
@@ -84,11 +98,7 @@
 		}
 	}
 
-	/**
-	 * Return which keyframe slot numbers are currently visible.
-	 * Slot 1 always visible. Slot N visible only when slot N-1 is configured.
-	 * Maximum MAX_KEYFRAMES slots.
-	 */
+	/** Return visible keyframe slots (progressive unlock) */
 	function getVisibleKeyframeSlots(pipe: PipeRow): number[] {
 		const visible: number[] = [];
 		for (let i = 1; i <= MAX_KEYFRAMES; i++) {
@@ -97,11 +107,23 @@
 			} else if (isKeyframeConfigured(pipe, i - 1)) {
 				visible.push(i);
 			} else {
-				break; // stop: previous slot not configured yet
+				break;
 			}
 		}
 		return visible;
 	}
+
+	/** Return visible subject reference slots (max 5, no progressive unlock) */
+		function getVisibleSubjectRefSlots(pipe: PipeRow): number[] {
+			const count = (pipe.subjectReferences ?? []).filter(r => r.visible !== false).length;
+			const slots: number[] = [];
+			for (let i = 1; i <= MAX_SUBJECT_REFS; i++) {
+				if (i <= count) slots.push(i);
+				else if (i === count + 1) slots.push(i); // show next empty slot
+				else break;
+			}
+			return slots;
+		}
 
 	function getTimeline(pipe: PipeRow): any {
 		return pipe.elements.find((e: any) => e.tag === 'timeline') ?? null;
@@ -133,7 +155,6 @@
 		if (!pipe || !session?.id) return;
 		activePipeIdx = idx;
 		editingKeyframeSlot = slotIndex ?? (getVisibleKeyframeSlots(pipe).length + 1);
-		// read existing if editing
 		const existing = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === editingKeyframeSlot);
 		if (existing) {
 			kfType = existing.type;
@@ -170,6 +191,69 @@
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeKeyframe:', result.errors);
 	}
 
+	// ── Subject Reference ───────────────────────────────────────────────────
+
+	function openSubjectRefModal(idx: number, refId?: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		activePipeIdx = idx;
+		const existing = refId ? (pipe.subjectReferences ?? []).find(r => r.id === refId) : null;
+		if (existing) {
+			editingSubjectRefId = existing.id;
+			srImageUrl = existing.imageUrl;
+			srUseFrames = existing.useFrames ?? false;
+			srStart = existing.frameStart ?? 0;
+			srEnd = existing.frameEnd ?? Math.min(8, totalFrames - 1);
+		} else {
+			editingSubjectRefId = null;
+			srImageUrl = '';
+			srUseFrames = false;
+			srStart = 0;
+			srEnd = Math.min(8, totalFrames - 1);
+		}
+		showSubjectRefModal = true;
+		closeMenus();
+	}
+
+	async function confirmSubjectRef() {
+		const pipe = pipes[activePipeIdx!];
+		if (!pipe || !session?.id) return;
+		if (!srImageUrl.trim()) return;
+
+		// Check max
+		if (!editingSubjectRefId && (pipe.subjectReferences?.length ?? 0) >= MAX_SUBJECT_REFS) return;
+
+		let result;
+		if (editingSubjectRefId) {
+			// Update existing
+			result = await updateSubjectRefRangeAction(session.id, pipe.id, editingSubjectRefId, srStart, srEnd);
+			await updateSubjectRefUrlAction(session.id, pipe.id, editingSubjectRefId, srImageUrl);
+			await updateSubjectRefUseFramesAction(session.id, pipe.id, editingSubjectRefId, srUseFrames);
+		} else {
+			// Add new
+			result = await addSubjectRefAction(session.id, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
+		}
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] confirmSubjectRef:', result.errors);
+			return;
+		}
+		showSubjectRefModal = false;
+	}
+
+	async function handleToggleSubjectRef(idx: number, refId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await toggleSubjectRefAction(session.id, pipe.id, refId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] toggleSubjectRef:', result.errors);
+	}
+
+	async function handleRemoveSubjectRef(idx: number, refId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeSubjectRefAction(session.id, pipe.id, refId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeSubjectRef:', result.errors);
+	}
+
 	// ── Track add menu ──────────────────────────────────────────────────────
 
 	function handleToggleAddMenu(pipeIdx: number, e: MouseEvent) {
@@ -177,7 +261,6 @@
 		showAddMenu = !showAddMenu;
 		showTagMenu = false;
 		if (showAddMenu) {
-			// Position near the [+] button
 			const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
 			addMenuX = rect.left;
 			addMenuY = rect.bottom + 4;
@@ -196,10 +279,20 @@
 	function handleAddGlobal(idx: number) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
-		addGlobalElementAction(session.id, pipe.id, '').then(r => {
+		// Add with full range
+		addGlobalElementAction(session.id, pipe.id, 0, totalFrames - 1).then(r => {
 			if (r.errors?.length) console.error('[ComposerPanel] addGlobal:', r.errors);
 		});
 		showAddMenu = false;
+	}
+
+	// ── Global range update ─────────────────────────────────────────────────
+
+	async function handleGlobalRangeUpdate(idx: number, globalId: string, values: [number, number]) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await updateGlobalRangeAction(session.id, pipe.id, globalId, values[0], values[1]);
+		if (result.errors.length > 0) console.error('[ComposerPanel] handleGlobalRangeUpdate:', result.errors);
 	}
 
 	// ── Segment ─────────────────────────────────────────────────────────────
@@ -259,7 +352,7 @@
 		const seg = tl.segments.find((s: Segment) => s.id === selectedSegmentId);
 		if (!seg) return;
 		const spec = TAG_SPECIFICATIONS[selectedTagType];
-		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, selectedTagType, spec.color, seg.frameStart, seg.frameEnd);
+		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, selectedTagType);
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] addTag:', result.errors);
 			return;
@@ -292,7 +385,7 @@
 	async function handleRemoveTag(idx: number, segId: string, tagId: string) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
-		const result = await removeTagElementAction(session.id, pipe.id, tagId);
+		const result = await removeTagElementAction(session.id, pipe.id, selectedSegmentId, tagId);
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeTag:', result.errors);
 	}
 
@@ -301,6 +394,13 @@
 		if (!pipe || !session?.id) return;
 		const result = await removeGlobalElementAction(session.id, pipe.id, globalId);
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeGlobal:', result.errors);
+	}
+
+	async function handleToggleGlobal(idx: number, globalId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await toggleGlobalElementAction(session.id, pipe.id, globalId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] toggleGlobal:', result.errors);
 	}
 </script>
 
@@ -316,45 +416,116 @@
 			</div>
 
 			<!-- ═══ KEYFRAME ROW ═══ -->
-			<div class="kf-row">
-				{#each getVisibleKeyframeSlots(pipe) as kfNum}
-					{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
-						{#if kf}
-							<!-- Configured -->
-							<div class="kf-chip kf-filled"
-								onclick={() => openKeyframeModal(pipeIdx, kfNum)}
-								title="Frame {kf.frame} · {kf.type} · Click to edit">
-								{#if kf.imageSrc}
-									<img src={kf.imageSrc} class="kf-img" alt="keyframe" />
-								{:else}
-									<span class="kf-label">k{kfNum}</span>
-								{/if}
-								<button class="kf-del"
-									onclick={(e) => { e.stopPropagation(); handleRemoveKeyframe(pipeIdx, kf.id); }}>×</button>
-							</div>
-						{:else}
-							<!-- Empty / pending slot -->
-							<div class="kf-chip kf-empty"
-								onclick={() => openKeyframeModal(pipeIdx, kfNum)}
-								title="Click to configure keyframe {kfNum}">
-								<span class="kf-empty-label">+ k{kfNum}</span>
-							</div>
-						{/if}
+			<div class="row-group">
+				<div class="row-header">
+					<span class="row-label">KEYFRAMES</span>
+					<span class="row-count">{pipe.keyframes.length}/{MAX_KEYFRAMES}</span>
+				</div>
+				<div class="kf-row">
+					{#each getVisibleKeyframeSlots(pipe) as kfNum}
+						{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
+							{#if kf}
+								<div class="kf-chip kf-filled"
+									onclick={() => openKeyframeModal(pipeIdx, kfNum)}
+									title="Frame {kf.frame} · {kf.type} · Click to edit">
+									{#if kf.imageSrc}
+										<img src={kf.imageSrc} class="kf-img" alt="keyframe" />
+									{:else}
+										<span class="kf-label">k{kfNum}</span>
+									{/if}
+									<button class="kf-del"
+										onclick={(e) => { e.stopPropagation(); handleRemoveKeyframe(pipeIdx, kf.id); }}>×</button>
+								</div>
+							{:else}
+								<div class="kf-chip kf-empty"
+									onclick={() => openKeyframeModal(pipeIdx, kfNum)}
+									title="Click to configure keyframe {kfNum}">
+									<span class="kf-empty-label">+ k{kfNum}</span>
+								</div>
+							{/if}
+						{/each}
 					{/each}
-				{/each}
+				</div>
 			</div>
+
+			<!-- ═══ SUBJECT REFERENCES ROW ═══ -->
+			{#if (pipe.subjectReferences?.length ?? 0) > 0}
+				<div class="row-group">
+					<div class="row-header">
+						<span class="row-label">SUBJECT REFERENCES</span>
+						<span class="row-count">{(pipe.subjectReferences?.filter(r => r.visible !== false).length ?? 0)}/{MAX_SUBJECT_REFS}</span>
+					</div>
+					<div class="sr-row">
+						{#each (pipe.subjectReferences ?? []) as sr (sr.id)}
+							{#if sr.visible !== false}
+								<div class="sr-chip" title="Frames {sr.frameStart ?? '—'}–{sr.frameEnd ?? '—'} · Click to edit · Eye to toggle">
+									<button class="sr-eye"
+										onclick={(e) => { e.stopPropagation(); handleToggleSubjectRef(pipeIdx, sr.id); }}
+										title={sr.visible === false ? 'Enable reference' : 'Disable reference'}>
+										{#if sr.visible === false}
+											<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.5"/></svg>
+										{:else}
+											<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+										{/if}
+									</button>
+									{#if sr.imageUrl}
+										<img src={sr.imageUrl} class="sr-img" alt="subject ref" />
+									{:else}
+										<span class="sr-dot"></span>
+									{/if}
+									{#if sr.useFrames}
+										<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>
+									{:else}
+										<span class="sr-label">full</span>
+									{/if}
+									<button class="sr-del"
+										onclick={(e) => { e.stopPropagation(); handleRemoveSubjectRef(pipeIdx, sr.id); }}>×</button>
+								</div>
+							{/if}
+						{/each}
+						{#if (pipe.subjectReferences?.length ?? 0) < MAX_SUBJECT_REFS}
+							<button class="sr-add" onclick={() => openSubjectRefModal(pipeIdx)} title="Add subject reference">
+								+ s{pipe.subjectReferences.length + 1}
+							</button>
+						{/if}
+					</div>
+				</div>
+			{:else}
+				<div class="row-group">
+					<div class="row-header">
+						<span class="row-label">SUBJECT REFERENCES</span>
+						<span class="row-count">0/{MAX_SUBJECT_REFS}</span>
+					</div>
+					<div class="sr-row">
+						<button class="sr-add" onclick={() => openSubjectRefModal(pipeIdx)} title="Add subject reference">
+							+ s1
+						</button>
+					</div>
+				</div>
+			{/if}
 
 			<!-- ═══ FRAME RULER ═══ -->
 			<div class="ruler-wrap">
 				<FrameRuler {totalFrames} selectedFrame={null} segments={[]} onframeSelect={() => {}} />
 			</div>
 
-			<!-- ═══ GLOBAL TRACK (full-width, no title) ═══ -->
+			<!-- ═══ GLOBAL TRACK ═══ -->
 			{#each [getGlobal(pipe)] as global}
 				{#if global}
 					<div class="global-track">
-						<div class="global-bar" title="Global style — spans frames 0–{totalFrames - 1}">
-							<span class="global-text">{global.value || '—'}</span>
+						<div class="global-label">GLOBAL</div>
+						<MultiThumbSlider
+											values={[global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1]}
+											min={0}
+											max={totalFrames - 1}
+											step={8}
+											color="#8b9dc3"
+											onchange={(vals) => handleGlobalRangeUpdate(pipeIdx, global.id, vals)}
+										/>
+						<div class="global-actions">
+							<button class="btn-icon-sm" onclick={() => handleToggleGlobal(pipeIdx, global.id)} title="Toggle global">
+								{#if global.enabled}◉{:else}○{/if}
+							</button>
 							<button class="btn-icon-sm btn-del-sm" onclick={() => handleRemoveGlobal(pipeIdx, global.id)} title="Remove global">×</button>
 						</div>
 					</div>
@@ -365,10 +536,14 @@
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}
 					<div class="timeline-track">
+						<div class="timeline-header">
+							<span class="row-label">TIMELINE</span>
+							<span class="segment-count">{tl.segments.length} segment</span>
+						</div>
 						<div class="segment-row-list">
 							{#each tl.segments as seg (seg.id)}
-								<div class="seg-row"
-									style="left: {(seg.frameStart / (totalFrames - 1)) * 100}%; width: {((seg.frameEnd - seg.frameStart) / (totalFrames - 1)) * 100}%;">
+								<div class="seg-row full-width"
+									style="left: 0%; width: 100%;">
 									<div class="seg-body">
 										<span class="seg-range">{seg.frameStart}–{seg.frameEnd}</span>
 										{#if seg.tags.length > 0}
@@ -398,7 +573,7 @@
 								</div>
 							{/each}
 							{#if tl.segments.length === 0}
-								<div class="seg-empty" onclick={() => handleAddSegment(pipeIdx)} role="button" tabindex="0"
+								<div class="seg-empty full-width" onclick={() => handleAddSegment(pipeIdx)} role="button" tabindex="0"
 									onkeydown={(e) => e.key === 'Enter' && handleAddSegment(pipeIdx)}>
 									<span>+ Add first segment</span>
 								</div>
@@ -406,7 +581,7 @@
 						</div>
 					</div>
 				{:else}
-					<!-- No timeline — show nothing (timeline appears only after [+] → Timeline) -->
+					<!-- No timeline — show nothing -->
 				{/if}
 			{/each}
 
@@ -499,31 +674,65 @@
 	</div>
 {/if}
 
+<!-- ═══ SUBJECT REFERENCE MODAL ═══ -->
+{#if showSubjectRefModal}
+	<div class="modal-overlay" onclick={() => showSubjectRefModal = false} role="presentation">
+		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>{editingSubjectRefId ? 'Edit Subject Reference' : 'Add Subject Reference'}</h3>
+			</div>
+			<div class="modal-body">
+				<div class="modal-field">
+					<label id="sr-url-label">Image URL</label>
+					<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-url-label" />
+				</div>
+				<div class="modal-field">
+					<label>
+						<input type="checkbox" bind:checked={srUseFrames} />
+						Use frame range
+					</label>
+				</div>
+				{#if srUseFrames}
+					<div class="modal-field">
+						<label id="sr-start-label">Start Frame</label>
+						<input type="number" bind:value={srStart} step={8} min={0} max={totalFrames - 8} class="modal-input" aria-labelledby="sr-start-label" />
+					</div>
+					<div class="modal-field">
+						<label id="sr-end-label">End Frame</label>
+						<input type="number" bind:value={srEnd} step={8} min={srStart + 8} max={totalFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />
+					</div>
+					<div class="modal-hint">
+						Duration: {srEnd - srStart} frames ({((srEnd - srStart) / 24).toFixed(1)}s @ 24fps)
+					</div>
+				{/if}
+			</div>
+			<div class="modal-actions">
+				<button class="btn-confirm" onclick={confirmSubjectRef}>Save</button>
+				<button class="btn-cancel" onclick={() => showSubjectRefModal = false}>Cancel</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
 <!-- ═══ SEGMENT MODAL ═══ -->
 {#if showSegmentModal}
 	<div class="modal-overlay" onclick={() => showSegmentModal = false} role="presentation">
 		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<div class="modal-header">
-				<h3>Add Segment</h3>
+				<h3>Add Segment <span class="modal-sub">Frames {segStart}–{segEnd}</span></h3>
 			</div>
 			<div class="modal-body">
 				<div class="modal-field">
-					<label id="seg-start-label">Start frame</label>
+					<label id="seg-start-label">Start Frame</label>
 					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 8} class="modal-input" aria-labelledby="seg-start-label" />
 				</div>
 				<div class="modal-field">
-					<label id="seg-end-label">End frame</label>
-					<input type="number" bind:value={segEnd} step={8} min={8} max={totalFrames} class="modal-input" aria-labelledby="seg-end-label" />
-				</div>
-				<div class="segment-preview">
-					<div class="preview-bar">
-						<div class="preview-seg" style="left: {(segStart / (totalFrames - 1)) * 100}%; width: {((segEnd - segStart) / (totalFrames - 1)) * 100}%"></div>
-					</div>
-					<span class="preview-range">{segStart} → {segEnd} ({segEnd - segStart} frames)</span>
+					<label id="seg-end-label">End Frame</label>
+					<input type="number" bind:value={segEnd} step={8} min={segStart + 8} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />
 				</div>
 			</div>
 			<div class="modal-actions">
-				<button class="btn-confirm" onclick={confirmSegment}>Add</button>
+				<button class="btn-confirm" onclick={confirmSegment}>Save</button>
 				<button class="btn-cancel" onclick={() => showSegmentModal = false}>Cancel</button>
 			</div>
 		</div>
@@ -539,8 +748,8 @@
 			</div>
 			<div class="modal-body">
 				<div class="modal-field">
-					<label id="prompt-label">Prompt</label>
-					<textarea bind:value={tagPrompt} placeholder="Describe what happens in this tag segment..." class="modal-textarea" aria-labelledby="prompt-label"></textarea>
+					<label id="tag-prompt-label">Prompt</label>
+					<textarea bind:value={tagPrompt} placeholder="Describe the tag's visual intent..." class="modal-textarea" aria-labelledby="tag-prompt-label"></textarea>
 				</div>
 			</div>
 			<div class="modal-actions">
@@ -552,130 +761,158 @@
 {/if}
 
 <style>
-	/* ═══ LAYOUT ═══ */
+	/* ── Main Panel ── */
 	.composer-panel {
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-		padding: 8px;
-		overflow-y: auto;
+		padding: 12px;
+		background: var(--bg-surface, #0f1117);
+		border-right: 1px solid var(--border, #2a2d37);
 		height: 100%;
+		overflow-y: auto;
+		overflow-x: hidden;
 	}
 
-	/* ═══ PIPE ═══ */
+	/* ── Pipe ── */
 	.pipe {
-		border: 1px solid var(--border);
-		border-radius: 3px;
-		background: var(--bg-secondary);
+		background: var(--bg-elevated, #161820);
+		border: 1px solid var(--border, #2a2d37);
+		border-radius: 4px;
+		padding: 10px;
+		position: relative;
 	}
 
 	.pipe.active {
-		border-color: var(--accent);
+		border-color: var(--accent, #59b5ff);
+		box-shadow: 0 0 0 1px var(--accent, #59b5ff);
 	}
 
-	/* ═══ PIPE HEADER ═══ */
+	/* ── Pipe Header ── */
 	.pipe-header {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 5px 10px;
-		background: var(--bg-tertiary);
-		border-bottom: 1px solid var(--border);
+		margin-bottom: 10px;
+		padding-bottom: 8px;
+		border-bottom: 1px solid var(--border, #2a2d37);
 	}
 
 	.pipe-label {
-		font-size: 0.65rem;
+		font-size: 11px;
 		font-weight: 600;
-		color: var(--text-primary);
+		color: var(--text-primary, #c8d0e0);
 		text-transform: uppercase;
-		letter-spacing: 0.08em;
+		letter-spacing: 0.5px;
 	}
 
 	.pipe-meta {
-		flex: 1;
-		font-size: 0.6rem;
-		color: var(--text-muted);
-		font-family: 'JetBrains Mono', monospace;
+		font-size: 10px;
+		color: var(--text-secondary, #6e7681);
+		margin-left: auto;
 	}
 
-	/* ═══ KEYFRAME ROW ═══ */
-	.kf-row {
+	/* ── Row Group ── */
+	.row-group {
+		margin-bottom: 8px;
+	}
+
+	.row-header {
 		display: flex;
 		align-items: center;
-		gap: 5px;
-		padding: 7px 10px;
-		border-bottom: 1px solid var(--border);
+		gap: 6px;
+		margin-bottom: 4px;
+		padding-left: 2px;
+	}
+
+	.row-label {
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-muted, #4a5060);
+		text-transform: uppercase;
+		letter-spacing: 0.8px;
+	}
+
+	.row-count {
+		font-size: 9px;
+		color: var(--text-secondary, #6e7681);
+		margin-left: auto;
+	}
+
+	/* ── Keyframe Row ── */
+	.kf-row {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		padding: 6px 2px;
+		background: var(--bg-muted, #1a1d26);
+		border-radius: 3px;
+		border: 1px solid var(--border, #2a2d37);
 	}
 
 	.kf-chip {
-		width: 52px;
-		height: 36px;
-		border-radius: 3px;
 		display: flex;
-		flex-direction: column;
 		align-items: center;
-		justify-content: center;
+		gap: 4px;
+		padding: 4px 8px;
+		border-radius: 3px;
 		cursor: pointer;
-		position: relative;
-		overflow: hidden;
 		transition: all 0.12s;
-		flex-shrink: 0;
+		position: relative;
+		user-select: none;
 	}
 
-	.kf-filled {
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
+	.kf-chip.kf-filled {
+		background: var(--accent-light, rgba(89, 181, 255, 0.15));
+		border: 1px solid var(--accent, #59b5ff);
 	}
 
-	.kf-filled:hover {
-		border-color: var(--accent);
+	.kf-chip.kf-filled:hover {
+		background: var(--accent-light, rgba(89, 181, 255, 0.25));
 	}
 
-	.kf-empty {
+	.kf-chip.kf-empty {
 		background: transparent;
-		border: 1px dashed var(--border);
-		color: var(--text-muted);
+		border: 1px dashed var(--border, #2a2d37);
+		color: var(--text-muted, #4a5060);
 	}
 
-	.kf-empty:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-glow);
+	.kf-chip.kf-empty:hover {
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
 	}
 
 	.kf-img {
-		width: 100%;
-		height: 100%;
+		width: 20px;
+		height: 20px;
 		object-fit: cover;
+		border-radius: 2px;
 	}
 
 	.kf-label {
-		font-size: 0.65rem;
+		font-size: 10px;
 		font-weight: 600;
-		color: var(--text-secondary);
+		color: var(--accent, #59b5ff);
 	}
 
 	.kf-empty-label {
-		font-size: 0.6rem;
-		color: var(--text-muted);
+		font-size: 10px;
+		color: var(--text-muted, #4a5060);
 	}
 
 	.kf-del {
-		position: absolute;
-		top: 1px;
-		right: 1px;
-		width: 13px;
-		height: 13px;
-		font-size: 0.55rem;
-		padding: 0;
-		background: rgba(0, 0, 0, 0.6);
-		border: none;
-		border-radius: 50%;
-		color: var(--text-muted);
-		cursor: pointer;
+		width: 14px;
+		height: 14px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		background: transparent;
+		border: none;
+		color: var(--text-muted, #4a5060);
+		cursor: pointer;
+		font-size: 12px;
+		line-height: 1;
+		border-radius: 2px;
 		opacity: 0;
 		transition: opacity 0.12s;
 	}
@@ -685,341 +922,512 @@
 	}
 
 	.kf-del:hover {
-		background: rgba(220, 38, 38, 0.8);
-		color: #fff;
+		background: rgba(255, 89, 89, 0.2);
+		color: #ff5959;
 	}
 
-	/* ═══ FRAME RULER WRAP ═══ */
+	/* ── Subject Reference Row ── */
+	.sr-row {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		padding: 6px 2px;
+		background: var(--bg-muted, #1a1d26);
+		border-radius: 3px;
+		border: 1px solid var(--border, #2a2d37);
+	}
+
+	.sr-chip {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 6px;
+		border-radius: 3px;
+		background: var(--bg-elevated, #161820);
+		border: 1px solid var(--border, #2a2d37);
+		cursor: pointer;
+		transition: all 0.12s;
+	}
+
+	.sr-chip:hover {
+		border-color: var(--accent, #59b5ff);
+	}
+
+	.sr-chip.sr-disabled {
+		opacity: 0.4;
+	}
+
+	.sr-eye {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 14px;
+		height: 14px;
+		background: transparent;
+		border: none;
+		color: var(--text-muted, #4a5060);
+		cursor: pointer;
+		padding: 0;
+	}
+
+	.sr-eye:hover {
+		color: var(--accent, #59b5ff);
+	}
+
+	.sr-img {
+		width: 20px;
+		height: 20px;
+		object-fit: cover;
+		border-radius: 2px;
+		flex-shrink: 0;
+	}
+
+	.sr-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--accent, #59b5ff);
+		flex-shrink: 0;
+	}
+
+	.sr-label {
+		font-size: 9px;
+		color: var(--text-secondary, #6e7681);
+	}
+
+	.sr-range {
+		font-size: 9px;
+		color: var(--text-secondary, #6e7681);
+	}
+
+	.sr-del {
+		width: 14px;
+		height: 14px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: transparent;
+		border: none;
+		color: var(--text-muted, #4a5060);
+		cursor: pointer;
+		font-size: 12px;
+		line-height: 1;
+		border-radius: 2px;
+		opacity: 0;
+		transition: opacity 0.12s;
+	}
+
+	.sr-chip:hover .sr-del {
+		opacity: 1;
+	}
+
+	.sr-del:hover {
+		background: rgba(255, 89, 89, 0.2);
+		color: #ff5959;
+	}
+
+	.sr-add {
+		padding: 3px 8px;
+		background: transparent;
+		border: 1px dashed var(--border, #2a2d37);
+		border-radius: 3px;
+		color: var(--text-muted, #4a5060);
+		font-size: 10px;
+		cursor: pointer;
+		transition: all 0.12s;
+	}
+
+	.sr-add:hover {
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
+	}
+
+	/* ── Frame Ruler ── */
 	.ruler-wrap {
-		border-bottom: 1px solid var(--border);
+		margin: 8px 0;
 	}
 
-	/* ═══ GLOBAL TRACK ═══ */
+	/* ── Global Track ── */
 	.global-track {
-		padding: 3px 10px;
-		border-bottom: 1px solid var(--border);
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 8px 0;
+		border-top: 1px solid var(--border, #2a2d37);
+		border-bottom: 1px solid var(--border, #2a2d37);
+		margin: 8px 0;
 	}
 
-	.global-bar {
+	.global-label {
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-muted, #4a5060);
+		text-transform: uppercase;
+		letter-spacing: 0.8px;
+		padding-left: 2px;
+	}
+
+	.global-actions {
+		display: flex;
+		gap: 4px;
+		justify-content: flex-end;
+	}
+
+	/* ── Timeline Track ── */
+	.timeline-track {
+		padding: 8px 0;
+		border-top: 1px solid var(--border, #2a2d37);
+		margin: 8px 0;
+	}
+
+	.timeline-header {
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		height: 22px;
-		background: var(--accent-glow);
-		border: 1px solid var(--accent);
-		border-radius: 2px;
-		padding: 0 8px;
+		margin-bottom: 6px;
+		padding-left: 2px;
 	}
 
-	.global-text {
-		flex: 1;
-		font-size: 0.6rem;
-		color: var(--text-primary);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-family: 'JetBrains Mono', monospace;
-	}
-
-	.global-placeholder {
-		flex: 1;
-		font-size: 0.6rem;
-		color: var(--text-muted);
-	}
-
-	/* ═══ TIMELINE TRACK ═══ */
-	.timeline-track {
-		padding: 3px 10px;
-		border-bottom: 1px solid var(--border);
+	.segment-count {
+		font-size: 9px;
+		color: var(--text-secondary, #6e7681);
+		margin-left: auto;
 	}
 
 	.segment-row-list {
 		position: relative;
-		height: 28px;
-		background: var(--bg-primary);
-		border: 1px solid var(--border);
-		border-radius: 2px;
-		overflow: visible;
-		margin-top: 2px;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
 	}
 
 	.seg-row {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
+		position: relative;
+		height: 28px;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px solid var(--border, #2a2d37);
 		border-radius: 2px;
-		cursor: pointer;
-		transition: background 0.12s, border-color 0.12s;
-		overflow: visible;
+		display: flex;
+		align-items: center;
+		padding: 0 6px;
+		gap: 4px;
+		width: 100%;
+		box-sizing: border-box;
 	}
 
-	.seg-row:hover {
-		background: var(--bg-hover);
-		border-color: var(--accent);
+	.seg-row.full-width {
+		left: 0;
+		width: 100%;
+	}
+
+	.seg-empty {
+		padding: 8px;
+		text-align: center;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px dashed var(--border, #2a2d37);
+		border-radius: 2px;
+		color: var(--text-muted, #4a5060);
+		font-size: 10px;
+		cursor: pointer;
+		transition: all 0.12s;
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	.seg-empty.full-width {
+		left: 0;
+		width: 100%;
 	}
 
 	.seg-body {
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		padding: 3px 6px;
-		height: 14px;
 	}
 
 	.seg-range {
-		font-size: 0.55rem;
-		color: var(--text-secondary);
-		font-family: 'JetBrains Mono', monospace;
+		font-size: 9px;
+		color: var(--text-secondary, #6e7681);
 	}
 
 	.seg-tag-count {
-		font-size: 0.5rem;
-		color: var(--text-muted);
-		background: var(--bg-tertiary);
+		font-size: 8px;
+		background: var(--accent, #59b5ff);
+		color: #000;
 		padding: 1px 3px;
 		border-radius: 2px;
+		font-weight: 600;
 	}
 
 	.seg-tags {
 		position: absolute;
-		top: 14px;
+		top: 0;
 		left: 0;
 		right: 0;
-		height: 14px;
+		bottom: 0;
+		pointer-events: none;
 	}
 
 	.tag-bar {
 		position: absolute;
-		top: 2px;
-		height: 10px;
+		top: 4px;
+		bottom: 4px;
 		border-radius: 2px;
 		cursor: pointer;
 		display: flex;
 		align-items: center;
 		padding: 0 4px;
-		overflow: hidden;
+		pointer-events: all;
 		transition: opacity 0.12s;
-		min-width: 18px;
+		min-width: 20px;
 	}
 
 	.tag-bar:hover {
-		opacity: 0.8;
+		opacity: 0.85;
 	}
 
 	.tag-label {
-		font-size: 0.5rem;
-		color: rgba(0, 0, 0, 0.85);
+		font-size: 8px;
 		font-weight: 600;
-		white-space: nowrap;
-		text-transform: uppercase;
-		letter-spacing: 0.03em;
-	}
-
-	.tag-prompt-trunc {
-		font-size: 0.48rem;
-		color: rgba(0, 0, 0, 0.6);
+		color: rgba(0, 0, 0, 0.7);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
 
+	.tag-prompt-trunc {
+		font-size: 7px;
+		color: rgba(0, 0, 0, 0.5);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		margin-left: 4px;
+	}
+
 	.btn-seg-tag {
-		position: absolute;
-		bottom: 1px;
-		right: 3px;
-		font-size: 0.5rem;
-		padding: 1px 3px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border);
+		padding: 2px 6px;
+		background: transparent;
+		border: 1px solid var(--border, #2a2d37);
 		border-radius: 2px;
-		color: var(--text-muted);
+		color: var(--text-muted, #4a5060);
+		font-size: 8px;
+		cursor: pointer;
+		transition: all 0.12s;
+		margin-left: auto;
+	}
+
+	.btn-seg-tag:hover {
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
+	}
+
+	.btn-icon-sm {
+		width: 18px;
+		height: 18px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: transparent;
+		border: 1px solid var(--border, #2a2d37);
+		border-radius: 2px;
+		color: var(--text-muted, #4a5060);
+		cursor: pointer;
+		font-size: 12px;
+		line-height: 1;
+		transition: all 0.12s;
+	}
+
+	.btn-icon-sm:hover {
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
+	}
+
+	.btn-icon-sm.btn-del-sm:hover {
+		border-color: #ff5959;
+		color: #ff5959;
+		background: rgba(255, 89, 89, 0.1);
+	}
+
+	.seg-empty {
+		padding: 8px;
+		text-align: center;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px dashed var(--border, #2a2d37);
+		border-radius: 2px;
+		color: var(--text-muted, #4a5060);
+		font-size: 10px;
 		cursor: pointer;
 		transition: all 0.12s;
 	}
 
-	.btn-seg-tag:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
-
-	.seg-empty {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		height: 100%;
-		cursor: pointer;
-		color: var(--text-muted);
-		font-size: 0.6rem;
-		transition: color 0.12s;
-	}
-
 	.seg-empty:hover {
-		color: var(--accent);
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
 	}
 
-	/* ═══ ADD TRACK BUTTON ═══ */
+	/* ── Add Track Button ── */
 	.add-track-wrap {
-		padding: 5px 10px;
+		margin-top: 8px;
 		display: flex;
 		justify-content: center;
 	}
 
 	.btn-add-track {
-		width: 24px;
-		height: 24px;
-		border-radius: 50%;
-		border: 1px dashed var(--border);
-		background: transparent;
-		color: var(--text-muted);
-		font-size: 0.9rem;
-		cursor: pointer;
+		width: 28px;
+		height: 28px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px dashed var(--border, #2a2d37);
+		border-radius: 4px;
+		color: var(--text-muted, #4a5060);
+		font-size: 16px;
+		cursor: pointer;
 		transition: all 0.12s;
 	}
 
 	.btn-add-track:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-glow);
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
+		background: var(--accent-light, rgba(89, 181, 255, 0.1));
 	}
 
-	/* ═══ ADD PIPE BUTTON ═══ */
+	/* ── Add Pipe Button ── */
 	.btn-add-pipe {
-		align-self: flex-start;
-		padding: 5px 14px;
+		width: 100%;
+		padding: 10px;
 		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 3px;
-		color: var(--text-muted);
-		font-size: 0.7rem;
+		border: 1px dashed var(--border, #2a2d37);
+		border-radius: 4px;
+		color: var(--text-muted, #4a5060);
+		font-size: 11px;
 		cursor: pointer;
 		transition: all 0.12s;
-		margin-top: 4px;
-		font-family: inherit;
+		margin-top: 8px;
 	}
 
 	.btn-add-pipe:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-glow);
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
 	}
 
-	/* ═══ DROPDOWN MENU ═══ */
+	/* ── Dropdown Menu ── */
 	.dropdown-menu {
 		position: fixed;
-		min-width: 130px;
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
+		background: var(--bg-elevated, #161820);
+		border: 1px solid var(--border, #2a2d37);
 		border-radius: 4px;
-		box-shadow: var(--shadow-md);
-		z-index: 1000;
 		padding: 4px;
-	}
-
-	.dropdown-label {
-		font-size: 0.55rem;
-		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		padding: 3px 8px 1px;
+		min-width: 120px;
+		z-index: 1000;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 	}
 
 	.dropdown-item {
 		display: flex;
 		align-items: center;
-		gap: 7px;
+		gap: 8px;
 		width: 100%;
-		padding: 5px 8px;
+		padding: 6px 10px;
 		background: transparent;
 		border: none;
-		border-radius: 3px;
-		color: var(--text-secondary);
-		font-size: 0.7rem;
+		border-radius: 2px;
+		color: var(--text-primary, #c8d0e0);
+		font-size: 11px;
 		cursor: pointer;
-		transition: all 0.1s;
 		text-align: left;
-		font-family: inherit;
+		transition: background 0.12s;
 	}
 
 	.dropdown-item:hover {
-		background: var(--bg-hover);
-		color: var(--text-primary);
+		background: var(--bg-muted, #1a1d26);
 	}
 
 	.dropdown-item.active {
-		background: var(--accent-glow);
-		color: var(--accent);
+		background: var(--accent-light, rgba(89, 181, 255, 0.15));
+		color: var(--accent, #59b5ff);
 	}
 
 	.dropdown-icon {
-		font-size: 0.75rem;
-		opacity: 0.7;
+		font-size: 10px;
+		color: var(--text-muted, #4a5060);
+	}
+
+	.dropdown-label {
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-muted, #4a5060);
+		text-transform: uppercase;
+		letter-spacing: 0.8px;
+		padding: 4px 10px 2px;
+	}
+
+	.tag-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 	}
 
 	.tag-dot {
-		width: 7px;
-		height: 7px;
+		width: 8px;
+		height: 8px;
 		border-radius: 50%;
 		flex-shrink: 0;
 	}
 
 	.dropdown-actions {
 		display: flex;
-		gap: 6px;
-		padding: 4px 4px 2px;
-		border-top: 1px solid var(--border);
-		margin-top: 2px;
+		gap: 4px;
+		padding: 4px;
+		margin-top: 4px;
+		border-top: 1px solid var(--border, #2a2d37);
 	}
 
-	/* ═══ MODAL ═══ */
+	/* ── Modal ── */
 	.modal-overlay {
 		position: fixed;
 		inset: 0;
 		background: rgba(0, 0, 0, 0.6);
-		backdrop-filter: blur(4px);
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		z-index: 2000;
+		backdrop-filter: blur(2px);
 	}
 
 	.modal {
-		background: var(--bg-secondary);
-		border: 1px solid var(--border-light);
+		background: var(--bg-surface, #0f1117);
+		border: 1px solid var(--border, #2a2d37);
 		border-radius: 6px;
-		box-shadow: var(--shadow-lg);
-		min-width: 300px;
-		max-width: 440px;
-		width: 90%;
+		min-width: 320px;
+		max-width: 420px;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 	}
 
 	.modal-header {
-		padding: 10px 14px;
-		border-bottom: 1px solid var(--border);
+		padding: 12px 16px;
+		border-bottom: 1px solid var(--border, #2a2d37);
 	}
 
 	.modal-header h3 {
-		font-size: 0.8rem;
-		font-weight: 600;
-		color: var(--text-primary);
 		margin: 0;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-primary, #c8d0e0);
 	}
 
 	.modal-sub {
-		font-size: 0.65rem;
-		color: var(--text-muted);
 		font-weight: 400;
+		color: var(--text-secondary, #6e7681);
+		margin-left: 6px;
 	}
 
 	.modal-body {
-		padding: 14px;
+		padding: 16px;
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
+		gap: 12px;
 	}
 
 	.mode-selector {
@@ -1029,178 +1437,146 @@
 
 	.mode-btn {
 		flex: 1;
-		padding: 5px 10px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border);
+		padding: 6px 10px;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px solid var(--border, #2a2d37);
 		border-radius: 3px;
-		color: var(--text-muted);
-		font-size: 0.68rem;
+		color: var(--text-secondary, #6e7681);
+		font-size: 10px;
+		font-weight: 500;
 		cursor: pointer;
 		transition: all 0.12s;
-		font-family: inherit;
 	}
 
-	.mode-btn:hover,
+	.mode-btn:hover {
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
+	}
+
 	.mode-btn.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-glow);
+		background: var(--accent-light, rgba(89, 181, 255, 0.15));
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
 	}
 
 	.modal-field {
 		display: flex;
 		flex-direction: column;
-		gap: 3px;
+		gap: 4px;
 	}
 
 	.modal-field label {
-		font-size: 0.6rem;
-		color: var(--text-muted);
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-muted, #4a5060);
 		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.5px;
 	}
 
-	.modal-input,
-	.modal-textarea {
-		padding: 7px 9px;
-		background: var(--bg-primary);
-		border: 1px solid var(--border);
+	.modal-input {
+		padding: 8px 10px;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px solid var(--border, #2a2d37);
 		border-radius: 3px;
-		color: var(--text-primary);
-		font-size: 0.78rem;
-		font-family: 'JetBrains Mono', monospace;
+		color: var(--text-primary, #c8d0e0);
+		font-size: 12px;
+		outline: none;
 		transition: border-color 0.12s;
 	}
 
-	.modal-input:focus,
-	.modal-textarea:focus {
-		outline: none;
-		border-color: var(--accent);
+	.modal-input:focus {
+		border-color: var(--accent, #59b5ff);
 	}
 
 	.modal-textarea {
-		min-height: 72px;
+		padding: 8px 10px;
+		background: var(--bg-muted, #1a1d26);
+		border: 1px solid var(--border, #2a2d37);
+		border-radius: 3px;
+		color: var(--text-primary, #c8d0e0);
+		font-size: 12px;
+		font-family: inherit;
 		resize: vertical;
+		min-height: 80px;
+		outline: none;
+		transition: border-color 0.12s;
 	}
 
-	.segment-preview {
-		padding: 6px 0;
+	.modal-textarea:focus {
+		border-color: var(--accent, #59b5ff);
 	}
 
-	.preview-bar {
-		position: relative;
-		height: 14px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border);
-		border-radius: 2px;
-		overflow: hidden;
-	}
-
-	.preview-seg {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		background: var(--accent-glow);
-		border: 1px solid var(--accent);
-	}
-
-	.preview-range {
-		display: block;
-		font-size: 0.6rem;
-		color: var(--text-muted);
-		margin-top: 3px;
-		font-family: 'JetBrains Mono', monospace;
+	.modal-hint {
+		font-size: 9px;
+		color: var(--text-secondary, #6e7681);
+		padding: 6px 8px;
+		background: var(--bg-muted, #1a1d26);
+		border-radius: 3px;
 	}
 
 	.modal-actions {
 		display: flex;
-		gap: 7px;
+		gap: 8px;
+		padding: 12px 16px;
+		border-top: 1px solid var(--border, #2a2d37);
 		justify-content: flex-end;
-		padding: 10px 14px;
-		border-top: 1px solid var(--border);
 	}
 
-	.btn-confirm,
-	.btn-cancel {
-		padding: 5px 14px;
+	.btn-confirm, .btn-cancel {
+		padding: 6px 14px;
 		border-radius: 3px;
-		font-size: 0.7rem;
+		font-size: 11px;
+		font-weight: 500;
 		cursor: pointer;
 		transition: all 0.12s;
-		font-family: inherit;
 	}
 
 	.btn-confirm {
-		background: var(--accent);
-		border: 1px solid var(--accent);
-		color: var(--text-inverse);
+		background: var(--accent, #59b5ff);
+		border: 1px solid var(--accent, #59b5ff);
+		color: #000;
 	}
 
 	.btn-confirm:hover:not(:disabled) {
-		background: var(--accent-hover);
-		border-color: var(--accent-hover);
+		background: #7ac4ff;
+		border-color: #7ac4ff;
 	}
 
 	.btn-confirm:disabled {
-		opacity: 0.45;
+		opacity: 0.4;
 		cursor: not-allowed;
 	}
 
 	.btn-cancel {
 		background: transparent;
-		border: 1px solid var(--border);
-		color: var(--text-muted);
+		border: 1px solid var(--border, #2a2d37);
+		color: var(--text-secondary, #6e7681);
 	}
 
 	.btn-cancel:hover {
-		border-color: var(--border-light);
-		color: var(--text-primary);
+		border-color: var(--text-muted, #4a5060);
+		color: var(--text-primary, #c8d0e0);
 	}
 
-	.btn-icon,
-	.btn-icon-sm {
-		width: 18px;
-		height: 18px;
-		padding: 0;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 3px;
-		color: var(--text-muted);
-		cursor: pointer;
-		font-size: 0.7rem;
+	.btn-icon {
+		width: 20px;
+		height: 20px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.12s;
-	}
-
-	.btn-icon:hover,
-	.btn-icon-sm:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
-
-	.btn-del-sm:hover {
-		border-color: rgba(220, 38, 38, 0.5);
-		color: #ff6b6b;
-		background: rgba(220, 38, 38, 0.1);
-	}
-
-	/* ═══ SCROLLBAR ═══ */
-	.composer-panel::-webkit-scrollbar {
-		width: 4px;
-	}
-
-	.composer-panel::-webkit-scrollbar-track {
 		background: transparent;
+		border: 1px solid var(--border, #2a2d37);
+		border-radius: 3px;
+		color: var(--text-muted, #4a5060);
+		font-size: 14px;
+		cursor: pointer;
+		transition: all 0.12s;
+		line-height: 1;
 	}
 
-	.composer-panel::-webkit-scrollbar-thumb {
-		background: var(--border);
-		border-radius: 2px;
-	}
-
-	.composer-panel::-webkit-scrollbar-thumb:hover {
-		background: var(--border-light);
+	.btn-icon:hover {
+		border-color: #ff5959;
+		color: #ff5959;
+		background: rgba(255, 89, 89, 0.1);
 	}
 </style>
