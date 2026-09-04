@@ -91,6 +91,18 @@
 	let tagMenuY = $state(0);
 
 	// Drag state for segments and tags
+	// ── Drag state ────────────────────────────────────────────────────────────
+	// Transient preview state for visual feedback during drag
+	let previewDragState = $state<{
+		type: 'segment' | 'tag';
+		id: string;
+		segmentId?: string;
+		handle: 'left' | 'right' | 'body';
+		startFrame: number;
+		endFrame: number;
+	} | null>(null);
+
+	// Actual drag state for tracking interaction
 	let dragState = $state<{
 		type: 'segment' | 'tag';
 		id: string;
@@ -167,6 +179,14 @@
 	// Frame to percentage for rendering
 	function frameToX(frame: number): number {
 		return (frame / (totalFrames - 1)) * 100;
+	}
+
+	// Get preview state for a segment during drag
+	function getPreviewSegment(seg: Segment) {
+		if (!previewDragState || previewDragState.type !== 'segment' || previewDragState.id !== seg.id) {
+			return null;
+		}
+		return previewDragState;
 	}
 
 	// ── Actions ─────────────────────────────────────────────────────────────
@@ -336,7 +356,7 @@
 		if (!ruler) return;
 		const rect = ruler.getBoundingClientRect();
 		const startX = e.clientX;
-		
+
 		dragState = {
 			type: 'segment',
 			id: seg.id,
@@ -347,54 +367,116 @@
 			mouseStartX: startX,
 			rulerWidth: rect.width,
 		};
+
+		// Initialize preview with current values
+		previewDragState = {
+			type: 'segment',
+			id: seg.id,
+			handle,
+			startFrame: seg.frameStart,
+			endFrame: seg.frameEnd,
+		};
 	}
 
 	function handlePointerMove(e: MouseEvent) {
 		if (!dragState) return;
 		e.preventDefault();
-		
+
 		const dx = e.clientX - dragState.mouseStartX;
 		const percentDelta = (dx / dragState.rulerWidth) * 100;
 		const frameDelta = Math.round((percentDelta / 100) * (totalFrames - 1));
 		const snappedDelta = snapTo8(frameDelta);
-		
+
 		if (dragState.type === 'segment') {
 			const start = dragState.startFrame;
 			const end = dragState.endFrame;
 			const duration = end - start;
-			
+
+			let newStart: number;
+			let newEnd: number;
+
 			if (dragState.handle === 'body') {
-				const newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, totalFrames - 1 - duration)));
-				resizeSegmentAction(session!.id, pipes[activePipeIdx!].id, dragState.id, newStart, newStart + duration).catch(console.error);
+				newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, totalFrames - 1 - duration)));
+				newEnd = newStart + duration;
 			} else if (dragState.handle === 'left') {
-				const newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, end - 8)));
-				resizeSegmentAction(session!.id, pipes[activePipeIdx!].id, dragState.id, newStart, end).catch(console.error);
+				newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, end - 8)));
+				newEnd = end;
 			} else {
-				const newEnd = snapTo8(Math.min(totalFrames - 1, Math.max(start + 8, end + snappedDelta)));
-				resizeSegmentAction(session!.id, pipes[activePipeIdx!].id, dragState.id, start, newEnd).catch(console.error);
+				newStart = start;
+				newEnd = snapTo8(Math.min(totalFrames - 1, Math.max(start + 8, end + snappedDelta)));
 			}
+
+			// Update preview only, not store
+			previewDragState = {
+				type: 'segment',
+				id: dragState.id,
+				handle: dragState.handle,
+				startFrame: newStart,
+				endFrame: newEnd,
+			};
 		} else if (dragState.type === 'tag') {
 			const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === dragState.segmentId);
 			if (!seg) return;
 			const segStart = seg.frameStart;
 			const segEnd = seg.frameEnd;
 			const duration = dragState.endFrame - dragState.startFrame;
-			
+
+			let newStart: number;
+			let newEnd: number;
+
 			if (dragState.handle === 'body') {
-				const newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, segEnd - duration)));
-				resizeTagElementAction(session!.id, pipes[activePipeIdx!].id, dragState.segmentId, dragState.id, newStart, newStart + duration).catch(console.error);
+				newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, segEnd - duration)));
+				newEnd = newStart + duration;
 			} else if (dragState.handle === 'left') {
-				const newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, dragState.endFrame - 8)));
-				resizeTagElementAction(session!.id, pipes[activePipeIdx!].id, dragState.segmentId, dragState.id, newStart, dragState.endFrame).catch(console.error);
+				newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, dragState.endFrame - 8)));
+				newEnd = dragState.endFrame;
 			} else {
-				const newEnd = snapTo8(Math.min(segEnd, Math.max(dragState.startFrame + 8, dragState.endFrame + snappedDelta)));
-				resizeTagElementAction(session!.id, pipes[activePipeIdx!].id, dragState.segmentId, dragState.id, dragState.startFrame, newEnd).catch(console.error);
+				newStart = dragState.startFrame;
+				newEnd = snapTo8(Math.min(segEnd, Math.max(dragState.startFrame + 8, dragState.endFrame + snappedDelta)));
 			}
+
+			// Update preview only, not store
+			previewDragState = {
+				type: 'tag',
+				id: dragState.id,
+				segmentId: dragState.segmentId,
+				handle: dragState.handle,
+				startFrame: newStart,
+				endFrame: newEnd,
+			};
 		}
 	}
 
 	function handlePointerUp() {
+		if (!dragState) return;
+
+		// Commit the final preview state to store
+		if (previewDragState) {
+			if (previewDragState.type === 'segment') {
+				resizeSegmentAction(
+					session!.id,
+					pipes[activePipeIdx!].id,
+					previewDragState.id,
+					previewDragState.startFrame,
+					previewDragState.endFrame
+				).catch(console.error);
+			} else if (previewDragState.type === 'tag') {
+				const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === previewDragState.segmentId);
+				if (seg) {
+					resizeTagElementAction(
+						session!.id,
+						pipes[activePipeIdx!].id,
+						previewDragState.segmentId!,
+						previewDragState.id,
+						previewDragState.startFrame,
+						previewDragState.endFrame
+					).catch(console.error);
+				}
+			}
+		}
+
 		dragState = null;
+		previewDragState = null;
 	}
 
 	// ── Segment add ─────────────────────────────────────────────────────────
@@ -405,9 +487,18 @@
 		const tl = getTimeline(pipe);
 		if (!tl) return;
 		activePipeIdx = idx;
-		const lastSeg = tl.segments[tl.segments.length - 1];
-		segStart = lastSeg ? lastSeg.frameEnd : 0;
-		segEnd = Math.min(segStart + 8, totalFrames - 1);
+
+		// Use getNextAvailableRange to find first free gap, not just append after last
+		const available = getNextAvailableRange(tl.segments, pipe.lengthFrames, 8);
+		if (available) {
+			segStart = available.start;
+			segEnd = available.end;
+		} else {
+			// Fallback: append at end
+			const lastSeg = tl.segments[tl.segments.length - 1];
+			segStart = lastSeg ? lastSeg.frameEnd : 0;
+			segEnd = Math.min(segStart + 8, totalFrames - 1);
+		}
 		showSegmentModal = true;
 		closeMenus();
 	}
@@ -673,24 +764,24 @@
 								<!-- Segment range bar -->
 								<div class="seg-bar">
 									<!-- Left thumb -->
-									<div 
+									<div
 										class="thumb left"
 										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'left')}
-										style={`left: ${frameToX(seg.frameStart)}%`}
+										style={`left: ${frameToX(getPreviewSegment(seg)?.startFrame ?? seg.frameStart)}%`}
 										title="Drag to resize start">
 									</div>
 									<!-- Segment body -->
-									<div 
+									<div
 										class="seg-body"
 										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'body')}
-										style={`left: ${frameToX(seg.frameStart)}%; width: ${frameToX(seg.frameEnd) - frameToX(seg.frameStart)}%`}>
-										<span class="seg-label">{seg.frameStart}–{seg.frameEnd}</span>
+										style={`left: ${frameToX(getPreviewSegment(seg)?.startFrame ?? seg.frameStart)}%; width: ${frameToX(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd) - frameToX(getPreviewSegment(seg)?.startFrame ?? seg.frameStart)}%`}>
+										<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
 									</div>
 									<!-- Right thumb -->
-									<div 
+									<div
 										class="thumb right"
 										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'right')}
-										style={`left: ${frameToX(seg.frameEnd)}%`}
+										style={`left: ${frameToX(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd)}%`}
 										title="Drag to resize end">
 									</div>
 								</div>
@@ -724,7 +815,7 @@
 															};
 														}
 													}}
-													style={`left: ${frameToX(tag.frameStart)}%`}>
+													style={`left: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.startFrame : tag.frameStart)}%`}>
 												</div>
 												<!-- Tag body -->
 												<div 
@@ -746,7 +837,7 @@
 															};
 														}
 													}}
-													style={`left: ${frameToX(tag.frameStart)}%; width: ${frameToX(tag.frameEnd) - frameToX(tag.frameStart)}%`}>
+													style={`left: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.startFrame : tag.frameStart)}%; width: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.endFrame : tag.frameEnd) - frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.startFrame : tag.frameStart)}%`}>
 													<span class="tag-name">{tag.spec?.name || tag.tag}</span>
 													{#if tag.prompt}
 														<span class="tag-prompt">{tag.prompt}</span>
@@ -772,7 +863,7 @@
 															};
 														}
 													}}
-													style={`left: ${frameToX(tag.frameEnd)}%`}>
+													style={`left: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.endFrame : tag.frameEnd)}%`}>
 												</div>
 											</div>
 											<button 
