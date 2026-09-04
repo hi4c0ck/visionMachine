@@ -3,6 +3,7 @@
 	import { TAG_SPECIFICATIONS } from '$types';
 	import FrameRuler from './FrameRuler.svelte';
 	import MultiThumbSlider from './MultiThumbSlider.svelte';
+	import { getNextAvailableRange } from '$lib/frameMath';
 	import {
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
