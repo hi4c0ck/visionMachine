@@ -365,13 +365,13 @@ class ComposerStoreImpl implements ComposerStore {
             cValue: pipe.cValue,
             orderIndex: pipe.orderIndex,
             keyframes: pipe.keyframes,
-            subjectRefs: pipe.subjectRefs?.map((ref: any) => ({
+            subjectRefs: (pipe.subjectReferences ?? []).map((ref: any) => ({
               id: ref.id,
-              name: ref.name,
+              imageUrl: ref.imageUrl,
+              useFrames: ref.useFrames ?? false,
               frameStart: ref.frameStart,
               frameEnd: ref.frameEnd,
-              enabled: ref.enabled,
-              url: ref.url,
+              visible: ref.visible !== false,
             })),
             elements: pipe.elements.map((el: any) => {
               if ('segments' in el) {

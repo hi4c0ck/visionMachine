@@ -56,11 +56,14 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 	});
 
 	// Keyboard navigation for playhead
+	let selectedFrame = $state<number>(0);
+	let totalFrames = $state(241);
+	let pipes = $derived(selectedSession?.pipes ?? []);
 	function handleKeyDown(e: KeyboardEvent) {
 		if (e.key === 'ArrowLeft') {
 			selectedFrame = Math.max(0, (selectedFrame || 0) - 8);
 		} else if (e.key === 'ArrowRight') {
-			selectedFrame = Math.min(maxFrames, (selectedFrame || 0) + 8);
+			selectedFrame = Math.min(totalFrames, (selectedFrame || 0) + 8);
 		}
 	}
 
@@ -658,7 +661,31 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 		onlayoutChange={handleLayoutChange}
 	/>
 
-	<div class="workspace-body" onkeydown={handleKeyDown} tabindex="0">
+	{#if selectedSession && selectedProject}
+	<div class="preview-area">
+		<div class="preview-canvas">
+			<div class="preview-playhead" style={`left: ${((selectedFrame || 0) / totalFrames) * 100}%`}>
+				<div class="playhead-tip"></div>
+				<div class="playhead-line"></div>
+			</div>
+			<div class="preview-frames">
+				{#each [0, 8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240] as frame}
+					{#if frame <= totalFrames}
+					<div class="preview-tick" style={`left: ${(frame / (totalFrames - 1)) * 100}%`}>
+						{#if frame % 32 === 0}<span class="tick-label">{frame}</span>{/if}
+					</div>
+					{/if}
+				{/each}
+			</div>
+		</div>
+		<div class="preview-meta">
+			<span class="frame-indicator">Frame: <strong>{selectedFrame ?? 0}</strong> / {totalFrames}</span>
+			<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
+		</div>
+	</div>
+	{/if}
+
+	<div class="workspace-body" onkeydown={handleKeyDown} role="main" tabindex="0">
 		<div class="left-column">
 			{#if layoutMode !== 'single'}
 				<ProjectsPanel
@@ -688,7 +715,10 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 			{#if selectedSession && selectedProject}
 				<ComposerPanel
 					session={selectedSession}
+					{totalFrames}
+					{selectedFrame}
 					onUpdate={handleSessionUpdate}
+					onframechange={(f) => selectedFrame = f}
 				/>
 			{:else}
 				<div class="composer-empty">
@@ -724,6 +754,98 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 		background: var(--bg-primary);
 	}
 
+	/* ── Full-Width Preview ── */
+	.preview-area {
+		height: 120px;
+		background: var(--bg-secondary, #14141f);
+		border-bottom: 1px solid var(--border, #2a2a3a);
+		display: flex;
+		flex-direction: column;
+		flex-shrink: 0;
+	}
+
+	.preview-canvas {
+		flex: 1;
+		position: relative;
+		overflow: hidden;
+		background: linear-gradient(180deg, var(--bg-tertiary, #1e1e2e) 0%, var(--bg-secondary, #14141f) 100%);
+	}
+
+	.preview-playhead {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 2px;
+		background: var(--accent, #59B5FF);
+		box-shadow: 0 0 8px var(--accent-glow, rgba(89, 181, 255, 0.5));
+		z-index: 10;
+		pointer-events: none;
+	}
+
+	.preview-playhead .playhead-tip {
+		position: absolute;
+		top: 0;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 0;
+		height: 0;
+		border-left: 5px solid transparent;
+		border-right: 5px solid transparent;
+		border-top: 6px solid var(--accent, #59B5FF);
+		filter: drop-shadow(0 0 4px var(--accent, #59B5FF));
+	}
+
+	.preview-frames {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+	}
+
+	.preview-tick {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 1px;
+		background: var(--border-light, #3a3a4a);
+		transform: translateX(-50%);
+	}
+
+	.tick-label {
+		position: absolute;
+		bottom: 4px;
+		left: 50%;
+		transform: translateX(-50%);
+		font-size: 9px;
+		color: var(--text-muted, #6b6b80);
+		white-space: nowrap;
+	}
+
+	.preview-meta {
+		height: 24px;
+		background: var(--bg-primary, #0a0a0f);
+		border-top: 1px solid var(--border, #2a2a3a);
+		display: flex;
+		align-items: center;
+		padding: 0 12px;
+		gap: 16px;
+	}
+
+	.frame-indicator {
+		font-size: 11px;
+		color: var(--text-secondary, #a0a0b0);
+	}
+
+	.frame-indicator strong {
+		color: var(--accent, #59B5FF);
+		font-weight: 600;
+	}
+
+	.pipe-count {
+		font-size: 10px;
+		color: var(--text-muted, #6b6b80);
+		margin-left: auto;
+	}
+
 	.workspace-body {
 		display: flex;
 		flex: 1;
@@ -736,18 +858,18 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 		max-width: 320px;
 		display: flex;
 		flex-direction: column;
-		background: var(--bg-secondary);
-		border-right: 1px solid var(--panel-left-border);
-		box-shadow: var(--shadow-panel-left);
+		background: var(--bg-secondary, #14141f);
+		border-right: 1px solid var(--panel-left-border, rgba(255, 215, 0, 0.35));
+		box-shadow: var(--shadow-panel-left, inset 0 0 40px rgba(255, 215, 0, 0.03));
 	}
 
 	.composer-area {
 		flex: 1;
 		position: relative;
 		overflow: hidden;
-		background: var(--panel-center-bg);
-		border-left: 1px solid var(--panel-center-border);
-		border-right: 1px solid var(--panel-right-border);
+		background: var(--panel-center-bg, rgba(255, 70, 70, 0.05));
+		border-left: 1px solid var(--panel-center-border, rgba(255, 70, 70, 0.3));
+		border-right: 1px solid var(--panel-right-border, rgba(255, 120, 190, 0.35));
 	}
 
 	.composer-empty {
@@ -756,27 +878,27 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 		align-items: center;
 		justify-content: center;
 		height: 100%;
-		color: var(--text-muted);
+		color: var(--text-muted, #6b6b80);
 		gap: 16px;
 	}
 
 	.empty-icon {
 		font-size: 64px;
 		opacity: 0.4;
-		filter: drop-shadow(0 0 20px var(--accent-glow));
+		filter: drop-shadow(0 0 20px var(--accent-glow, rgba(89, 181, 255, 0.35)));
 	}
 
 	.empty-icon h2 {
 		font-size: 22px;
 		font-weight: 600;
-		color: var(--text-primary);
+		color: var(--text-primary, #ffffff);
 		margin: 0;
 		letter-spacing: -0.02em;
 	}
 
 	.empty-icon p {
 		font-size: 13px;
-		color: var(--text-secondary);
+		color: var(--text-secondary, #a0a0b0);
 		max-width: 280px;
 		text-align: center;
 		line-height: 1.5;

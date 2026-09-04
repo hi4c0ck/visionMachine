@@ -15,8 +15,10 @@
 		addTimelineElement as addTimelineElementAction,
 		addSegment as addSegmentAction,
 		removeSegment as removeSegmentAction,
+		resizeSegment as resizeSegmentAction,
 		addTagElement as addTagElementAction,
 		removeTagElement as removeTagElementAction,
+		resizeTagElement as resizeTagElementAction,
 		updateTagPrompt as updateTagPromptAction,
 		addSubjectRef as addSubjectRefAction,
 		updateSubjectRefRange as updateSubjectRefRangeAction,
@@ -25,9 +27,19 @@
 		updateSubjectRefUrl as updateSubjectRefUrlAction,
 		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 	} from '$lib/composerStore';
-	import { snapTo8 } from '$lib/frameMath';
+	import { snapTo8, frameToPercent } from '$lib/frameMath';
 
-	let { session }: { session?: SessionData } = $props();
+	let {
+		session,
+		totalFrames: propTotalFrames = 241,
+		selectedFrame,
+	} = $props<{
+		session?: SessionData;
+		totalFrames?: number;
+		selectedFrame?: number;
+		onUpdate?: (session: SessionData) => void;
+		onframechange?: (frame: number) => void;
+	}>();
 
 	const MAX_KEYFRAMES = 3;
 	const MAX_SUBJECT_REFS = 5;
@@ -35,7 +47,7 @@
 
 	// ── Derived state ────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
-	let totalFrames = $derived(pipes.length > 0 ? (pipes[0]?.lengthFrames ?? DEFAULT_FRAME_COUNT) : DEFAULT_FRAME_COUNT);
+	let totalFrames = $derived(propTotalFrames ?? (pipes.length > 0 ? (pipes[0]?.lengthFrames ?? DEFAULT_FRAME_COUNT) : DEFAULT_FRAME_COUNT));
 
 	// ── UI state ─────────────────────────────────────────────────────────────
 	let activePipeIdx = $state<number | null>(null);
@@ -78,15 +90,31 @@
 	let tagMenuX = $state(0);
 	let tagMenuY = $state(0);
 
+	// Drag state for segments and tags
+	let dragState = $state<{
+		type: 'segment' | 'tag';
+		id: string;
+		segmentId?: string;
+		handle: 'left' | 'right' | 'body';
+		startFrame: number;
+		endFrame: number;
+		mouseStartX: number;
+		rulerWidth: number;
+	} | null>(null);
+
 	// Close menus on outside click
-	function closeMenus() {
-		showAddMenu = false;
-		showTagMenu = false;
-	}
+	$effect(() => {
+		function handler() {
+			showAddMenu = false;
+			showTagMenu = false;
+			dragState = null;
+		}
+		document.addEventListener('click', handler);
+		return () => document.removeEventListener('click', handler);
+	});
 
 	// ── Helpers ─────────────────────────────────────────────────────────────
 
-	/** Check if a keyframe at a given slot is "configured" */
 	function isKeyframeConfigured(pipe: PipeRow, slotIndex: number): boolean {
 		const kf = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === slotIndex);
 		if (!kf) return false;
@@ -98,7 +126,6 @@
 		}
 	}
 
-	/** Return visible keyframe slots (progressive unlock) */
 	function getVisibleKeyframeSlots(pipe: PipeRow): number[] {
 		const visible: number[] = [];
 		for (let i = 1; i <= MAX_KEYFRAMES; i++) {
@@ -113,24 +140,17 @@
 		return visible;
 	}
 
-	/** Return visible subject reference slots (max 5, no progressive unlock) */
-		function getVisibleSubjectRefSlots(pipe: PipeRow): number[] {
-			const count = (pipe.subjectReferences ?? []).filter(r => r.visible !== false).length;
-			const slots: number[] = [];
-			for (let i = 1; i <= MAX_SUBJECT_REFS; i++) {
-				if (i <= count) slots.push(i);
-				else if (i === count + 1) slots.push(i); // show next empty slot
-				else break;
-			}
-			return slots;
-		}
-
 	function getTimeline(pipe: PipeRow): any {
 		return pipe.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
 	function getGlobal(pipe: PipeRow): any {
 		return pipe.elements.find((e: any) => e.tag === 'global_style') ?? null;
+	}
+
+	// Frame to percentage for rendering
+	function frameToX(frame: number): number {
+		return (frame / (totalFrames - 1)) * 100;
 	}
 
 	// ── Actions ─────────────────────────────────────────────────────────────
@@ -220,17 +240,14 @@
 		if (!pipe || !session?.id) return;
 		if (!srImageUrl.trim()) return;
 
-		// Check max
 		if (!editingSubjectRefId && (pipe.subjectReferences?.length ?? 0) >= MAX_SUBJECT_REFS) return;
 
 		let result;
 		if (editingSubjectRefId) {
-			// Update existing
 			result = await updateSubjectRefRangeAction(session.id, pipe.id, editingSubjectRefId, srStart, srEnd);
 			await updateSubjectRefUrlAction(session.id, pipe.id, editingSubjectRefId, srImageUrl);
 			await updateSubjectRefUseFramesAction(session.id, pipe.id, editingSubjectRefId, srUseFrames);
 		} else {
-			// Add new
 			result = await addSubjectRefAction(session.id, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
 		}
 		if (result.errors.length > 0) {
@@ -279,7 +296,6 @@
 	function handleAddGlobal(idx: number) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
-		// Add with full range
 		addGlobalElementAction(session.id, pipe.id, 0, totalFrames - 1).then(r => {
 			if (r.errors?.length) console.error('[ComposerPanel] addGlobal:', r.errors);
 		});
@@ -295,7 +311,77 @@
 		if (result.errors.length > 0) console.error('[ComposerPanel] handleGlobalRangeUpdate:', result.errors);
 	}
 
-	// ── Segment ─────────────────────────────────────────────────────────────
+	// ── Segment interactions ────────────────────────────────────────────────
+
+	function handleSegmentPointerDown(e: MouseEvent, seg: Segment, handle: 'left' | 'right' | 'body') {
+		e.preventDefault();
+		e.stopPropagation();
+		const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
+		if (!ruler) return;
+		const rect = ruler.getBoundingClientRect();
+		const startX = e.clientX;
+		
+		dragState = {
+			type: 'segment',
+			id: seg.id,
+			segmentId: seg.id,
+			handle,
+			startFrame: seg.frameStart,
+			endFrame: seg.frameEnd,
+			mouseStartX: startX,
+			rulerWidth: rect.width,
+		};
+	}
+
+	function handlePointerMove(e: MouseEvent) {
+		if (!dragState) return;
+		e.preventDefault();
+		
+		const dx = e.clientX - dragState.mouseStartX;
+		const percentDelta = (dx / dragState.rulerWidth) * 100;
+		const frameDelta = Math.round((percentDelta / 100) * (totalFrames - 1));
+		const snappedDelta = snapTo8(frameDelta);
+		
+		if (dragState.type === 'segment') {
+			const start = dragState.startFrame;
+			const end = dragState.endFrame;
+			const duration = end - start;
+			
+			if (dragState.handle === 'body') {
+				const newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, totalFrames - 1 - duration)));
+				resizeSegmentAction(session!.id, pipes[activePipeIdx!].id, dragState.id, newStart, newStart + duration).catch(console.error);
+			} else if (dragState.handle === 'left') {
+				const newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, end - 8)));
+				resizeSegmentAction(session!.id, pipes[activePipeIdx!].id, dragState.id, newStart, end).catch(console.error);
+			} else {
+				const newEnd = snapTo8(Math.min(totalFrames - 1, Math.max(start + 8, end + snappedDelta)));
+				resizeSegmentAction(session!.id, pipes[activePipeIdx!].id, dragState.id, start, newEnd).catch(console.error);
+			}
+		} else if (dragState.type === 'tag') {
+			const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === dragState.segmentId);
+			if (!seg) return;
+			const segStart = seg.frameStart;
+			const segEnd = seg.frameEnd;
+			const duration = dragState.endFrame - dragState.startFrame;
+			
+			if (dragState.handle === 'body') {
+				const newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, segEnd - duration)));
+				resizeTagElementAction(session!.id, pipes[activePipeIdx!].id, dragState.segmentId, dragState.id, newStart, newStart + duration).catch(console.error);
+			} else if (dragState.handle === 'left') {
+				const newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, dragState.endFrame - 8)));
+				resizeTagElementAction(session!.id, pipes[activePipeIdx!].id, dragState.segmentId, dragState.id, newStart, dragState.endFrame).catch(console.error);
+			} else {
+				const newEnd = snapTo8(Math.min(segEnd, Math.max(dragState.startFrame + 8, dragState.endFrame + snappedDelta)));
+				resizeTagElementAction(session!.id, pipes[activePipeIdx!].id, dragState.segmentId, dragState.id, dragState.startFrame, newEnd).catch(console.error);
+			}
+		}
+	}
+
+	function handlePointerUp() {
+		dragState = null;
+	}
+
+	// ── Segment add ─────────────────────────────────────────────────────────
 
 	function handleAddSegment(idx: number) {
 		const pipe = pipes[idx];
@@ -351,7 +437,6 @@
 		if (!tl) return;
 		const seg = tl.segments.find((s: Segment) => s.id === selectedSegmentId);
 		if (!seg) return;
-		const spec = TAG_SPECIFICATIONS[selectedTagType];
 		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, selectedTagType);
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] addTag:', result.errors);
@@ -385,7 +470,7 @@
 	async function handleRemoveTag(idx: number, segId: string, tagId: string) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
-		const result = await removeTagElementAction(session.id, pipe.id, selectedSegmentId, tagId);
+		const result = await removeTagElementAction(session.id, pipe.id, segId, tagId);
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeTag:', result.errors);
 	}
 
@@ -402,12 +487,17 @@
 		const result = await toggleGlobalElementAction(session.id, pipe.id, globalId);
 		if (result.errors.length > 0) console.error('[ComposerPanel] toggleGlobal:', result.errors);
 	}
+
+	function closeMenus() {
+		showAddMenu = false;
+		showTagMenu = false;
+	}
 </script>
 
 <div class="composer-panel">
 	{#each pipes as pipe, pipeIdx (pipe.id)}
 		<div class="pipe" class:active={activePipeIdx === pipeIdx}>
-
+			
 			<!-- ═══ PIPE HEADER ═══ -->
 			<div class="pipe-header">
 				<span class="pipe-label">Pipe {pipeIdx + 1}</span>
@@ -425,20 +515,30 @@
 					{#each getVisibleKeyframeSlots(pipe) as kfNum}
 						{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
 							{#if kf}
-								<div class="kf-chip kf-filled"
+								<div 
+									class="kf-chip kf-filled"
 									onclick={() => openKeyframeModal(pipeIdx, kfNum)}
+									onkeydown={(e) => e.key === 'Enter' && openKeyframeModal(pipeIdx, kfNum)}
+									role="button"
+									tabindex="0"
 									title="Frame {kf.frame} · {kf.type} · Click to edit">
 									{#if kf.imageSrc}
 										<img src={kf.imageSrc} class="kf-img" alt="keyframe" />
 									{:else}
 										<span class="kf-label">k{kfNum}</span>
 									{/if}
-									<button class="kf-del"
-										onclick={(e) => { e.stopPropagation(); handleRemoveKeyframe(pipeIdx, kf.id); }}>×</button>
+									<button 
+										class="kf-del"
+										onclick={(e) => { e.stopPropagation(); handleRemoveKeyframe(pipeIdx, kf.id); }}
+										title="Remove keyframe">×</button>
 								</div>
 							{:else}
-								<div class="kf-chip kf-empty"
+								<div 
+									class="kf-chip kf-empty"
 									onclick={() => openKeyframeModal(pipeIdx, kfNum)}
+									onkeydown={(e) => e.key === 'Enter' && openKeyframeModal(pipeIdx, kfNum)}
+									role="button"
+									tabindex="0"
 									title="Click to configure keyframe {kfNum}">
 									<span class="kf-empty-label">+ k{kfNum}</span>
 								</div>
@@ -452,14 +552,15 @@
 			{#if (pipe.subjectReferences?.length ?? 0) > 0}
 				<div class="row-group">
 					<div class="row-header">
-						<span class="row-label">SUBJECT REFERENCES</span>
+						<span class="row-label">SUBJECT REFS</span>
 						<span class="row-count">{(pipe.subjectReferences?.filter(r => r.visible !== false).length ?? 0)}/{MAX_SUBJECT_REFS}</span>
 					</div>
 					<div class="sr-row">
 						{#each (pipe.subjectReferences ?? []) as sr (sr.id)}
 							{#if sr.visible !== false}
-								<div class="sr-chip" title="Frames {sr.frameStart ?? '—'}–{sr.frameEnd ?? '—'} · Click to edit · Eye to toggle">
-									<button class="sr-eye"
+								<div class="sr-chip" title="Frames {sr.frameStart ?? '—'}–{sr.frameEnd ?? '—'} · Click to edit">
+									<button 
+										class="sr-eye"
 										onclick={(e) => { e.stopPropagation(); handleToggleSubjectRef(pipeIdx, sr.id); }}
 										title={sr.visible === false ? 'Enable reference' : 'Disable reference'}>
 										{#if sr.visible === false}
@@ -478,14 +579,19 @@
 									{:else}
 										<span class="sr-label">full</span>
 									{/if}
-									<button class="sr-del"
-										onclick={(e) => { e.stopPropagation(); handleRemoveSubjectRef(pipeIdx, sr.id); }}>×</button>
+									<button 
+										class="sr-del"
+										onclick={(e) => { e.stopPropagation(); handleRemoveSubjectRef(pipeIdx, sr.id); }}
+										title="Remove subject reference">×</button>
 								</div>
 							{/if}
 						{/each}
 						{#if (pipe.subjectReferences?.length ?? 0) < MAX_SUBJECT_REFS}
-							<button class="sr-add" onclick={() => openSubjectRefModal(pipeIdx)} title="Add subject reference">
-								+ s{pipe.subjectReferences.length + 1}
+							<button 
+								class="sr-add" 
+								onclick={() => openSubjectRefModal(pipeIdx)} 
+								title="Add subject reference">
+								+ s{(pipe.subjectReferences?.length ?? 0) + 1}
 							</button>
 						{/if}
 					</div>
@@ -493,35 +599,45 @@
 			{:else}
 				<div class="row-group">
 					<div class="row-header">
-						<span class="row-label">SUBJECT REFERENCES</span>
+						<span class="row-label">SUBJECT REFS</span>
 						<span class="row-count">0/{MAX_SUBJECT_REFS}</span>
 					</div>
 					<div class="sr-row">
-						<button class="sr-add" onclick={() => openSubjectRefModal(pipeIdx)} title="Add subject reference">
+						<button 
+							class="sr-add" 
+							onclick={() => openSubjectRefModal(pipeIdx)} 
+							title="Add subject reference">
 							+ s1
 						</button>
 					</div>
 				</div>
 			{/if}
 
-			<!-- ═══ FRAME RULER ═══ -->
-			<div class="ruler-wrap">
-				<FrameRuler {totalFrames} selectedFrame={null} segments={[]} onframeSelect={() => {}} />
+			<!-- ═══ FRAME RULER (CANONICAL) ═══ -->
+			<div class="ruler-wrap ruler-aligned">
+				<FrameRuler 
+					{totalFrames} 
+					{selectedFrame}
+					segments={[]} 
+					onframeSelect={(f) => {
+						selectedFrame = f;
+						onframechange?.(f);
+					}} 
+				/>
 			</div>
 
 			<!-- ═══ GLOBAL TRACK ═══ -->
 			{#each [getGlobal(pipe)] as global}
 				{#if global}
-					<div class="global-track">
-						<div class="global-label">GLOBAL</div>
+					<div class="global-track ruler-aligned">
 						<MultiThumbSlider
-											values={[global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1]}
-											min={0}
-											max={totalFrames - 1}
-											step={8}
-											color="#8b9dc3"
-											onchange={(vals) => handleGlobalRangeUpdate(pipeIdx, global.id, vals)}
-										/>
+							values={[global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1]}
+							min={0}
+							max={totalFrames - 1}
+							step={8}
+							color="#59B5FF"
+							onchange={(vals) => handleGlobalRangeUpdate(pipeIdx, global.id, vals)}
+						/>
 						<div class="global-actions">
 							<button class="btn-icon-sm" onclick={() => handleToggleGlobal(pipeIdx, global.id)} title="Toggle global">
 								{#if global.enabled}◉{:else}○{/if}
@@ -535,50 +651,146 @@
 			<!-- ═══ TIMELINE TRACK ═══ -->
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}
-					<div class="timeline-track">
-						<div class="timeline-header">
-							<span class="row-label">TIMELINE</span>
-							<span class="segment-count">{tl.segments.length} segment</span>
-						</div>
-						<div class="segment-row-list">
-							{#each tl.segments as seg (seg.id)}
-								<div class="seg-row full-width"
-									style="left: 0%; width: 100%;">
-									<div class="seg-body">
-										<span class="seg-range">{seg.frameStart}–{seg.frameEnd}</span>
-										{#if seg.tags.length > 0}
-											<span class="seg-tag-count">{seg.tags.length}</span>
-										{/if}
+					<div class="timeline-track ruler-aligned">
+						{#each tl.segments as seg (seg.id)}
+							<div class="segment-row">
+								<!-- Segment range bar -->
+								<div class="seg-bar">
+									<!-- Left thumb -->
+									<div 
+										class="thumb left"
+										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'left')}
+										style={`left: ${frameToX(seg.frameStart)}%`}
+										title="Drag to resize start">
 									</div>
-									<div class="seg-tags">
-										{#each seg.tags as tag (tag.id)}
-											<div class="tag-bar"
-												style="left: {((tag.frameStart - seg.frameStart) / (seg.frameEnd - seg.frameStart)) * 100}%; width: {((tag.frameEnd - tag.frameStart) / (seg.frameEnd - seg.frameStart)) * 100}%; background: {tag.spec?.color || '#59B5FF'};"
-												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd}"
+									<!-- Segment body -->
+									<div 
+										class="seg-body"
+										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'body')}
+										style={`left: ${frameToX(seg.frameStart)}%; width: ${frameToX(seg.frameEnd) - frameToX(seg.frameStart)}%`}>
+										<span class="seg-label">{seg.frameStart}–{seg.frameEnd}</span>
+									</div>
+									<!-- Right thumb -->
+									<div 
+										class="thumb right"
+										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'right')}
+										style={`left: ${frameToX(seg.frameEnd)}%`}
+										title="Drag to resize end">
+									</div>
+								</div>
+								
+								<!-- Tag sub-rows -->
+								{#each seg.tags as tag (tag.id)}
+									<div class="tag-row">
+										<div class="tag-track">
+											<!-- Tag bar with thumbs -->
+											<div 
+												class="tag-bar"
 												onclick={() => handleEditTagPrompt(pipeIdx, seg, tag)}
-												role="button"
-												tabindex="0"
-												onkeydown={(e) => e.key === 'Enter' && handleEditTagPrompt(pipeIdx, seg, tag)}>
-												<span class="tag-label">{tag.spec?.name || tag.tag}</span>
-												{#if tag.prompt}
-													<span class="tag-prompt-trunc">{tag.prompt}</span>
-												{/if}
+												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Click to edit prompt">
+												<!-- Left thumb -->
+												<div 
+													class="thumb small left"
+													onpointerdown={(e) => {
+														e.stopPropagation();
+														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
+														if (ruler) {
+															const rect = ruler.getBoundingClientRect();
+															dragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'left',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
+																mouseStartX: e.clientX,
+																rulerWidth: rect.width,
+															};
+														}
+													}}
+													style={`left: ${frameToX(tag.frameStart)}%`}>
+												</div>
+												<!-- Tag body -->
+												<div 
+													class="tag-body"
+													onpointerdown={(e) => {
+														e.stopPropagation();
+														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
+														if (ruler) {
+															const rect = ruler.getBoundingClientRect();
+															dragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'body',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
+																mouseStartX: e.clientX,
+																rulerWidth: rect.width,
+															};
+														}
+													}}
+													style={`left: ${frameToX(tag.frameStart)}%; width: ${frameToX(tag.frameEnd) - frameToX(tag.frameStart)}%`}>
+													<span class="tag-name">{tag.spec?.name || tag.tag}</span>
+													{#if tag.prompt}
+														<span class="tag-prompt">{tag.prompt}</span>
+													{/if}
+												</div>
+												<!-- Right thumb -->
+												<div 
+													class="thumb small right"
+													onpointerdown={(e) => {
+														e.stopPropagation();
+														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
+														if (ruler) {
+															const rect = ruler.getBoundingClientRect();
+															dragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'right',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
+																mouseStartX: e.clientX,
+																rulerWidth: rect.width,
+															};
+														}
+													}}
+													style={`left: ${frameToX(tag.frameEnd)}%`}>
+												</div>
 											</div>
-										{/each}
+											<button 
+												class="btn-del-tag"
+												onclick={(e) => { e.stopPropagation(); handleRemoveTag(pipeIdx, seg.id, tag.id); }}
+												title="Remove tag">×</button>
+										</div>
 									</div>
-									<button class="btn-seg-tag"
-										onclick={(e) => handleOpenTagMenu(seg.id, e, pipeIdx)}>+ Tag</button>
-									<button class="btn-icon-sm btn-del-sm"
-										onclick={() => handleDeleteSegment(pipeIdx, seg.id)}>×</button>
+								{/each}
+								
+								<!-- Add tag button -->
+								<div class="tag-add-row">
+									<button 
+										class="btn-add-tag"
+										onclick={(e) => handleOpenTagMenu(seg.id, e, pipeIdx)}
+										title="Add tag to segment">
+										+ Tag
+									</button>
 								</div>
-							{/each}
-							{#if tl.segments.length === 0}
-								<div class="seg-empty full-width" onclick={() => handleAddSegment(pipeIdx)} role="button" tabindex="0"
-									onkeydown={(e) => e.key === 'Enter' && handleAddSegment(pipeIdx)}>
-									<span>+ Add first segment</span>
-								</div>
-							{/if}
-						</div>
+								
+								<!-- Delete segment button -->
+								<button 
+									class="btn-icon-sm btn-del-sm seg-del"
+									onclick={() => handleDeleteSegment(pipeIdx, seg.id)}
+									title="Delete segment">×</button>
+							</div>
+						{/each}
+						
+						{#if tl.segments.length === 0}
+							<div class="seg-empty full-width" onclick={() => handleAddSegment(pipeIdx)} role="button" tabindex="0"
+								onkeydown={(e) => e.key === 'Enter' && handleAddSegment(pipeIdx)}>
+								<span>+ Add first segment</span>
+							</div>
+						{/if}
 					</div>
 				{:else}
 					<!-- No timeline — show nothing -->
@@ -587,7 +799,8 @@
 
 			<!-- ═══ [+] BUTTON ═══ -->
 			<div class="add-track-wrap">
-				<button class="btn-add-track"
+				<button 
+					class="btn-add-track"
 					onclick={(e) => handleToggleAddMenu(pipeIdx, e)}
 					title="Add track">
 					+
@@ -630,6 +843,15 @@
 			</div>
 		</div>
 	{/if}
+</div>
+
+<!-- Document-wide pointer handlers for drag -->
+<div 
+	onpointermove={handlePointerMove}
+	onpointerup={handlePointerUp}
+	onpointerleave={handlePointerUp}
+	style="position: fixed; inset: 0; pointer-events: none;"
+	aria-hidden="true">
 </div>
 
 <!-- ═══ KEYFRAME MODAL ═══ -->
@@ -953,10 +1175,6 @@
 		border-color: var(--accent, #59b5ff);
 	}
 
-	.sr-chip.sr-disabled {
-		opacity: 0.4;
-	}
-
 	.sr-eye {
 		display: flex;
 		align-items: center;
@@ -1047,6 +1265,12 @@
 		margin: 8px 0;
 	}
 
+	/* Shared alignment for ruler-aligned elements */
+	.ruler-aligned {
+		position: relative;
+		width: 100%;
+	}
+
 	/* ── Global Track ── */
 	.global-track {
 		display: flex;
@@ -1056,15 +1280,6 @@
 		border-top: 1px solid var(--border, #2a2d37);
 		border-bottom: 1px solid var(--border, #2a2d37);
 		margin: 8px 0;
-	}
-
-	.global-label {
-		font-size: 9px;
-		font-weight: 600;
-		color: var(--text-muted, #4a5060);
-		text-transform: uppercase;
-		letter-spacing: 0.8px;
-		padding-left: 2px;
 	}
 
 	.global-actions {
@@ -1080,46 +1295,202 @@
 		margin: 8px 0;
 	}
 
-	.timeline-header {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-bottom: 6px;
-		padding-left: 2px;
-	}
-
-	.segment-count {
-		font-size: 9px;
-		color: var(--text-secondary, #6e7681);
-		margin-left: auto;
-	}
-
-	.segment-row-list {
+	.segment-row {
 		position: relative;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
+		margin-bottom: 4px;
 	}
 
-	.seg-row {
+	/* Segment bar - full width aligned with ruler */
+	.seg-bar {
 		position: relative;
 		height: 28px;
 		background: var(--bg-muted, #1a1d26);
 		border: 1px solid var(--border, #2a2d37);
 		border-radius: 2px;
+		overflow: visible;
+	}
+
+	/* Segment body - positioned absolutely within seg-bar */
+	.seg-body {
+		position: absolute;
+		top: 2px;
+		bottom: 2px;
+		background: var(--accent, #59b5ff);
+		border-radius: 2px;
+		cursor: move;
+		display: flex;
+		align-items: center;
+		padding: 0 8px;
+		min-width: 24px;
+		opacity: 0.7;
+		transition: opacity 0.12s;
+	}
+
+	.seg-body:hover {
+		opacity: 1;
+	}
+
+	.seg-label {
+		font-size: 9px;
+		font-weight: 600;
+		color: rgba(0, 0, 0, 0.7);
+		white-space: nowrap;
+	}
+
+	/* Segment thumbs */
+	.thumb {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 8px;
+		background: var(--accent, #59b5ff);
+		border: 1px solid rgba(255, 255, 255, 0.3);
+		border-radius: 1px;
+		cursor: ew-resize;
+		z-index: 2;
+	}
+
+	.thumb.left {
+		left: 0;
+		border-radius: 2px 0 0 2px;
+	}
+
+	.thumb.right {
+		right: 0;
+		border-radius: 0 2px 2px 0;
+	}
+
+	.thumb.small {
+		width: 6px;
+		background: currentColor;
+		opacity: 0.6;
+	}
+
+	/* ── Tag Rows ── */
+	.tag-row {
+		position: relative;
+		height: 20px;
+		margin-top: 2px;
+	}
+
+	.tag-track {
+		position: relative;
+		height: 100%;
+	}
+
+	.tag-bar {
+		position: absolute;
+		top: 2px;
+		bottom: 2px;
+		border-radius: 2px;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		overflow: hidden;
+		min-width: 20px;
+		transition: opacity 0.12s;
+	}
+
+	.tag-bar:hover {
+		opacity: 0.85;
+	}
+
+	.tag-body {
+		position: absolute;
+		top: 0;
+		bottom: 0;
 		display: flex;
 		align-items: center;
 		padding: 0 6px;
 		gap: 4px;
-		width: 100%;
-		box-sizing: border-box;
+		min-width: 20px;
+		cursor: move;
 	}
 
-	.seg-row.full-width {
+	.tag-name {
+		font-size: 8px;
+		font-weight: 600;
+		color: rgba(0, 0, 0, 0.8);
+		white-space: nowrap;
+	}
+
+	.tag-prompt {
+		font-size: 7px;
+		color: rgba(0, 0, 0, 0.6);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	/* ── Add Tag Row ── */
+	.tag-add-row {
+		position: relative;
+		height: 16px;
+		margin-top: 2px;
+	}
+
+	.btn-add-tag {
+		position: absolute;
 		left: 0;
-		width: 100%;
+		top: 0;
+		padding: 2px 6px;
+		background: transparent;
+		border: 1px dashed var(--border, #2a2d37);
+		border-radius: 2px;
+		color: var(--text-muted, #4a5060);
+		font-size: 8px;
+		cursor: pointer;
+		transition: all 0.12s;
 	}
 
+	.btn-add-tag:hover {
+		border-color: var(--accent, #59b5ff);
+		color: var(--accent, #59b5ff);
+	}
+
+	/* ── Delete buttons ── */
+	.btn-del-tag {
+		position: absolute;
+		right: 2px;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 14px;
+		height: 14px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: transparent;
+		border: none;
+		color: var(--text-muted, #4a5060);
+		cursor: pointer;
+		font-size: 10px;
+		opacity: 0;
+		transition: opacity 0.12s;
+		border-radius: 2px;
+	}
+
+	.tag-row:hover .btn-del-tag {
+		opacity: 1;
+	}
+
+	.btn-del-tag:hover {
+		background: rgba(255, 89, 89, 0.2);
+		color: #ff5959;
+	}
+
+	.seg-del {
+		position: absolute;
+		right: 4px;
+		top: 50%;
+		transform: translateY(-50%);
+		opacity: 0;
+	}
+
+	.segment-row:hover .seg-del {
+		opacity: 1;
+	}
+
+	/* ── Empty State ── */
 	.seg-empty {
 		padding: 8px;
 		text-align: center;
@@ -1134,93 +1505,12 @@
 		box-sizing: border-box;
 	}
 
-	.seg-empty.full-width {
-		left: 0;
-		width: 100%;
-	}
-
-	.seg-body {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-	}
-
-	.seg-range {
-		font-size: 9px;
-		color: var(--text-secondary, #6e7681);
-	}
-
-	.seg-tag-count {
-		font-size: 8px;
-		background: var(--accent, #59b5ff);
-		color: #000;
-		padding: 1px 3px;
-		border-radius: 2px;
-		font-weight: 600;
-	}
-
-	.seg-tags {
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-		bottom: 0;
-		pointer-events: none;
-	}
-
-	.tag-bar {
-		position: absolute;
-		top: 4px;
-		bottom: 4px;
-		border-radius: 2px;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		padding: 0 4px;
-		pointer-events: all;
-		transition: opacity 0.12s;
-		min-width: 20px;
-	}
-
-	.tag-bar:hover {
-		opacity: 0.85;
-	}
-
-	.tag-label {
-		font-size: 8px;
-		font-weight: 600;
-		color: rgba(0, 0, 0, 0.7);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.tag-prompt-trunc {
-		font-size: 7px;
-		color: rgba(0, 0, 0, 0.5);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		margin-left: 4px;
-	}
-
-	.btn-seg-tag {
-		padding: 2px 6px;
-		background: transparent;
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 2px;
-		color: var(--text-muted, #4a5060);
-		font-size: 8px;
-		cursor: pointer;
-		transition: all 0.12s;
-		margin-left: auto;
-	}
-
-	.btn-seg-tag:hover {
+	.seg-empty:hover {
 		border-color: var(--accent, #59b5ff);
 		color: var(--accent, #59b5ff);
 	}
 
+	/* ── Controls ── */
 	.btn-icon-sm {
 		width: 18px;
 		height: 18px;
@@ -1248,21 +1538,26 @@
 		background: rgba(255, 89, 89, 0.1);
 	}
 
-	.seg-empty {
-		padding: 8px;
-		text-align: center;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px dashed var(--border, #2a2d37);
-		border-radius: 2px;
+	.btn-icon {
+		width: 20px;
+		height: 20px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: transparent;
+		border: 1px solid var(--border, #2a2d37);
+		border-radius: 3px;
 		color: var(--text-muted, #4a5060);
-		font-size: 10px;
+		font-size: 14px;
 		cursor: pointer;
 		transition: all 0.12s;
+		line-height: 1;
 	}
 
-	.seg-empty:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
+	.btn-icon:hover {
+		border-color: #ff5959;
+		color: #ff5959;
+		background: rgba(255, 89, 89, 0.1);
 	}
 
 	/* ── Add Track Button ── */
@@ -1556,27 +1851,5 @@
 	.btn-cancel:hover {
 		border-color: var(--text-muted, #4a5060);
 		color: var(--text-primary, #c8d0e0);
-	}
-
-	.btn-icon {
-		width: 20px;
-		height: 20px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 3px;
-		color: var(--text-muted, #4a5060);
-		font-size: 14px;
-		cursor: pointer;
-		transition: all 0.12s;
-		line-height: 1;
-	}
-
-	.btn-icon:hover {
-		border-color: #ff5959;
-		color: #ff5959;
-		background: rgba(255, 89, 89, 0.1);
 	}
 </style>

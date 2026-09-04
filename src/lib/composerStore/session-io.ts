@@ -101,7 +101,8 @@ export class SessionServiceImpl implements SessionService {
       return {
         id: el.id,
         tag: 'global_style',
-        value: el.value,
+        frameStart: el.frame_start ?? el.frameStart ?? 0,
+        frameEnd: el.frame_end ?? el.frameEnd ?? 240,
         enabled: el.enabled !== false,
       };
     }
