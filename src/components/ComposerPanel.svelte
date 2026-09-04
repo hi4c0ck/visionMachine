@@ -113,6 +113,22 @@
 		return () => document.removeEventListener('click', handler);
 	});
 
+	// Drag listeners for segments and tags
+	$effect(() => {
+		function onPointerMove(e: MouseEvent) {
+			handlePointerMove(e);
+		}
+		function onPointerUp() {
+			handlePointerUp();
+		}
+		document.addEventListener('pointermove', onPointerMove);
+		document.addEventListener('pointerup', onPointerUp);
+		return () => {
+			document.removeEventListener('pointermove', onPointerMove);
+			document.removeEventListener('pointerup', onPointerUp);
+		};
+	});
+
 	// ── Helpers ─────────────────────────────────────────────────────────────
 
 	function isKeyframeConfigured(pipe: PipeRow, slotIndex: number): boolean {
@@ -248,7 +264,7 @@
 			await updateSubjectRefUrlAction(session.id, pipe.id, editingSubjectRefId, srImageUrl);
 			await updateSubjectRefUseFramesAction(session.id, pipe.id, editingSubjectRefId, srUseFrames);
 		} else {
-			result = await addSubjectRefAction(session.id, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
+			result = await addSubjectRefAction(session.id, pipe.id, '', srImageUrl, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
 		}
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] confirmSubjectRef:', result.errors);
