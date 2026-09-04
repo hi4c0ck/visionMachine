@@ -138,13 +138,14 @@ describe('Composer Integration', () => {
       await addPipe(session.id);
 
       const pipe = session.pipes[0];
-      const result = await addGlobalElement(session.id, pipe.id, 'dark forest atmosphere');
+      const result = await addGlobalElement(session.id, pipe.id, 0, 240);
 
       expect(result.errors).toHaveLength(0);
       expect(pipe.elements).toHaveLength(1);
       expect(pipe.elements[0]).toMatchObject({
         tag: 'global_style',
-        value: 'dark forest atmosphere',
+        frameStart: 0,
+        frameEnd: 120,
         enabled: true,
       });
     });
