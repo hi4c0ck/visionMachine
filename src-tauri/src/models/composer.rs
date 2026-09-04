@@ -97,7 +97,8 @@ impl Segment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalElement {
     pub id: String,
-    pub value: String,
+    pub frame_start: u32,
+    pub frame_end: u32,
     pub enabled: bool,
 }
 
@@ -105,8 +106,38 @@ impl GlobalElement {
     pub fn new() -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            value: String::new(),
+            frame_start: 0,
+            frame_end: 240,
             enabled: true,
+        }
+    }
+}
+
+/// Subject reference for visual consistency across the pipe
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubjectReference {
+    pub id: String,
+    pub image_url: String,
+    #[serde(rename = "useFrames")]
+    pub use_frames: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameStart")]
+    pub frame_start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameEnd")]
+    pub frame_end: Option<u32>,
+    pub visible: bool,
+}
+
+impl SubjectReference {
+    pub fn new(image_url: String, use_frames: bool) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            image_url,
+            use_frames,
+            frame_start: None,
+            frame_end: None,
+            visible: true,
         }
     }
 }
@@ -179,6 +210,8 @@ pub struct Pipe {
     pub q_value: u32,
     pub c_value: f32,
     pub keyframes: Vec<Keyframe>,
+    #[serde(default)]
+    pub subject_references: Vec<SubjectReference>,
     pub elements: Vec<PipeElement>,
     pub order_index: usize,
 }
@@ -192,10 +225,9 @@ impl Pipe {
             q_value: 18,
             c_value: 7.0,
             keyframes: Vec::new(),
-            elements: vec![
-                PipeElement::Global(GlobalElement::new()),
-                PipeElement::Timeline(TimelineElement::new()),
-            ],
+            subject_references: Vec::new(),
+            // Start empty - user chooses Global OR Timeline via [+]
+            elements: Vec::new(),
             order_index: 0,
         }
     }

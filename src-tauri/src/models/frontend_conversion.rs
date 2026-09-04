@@ -1,7 +1,7 @@
 // Clean conversion: frontend PipeRow -> backend ComposerConfig
 // No legacy prompt_nodes - pipes stored directly as JSON
 
-use crate::models::{ComposerConfig, GlobalElement, Keyframe, Pipe, PipeElement, Segment, TagElement, TagType, TimelineElement};
+use crate::models::{ComposerConfig, GlobalElement, Keyframe, Pipe, PipeElement, Segment, SubjectReference, TagElement, TagType, TimelineElement};
 
 #[derive(serde::Deserialize, Clone)]
 pub struct FrontendTag {
@@ -31,8 +31,27 @@ pub struct FrontendTimelineElement {
 #[derive(serde::Deserialize, Clone)]
 pub struct FrontendGlobalElement {
     pub id: String,
-    pub value: String,
+    #[serde(rename = "frameStart")]
+    pub frame_start: u32,
+    #[serde(rename = "frameEnd")]
+    pub frame_end: u32,
     pub enabled: bool,
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct FrontendSubjectReference {
+    pub id: String,
+    #[serde(rename = "imageUrl")]
+    pub image_url: String,
+    #[serde(rename = "useFrames")]
+    pub use_frames: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameStart")]
+    pub frame_start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "frameEnd")]
+    pub frame_end: Option<u32>,
+    pub visible: bool,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -64,6 +83,8 @@ pub struct FrontendPipe {
     pub q_value: u32,
     pub c_value: f32,
     pub keyframes: Vec<FrontendKeyframe>,
+    #[serde(default)]
+    pub subject_references: Vec<FrontendSubjectReference>,
     pub elements: Vec<FrontendPipeElement>,
     pub order_index: usize,
 }
@@ -116,7 +137,8 @@ impl FrontendComposerInput {
                 FrontendPipeElement::Global(g) => {
                     crate::models::PipeElement::Global(crate::models::GlobalElement {
                         id: g.id.clone(),
-                        value: g.value.clone(),
+                        frame_start: g.frame_start,
+                        frame_end: g.frame_end,
                         enabled: g.enabled,
                     })
                 }
@@ -142,6 +164,16 @@ impl FrontendComposerInput {
                 q_value: p.q_value,
                 c_value: p.c_value,
                 keyframes,
+                subject_references: p.subject_references.iter().map(|sr| {
+                    SubjectReference {
+                        id: sr.id.clone(),
+                        image_url: sr.image_url.clone(),
+                        use_frames: sr.use_frames,
+                        frame_start: sr.frame_start,
+                        frame_end: sr.frame_end,
+                        visible: sr.visible,
+                    }
+                }).collect(),
                 elements,
                 order_index: p.order_index,
             }

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionMachine Build Stats</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary, #0a0a0f);
+      color: var(--text-primary, #fff);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .chart-container {
+      width: 100%;
+      max-width: 700px;
+      background: var(--bg-secondary, #14141f);
+      border-radius: 16px;
+      padding: 32px;
+      border: 1px solid var(--border, #2a2a3a);
+    }
+    .chart-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 24px;
+      color: var(--text-primary, #fff);
+    }
+    .chart-svg {
+      width: 100%;
+      height: 320px;
+    }
+    .axis-label {
+      font-size: 12px;
+      fill: var(--text-muted, #6b6b80);
+    }
+    .grid-line {
+      stroke: var(--border-light, #3a3a4a);
+      stroke-width: 1;
+      stroke-dasharray: 4,4;
+    }
+    .bar {
+      fill: var(--accent, #59B5FF);
+      rx: 4;
+      ry: 4;
+    }
+    .bar.dev {
+      fill: var(--accent2, #bb88ee);
+      opacity: 0.8;
+    }
+    .bar-label {
+      font-size: 13px;
+      font-weight: 500;
+      fill: var(--text-primary, #fff);
+    }
+    .bar-value {
+      font-size: 12px;
+      fill: var(--text-secondary, #a0a0b0);
+    }
+    .y-axis-title {
+      font-size: 11px;
+      fill: var(--text-muted, #6b6b80);
+      writing-mode: tb;
+      text-orientation: mixed;
+    }
+  </style>
+</head>
+<body>
+  <div class="chart-container">
+    <div class="chart-title">VisionMachine Build Time & Size (Desktop)</div>
+    <svg class="chart-svg" viewBox="0 0 636 320" preserveAspectRatio="xMidYMid meet">
+      <!-- Y axis title -->
+      <text class="y-axis-title" x="-140" y="30" transform="rotate(-90)">Build Size (MB)</text>
+      
+      <!-- Grid lines -->
+      <line class="grid-line" x1="60" y1="260" x2="600" y2="260"/>
+      <line class="grid-line" x1="60" y1="200" x2="600" y2="200"/>
+      <line class="grid-line" x1="60" y1="140" x2="600" y2="140"/>
+      <line class="grid-line" x1="60" y1="80" x2="600" y2="80"/>
+      <line class="grid-line" x1="60" y1="20" x2="600" y2="20"/>
+      
+      <!-- Y axis labels -->
+      <text class="axis-label" x="50" y="264" text-anchor="end">0</text>
+      <text class="axis-label" x="50" y="204" text-anchor="end">2</text>
+      <text class="axis-label" x="50" y="144" text-anchor="end">4</text>
+      <text class="axis-label" x="50" y="84" text-anchor="end">6</text>
+      <text class="axis-label" x="50" y="24" text-anchor="end">8</text>
+      
+      <!-- Bars -->
+      <!-- Dev Server: time ~0.7s, size ~2MB (normalized to small bar) -->
+      <rect class="bar dev" x="120" y="248" width="100" height="12"/>
+      <text class="bar-label" x="170" y="240" text-anchor="middle">Dev Server</text>
+      <text class="bar-value" x="170" y="275" text-anchor="middle">~2 MB</text>
+      
+      <!-- Desktop Release: time 208s (scaled), size 4.85MB -->
+      <rect class="bar" x="350" y="110" width="100" height="150"/>
+      <text class="bar-label" x="400" y="100" text-anchor="middle">Desktop Release</text>
+      <text class="bar-value" x="400" y="275" text-anchor="middle">4.85 MB</text>
+      
+      <!-- X axis -->
+      <line x1="60" y1="260" x2="600" y2="260" stroke="var(--border-light, #3a3a4a)" stroke-width="1"/>
+    </svg>
+  </div>
+</body>
+</html>

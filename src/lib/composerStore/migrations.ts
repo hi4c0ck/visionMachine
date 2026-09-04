@@ -6,6 +6,11 @@ import type { PipeRow, PipeElement, GlobalElement, TimelineElement } from '$type
 
 export class MigrationServiceImpl implements MigrationService {
   migratePipe(pipe: PipeRow): PipeRow {
+    // Ensure subjectReferences array exists (normalize for old data)
+    if (!pipe.subjectReferences) {
+      pipe.subjectReferences = [];
+    }
+
     // If already has elements with proper structure, no migration needed
     if (pipe.elements && pipe.elements.length > 0) {
       return pipe;

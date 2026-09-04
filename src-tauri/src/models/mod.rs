@@ -7,8 +7,8 @@ pub mod viewmodel;
 
 // Re-export all from composer (priority over viewmodel to avoid ambiguity)
 pub use composer::{
-    ComposerConfig, Keyframe, Pipe, PipeElement, Resolution, Segment, TagElement, TagType,
-    TimelineElement, GlobalElement,
+    ComposerConfig, GlobalElement, Keyframe, Pipe, PipeElement, Resolution, Segment,
+    SubjectReference, TagElement, TagType, TimelineElement,
 };
 
 // Re-export viewmodel items (without conflicting names)

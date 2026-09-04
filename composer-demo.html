@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisionMachine Composer — Standalone Demo</title>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #14141f;
+            --bg-tertiary: #1e1e2e;
+            --bg-elevated: #252538;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0b0;
+            --text-muted: #6b6b80;
+            --accent: #59B5FF;
+            --accent-glow: rgba(89, 181, 255, 0.3);
+            --border: #2a2a3a;
+            --border-light: #3a3a4a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 40px;
+            min-height: 100vh;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-bottom: 32px;
+        }
+
+        /* Composer Panel */
+        .composer-panel {
+            max-width: 800px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .composer-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-tertiary);
+        }
+
+        .composer-title {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .header-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+        }
+
+        .unified-composer {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* Pipe Row */
+        .pipe-row {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px;
+        }
+
+        /* Keyframe Chips */
+        .kf-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .kf-chip {
+            flex: 1;
+            height: 32px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s;
+            gap: 4px;
+        }
+
+        .kf-chip:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-glow);
+        }
+
+        .kf-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 3px;
+        }
+
+        /* Timeline Container */
+        .timeline-container {
+            position: relative;
+            margin-bottom: 12px;
+        }
+
+        /* Frame Ruler */
+        .frame-ruler {
+            position: relative;
+            height: 24px;
+            background: var(--bg-primary);
+            border-top: 1px solid var(--border);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .ruler-bar {
+            position: relative;
+            height: 100%;
+            display: flex;
+            align-items: flex-end;
+        }
+
+        .ruler-line {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #3a3a3a;
+        }
+
+        .marker {
+            position: absolute;
+            bottom: 0;
+            height: 100%;
+            cursor: pointer;
+            transition: all 0.1s;
+        }
+
+        .marker:hover {
+            background: rgba(99, 102, 241, 0.1);
+        }
+
+        .tick {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 1px;
+            height: 8px;
+            background: #4a4a4a;
+        }
+
+        .marker.major .tick {
+            height: 12px;
+            background: #6a6a6a;
+        }
+
+        .label {
+            position: absolute;
+            bottom: 14px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 9px;
+            color: #6a6a6a;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+
+        .playhead {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: var(--accent);
+            opacity: 0.6;
+            pointer-events: none;
+            z-index: 10;
+            box-shadow: 0 0 4px var(--accent);
+        }
+
+        /* Add Mode Row */
+        .add-mode-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 12px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .add-mode-btn {
+            padding: 6px 14px;
+            background: transparent;
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-weight: 500;
+        }
+
+        .add-mode-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-glow);
+        }
+
+        .add-mode-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        /* Track Rows */
+        .track-row {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 6px;
+            min-height: 32px;
+        }
+
+        .track-tag {
+            width: 50px;
+            font-size: 0.6rem;
+            color: var(--text-muted);
+            text-align: right;
+            font-weight: 600;
+        }
+
+        .track-bar-wrap {
+            flex: 1;
+            height: 22px;
+            background: var(--bg-primary);
+            border-radius: 11px;
+            border: 1px solid var(--border);
+            position: relative;
+            overflow: visible;
+        }
+
+        /* Multi-Thumb Slider */
+        .slider {
+            --c: #a8b5d6;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 10px 0;
+            width: 100%;
+            touch-action: none;
+        }
+
+        .track-container {
+            position: relative;
+            height: 36px;
+            cursor: pointer;
+        }
+
+        .rail {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            left: 0;
+            right: 0;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 5px;
+        }
+
+        .fill {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 10px;
+            background: var(--c);
+            border-radius: 5px;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .thumb-hit {
+            position: absolute;
+            top: 50%;
+            width: 36px;
+            height: 36px;
+            transform: translate(-50%, -50%);
+            cursor: grab;
+            z-index: 3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            transition: transform 0.08s, box-shadow 0.12s;
+        }
+
+        .thumb-a {
+            background: radial-gradient(circle at 35% 35%, #d0dbe8, #8ba4c4);
+            border: 2px solid #6a8ab5;
+        }
+
+        .thumb-b {
+            background: radial-gradient(circle at 35% 35%, #d0e8d8, #7fb89a);
+            border: 2px solid #5a9a78;
+        }
+
+        .thumb-value {
+            font-size: 7px;
+            font-weight: 700;
+            color: rgba(0, 0, 0, 0.7);
+        }
+
+        .readout {
+            display: flex;
+            justify-content: space-between;
+            padding: 0 4px;
+        }
+
+        .value-chip {
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .value-a { color: #8ba4c4; }
+        .value-b { color: #7fb89a; }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .dot-a { background: #8ba4c4; }
+        .dot-b { background: #7fb89a; }
+
+        /* Empty Track */
+        .track-empty {
+            opacity: 0.6;
+        }
+
+        .track-bar-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .add-tag-btn {
+            padding: 4px 12px;
+            background: transparent;
+            border: 1px dashed var(--border-light);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 0.65rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .add-tag-btn:hover {
+            border-color: var(--accent);
+            border-style: solid;
+            color: var(--accent);
+        }
+
+        /* Add Segment */
+        .add-segment-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .add-seg-btn {
+            padding: 4px 12px;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-size: 0.65rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .add-seg-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* Demo Controls */
+        .demo-controls {
+            max-width: 800px;
+            margin-top: 32px;
+            padding: 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        .demo-controls h3 {
+            font-size: 1rem;
+            margin-bottom: 16px;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .control-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .control-item label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .control-item button {
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .control-item button:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .control-item button.active {
+            border-color: var(--accent);
+            background: var(--accent-glow);
+            color: var(--accent);
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            color: #fff;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            pointer-events: none;
+            white-space: nowrap;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <h1>VisionMachine Composer</h1>
+    <p class="subtitle">Standalone demo — simplified timeline layout with coordinated frame space</p>
+
+    <div class="composer-panel">
+        <div class="composer-header">
+            <span class="composer-title">Composer</span>
+            <div class="header-meta">1 pipe · 241 frames</div>
+        </div>
+
+        <div class="unified-composer">
+            <!-- Pipe Row -->
+            <div class="pipe-row">
+                <!-- Keyframe Chips -->
+                <div class="kf-row">
+                    <div class="kf-chip" title="Keyframe 1: frame 0">
+                        <span>k1</span>
+                    </div>
+                    <div class="kf-chip" title="Keyframe 2: frame 80">
+                        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='32'%3E%3Crect fill='%231e1e2e' width='48' height='32'/%3E%3Ctext x='24' y='18' text-anchor='middle' fill='%2359B5FF' font-size='10' font-family='monospace'%3EIMG%3C/text%3E%3C/svg%3E" alt="kf2" class="kf-img" />
+                    </div>
+                    <!-- k3 not shown — empty slot -->
+                </div>
+
+                <!-- Timeline Container -->
+                <div class="timeline-container" id="timeline">
+                    <!-- Frame Ruler -->
+                    <div class="frame-ruler" id="ruler">
+                        <div class="ruler-bar">
+                            <div class="ruler-line"></div>
+                            <!-- Markers generated by JS -->
+                        </div>
+                        <!-- Playhead -->
+                        <div class="playhead" id="playhead" style="display: none;"></div>
+                    </div>
+
+                    <!-- Add Mode Row -->
+                    <div class="add-mode-row">
+                        <button class="add-mode-btn">+ Global</button>
+                        <button class="add-mode-btn">+ Timeline</button>
+                    </div>
+
+                    <!-- Tag Tracks -->
+                    <div class="track-row">
+                        <span class="track-tag" style="color: #FF6B6B">Scene</span>
+                        <div class="track-bar-wrap">
+                            <div class="slider">
+                                <div class="track-container" id="slider-scene">
+                                    <div class="rail"></div>
+                                    <div class="fill" style="left: 20%; width: 40%; background: #FF6B6B;"></div>
+                                    <div class="thumb-hit" style="left: 20%;">
+                                        <div class="thumb thumb-a"><span class="thumb-value">48</span></div>
+                                    </div>
+                                    <div class="thumb-hit" style="left: 60%;">
+                                        <div class="thumb thumb-b"><span class="thumb-value">96</span></div>
+                                    </div>
+                                </div>
+                                <div class="readout">
+                                    <span class="value-chip value-a"><span class="dot dot-a"></span><span>48</span></span>
+                                    <span class="value-chip value-b"><span class="dot dot-b"></span><span>96</span></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="track-row">
+                        <span class="track-tag" style="color: #FFE66D">Camera</span>
+                        <div class="track-bar-wrap">
+                            <div class="slider">
+                                <div class="track-container" id="slider-camera">
+                                    <div class="rail"></div>
+                                    <div class="fill" style="left: 40%; width: 30%; background: #FFE66D;"></div>
+                                    <div class="thumb-hit" style="left: 40%;">
+                                        <div class="thumb thumb-a"><span class="thumb-value">96</span></div>
+                                    </div>
+                                    <div class="thumb-hit" style="left: 70%;">
+                                        <div class="thumb thumb-b"><span class="thumb-value">144</span></div>
+                                    </div>
+                                </div>
+                                <div class="readout">
+                                    <span class="value-chip value-a"><span class="dot dot-a"></span><span>96</span></span>
+                                    <span class="value-chip value-b"><span class="dot dot-b"></span><span>144</span></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="track-row">
+                        <span class="track-tag" style="color: #4ECDC4">Rotation</span>
+                        <div class="track-bar-wrap track-bar-empty">
+                            <button class="add-tag-btn">+ Rotation</button>
+                        </div>
+                    </div>
+
+                    <div class="track-row">
+                        <span class="track-tag" style="color: #45B7D1">Lighting</span>
+                        <div class="track-bar-wrap track-bar-empty">
+                            <button class="add-tag-btn">+ Lighting</button>
+                        </div>
+                    </div>
+
+                    <!-- Add Segment -->
+                    <div class="add-segment-row">
+                        <span class="track-tag">+</span>
+                        <div class="track-bar-wrap">
+                            <button class="add-seg-btn">Add Segment</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Add Pipe Button -->
+            <button class="add-mode-btn" style="width: 100%;">+ Add Pipe</button>
+        </div>
+    </div>
+
+    <!-- Demo Controls -->
+    <div class="demo-controls">
+        <h3>Demo Controls</h3>
+        <div class="control-group">
+            <div class="control-item">
+                <label>Playhead Frame</label>
+                <button onclick="setPlayhead(0)">Frame 0</button>
+                <button onclick="setPlayhead(80)">Frame 80</button>
+                <button onclick="setPlayhead(160)">Frame 160</button>
+                <button onclick="setPlayhead(240)">Frame 240</button>
+            </div>
+            <div class="control-item">
+                <label>Keyframes</label>
+                <button onclick="toggleKF(1)">Show k1</button>
+                <button onclick="toggleKF(2)">Show k2</button>
+                <button onclick="toggleKF(3)">Show k3</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const TOTAL_FRAMES = 241;
+        const ruler = document.getElementById('ruler');
+        const playhead = document.getElementById('playhead');
+        const rulerBar = ruler.querySelector('.ruler-bar');
+
+        // Generate ruler markers
+        for (let f = 0; f <= TOTAL_FRAMES; f += 8) {
+            const marker = document.createElement('div');
+            marker.className = 'marker' + (f % 100 === 0 ? ' major' : '');
+            marker.style.left = (f / TOTAL_FRAMES * 100) + '%';
+            
+            const tick = document.createElement('div');
+            tick.className = 'tick';
+            marker.appendChild(tick);
+
+            if (f % 100 === 0 && f > 0) {
+                const label = document.createElement('span');
+                label.className = 'label';
+                label.textContent = f;
+                marker.appendChild(label);
+            }
+
+            marker.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setPlayhead(f);
+            });
+            rulerBar.appendChild(marker);
+        }
+
+        // Set playhead position
+        function setPlayhead(frame) {
+            if (frame < 0) frame = 0;
+            if (frame >= TOTAL_FRAMES) frame = TOTAL_FRAMES - 1;
+            playhead.style.display = 'block';
+            playhead.style.left = (frame / TOTAL_FRAMES * 100) + '%';
+        }
+
+        // Click on ruler to set playhead
+        ruler.addEventListener('click', (e) => {
+            if (e.target.closest('.marker')) return;
+            const rect = ruler.getBoundingClientRect();
+            const percent = (e.clientX - rect.left) / rect.width;
+            const frame = Math.round(percent * TOTAL_FRAMES / 8) * 8;
+            setPlayhead(Math.max(0, Math.min(frame, TOTAL_FRAMES - 8)));
+        });
+
+        // Drag interaction for sliders
+        document.querySelectorAll('.thumb-hit').forEach(hit => {
+            let isDragging = false;
+            let dragSide = null;
+            
+            hit.addEventListener('pointerdown', (e) => {
+                isDragging = true;
+                dragSide = hit.classList.contains('thumb-a') ? 'left' : 'right';
+                hit.setPointerCapture(e.pointerId);
+                e.stopPropagation();
+            });
+            
+            hit.addEventListener('pointermove', (e) => {
+                if (!isDragging) return;
+                const container = hit.closest('.track-container');
+                const rect = container.getBoundingClientRect();
+                const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                const snappedPercent = Math.round(percent * 100 / 8) * 8 / 100;
+                hit.style.left = (snappedPercent * 100) + '%';
+                
+                // Update fill
+                updateFill(container);
+            });
+            
+            hit.addEventListener('pointerup', () => {
+                isDragging = false;
+            });
+        });
+
+        function updateFill(container) {
+            const thumbs = container.querySelectorAll('.thumb-hit');
+            const left = parseFloat(thumbs[0].style.left);
+            const right = parseFloat(thumbs[1].style.left);
+            const fill = container.querySelector('.fill');
+            fill.style.left = Math.min(left, right) + '%';
+            fill.style.width = Math.abs(right - left) + '%';
+            
+            // Update readout values
+            const totalFrames = 241;
+            const startFrame = Math.round(Math.min(left, right) / 100 * totalFrames / 8) * 8;
+            const endFrame = Math.round(Math.max(left, right) / 100 * totalFrames / 8) * 8;
+            const readout = container.closest('.slider').querySelector('.readout');
+            const values = readout.querySelectorAll('span:last-child');
+            values[0].textContent = startFrame;
+            values[1].textContent = endFrame;
+        }
+
+        // Demo controls
+        function toggleKF(num) {
+            const chips = document.querySelectorAll('.kf-chip');
+            const row = document.querySelector('.kf-row');
+            
+            if (num === 1) {
+                chips[0].style.display = chips[0].style.display === 'none' ? 'flex' : 'none';
+            } else if (num === 2) {
+                chips[1].style.display = chips[1].style.display === 'none' ? 'flex' : 'none';
+            } else if (num === 3) {
+                if (!chips[2]) {
+                    const chip = document.createElement('div');
+                    chip.className = 'kf-chip';
+                    chip.innerHTML = '<span>k3</span>';
+                    chip.title = 'Keyframe 3: frame 160';
+                    row.appendChild(chip);
+                }
+                chips[2].style.display = chips[2].style.display === 'none' ? 'flex' : 'none';
+            }
+        }
+
+        // Add segment button
+        document.querySelectorAll('.add-seg-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                alert('Add Segment modal would open here');
+            });
+        });
+
+        // Add tag buttons
+        document.querySelectorAll('.add-tag-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tagType = btn.textContent.replace('+ ', '');
+                alert('Add ' + tagType + ' tag modal would open here');
+            });
+        });
+
+        // Add mode buttons
+        document.querySelectorAll('.add-mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const action = btn.textContent;
+                if (action.includes('Global')) {
+                    alert('Open Global Style modal');
+                } else if (action.includes('Timeline')) {
+                    alert('Add Timeline element');
+                }
+            });
+        });
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') {
+                const current = playhead.style.left ? parseFloat(playhead.style.left) : 0;
+                const frame = Math.max(0, Math.round(current / 100 * TOTAL_FRAMES) - 8);
+                setPlayhead(frame);
+            } else if (e.key === 'ArrowRight') {
+                const current = playhead.style.left ? parseFloat(playhead.style.left) : 0;
+                const frame = Math.min(TOTAL_FRAMES - 8, Math.round(current / 100 * TOTAL_FRAMES) + 8);
+                setPlayhead(frame);
+            }
+        });
+    </script>
+</body>
+</html>

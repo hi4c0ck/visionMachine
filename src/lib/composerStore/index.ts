@@ -365,7 +365,7 @@ class ComposerStoreImpl implements ComposerStore {
             cValue: pipe.cValue,
             orderIndex: pipe.orderIndex,
             keyframes: pipe.keyframes,
-            subjectRefs: (pipe.subjectReferences ?? []).map((ref: any) => ({
+            subjectReferences: (pipe.subjectReferences ?? []).map((ref: any) => ({
               id: ref.id,
               imageUrl: ref.imageUrl,
               useFrames: ref.useFrames ?? false,
