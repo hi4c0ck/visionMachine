@@ -6,8 +6,9 @@
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData, PipeRow } from '$types';
-	import { getMaxFramesForResolution, migratePipeToTwoLayer } from '$types';
-	import { hydrateSessions, setOnUpdate } from '$lib/composerStore';
+	import { getMaxFramesForResolution } from '$types';
+import { migratePipe } from '$lib/composerStore';
+import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } from '$lib/composerStore';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -54,6 +55,15 @@
 		return sess || null;
 	});
 
+	// Keyboard navigation for playhead
+	function handleKeyDown(e: KeyboardEvent) {
+		if (e.key === 'ArrowLeft') {
+			selectedFrame = Math.max(0, (selectedFrame || 0) - 8);
+		} else if (e.key === 'ArrowRight') {
+			selectedFrame = Math.min(maxFrames, (selectedFrame || 0) + 8);
+		}
+	}
+
 	// Load projects from backend
 	async function loadProjects() {
 		try {
@@ -81,7 +91,7 @@
 			const backendProjectsResult = result as any[];
 
 			// Convert backend format to frontend format
-			let backendProjects = backendProjectsResult.map((p: any) => ({
+			let backendProjects = (backendProjectsResult || []).map((p: any) => ({
 				id: p.id,
 				name: p.name,
 				createdAt: new Date(p.created_at).getTime(),
@@ -104,7 +114,7 @@
 						createdAt: s.created_at ? new Date(s.created_at).getTime() : Date.now(),
 						updatedAt: s.updated_at ? new Date(s.updated_at).getTime() : Date.now(),
 						directoryPath: s.directory_path || '',
-						pipes: s.pipes_json ? JSON.parse(s.pipes_json) : [],
+						pipes: [], // Pipes loaded via get_composer when session is selected
 						fps: s.fps || 24,
 						resolution: s.resolution || '720p',
 						orientation: s.orientation || 'horizontal',
@@ -167,18 +177,23 @@
 
 	// Fallback: Load from localStorage (for migration)
 	async function loadFromLocalStorage() {
-		try {
-			const saved = localStorage.getItem(`vm-projects-${userName}`);
-			if (saved) {
-				let parsed: ProjectData[] = JSON.parse(saved);
-				// Migrate old globalPrompt -> globalNodes format for each pipe in each session
-				parsed = parsed.map(project => ({
-					...project,
-					sessions: project.sessions.map(session => ({
-						...session,
-						pipes: (session.pipes || []).map(p => migratePipeToTwoLayer(p))
-					}))
-				}));
+			try {
+				const saved = localStorage.getItem(`vm-projects-${userName}`);
+				if (saved) {
+					let parsed: any = JSON.parse(saved);
+					// Ensure parsed is an array
+					if (!Array.isArray(parsed)) {
+						console.error('[Workspace] Invalid projects format in localStorage, resetting');
+						parsed = [];
+					}
+					// Migrate old globalPrompt -> globalNodes format for each pipe in each session
+					parsed = parsed.map((project: any) => ({
+						...project,
+						sessions: (project.sessions || []).map((session: any) => ({
+							...session,
+							pipes: (session.pipes || []).map((p: any) => migratePipe(p))
+						}))
+					}));
 				projects = parsed;
 				hydrateSessions(parsed.flatMap(p => p.sessions));
 				
@@ -206,21 +221,21 @@
 
 	// Register store update callback - reload session from backend when changed
 	setOnUpdate(async (sessionId) => {
-		if (selectedSessionId === sessionId) {
-			// Get fresh data from store (which was just updated by the action)
+		if (selectedSessionId === sessionId && selectedProject) {
+			// Update the project's session data with loaded pipes
 			const freshSession = sessions.get(sessionId);
-			if (freshSession && selectedProject) {
-				// Update the project's session directly to trigger reactive update
-				const updatedProjects = projects.map(p => {
+			if (freshSession) {
+				const updatedProjects = (projects || []).map((p: any) => {
 					if (p.id !== selectedProject.id) return p;
 					return {
 						...p,
-						sessions: p.sessions.map(s =>
+						sessions: (p.sessions || []).map((s: any) =>
 							s.id === sessionId ? { ...freshSession } : s
 						)
 					};
 				});
 				projects = updatedProjects;
+				saveProjects();
 			}
 		}
 	});
@@ -268,18 +283,38 @@
 		saveProjects();
 	}
 
-	function handleSessionSelect(sessionId: string) {
-			const foundProject = projects.find(p =>
-				p.sessions.some(s => s.id === sessionId)
-			);
+	async function handleSessionSelect(sessionId: string) {
+		const foundProject = projects.find(p =>
+			p.sessions.some(s => s.id === sessionId)
+		);
 
-			if (foundProject) {
-				selectedProjectId = foundProject.id;
-				selectedSessionId = sessionId;
-				hydrateSessions(foundProject.sessions);
-				saveProjects();
+		if (foundProject) {
+			selectedProjectId = foundProject.id;
+			selectedSessionId = sessionId;
+
+			// Load fresh data from backend
+			const loadResult = await loadSession(sessionId);
+
+			// Update the project's session data with loaded pipes
+			if (loadResult.errors.length === 0) {
+				const loadedSession = sessions.get(sessionId);
+				if (loadedSession) {
+					// Update the project's session with loaded data
+						const updatedProjects = (projects || []).map((p: any) => {
+							if (p.id !== foundProject.id) return p;
+							return {
+								...p,
+								sessions: (p.sessions || []).map((s: any) =>
+									s.id === sessionId ? { ...s, ...loadedSession } : s
+								)
+							};
+						});
+					projects = updatedProjects;
+					saveProjects();
+				}
 			}
 		}
+	}
 
 	async function handleCreateProject(input: { name: string; path?: string }) {
 			try {
@@ -358,7 +393,7 @@
 			selectedSessionId = null;
 		}
 		// Clear store for deleted project's sessions
-		hydrateSessions(projects.flatMap(p => p.sessions));
+		hydrateSessions((projects || []).flatMap((p: any) => p.sessions || []));
 		saveProjects();
 	}
 
@@ -425,10 +460,10 @@
 				updatedAt: Date.now(),
 			};
 			
-			projects = projects.map(p => 
+			projects = (projects || []).map((p: any) =>
 				p.id === projectId ? updatedProject : p
 			);
-			
+
 			selectedSessionId = newSession.id;
 			hydrateSessions([newSession]);
 			await saveProjects();
@@ -476,11 +511,11 @@
 			...project,
 			sessions: [...project.sessions, newSession],
 		};
-		
-		projects = projects.map(p => 
+
+		projects = (projects || []).map((p: any) =>
 			p.id === projectId ? updatedProject : p
 		);
-		
+
 		selectedSessionId = newSession.id;
 		saveProjects();
 	}
@@ -488,17 +523,17 @@
 	function handleRenameSession(sessionId: string, newName: string) {
 		if (!selectedProject) return;
 		
-		const updatedSessions = selectedProject.sessions.map(s =>
+		const updatedSessions = (selectedProject?.sessions || []).map((s: any) =>
 			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
 		);
-		
+
 		const updatedProject: ProjectData = {
 			...selectedProject,
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
 		};
-		
-		projects = projects.map(p =>
+
+		projects = (projects || []).map((p: any) =>
 			p.id === selectedProject.id ? updatedProject : p
 		);
 		saveProjects();
@@ -523,8 +558,8 @@
 			sessions: updatedSessions,
 			updatedAt: Date.now(),
 		};
-		
-		projects = projects.map(p =>
+
+		projects = (projects || []).map((p: any) =>
 			p.id === projectId ? updatedProject : p
 		);
 		
@@ -543,11 +578,11 @@
 		}
 		
 		// Update locally
-		const updatedProjects = projects.map(p => {
+		const updatedProjects = (projects || []).map((p: any) => {
 			if (p.id !== selectedProject.id) return p;
 			return {
 				...p,
-				sessions: p.sessions.map(s => 
+				sessions: (p.sessions || []).map((s: any) =>
 					s.id === updatedSession.id ? updatedSession : s
 				)
 			};
@@ -570,11 +605,29 @@
 						}
 					}
 				}).catch(e => console.error('[Workspace] Backend update failed:', e));
-		} catch (e) {
-			console.error('[Workspace] Failed to update session backend:', e);
-		}
+			} catch (e) {
+				console.error('[Workspace] Failed to update session backend:', e);
+			}
 		
 		saveProjects();
+	}
+
+	function handleGenerate() {
+		if (!selectedSession || !selectedSession.pipes?.length) return;
+		console.log('[Workspace] Generating video for session:', selectedSession.id);
+		// TODO: Implement actual generation logic
+	}
+
+	function handleFpsChange(fps: number) {
+		if (!selectedSession) return;
+		selectedSession.fps = fps;
+		handleSessionUpdate(selectedSession);
+	}
+
+	function handleResolutionChange(res: string) {
+		if (!selectedSession) return;
+		selectedSession.resolution = res;
+		handleSessionUpdate(selectedSession);
 	}
 
 	function handleToolSelect(id: string) {
@@ -605,7 +658,7 @@
 		onlayoutChange={handleLayoutChange}
 	/>
 
-	<div class="workspace-body">
+	<div class="workspace-body" onkeydown={handleKeyDown} tabindex="0">
 		<div class="left-column">
 			{#if layoutMode !== 'single'}
 				<ProjectsPanel
@@ -651,8 +704,11 @@
 				{selectedSession}
 				{selectedProject}
 				{activeTool}
+				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
 				onselect={handleToolSelect}
-				ongenerate={() => {}}
+				ongenerate={handleGenerate}
+				onfpschange={handleFpsChange}
+				onresolutionchange={handleResolutionChange}
 			/>
 		{/if}
 	</div>

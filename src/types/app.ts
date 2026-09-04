@@ -1,4 +1,5 @@
 // Core data types for VisionMachine app
+// Single source of truth - all types defined here
 
 /**
  * Tag types available in pipe segments
@@ -164,7 +165,7 @@ export type PipeElement = GlobalElement | TimelineElement;
 export interface PipeKeyframe {
   id: string;
   frame: number;
-  slot_index: number;  // 1, 2, or 3
+  slotIndex: number;  // 1, 2, or 3
   type: KeyframeType;
   imageSrc?: string;
   prompt?: string;
@@ -178,78 +179,17 @@ export interface PipeKeyframe {
  */
 export interface PipeRow {
   id: string;
+  name: string;
   lengthFrames: number;
+  qValue: number;    // num_inference_steps
+  cValue: number;    // cfg_scale
   keyframes: PipeKeyframe[];
-  qValue: number;
-  cValue: number;
-  elements: PipeElement[];  // Array of GlobalElement and/or TimelineElement
-  // Backward compatibility — will be deprecated
-  globalNodes?: GlobalNode[];
-  segments?: PromptSegment[];
+  elements: PipeElement[];
+  orderIndex: number;
 }
 
 /**
- * Legacy prompt segment for backward compatibility
- * @deprecated Use Segment + TagElement instead
- */
-export interface PromptSegment {
-  id: string;
-  frameStart: number;
-  frameEnd: number;
-  tag: TagType;
-  value: number;
-  spec: TagSpecification;
-  prompt?: string;
-}
-
-/**
- * Legacy global node for backward compatibility
- * @deprecated Use GlobalElement instead
- */
-export interface GlobalNode {
-  id: string;
-  tag: 'global_style';
-  value: string;
-  enabled: boolean;
-}
-
-/**
- * Legacy global prompt for backward compatibility
- * @deprecated Use GlobalElement instead
- */
-export interface PipeGlobalPrompt {
-  text: string;
-}
-
-/**
- * Migrate old pipe to new nested structure
- * @deprecated Use migratePipeToNested instead
- */
-export function migratePipeToTwoLayer(pipe: PipeRow): PipeRow {
-  return pipe; // Already migrated or no conversion needed
-}
-
-/**
- * Alias for backward compatibility
- * @deprecated Use validateTagElements or validateTimelineSegments instead
- */
-export function validatePromptSegments(segments: PromptSegment[]): { valid: boolean; errors: string[] } {
-  // Convert legacy segments to tag elements and validate
-  const tags: TagElement[] = segments.map(s => ({
-    id: s.id,
-    tag: s.tag,
-    frameStart: s.frameStart,
-    frameEnd: s.frameEnd,
-    value: s.value,
-    prompt: s.prompt,
-    spec: s.spec,
-  }));
-  
-  return validateTagElements(tags);
-}
-
-/**
- * Session data - represents a complete video project
+ * Session data
  */
 export interface SessionData {
   id: string;
@@ -265,7 +205,7 @@ export interface SessionData {
 }
 
 /**
- * Project data - contains multiple sessions
+ * Project data
  */
 export interface ProjectData {
   id: string;
@@ -275,16 +215,6 @@ export interface ProjectData {
   sessions: SessionData[];
   totalGenerations: number;
   profileId?: string;
-  files?: ProjectFile[];
-}
-
-export interface ProjectFile {
-  id: string;
-  fileName: string;
-  filePath: string;
-  fileType: string;
-  fileSize: number;
-  addedAt: number;
 }
 
 /**
@@ -292,146 +222,9 @@ export interface ProjectFile {
  */
 export interface AppState {
   userName: string;
+  projects: ProjectData[];
   selectedProjectId: string | null;
   selectedSessionId: string | null;
-  projects: ProjectData[];
-}
-
-/**
- * Create empty project
- */
-export function createEmptyProject(name: string, directoryPath: string): ProjectData {
-  return {
-    id: crypto.randomUUID(),
-    name,
-    createdAt: Date.now(),
-    directoryPath,
-    sessions: [],
-    totalGenerations: 0,
-  };
-}
-
-/**
- * Create empty session with default pipe (nested structure)
- */
-export function createEmptySession(projectName: string, directoryPath: string): SessionData {
-  // Create default pipe with empty Timeline element
-  const pipe: PipeRow = {
-    id: crypto.randomUUID(),
-    lengthFrames: 121,
-    keyframes: [],
-    qValue: 18,
-    cValue: 7,
-    elements: [{
-      id: crypto.randomUUID(),
-      tag: 'timeline',
-      segments: [],
-    }],
-  };
-  
-  return {
-    id: crypto.randomUUID(),
-    name: projectName ? `${projectName}_session_1` : 'Untitled Session',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    directoryPath,
-    pipes: [pipe],
-    fps: 24,
-    resolution: '720p',
-    orientation: 'horizontal',
-    totalGeneratedFrames: 0,
-  };
-}
-
-/**
- * Validate tag elements have no overlapping ranges for same tag type within a segment
- */
-export function validateTagElements(tags: TagElement[]): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-  const tagRanges = new Map<TagType, Array<{ start: number; end: number; index: number }>>();
-
-  tags.forEach((tag, idx) => {
-    if (!tagRanges.has(tag.tag)) {
-      tagRanges.set(tag.tag, []);
-    }
-    tagRanges.get(tag.tag)!.push({ start: tag.frameStart, end: tag.frameEnd, index: idx });
-  });
-
-  // Check for overlaps within each tag type
-  tagRanges.forEach((ranges, tag) => {
-    for (let i = 0; i < ranges.length; i++) {
-      for (let j = i + 1; j < ranges.length; j++) {
-        const a = ranges[i];
-        const b = ranges[j];
-        // Check overlap: a.start < b.end && b.start < a.end
-        if (a.start < b.end && b.start < a.end) {
-          errors.push(
-            `Overlap detected for <${tag}> between tags ${a.index} (${a.start}-${a.end}) and ${b.index} (${b.start}-${b.end})`
-          );
-        }
-      }
-    }
-  });
-
-  // Validate frame bounds
-  tags.forEach((tag, idx) => {
-    if (tag.frameStart < 0 || tag.frameEnd < 0) {
-      errors.push(`Tag ${idx}: frames must be non-negative`);
-    }
-    if (tag.frameEnd <= tag.frameStart) {
-      errors.push(`Tag ${idx}: frameEnd must be greater than frameStart`);
-    }
-    if (tag.frameEnd - tag.frameStart < 8) {
-      errors.push(`Tag ${idx}: minimum span is 8 frames`);
-    }
-    if (tag.frameStart % 8 !== 0 || tag.frameEnd % 8 !== 0) {
-      errors.push(`Tag ${idx}: frame positions must be multiples of 8`);
-    }
-  });
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
-}
-
-/**
- * Validate segment timeline — segments should not overlap
- */
-export function validateTimelineSegments(segments: Segment[]): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-  
-  for (let i = 0; i < segments.length; i++) {
-    for (let j = i + 1; j < segments.length; j++) {
-      const a = segments[i];
-      const b = segments[j];
-      // Check overlap
-      if (a.frameStart < b.frameEnd && b.frameStart < a.frameEnd) {
-        errors.push(
-          `Overlap detected between segments ${i} (${a.frameStart}-${a.frameEnd}) and ${j} (${b.frameStart}-${b.frameEnd})`
-        );
-      }
-    }
-  }
-  
-  // Validate each segment's tags
-  segments.forEach((seg, segIdx) => {
-    const tagValidation = validateTagElements(seg.tags);
-    if (!tagValidation.valid) {
-      errors.push(...tagValidation.errors.map(e => `Segment ${segIdx}: ${e}`));
-    }
-  });
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
-}
-
-/**
- * Generate unique folder name for session
- */
-export function generateSessionFolderName(baseName: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `${baseName}_${timestamp}`;
+  theme: string;
+  layout: string;
 }

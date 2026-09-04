@@ -1,7 +1,7 @@
+use super::tool::ToolDefinition;
 use std::collections::HashMap;
 use std::sync::Arc;
-use super::tool::ToolDefinition;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{watch, Mutex};
 
 /// Base ViewModel class implementing MVI (Model-View-Intent) pattern
 #[derive(Clone)]
@@ -52,7 +52,7 @@ impl ViewModel {
         let (loading_tx, _) = watch::channel(false);
         let (opacity_tx, _) = watch::channel(1.0);
         let (visible_tx, _) = watch::channel(true);
-        
+
         Self {
             state: Arc::new(Mutex::new(ViewState::default())),
             loading: Arc::new(loading_tx),
@@ -107,7 +107,10 @@ impl ViewModel {
 
     pub async fn get_data<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
         let state = self.state.lock().await;
-        state.data.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
+        state
+            .data
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
     }
 }
 
@@ -126,7 +129,7 @@ impl FrameViewModel {
         let (frame_tx, _) = watch::channel(0);
         let (video_tx, _) = watch::channel(false);
         let (duration_tx, _) = watch::channel(0.0);
-        
+
         Self {
             base: ViewModel::new(),
             current_frame_index: Arc::new(frame_tx),
@@ -167,7 +170,7 @@ impl ProjectViewModel {
     pub fn new() -> Self {
         let (project_tx, _) = watch::channel(None);
         let (session_tx, _) = watch::channel(None);
-        
+
         Self {
             base: ViewModel::new(),
             selected_project_id: Arc::new(project_tx),
@@ -205,7 +208,7 @@ pub struct ProfileViewModel {
 impl ProfileViewModel {
     pub fn new() -> Self {
         let (profile_tx, _) = watch::channel(None);
-        
+
         Self {
             base: ViewModel::new(),
             selected_profile_id: Arc::new(profile_tx),
@@ -286,7 +289,7 @@ pub enum TaskStatus {
 impl ComposerViewModel {
     pub fn new() -> Self {
         let (active_tx, _) = watch::channel(0);
-        
+
         Self {
             base: ViewModel::new(),
             primary_instance: None,
@@ -326,7 +329,7 @@ pub struct ToolsViewModel {
 impl ToolsViewModel {
     pub fn new() -> Self {
         let (tool_tx, _) = watch::channel(None);
-        
+
         Self {
             base: ViewModel::new(),
             available_tools: Arc::new(Mutex::new(Vec::new())),

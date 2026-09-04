@@ -1,1787 +1,1159 @@
 <script lang="ts">
-	import type { 
-		SessionData, 
-		PipeRow, 
-		TagType, 
-		PipeKeyframe,
-		GlobalElement,
-		TimelineElement,
-		Segment,
-		TagElement
-	} from '$types';
-	import {
-		snapTo8nPlus1,
-		snapTo8,
-		getMaxFrames,
-	} from '$lib/frameMath';
-	import {
-		TAG_SPECIFICATIONS,
-		FPS_PRESETS,
-		getMaxFramesForResolution,
-	} from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment } from '$types';
+	import { TAG_SPECIFICATIONS } from '$types';
 	import FrameRuler from './FrameRuler.svelte';
-	import MultiThumbSlider from './MultiThumbSlider.svelte';
 	import {
 		addPipe as addPipeAction,
-		removePipe,
-		movePipe as movePipeAction,
-		duplicatePipe,
-		updateQ as updateQAction,
-		updateC as updateCAction,
-		setPipeLength,
+		removePipe as removePipeAction,
+		addKeyframe as addKeyframeAction,
+		removeKeyframe as removeKeyframeAction,
 		addGlobalElement as addGlobalElementAction,
 		updateGlobalElement as updateGlobalElementAction,
-		toggleGlobalElement,
-		removeGlobalElement,
+		removeGlobalElement as removeGlobalElementAction,
 		addTimelineElement as addTimelineElementAction,
 		addSegment as addSegmentAction,
-		removeSegment,
-		resizeSegment as resizeSegmentAction,
+		removeSegment as removeSegmentAction,
 		addTagElement as addTagElementAction,
 		removeTagElement as removeTagElementAction,
-		resizeTagElement as resizeTagElementAction,
-		updateTagValue as updateTagValueAction,
 		updateTagPrompt as updateTagPromptAction,
-		addKeyframe,
-		removeKeyframe,
-		moveKeyframe,
-		updateFPS as storeUpdateFPS,
-		updateResolution as storeUpdateResolution,
 	} from '$lib/composerStore';
+	import { snapTo8 } from '$lib/frameMath';
 
-	let { session, onUpdate }: { session?: SessionData; onUpdate: (session: SessionData) => void } = $props();
+	let { session }: { session?: SessionData } = $props();
 
 	const MAX_KEYFRAMES = 3;
-	const Q_MIN = 5, Q_MAX = 30, Q_DEFAULT = 18;
-	const C_MIN = 0.5, C_MAX = 15, C_DEFAULT = 7;
-	const MIN_PIPE_LENGTH = 41;
+	const DEFAULT_FRAME_COUNT = 241;
 
+	// ── Derived state ────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
-	let totalFrames = $derived(pipes[0]?.lengthFrames ?? 121);
+	let totalFrames = $derived(pipes.length > 0 ? (pipes[0]?.lengthFrames ?? DEFAULT_FRAME_COUNT) : DEFAULT_FRAME_COUNT);
 
-	// Force reactivity by tracking session updatedAt
-	let sessionVersion = $derived(session?.updatedAt ?? 0);
-	// Toast/notification state
-	let toastMessage = $state<string | null>(null);
-	let toastType = $state<'success' | 'error'>('success');
+	// ── UI state ─────────────────────────────────────────────────────────────
+	let activePipeIdx = $state<number | null>(null);
 
-	// Timeline state
-	let timelineZoom = $state(1);
-	let selectedFrame = $state<number | null>(null);
+	// Keyframe modal
+	let showKeyframeModal = $state(false);
+	let editingKeyframeSlot = $state<number | null>(null);
+	let kfType = $state<'url' | 'txt2img' | 'img2img'>('url');
+	let kfValue = $state('');
+	let kfFrame = $state(0);
 
-	// Add pipe modal state
-	let showAddPipeModal = $state(false);
-	let newPipeName = $state('');
-
-	// Add keyframe modal state
-	let showAddModal = $state(false);
-	let activePipeIndex = $state<number | null>(null);
-	let activeKfIndex = $state<number | null>(null);
-	let addMode = $state<'url' | 'txt2img' | 'img2img'>('url');
-	let modalUrl = $state('');
-	let modalPrompt = $state('');
-	let modalImg2Img = $state('');
-
-	// Segment modal state
+	// Segment modal
 	let showSegmentModal = $state(false);
-	let activeSegmentAddPipeIndex = $state<number | null>(null);
-	let newSegmentStart = $state(0);
-	let newSegmentEnd = $state(121);
+	let segStart = $state(0);
+	let segEnd = $state(8);
 
-	// Tag modal state
-	let showTagModal = $state(false);
-	let activeTagId = $state<string | null>(null);
-	let activeTagPipeIndex = $state<number | null>(null);
-	let activeTagSegmentIndex = $state<number | null>(null);
-	let tagValue = $state(0);
+	// Tag prompt modal
+	let showTagPromptModal = $state(false);
+	let editingTagId = $state<string>('');
 	let tagPrompt = $state('');
+	let editingSegmentId = $state<string>('');
 
-	// Global element modal state
-	let showGlobalModal = $state(false);
-	let activeGlobalPipeIndex = $state<number | null>(null);
-	let activeGlobalElementId = $state<string | null>(null);
-	let globalPromptText = $state('');
+	// [+] menu
+	let showAddMenu = $state(false);
+	let addMenuRef = $state<{ x: number; y: number } | null>(null);
 
-	// All tag types
-	const allTags = Object.keys(TAG_SPECIFICATIONS) as TagType[];
+	// [+] menu position tracking (relative to window)
+	let addMenuX = $state(0);
+	let addMenuY = $state(0);
 
-	// Helper to collect tags of a specific type across all segments in a pipe
-	function getTagsForType(pipe: PipeRow, tagType: TagType): Array<{ tag: TagElement; segment: Segment; segmentIndex: number }> {
-	  const timeline = pipe.elements.find(e => e.tag === 'timeline') as TimelineElement | undefined;
-	  if (!timeline) return [];
-	  return timeline.segments.flatMap((segment, segIdx) =>
-	    segment.tags
-	      .filter(tag => tag.tag === tagType)
-	      .map(tag => ({ tag, segment, segmentIndex: segIdx }))
-	  );
+	// Tag selector menu
+	let showTagMenu = $state(false);
+	let selectedSegmentId = $state<string>('');
+	let selectedTagType = $state<TagType | null>(null);
+	let tagMenuX = $state(0);
+	let tagMenuY = $state(0);
+
+	// Close menus on outside click
+	function closeMenus() {
+		showAddMenu = false;
+		showTagMenu = false;
 	}
 
-	function getGlobalElement(pipe: PipeRow): GlobalElement | undefined {
-		return pipe.elements.find(e => e.tag === 'global_style') as GlobalElement | undefined;
-	}
+	// ── Helpers ─────────────────────────────────────────────────────────────
 
-	function getTimelineElement(pipe: PipeRow): TimelineElement | undefined {
-		return pipe.elements.find(e => e.tag === 'timeline') as TimelineElement | undefined;
-	}
-
-	function getTagById(pipeIndex: number, segmentIndex: number, tagId: string): TagElement | undefined {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return undefined;
-		const timeline = getTimelineElement(pipe);
-		if (!timeline || !timeline.segments[segmentIndex]) return undefined;
-		return timeline.segments[segmentIndex].tags.find(t => t.id === tagId);
-	}
-
-	function showToast(message: string, type: 'success' | 'error' = 'success') {
-		toastMessage = message;
-		toastType = type;
-		setTimeout(() => { toastMessage = null; }, 3000);
-	}
-
-	function closeAddPipeModal() {
-		showAddPipeModal = false;
-		newPipeName = '';
-	}
-
-	function openAddPipeModal() {
-		showAddPipeModal = true;
-		newPipeName = '';
-	}
-
-	async function confirmAddPipe() {
-		if (!session?.id) {
-			showToast('No active session', 'error');
-			return;
-		}
-		try {
-			const result = await addPipeAction(session.id);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-				return;
-			}
-			closeAddPipeModal();
-			showToast('Pipe added', 'success');
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to add pipe:', e);
-			showToast('Failed to add pipe', 'error');
+	/** Check if a keyframe at a given slot is "configured" (has the required data) */
+	function isKeyframeConfigured(pipe: PipeRow, slotIndex: number): boolean {
+		const kf = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === slotIndex);
+		if (!kf) return false;
+		switch (kf.type) {
+			case 'url': return !!(kf.imageSrc && kf.imageSrc.trim().length > 0);
+			case 'txt2img': return !!(kf.prompt && kf.prompt.trim().length > 0);
+			case 'img2img': return !!(kf.referenceUrl && kf.referenceUrl.trim().length > 0);
+			default: return false;
 		}
 	}
 
-	// ── Global Element Actions ────────────────────────────────────────────────
-
-	function openGlobalModal(pipeIndex: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		
-		const global = getGlobalElement(pipe);
-		activeGlobalPipeIndex = pipeIndex;
-		activeGlobalElementId = global?.id || null;
-		globalPromptText = global?.value || '';
-		showGlobalModal = true;
-	}
-
-	async function confirmGlobalEdit() {
-		if (!session?.id || activeGlobalPipeIndex === null) return;
-		const pipe = pipes[activeGlobalPipeIndex];
-		if (!pipe) return;
-
-		try {
-			let result;
-			if (activeGlobalElementId) {
-				result = await updateGlobalElementAction(
-					session.id,
-					pipe.id,
-					activeGlobalElementId,
-					globalPromptText
-				);
+	/**
+	 * Return which keyframe slot numbers are currently visible.
+	 * Slot 1 always visible. Slot N visible only when slot N-1 is configured.
+	 * Maximum MAX_KEYFRAMES slots.
+	 */
+	function getVisibleKeyframeSlots(pipe: PipeRow): number[] {
+		const visible: number[] = [];
+		for (let i = 1; i <= MAX_KEYFRAMES; i++) {
+			if (i === 1) {
+				visible.push(i);
+			} else if (isKeyframeConfigured(pipe, i - 1)) {
+				visible.push(i);
 			} else {
-				result = await addGlobalElementAction(session.id, pipe.id, globalPromptText);
+				break; // stop: previous slot not configured yet
 			}
-
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			} else {
-				showToast(activeGlobalElementId ? 'Global style updated' : 'Global style added', 'success');
-			}
-			closeGlobalModal();
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to save global:', e);
-			showToast('Failed to save global', 'error');
 		}
+		return visible;
 	}
 
-	function closeGlobalModal() {
-		showGlobalModal = false;
-		activeGlobalPipeIndex = null;
-		activeGlobalElementId = null;
-		globalPromptText = '';
+	function getTimeline(pipe: PipeRow): any {
+		return pipe.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
-	// ── Segment Actions ───────────────────────────────────────────────────────
-
-	function openAddSegmentModal(pipeIndex: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		
-		activeSegmentAddPipeIndex = pipeIndex;
-		newSegmentStart = 0;
-		newSegmentEnd = snapTo8(pipe.lengthFrames - 1);
-		showSegmentModal = true;
+	function getGlobal(pipe: PipeRow): any {
+		return pipe.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
 
-	async function confirmAddSegment() {
-		if (!session?.id || activeSegmentAddPipeIndex === null) return;
-		const pipe = pipes[activeSegmentAddPipeIndex];
-		if (!pipe) return;
+	// ── Actions ─────────────────────────────────────────────────────────────
 
-		try {
-			const result = await addSegmentAction(
-				session.id,
-				pipe.id,
-				snapTo8(newSegmentStart),
-				snapTo8(newSegmentEnd)
-			);
-			if (result.errors.length > 0) {
-				showToast(result.errors.join(', '), 'error');
-			} else {
-				showToast('Segment added', 'success');
-			}
-			closeAddSegmentModal();
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to add segment:', e);
-			showToast('Failed to add segment', 'error');
-		}
-	}
-
-	function closeAddSegmentModal() {
-		showSegmentModal = false;
-		activeSegmentAddPipeIndex = null;
-		newSegmentStart = 0;
-		newSegmentEnd = 121;
-	}
-
-	// Open tag modal for a specific segment
-	function openAddTagForSegment(pipeIndex: number, segmentIndex: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		const timeline = getTimelineElement(pipe);
-		if (!timeline || !timeline.segments[segmentIndex]) return;
-		// Open the tag modal to add a new tag to this segment
-		activeSegmentAddPipeIndex = pipeIndex;
-		showTagModal = true;
-		// We'll handle this in the tag modal
-	}
-
-	async function removeSegmentAction(pipeIndex: number, segmentId: string) {
+	async function handleAddPipe() {
 		if (!session?.id) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-
-		try {
-			const result = await removeSegment(session.id, pipe.id, segmentId);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to remove segment:', e);
-		}
+		const result = await addPipeAction(session.id);
+		if (result.errors.length > 0) console.error('[ComposerPanel] addPipe:', result.errors);
 	}
 
-	async function resizeSegment(pipeIndex: number, segmentId: string, vals: [number, number]) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
+	async function handleRemovePipe(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removePipeAction(session.id, pipe.id);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removePipe:', result.errors);
+	}
 
-		const maxEnd = snapTo8(pipe.lengthFrames - 1);
-		const [newStart, newEnd] = vals.map(v => snapTo8(Math.max(0, Math.min(v, maxEnd))));
-		
-		if (newEnd <= newStart) {
-			showToast('Segment must have positive span', 'error');
+	// ── Keyframe ────────────────────────────────────────────────────────────
+
+	function openKeyframeModal(idx: number, slotIndex?: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		activePipeIdx = idx;
+		editingKeyframeSlot = slotIndex ?? (getVisibleKeyframeSlots(pipe).length + 1);
+		// read existing if editing
+		const existing = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === editingKeyframeSlot);
+		if (existing) {
+			kfType = existing.type;
+			kfValue = existing.imageSrc ?? existing.prompt ?? existing.referenceUrl ?? '';
+			kfFrame = existing.frame;
+		} else {
+			kfType = 'url';
+			kfValue = '';
+			kfFrame = snapTo8(pipe.keyframes.length > 0 ? pipe.keyframes[0].frame : 0);
+		}
+		showKeyframeModal = true;
+		closeMenus();
+	}
+
+	async function confirmKeyframe() {
+		const pipe = pipes[activePipeIdx!];
+		if (!pipe || !session?.id || editingKeyframeSlot === null) return;
+		if (!kfValue.trim()) return;
+
+		const slotIndex = editingKeyframeSlot;
+		const result = await addKeyframeAction(session.id, pipe.id, slotIndex, kfFrame, kfType, kfValue);
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] confirmKeyframe:', result.errors);
 			return;
 		}
+		showKeyframeModal = false;
+		kfValue = '';
+	}
 
-		try {
-			const result = await resizeSegmentAction(session.id, pipe.id, segmentId, newStart, newEnd);
-			if (result.errors.length > 0) {
-				showToast(`Resize failed: ${result.errors.join(', ')}`, 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to resize segment:', e);
-			showToast('Failed to resize segment', 'error');
+	async function handleRemoveKeyframe(idx: number, kfId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeKeyframeAction(session.id, pipe.id, kfId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeKeyframe:', result.errors);
+	}
+
+	// ── Track add menu ──────────────────────────────────────────────────────
+
+	function handleToggleAddMenu(pipeIdx: number, e: MouseEvent) {
+		activePipeIdx = pipeIdx;
+		showAddMenu = !showAddMenu;
+		showTagMenu = false;
+		if (showAddMenu) {
+			// Position near the [+] button
+			const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+			addMenuX = rect.left;
+			addMenuY = rect.bottom + 4;
 		}
 	}
 
-	// ── Tag Actions ───────────────────────────────────────────────────────────
-
-	function openTagModal(pipeIndex: number, segmentIndex: number, tag: TagElement) {
-		activeTagPipeIndex = pipeIndex;
-		activeTagSegmentIndex = segmentIndex;
-		activeTagId = tag.id;
-		tagValue = tag.value;
-		tagPrompt = tag.prompt || '';
-		showTagModal = true;
+	function handleAddTimeline(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		addTimelineElementAction(session.id, pipe.id).then(r => {
+			if (r.errors?.length) console.error('[ComposerPanel] addTimeline:', r.errors);
+		});
+		showAddMenu = false;
 	}
 
-	async function confirmTagEdit() {
-		if (!session?.id || activeTagPipeIndex === null || activeTagSegmentIndex === null || !activeTagId) return;
-		const pipe = pipes[activeTagPipeIndex];
+	function handleAddGlobal(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		addGlobalElementAction(session.id, pipe.id, '').then(r => {
+			if (r.errors?.length) console.error('[ComposerPanel] addGlobal:', r.errors);
+		});
+		showAddMenu = false;
+	}
+
+	// ── Segment ─────────────────────────────────────────────────────────────
+
+	function handleAddSegment(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const tl = getTimeline(pipe);
+		if (!tl) return;
+		activePipeIdx = idx;
+		const lastSeg = tl.segments[tl.segments.length - 1];
+		segStart = lastSeg ? lastSeg.frameEnd : 0;
+		segEnd = Math.min(segStart + 8, totalFrames - 1);
+		showSegmentModal = true;
+		closeMenus();
+	}
+
+	async function confirmSegment() {
+		const pipe = pipes[activePipeIdx!];
+		if (!pipe || !session?.id) return;
+		const start = snapTo8(segStart);
+		const end = Math.min(snapTo8(segEnd), totalFrames - 1);
+		if (end <= start) return;
+		const result = await addSegmentAction(session.id, pipe.id, start, end);
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] addSegment:', result.errors);
+			return;
+		}
+		showSegmentModal = false;
+	}
+
+	async function handleDeleteSegment(idx: number, segId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeSegmentAction(session.id, pipe.id, segId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeSegment:', result.errors);
+	}
+
+	// ── Tags ────────────────────────────────────────────────────────────────
+
+	function handleOpenTagMenu(segId: string, e: MouseEvent, idx: number) {
+		activePipeIdx = idx;
+		selectedSegmentId = segId;
+		selectedTagType = null;
+		tagMenuX = e.clientX;
+		tagMenuY = e.clientY;
+		showTagMenu = true;
+		showAddMenu = false;
+	}
+
+	async function confirmTagSelector() {
+		if (!selectedTagType || !session?.id) return;
+		const pipe = pipes[activePipeIdx!];
 		if (!pipe) return;
-		
-		const timeline = getTimelineElement(pipe);
-		if (!timeline) return;
-		
-		const segment = timeline.segments[activeTagSegmentIndex];
-		if (!segment) return;
-		
-		const tag = segment.tags.find(t => t.id === activeTagId);
-		if (!tag) return;
-
-		try {
-			const result = tag.spec.usePrompt
-				? await updateTagPromptAction(session.id, pipe.id, segment.id, tag.id, tagPrompt)
-				: await updateTagValueAction(session.id, pipe.id, segment.id, tag.id, tagValue);
-				
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to update tag:', e);
-			showToast('Failed to update tag', 'error');
+		const tl = getTimeline(pipe);
+		if (!tl) return;
+		const seg = tl.segments.find((s: Segment) => s.id === selectedSegmentId);
+		if (!seg) return;
+		const spec = TAG_SPECIFICATIONS[selectedTagType];
+		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, selectedTagType, spec.color, seg.frameStart, seg.frameEnd);
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] addTag:', result.errors);
+			return;
 		}
-		closeTagModal();
+		showTagMenu = false;
+		selectedTagType = null;
 	}
 
-	function closeTagModal() {
-		showTagModal = false;
-		activeTagId = null;
-		activeTagPipeIndex = null;
-		activeTagSegmentIndex = null;
-		tagValue = 0;
+	function handleEditTagPrompt(idx: number, seg: Segment, tag: TagElement) {
+		activePipeIdx = idx;
+		editingTagId = tag.id;
+		editingSegmentId = seg.id;
+		tagPrompt = tag.prompt || '';
+		showTagPromptModal = true;
+		closeMenus();
+	}
+
+	async function confirmTagPrompt() {
+		const pipe = pipes[activePipeIdx!];
+		if (!pipe || !session?.id) return;
+		const result = await updateTagPromptAction(session.id, pipe.id, editingSegmentId, editingTagId, tagPrompt);
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] updateTagPrompt:', result.errors);
+			return;
+		}
+		showTagPromptModal = false;
 		tagPrompt = '';
 	}
 
-	async function addTagElement(pipeIndex: number, segmentId: string, tagType: TagType) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-
-		try {
-			const result = await addTagElementAction(session.id, pipe.id, segmentId, tagType);
-			if (result.errors.length > 0) {
-				showToast(result.errors.join(', '), 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to add tag:', e);
-			showToast('Failed to add tag', 'error');
-		}
+	async function handleRemoveTag(idx: number, segId: string, tagId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeTagElementAction(session.id, pipe.id, tagId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeTag:', result.errors);
 	}
 
-	async function removeTag(pipeIndex: number, segmentId: string, tagId: string) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-
-		try {
-			const result = await removeTagElementAction(session.id, pipe.id, segmentId, tagId);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to remove tag:', e);
-		}
-	}
-
-	// ── Resize Tag ────────────────────────────────────────────────────────────
-
-	async function resizeTag(pipeIndex: number, segmentId: string, tagId: string, vals: [number, number]) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-
-		const maxEnd = snapTo8(pipe.lengthFrames - 1);
-		const [newStart, newEnd] = vals.map(v => snapTo8(Math.max(0, Math.min(v, maxEnd))));
-		
-		if (newEnd <= newStart) return;
-
-		try {
-			const result = await resizeTagElementAction(session.id, pipe.id, segmentId, tagId, newStart, newEnd);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to resize tag:', e);
-		}
-	}
-
-	// ── Keyframe Actions ──────────────────────────────────────────────────────
-
-	function closeModal() {
-		showAddModal = false;
-		activePipeIndex = null;
-		activeKfIndex = null;
-		modalUrl = '';
-		modalPrompt = '';
-		modalImg2Img = '';
-	}
-
-	function openAddModal(pipeIndex: number, kfSlot?: number) {
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		
-		activePipeIndex = pipeIndex;
-		activeKfIndex = kfSlot ?? pipe.keyframes.length;
-		modalUrl = '';
-		modalPrompt = '';
-		modalImg2Img = '';
-		showAddModal = true;
-	}
-
-	async function confirmAdd() {
-		if (!session?.id || activePipeIndex === null) return;
-		const pipe = pipes[activePipeIndex];
-		if (!pipe) return;
-
-		try {
-			const result = await addKeyframe(session.id, pipe.id, addMode, {
-				imageSrc: addMode === 'url' ? modalUrl : undefined,
-				prompt: addMode === 'txt2img' ? modalPrompt : addMode === 'img2img' ? modalPrompt : undefined,
-				referenceUrl: addMode === 'img2img' ? modalImg2Img : undefined,
-			});
-			
-			if (result.errors.length > 0) {
-				showToast(result.errors.join(', '), 'error');
-			} else {
-				showToast('Keyframe added', 'success');
-			}
-			closeModal();
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to add keyframe:', e);
-			showToast('Failed to add keyframe', 'error');
-		}
-	}
-
-	// ── Drag Handlers ─────────────────────────────────────────────────────────
-
-	let isDraggingKeyframe = $state(false);
-	let dragKeyframeStartX = $state(0);
-	let dragKeyframeStartFrame = $state(0);
-	let dragKeyframeId = $state<string | null>(null);
-	let dragKeyframePipeIndex = $state<number | null>(null);
-
-	function handleKeyframePointerDown(pipeIndex: number, kfId: string, frame: number, e: PointerEvent) {
-		e.preventDefault();
-		isDraggingKeyframe = true;
-		dragKeyframeStartX = e.clientX;
-		dragKeyframeStartFrame = frame;
-		dragKeyframeId = kfId;
-		dragKeyframePipeIndex = pipeIndex;
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-	}
-
-	function handleKeyframePointerMove(e: PointerEvent) {
-		if (!isDraggingKeyframe || dragKeyframePipeIndex === null || dragKeyframeId === null) return;
-	}
-
-	async function handleKeyframePointerUp(e: PointerEvent) {
-		if (!isDraggingKeyframe || dragKeyframePipeIndex === null || dragKeyframeId === null) return;
-		isDraggingKeyframe = false;
-		const deltaPx = e.clientX - dragKeyframeStartX;
-		if (Math.abs(deltaPx) < 4) {
-			return;
-		}
-		const pipe = pipes[dragKeyframePipeIndex];
-		if (!pipe) return;
-		const trackWidth = (e.currentTarget as HTMLElement)?.offsetWidth || 1;
-		const deltaFrames = Math.round((deltaPx / trackWidth) * pipe.lengthFrames / 8) * 8;
-		const newFrame = snapTo8(dragKeyframeStartFrame + deltaFrames);
-		if (newFrame < 0 || newFrame >= pipe.lengthFrames) {
-			showToast('Keyframe position out of bounds', 'error');
-			return;
-		}
-		try {
-			const result = await moveKeyframe(session!.id, pipe.id, dragKeyframeId, deltaFrames);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (err) {
-			showToast(`Failed to move keyframe: ${String(err)}`, 'error');
-		} finally {
-			dragKeyframeId = null;
-			dragKeyframePipeIndex = null;
-		}
-	}
-
-	// ── Segment Drag Handlers ────────────────────────────────────────────────
-
-	let isDraggingSegment = $state(false);
-	let dragSegmentPipeIndex = $state<number | null>(null);
-	let dragSegmentId = $state<string | null>(null);
-	let dragTagId = $state<string | null>(null);
-	let dragEdge = $state<'left' | 'right'>('left');
-	let dragStartX = $state(0);
-	let dragStartStartFrame = $state(0);
-	let dragStartEndFrame = $state(0);
-
-	function startSegmentDrag(pipeIndex: number, segmentId: string, tagId: string, edge: 'left' | 'right', e: PointerEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		isDraggingSegment = true;
-		dragSegmentPipeIndex = pipeIndex;
-		dragSegmentId = segmentId;
-		dragTagId = tagId;
-		dragEdge = edge;
-		dragStartX = e.clientX;
-
-		const pipe = pipes[pipeIndex];
-		const timeline = getTimelineElement(pipe);
-		if (!timeline) return;
-		const segment = timeline.segments.find(s => s.id === segmentId);
-		if (!segment) return;
-		const tag = segment.tags.find(t => t.id === tagId);
-		if (!tag) return;
-
-		dragStartStartFrame = tag.frameStart;
-		dragStartEndFrame = tag.frameEnd;
-
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-	}
-
-	function handleSegmentPointerMove(e: PointerEvent) {
-		if (!isDraggingSegment || dragSegmentPipeIndex === null || dragTagId === null) return;
-	}
-
-	async function handleSegmentPointerUp(e: PointerEvent) {
-		if (!isDraggingSegment || dragSegmentPipeIndex === null || dragSegmentId === null || dragTagId === null) return;
-		isDraggingSegment = false;
-
-		const pipe = pipes[dragSegmentPipeIndex];
-		if (!pipe) return;
-
-		const deltaPx = e.clientX - dragStartX;
-		if (Math.abs(deltaPx) < 4) {
-			dragSegmentPipeIndex = null;
-			dragSegmentId = null;
-			dragTagId = null;
-			return;
-		}
-
-		const trackWidth = (e.currentTarget as HTMLElement)?.offsetWidth || 1;
-		const deltaFrames = Math.round((deltaPx / trackWidth) * pipe.lengthFrames / 8) * 8;
-
-		let newStart = dragStartStartFrame;
-		let newEnd = dragStartEndFrame;
-
-		if (dragEdge === 'left') {
-			newStart = snapTo8(Math.max(0, Math.min(dragStartStartFrame + deltaFrames, dragStartEndFrame - 8)));
-		} else {
-			newEnd = snapTo8(Math.min(pipe.lengthFrames, Math.max(dragStartEndFrame + deltaFrames, dragStartStartFrame + 8)));
-		}
-
-		try {
-			const result = await resizeTagElementAction(session!.id, pipe.id, dragSegmentId, dragTagId, newStart, newEnd);
-			if (result.errors.length > 0) {
-				showToast(result.errors.join(', '), 'error');
-			}
-		} catch (err) {
-			showToast(`Failed to resize: ${String(err)}`, 'error');
-		} finally {
-			dragSegmentPipeIndex = null;
-			dragSegmentId = null;
-			dragTagId = null;
-		}
-	}
-
-	// ── Pipe Actions ──────────────────────────────────────────────────────────
-
-	async function movePipeUp(pipeIndex: number) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe || pipeIndex === 0) return;
-
-		try {
-			await movePipeAction(session.id, pipe.id, 'up');
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to move pipe up:', e);
-		}
-	}
-
-	async function movePipeDown(pipeIndex: number) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe || pipeIndex === pipes.length - 1) return;
-
-		try {
-			await movePipeAction(session.id, pipe.id, 'down');
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to move pipe down:', e);
-		}
-	}
-
-	async function deletePipe(pipeIndex: number) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe || pipes.length <= 1) return;
-
-		try {
-			const result = await removePipe(session.id, pipe.id);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to delete pipe:', e);
-		}
-	}
-
-	// ── Settings ──────────────────────────────────────────────────────────────
-
-	function updateQ(pipeIndex: number, value: number) {
-		if (!session?.id) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		// Update locally for now, will persist via store
-		const newPipes = pipes.map((p, i) => 
-			i === pipeIndex ? { ...p, qValue: value } : p
-		);
-		// Rebuild session with updated pipes
-		onUpdate({
-			...session!,
-			pipes: newPipes
-		});
-	}
-
-	function updateC(pipeIndex: number, value: number) {
-		if (!session?.id) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-		const newPipes = pipes.map((p, i) => 
-			i === pipeIndex ? { ...p, cValue: value } : p
-		);
-		onUpdate({
-			...session!,
-			pipes: newPipes
-		});
-	}
-
-	async function updatePipeLength(pipeIndex: number, value: number) {
-		if (!session?.id || pipeIndex < 0) return;
-		const pipe = pipes[pipeIndex];
-		if (!pipe) return;
-
-		const maxFrames = getMaxFramesForResolution(session!.resolution || '720p');
-		const snapped = snapTo8nPlus1(value);
-		const clamped = Math.max(MIN_PIPE_LENGTH, Math.min(snapped, maxFrames));
-
-		try {
-			const result = await setPipeLength(session.id, pipe.id, clamped);
-			if (result.errors.length > 0) {
-				showToast(result.errors[0], 'error');
-			}
-		} catch (e) {
-			console.error('[ComposerPanel] Failed to update pipe length:', e);
-		}
-	}
-
-	function handleTimelineFrameSelect(frame: number) {
-		selectedFrame = frame;
-	}
-
-	function handleZoomChange(newZoom: number) {
-		timelineZoom = newZoom;
+	async function handleRemoveGlobal(idx: number, globalId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeGlobalElementAction(session.id, pipe.id, globalId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeGlobal:', result.errors);
 	}
 </script>
 
 <div class="composer-panel">
-	<!-- Header -->
-	<div class="composer-header">
-		<span class="composer-title">Composer</span>
-		<div class="header-meta">
-			<span class="meta-info">{pipes.length} pipe{pipes.length !== 1 ? 's' : ''} · {totalFrames} frames</span>
-		</div>
-	</div>
+	{#each pipes as pipe, pipeIdx (pipe.id)}
+		<div class="pipe" class:active={activePipeIdx === pipeIdx}>
 
-		{#if !session}
-			<div class="composer-empty">Select a session to compose</div>
-		{:else}
-			<!-- Unified Composer View — Design-Aligned -->
-			<div class="unified-composer">
-				{#each pipes as pipe, pipeIdx (pipe.id)}
-					<div class="pipe-row">
-						<!-- Keyframe Thumbnails -->
-						<div class="kf-row">
-							{#each [0, 1, 2] as kfSlot}
-								{#if pipe.keyframes[kfSlot]}
-									{#each [pipe.keyframes[kfSlot]] as kf}
-										<div class="kf-thumb filled"
-											onclick={() => openAddModal(pipeIdx, kfSlot)}
-											title="Keyframe {kfSlot + 1}: frame {kf.frame}"
-											role="button"
-											tabindex="0">
-											{#if kf.imageSrc}
-												<img src={kf.imageSrc} alt="kf{kfSlot+1}" class="kf-img" />
-											{:else}
-												<span class="kf-label">k{kfSlot + 1}</span>
-											{/if}
-										</div>
-									{/each}
+			<!-- ═══ PIPE HEADER ═══ -->
+			<div class="pipe-header">
+				<span class="pipe-label">Pipe {pipeIdx + 1}</span>
+				<span class="pipe-meta">{totalFrames}f</span>
+				<button class="btn-icon" onclick={() => handleRemovePipe(pipeIdx)} title="Remove pipe">×</button>
+			</div>
+
+			<!-- ═══ KEYFRAME ROW ═══ -->
+			<div class="kf-row">
+				{#each getVisibleKeyframeSlots(pipe) as kfNum}
+					{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
+						{#if kf}
+							<!-- Configured -->
+							<div class="kf-chip kf-filled"
+								onclick={() => openKeyframeModal(pipeIdx, kfNum)}
+								title="Frame {kf.frame} · {kf.type} · Click to edit">
+								{#if kf.imageSrc}
+									<img src={kf.imageSrc} class="kf-img" alt="keyframe" />
 								{:else}
-									<div class="kf-thumb empty"
-										onclick={() => openAddModal(pipeIdx, kfSlot)}
-										title="Add keyframe {kfSlot + 1}"
-										role="button"
-										tabindex="0">+</div>
+									<span class="kf-label">k{kfNum}</span>
 								{/if}
-							{/each}
-						</div>
+								<button class="kf-del"
+									onclick={(e) => { e.stopPropagation(); handleRemoveKeyframe(pipeIdx, kf.id); }}>×</button>
+							</div>
+						{:else}
+							<!-- Empty / pending slot -->
+							<div class="kf-chip kf-empty"
+								onclick={() => openKeyframeModal(pipeIdx, kfNum)}
+								title="Click to configure keyframe {kfNum}">
+								<span class="kf-empty-label">+ k{kfNum}</span>
+							</div>
+						{/if}
+					{/each}
+				{/each}
+			</div>
 
-						<!-- Frame Ruler -->
-						<div class="frame-ruler">
-							<div class="ruler-line"></div>
-							<!-- Render keyframe positions on ruler -->
-							{#each pipe.keyframes as kf, kfIdx (kf.id)}
-								<div class="ruler-kf-marker" style="left: calc({kf.frame} / {pipe.lengthFrames} * 100%)"></div>
-							{/each}
-						</div>
+			<!-- ═══ FRAME RULER ═══ -->
+			<div class="ruler-wrap">
+				<FrameRuler {totalFrames} selectedFrame={null} segments={[]} onframeSelect={() => {}} />
+			</div>
 
-						<!-- Segment Tracks — Organized by Tag Type -->
-						{#each [getTimelineElement(pipe)] as timeline}
-							{#if timeline}
-								{#each allTags as tagType}
-									{#each [getTagsForType(pipe, tagType)] as tagsOfType}
-										{#if tagsOfType.length > 0}
-											<div class="track-row">
-												<span class="track-tag" style="color: {TAG_SPECIFICATIONS[tagType].color}">
-													{TAG_SPECIFICATIONS[tagType].name}
-												</span>
-												<div class="track-bar-wrap">
-													{#each tagsOfType as {tag, segment, segmentIndex}}
-														<div
-															class="track-seg"
-															style="left: calc({tag.frameStart} / {pipe.lengthFrames} * 100%); width: calc(({tag.frameEnd} - {tag.frameStart}) / {pipe.lengthFrames} * 100%); background: {tag.spec.color};"
-															onclick={() => openTagModal(pipeIdx, segmentIndex, tag)}
-															role="button"
-															tabindex="0"
-															title="{tag.spec.name}: {tag.spec.usePrompt ? tag.prompt || '(prompt)' : tag.value}">
-															<span class="seg-label">{tag.spec.usePrompt ? 'P' : tag.value}</span>
-															<!-- Left knob -->
-															<div class="tknob l" style="background: {tag.spec.color}"
-																onpointerdown={(e) => startSegmentDrag(pipeIdx, segment.id, tag.id, 'left', e)}></div>
-															<!-- Right knob -->
-															<div class="tknob r" style="background: {tag.spec.color}"
-																onpointerdown={(e) => startSegmentDrag(pipeIdx, segment.id, tag.id, 'right', e)}></div>
-														</div>
-													{/each}
-												</div>
-											</div>
-										{:else}
-											<!-- Empty track for this tag type -->
-											<div class="track-row track-empty">
-												<span class="track-tag" style="color: {TAG_SPECIFICATIONS[tagType].color}">
-													{TAG_SPECIFICATIONS[tagType].name}
-												</span>
-												<div class="track-bar-wrap track-bar-empty">
-													<span class="empty-hint">No {TAG_SPECIFICATIONS[tagType].name} tags</span>
-												</div>
-											</div>
+			<!-- ═══ GLOBAL TRACK (full-width, no title) ═══ -->
+			{#each [getGlobal(pipe)] as global}
+				{#if global}
+					<div class="global-track">
+						<div class="global-bar" title="Global style — spans frames 0–{totalFrames - 1}">
+							{#if global.value}
+								<span class="global-text">{global.value}</span>
+							{:else}
+								<span class="global-placeholder">—</span>
+							{/if}
+							<button class="btn-icon-sm" onclick={() => { /* edit global */ }} title="Edit global">✎</button>
+							<button class="btn-icon-sm btn-del-sm" onclick={() => handleRemoveGlobal(pipeIdx, global.id)}>×</button>
+						</div>
+					</div>
+				{/if}
+			{/each}
+
+			<!-- ═══ TIMELINE TRACK ═══ -->
+			{#each [getTimeline(pipe)] as tl}
+				{#if tl}
+					<div class="timeline-track">
+						<div class="segment-row-list">
+							{#each tl.segments as seg (seg.id)}
+								<div class="seg-row"
+									style="left: {(seg.frameStart / (totalFrames - 1)) * 100}%; width: {((seg.frameEnd - seg.frameStart) / (totalFrames - 1)) * 100}%;">
+									<div class="seg-body">
+										<span class="seg-range">{seg.frameStart}–{seg.frameEnd}</span>
+										{#if seg.tags.length > 0}
+											<span class="seg-tag-count">{seg.tags.length}</span>
 										{/if}
-									{/each}
-								{/each}
-
-								<!-- Show all segments even without tags -->
-								{#if timeline.segments.length > 0}
-									<div class="segments-summary">
-										<span class="summary-label">Segments ({timeline.segments.length}):</span>
-										{#each timeline.segments as segment, segIdx (segment.id)}
-											<div class="segment-chip" onclick={() => openAddTagForSegment(pipeIdx, segIdx)}>
-												<span class="seg-range">{segment.frameStart}-{segment.frameEnd}</span>
-												<span class="seg-tags-count">{segment.tags.length} tags</span>
-												<button class="add-tag-mini" title="Add tag">+</button>
+									</div>
+									<div class="seg-tags">
+										{#each seg.tags as tag (tag.id)}
+											<div class="tag-bar"
+												style="left: {((tag.frameStart - seg.frameStart) / (seg.frameEnd - seg.frameStart)) * 100}%; width: {((tag.frameEnd - tag.frameStart) / (seg.frameEnd - seg.frameStart)) * 100}%; background: {tag.spec?.color || '#59B5FF'};"
+												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd}"
+												onclick={() => handleEditTagPrompt(pipeIdx, seg, tag)}
+												role="button"
+												tabindex="0"
+												onkeydown={(e) => e.key === 'Enter' && handleEditTagPrompt(pipeIdx, seg, tag)}>
+												<span class="tag-label">{tag.spec?.name || tag.tag}</span>
+												{#if tag.prompt}
+													<span class="tag-prompt-trunc">{tag.prompt}</span>
+												{/if}
 											</div>
 										{/each}
 									</div>
-								{/if}
-
-								<!-- Add segment button -->
-								<div class="add-segment-row">
-									<span class="track-tag">Add</span>
-									<div class="track-bar-wrap">
-										<button class="add-seg-btn" onclick={() => openAddSegmentModal(pipeIdx)}>+ Segment</button>
-									</div>
+									<button class="btn-seg-tag"
+										onclick={(e) => handleOpenTagMenu(seg.id, e, pipeIdx)}>+ Tag</button>
+									<button class="btn-icon-sm btn-del-sm"
+										onclick={() => handleDeleteSegment(pipeIdx, seg.id)}>×</button>
+								</div>
+							{/each}
+							{#if tl.segments.length === 0}
+								<div class="seg-empty" onclick={() => handleAddSegment(pipeIdx)} role="button" tabindex="0"
+									onkeydown={(e) => e.key === 'Enter' && handleAddSegment(pipeIdx)}>
+									<span>+ Add first segment</span>
 								</div>
 							{/if}
-						{/each}
+						</div>
 					</div>
-				{/each}
+				{:else}
+					<!-- No timeline — show nothing (timeline appears only after [+] → Timeline) -->
+				{/if}
+			{/each}
 
-				<!-- Add Pipe Button -->
-				<button class="add-pipe" onclick={openAddPipeModal}>+ Add Pipe</button>
+			<!-- ═══ [+] BUTTON ═══ -->
+			<div class="add-track-wrap">
+				<button class="btn-add-track"
+					onclick={(e) => handleToggleAddMenu(pipeIdx, e)}
+					title="Add track">
+					+
+				</button>
 			</div>
-		{/if}
 
-	<!-- Toast Notification -->
-	{#if toastMessage}
-		<div class="toast toast-{toastType}">{toastMessage}</div>
-	{/if}
+		</div>
+	{/each}
 
-	<!-- Add Pipe Modal -->
-	{#if showAddPipeModal}
-		<div class="modal-backdrop" onclick={closeAddPipeModal} role="dialog" aria-modal="true">
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
-				<div class="modal-header">
-					<span class="modal-title">Add New Pipe</span>
-					<button class="modal-close" onclick={closeAddPipeModal}>×</button>
-				</div>
-				<div class="modal-body">
-					<div class="form-group">
-						<label class="form-label">Pipe Name</label>
-						<input type="text" bind:value={newPipeName} placeholder="Enter pipe name..." />
-					</div>
-				</div>
-				<div class="modal-footer">
-					<button class="btn-cancel" onclick={closeAddPipeModal}>Cancel</button>
-					<button class="btn-confirm" onclick={confirmAddPipe}>Add</button>
-				</div>
-			</div>
+	<!-- ═══ ADD PIPE ═══ -->
+	<button class="btn-add-pipe" onclick={handleAddPipe}>+ Add Pipe</button>
+
+	<!-- ═══ [+] DROPDOWN MENU ═══ -->
+	{#if showAddMenu && activePipeIdx !== null}
+		<div class="dropdown-menu" style="left: {addMenuX}px; top: {addMenuY}px;">
+			<button class="dropdown-item" onclick={() => handleAddTimeline(activePipeIdx)}>
+				<span class="dropdown-icon">▬</span> Timeline
+			</button>
+			<button class="dropdown-item" onclick={() => handleAddGlobal(activePipeIdx)}>
+				<span class="dropdown-icon">◈</span> Global
+			</button>
 		</div>
 	{/if}
 
-	<!-- Add Keyframe Modal -->
-	{#if showAddModal && activePipeIndex !== null}
-		<div class="modal-backdrop" onclick={closeModal} role="dialog" aria-modal="true">
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
-				<div class="modal-header">
-					<span class="modal-title">Add Keyframe</span>
-					<button class="modal-close" onclick={closeModal}>×</button>
-				</div>
-				<div class="modal-body">
-					<div class="form-group">
-						<label class="form-label">Source Type</label>
-						<div class="mode-buttons">
-							<button class="{addMode === 'url' ? 'active' : ''}" onclick={() => addMode = 'url'}>URL</button>
-							<button class="{addMode === 'txt2img' ? 'active' : ''}" onclick={() => addMode = 'txt2img'}>Text to Image</button>
-							<button class="{addMode === 'img2img' ? 'active' : ''}" onclick={() => addMode = 'img2img'}>Image to Image</button>
-						</div>
-					</div>
-
-					{#if addMode === 'url'}
-						<div class="form-group">
-							<label class="form-label">Image URL</label>
-							<input type="text" bind:value={modalUrl} placeholder="https://example.com/image.jpg" />
-						</div>
-					{:else if addMode === 'txt2img'}
-						<div class="form-group">
-							<label class="form-label">Prompt</label>
-							<textarea bind:value={modalPrompt} placeholder="Describe the image..."></textarea>
-						</div>
-					{:else if addMode === 'img2img'}
-						<div class="form-group">
-							<label class="form-label">Reference Image URL</label>
-							<input type="text" bind:value={modalImg2Img} placeholder="https://example.com/reference.jpg" />
-						</div>
-						<div class="form-group">
-							<label class="form-label">Prompt</label>
-							<textarea bind:value={modalPrompt} placeholder="Describe the transformation..."></textarea>
-						</div>
-					{/if}
-
-				</div>
-				<div class="modal-footer">
-					<button class="btn-cancel" onclick={closeModal}>Cancel</button>
-					<button class="btn-confirm" onclick={confirmAdd} disabled={
-						(addMode === 'url' && !modalUrl.trim()) ||
-						(addMode === 'txt2img' && !modalPrompt.trim()) ||
-						(addMode === 'img2img' && !modalImg2Img.trim())
-					}>Add</button>
-				</div>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Add Segment Modal -->
-	{#if showSegmentModal && activeSegmentAddPipeIndex !== null}
-		<div class="modal-backdrop" onclick={closeAddSegmentModal} role="dialog" aria-modal="true">
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
-				<div class="modal-header">
-					<span class="modal-title">Add Segment</span>
-					<button class="modal-close" onclick={closeAddSegmentModal}>×</button>
-				</div>
-				<div class="modal-body">
-					<div class="form-group">
-						<label class="form-label">Start Frame</label>
-						<input type="number" bind:value={newSegmentStart} step="8" min="0" max={pipes[activeSegmentAddPipeIndex]?.lengthFrames ?? 121} />
-					</div>
-					<div class="form-group">
-						<label class="form-label">End Frame</label>
-						<input type="number" bind:value={newSegmentEnd} step="8" min={newSegmentStart} max={pipes[activeSegmentAddPipeIndex]?.lengthFrames ?? 121} />
-					</div>
-				</div>
-				<div class="modal-footer">
-					<button class="btn-cancel" onclick={closeAddSegmentModal}>Cancel</button>
-					<button class="btn-confirm" onclick={confirmAddSegment}>Add</button>
-				</div>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Global Element Modal -->
-	{#if showGlobalModal && activeGlobalPipeIndex !== null}
-		<div class="modal-backdrop" onclick={closeGlobalModal} role="dialog" aria-modal="true">
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
-				<div class="modal-header">
-					<span class="modal-title">Edit Global Style</span>
-					<button class="modal-close" onclick={closeGlobalModal}>×</button>
-				</div>
-				<div class="modal-body">
-					<div class="form-group">
-						<label class="form-label">Style Description</label>
-						<textarea bind:value={globalPromptText} placeholder="Describe the global style..."></textarea>
-					</div>
-				</div>
-				<div class="modal-footer">
-					<button class="btn-cancel" onclick={closeGlobalModal}>Cancel</button>
-					<button class="btn-confirm" onclick={confirmGlobalEdit}>Save</button>
-				</div>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Tag Edit Modal -->
-	{#if showTagModal && activeTagPipeIndex !== null && activeTagSegmentIndex !== null && activeTagId}
-		<div class="modal-backdrop" onclick={closeTagModal} role="dialog" aria-modal="true">
-			<div class="modal" onclick={(e) => e.stopPropagation()}>
-				<div class="modal-header">
-					<span class="modal-title">Edit Tag</span>
-					<button class="modal-close" onclick={closeTagModal}>×</button>
-				</div>
-				<div class="modal-body">
-					{#if activeTagPipeIndex !== null && activeTagSegmentIndex !== null && activeTagId}
-						{#each [getTagById(activeTagPipeIndex, activeTagSegmentIndex, activeTagId)] as tag}
-						{#if tag}
-							<div class="form-group">
-								<label class="form-label">Tag Type</label>
-								<span class="tag-type-display" style="color: {tag.spec.color}">[{tag.spec.name}]</span>
-							</div>
-							{#if tag.spec.usePrompt}
-								<div class="form-group">
-									<label class="form-label">Prompt</label>
-									<textarea bind:value={tagPrompt} placeholder="Enter prompt..."></textarea>
-								</div>
-							{:else}
-								<div class="form-group">
-									<label class="form-label">Value</label>
-									<input type="number" bind:value={tagValue} step="0.1" />
-								</div>
-							{/if}
-						{/if}
-						{/each}
-					{/if}
-				</div>
-				<div class="modal-footer">
-					<button class="btn-cancel" onclick={closeTagModal}>Cancel</button>
-					<button class="btn-confirm" onclick={confirmTagEdit}>Save</button>
-				</div>
+	<!-- ═══ TAG SELECTOR DROPDOWN ═══ -->
+	{#if showTagMenu}
+		<div class="dropdown-menu tag-menu" style="left: {tagMenuX}px; top: {tagMenuY}px;">
+			<div class="dropdown-label">Add Tag</div>
+			{#each ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'] as tagType}
+				<button class="dropdown-item tag-item"
+					class:active={selectedTagType === tagType}
+					onclick={() => selectedTagType = tagType as TagType}>
+					<span class="tag-dot" style="background: {TAG_SPECIFICATIONS[tagType as TagType].color}"></span>
+					<span>{TAG_SPECIFICATIONS[tagType as TagType].name}</span>
+				</button>
+			{/each}
+			<div class="dropdown-actions">
+				<button class="btn-confirm" onclick={confirmTagSelector} disabled={!selectedTagType}>Add</button>
+				<button class="btn-cancel" onclick={closeMenus}>Cancel</button>
 			</div>
 		</div>
 	{/if}
 </div>
 
+<!-- ═══ KEYFRAME MODAL ═══ -->
+{#if showKeyframeModal}
+	<div class="modal-overlay" onclick={() => showKeyframeModal = false} role="presentation">
+		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>{editingKeyframeSlot ? 'Edit Keyframe' : 'Add Keyframe'} <span class="modal-sub">Slot {editingKeyframeSlot ?? '?'}</span></h3>
+			</div>
+			<div class="modal-body">
+				<div class="mode-selector">
+					<button class="mode-btn {kfType === 'url' ? 'active' : ''}" onclick={() => kfType = 'url'}>URL</button>
+					<button class="mode-btn {kfType === 'txt2img' ? 'active' : ''}" onclick={() => kfType = 'txt2img'}>Txt2Img</button>
+					<button class="mode-btn {kfType === 'img2img' ? 'active' : ''}" onclick={() => kfType = 'img2img'}>Img2Img</button>
+				</div>
+				<div class="modal-field">
+					<label id="kf-frame-label">Frame</label>
+					<input type="number" bind:value={kfFrame} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="kf-frame-label" />
+				</div>
+				{#if kfType === 'url'}
+					<div class="modal-field">
+						<label id="kf-url-label">Image URL</label>
+						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />
+					</div>
+				{:else if kfType === 'txt2img'}
+					<div class="modal-field">
+						<label id="kf-prompt-label">Prompt</label>
+						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-prompt-label"></textarea>
+					</div>
+				{:else if kfType === 'img2img'}
+					<div class="modal-field">
+						<label id="kf-ref-label">Reference URL</label>
+						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-ref-label" />
+					</div>
+				{/if}
+			</div>
+			<div class="modal-actions">
+				<button class="btn-confirm" onclick={confirmKeyframe}>Save</button>
+				<button class="btn-cancel" onclick={() => showKeyframeModal = false}>Cancel</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- ═══ SEGMENT MODAL ═══ -->
+{#if showSegmentModal}
+	<div class="modal-overlay" onclick={() => showSegmentModal = false} role="presentation">
+		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>Add Segment</h3>
+			</div>
+			<div class="modal-body">
+				<div class="modal-field">
+					<label id="seg-start-label">Start frame</label>
+					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 8} class="modal-input" aria-labelledby="seg-start-label" />
+				</div>
+				<div class="modal-field">
+					<label id="seg-end-label">End frame</label>
+					<input type="number" bind:value={segEnd} step={8} min={8} max={totalFrames} class="modal-input" aria-labelledby="seg-end-label" />
+				</div>
+				<div class="segment-preview">
+					<div class="preview-bar">
+						<div class="preview-seg" style="left: {(segStart / (totalFrames - 1)) * 100}%; width: {((segEnd - segStart) / (totalFrames - 1)) * 100}%"></div>
+					</div>
+					<span class="preview-range">{segStart} → {segEnd} ({segEnd - segStart} frames)</span>
+				</div>
+			</div>
+			<div class="modal-actions">
+				<button class="btn-confirm" onclick={confirmSegment}>Add</button>
+				<button class="btn-cancel" onclick={() => showSegmentModal = false}>Cancel</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- ═══ TAG PROMPT MODAL ═══ -->
+{#if showTagPromptModal}
+	<div class="modal-overlay" onclick={() => showTagPromptModal = false} role="presentation">
+		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>Edit Tag Prompt</h3>
+			</div>
+			<div class="modal-body">
+				<div class="modal-field">
+					<label id="prompt-label">Prompt</label>
+					<textarea bind:value={tagPrompt} placeholder="Describe what happens in this tag segment..." class="modal-textarea" aria-labelledby="prompt-label"></textarea>
+				</div>
+			</div>
+			<div class="modal-actions">
+				<button class="btn-confirm" onclick={confirmTagPrompt}>Save</button>
+				<button class="btn-cancel" onclick={() => showTagPromptModal = false}>Cancel</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
 <style>
+	/* ═══ LAYOUT ═══ */
 	.composer-panel {
 		display: flex;
 		flex-direction: column;
+		gap: 2px;
+		padding: 8px;
+		overflow-y: auto;
 		height: 100%;
-		background: var(--bg-primary);
-		color: var(--text-primary);
 	}
 
-	.composer-header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 12px 16px;
-		border-bottom: 1px solid var(--border);
+	/* ═══ PIPE ═══ */
+	.pipe {
+		border: 1px solid var(--border);
+		border-radius: 3px;
 		background: var(--bg-secondary);
 	}
 
-	.composer-title {
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--text-primary);
-		letter-spacing: 0.02em;
-	}
-
-	.header-meta {
-		display: flex;
-		gap: 12px;
-		align-items: center;
-	}
-
-	.meta-info {
-		font-size: 11px;
-		color: var(--text-muted);
-		font-family: 'JetBrains Mono', monospace;
-	}
-
-	.composer-empty {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		flex: 1;
-		color: var(--text-muted);
-		font-size: 13px;
-	}
-
-	.unified-composer {
-			flex: 1;
-			overflow-y: auto;
-			padding: 12px;
-			display: flex;
-			flex-direction: column;
-			gap: 12px;
-		}
-
-		/* ── Design-aligned pipe row ─────────────────────────────────────── */
-		.pipe-row {
-			background: var(--bg-secondary);
-			border: 1px solid var(--border);
-			border-radius: 10px;
-			padding: 14px;
-			margin-bottom: 12px;
-			transition: all 0.2s;
-		}
-
-		.pipe-row:hover {
-			border-color: rgba(255, 70, 70, 0.4);
-			box-shadow: 0 4px 20px rgba(255, 70, 70, 0.1);
-		}
-
-		/* ── Keyframe thumbnails ─────────────────────────────────────────── */
-		.kf-row {
-			display: flex;
-			gap: 8px;
-			margin-bottom: 12px;
-		}
-
-		.kf-thumb {
-			width: 48px;
-			height: 32px;
-			background: var(--bg-tertiary);
-			border: 1px solid var(--border);
-			border-radius: 4px;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			font-size: 0.55rem;
-			font-family: 'JetBrains Mono', monospace;
-			color: var(--text-muted);
-			transition: all 0.2s;
-			cursor: pointer;
-		}
-
-		.kf-thumb.filled {
-			border-color: var(--accent);
-			background: linear-gradient(135deg, rgba(89, 181, 255, 0.2), rgba(187, 136, 238, 0.2));
-			color: var(--accent);
-			animation: kfPulse 2s ease-in-out infinite;
-		}
-
-		.kf-thumb.empty:hover {
-			border-color: var(--accent);
-			color: var(--accent);
-		}
-
-		.kf-img {
-				width: 100%;
-				height: 100%;
-				object-fit: cover;
-				border-radius: 3px;
-				display: block;
-			}
-
-			.kf-label {
-				font-size: 0.6rem;
-				font-family: 'JetBrains Mono', monospace;
-				color: var(--accent);
-				font-weight: 700;
-			}
-
-		@keyframes kfPulse {
-			0%, 100% { box-shadow: 0 0 0 0 rgba(89, 181, 255, 0.4); }
-			50% { box-shadow: 0 0 0 6px rgba(89, 181, 255, 0); }
-		}
-
-		/* ── Frame ruler ─────────────────────────────────────────────────── */
-		.frame-ruler {
-			position: relative;
-			height: 18px;
-			margin-bottom: 10px;
-		}
-
-		.ruler-line {
-			position: absolute;
-			top: 8px;
-			left: 0;
-			right: 0;
-			height: 1px;
-			background: var(--text-muted);
-			opacity: 0.4;
-		}
-
-		.ruler-kf-marker {
-			position: absolute;
-			top: 4px;
-			width: 2px;
-			height: 8px;
-			background: var(--accent);
-			border-radius: 1px;
-		}
-
-		/* ── Track rows ──────────────────────────────────────────────────── */
-		.track-row {
-			display: flex;
-			align-items: center;
-			gap: 10px;
-			margin-bottom: 6px;
-		}
-
-		.track-tag {
-			width: 50px;
-			font-size: 0.6rem;
-			color: var(--text-muted);
-			text-align: right;
-			font-weight: 600;
-		}
-
-		.track-bar-wrap {
-			flex: 1;
-			height: 22px;
-			background: var(--bg-primary);
-			border-radius: 11px;
-			border: 1px solid var(--border);
-			position: relative;
-			overflow: visible;
-		}
-
-		/* ── Segment bars ────────────────────────────────────────────────── */
-		.track-seg {
-			position: absolute;
-			top: 3px;
-			height: 16px;
-			border-radius: 8px;
-			display: flex;
-			align-items: center;
-			padding: 0 10px;
-			font-size: 0.6rem;
-			font-weight: 600;
-			color: rgba(0, 0, 0, 0.7);
-			cursor: grab;
-			transition: filter 0.2s, transform 0.1s;
-		}
-
-		.track-seg:hover {
-			filter: brightness(1.2);
-		}
-
-		.track-seg:active {
-			cursor: grabbing;
-		}
-
-		/* ── Knob handles ────────────────────────────────────────────────── */
-		.tknob {
-			width: 12px;
-			height: 12px;
-			border-radius: 50%;
-			position: absolute;
-			top: 50%;
-			transform: translateY(-50%);
-			border: 2px solid rgba(0, 0, 0, 0.3);
-			z-index: 2;
-			cursor: ew-resize;
-			transition: transform 0.15s, box-shadow 0.15s;
-		}
-
-		.tknob:hover {
-			transform: translateY(-50%) scale(1.3);
-			box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.1);
-		}
-
-		.tknob.l { left: -7px; }
-		.tknob.r { right: -7px; }
-
-		/* ── Add buttons ─────────────────────────────────────────────────── */
-		.add-pipe {
-			width: 100%;
-			padding: 12px;
-			background: transparent;
-			border: 1px dashed var(--border-light);
-			border-radius: 8px;
-			color: var(--text-muted);
-			font-size: 0.8rem;
-			cursor: pointer;
-			transition: all 0.2s;
-			margin-top: 8px;
-		}
-
-		.add-pipe:hover {
-			border-color: var(--accent);
-			color: var(--accent);
-		}
-
-		.add-seg-btn {
-			padding: 4px 12px;
-			background: transparent;
-			border: 1px solid var(--border);
-			border-radius: 6px;
-			color: var(--text-muted);
-			font-size: 0.65rem;
-			cursor: pointer;
-			transition: all 0.2s;
-		}
-
-		.add-seg-btn:hover {
-			border-color: var(--accent);
-			color: var(--accent);
-		}
-
-		/* ── Empty track hints ─────────────────────────────────────────── */
-		.track-empty {
-			opacity: 0.6;
-		}
-
-		.track-bar-empty {
-			display: flex;
-			align-items: center;
-			justify-content: center;
-		}
-
-		.empty-hint {
-			font-size: 0.55rem;
-			color: var(--text-muted);
-			font-style: italic;
-		}
-
-		/* ── Segments summary ──────────────────────────────────────────── */
-		.segments-summary {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 6px;
-			align-items: center;
-			margin-top: 8px;
-			padding-top: 8px;
-			border-top: 1px solid var(--border);
-		}
-
-		.summary-label {
-			font-size: 0.6rem;
-			color: var(--text-muted);
-			font-weight: 600;
-		}
-
-		.segment-chip {
-			display: flex;
-			align-items: center;
-			gap: 4px;
-			padding: 4px 8px;
-			background: var(--bg-primary);
-			border: 1px solid var(--border);
-			border-radius: 4px;
-			font-size: 0.6rem;
-			cursor: pointer;
-			transition: all 0.15s;
-		}
-
-		.segment-chip:hover {
-			border-color: var(--accent);
-		}
-
-		.seg-range {
-			color: var(--text-primary);
-			font-family: 'JetBrains Mono', monospace;
-		}
-
-		.seg-tags-count {
-			color: var(--text-muted);
-		}
-
-		.add-tag-mini {
-			width: 14px;
-			height: 14px;
-			border-radius: 50%;
-			border: 1px solid var(--border);
-			background: transparent;
-			color: var(--text-muted);
-			font-size: 10px;
-			cursor: pointer;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			transition: all 0.15s;
-		}
-
-		.add-tag-mini:hover {
-			border-color: var(--accent);
-			color: var(--accent);
-		}
-
-		/* ── Toast ───────────────────────────────────────────────────────── */
-		.toast {
-			position: fixed;
-			bottom: 20px;
-			right: 20px;
-			padding: 12px 20px;
-			border-radius: 8px;
-			font-size: 0.85rem;
-			font-weight: 500;
-			z-index: 2000;
-			animation: slideIn 0.3s ease;
-		}
-
-		.toast-success {
-			background: var(--accent);
-			color: #fff;
-		}
-
-		.toast-error {
-			background: #E85050;
-			color: #fff;
-		}
-
-		@keyframes slideIn {
-			from { transform: translateX(100%); opacity: 0; }
-			to { transform: translateX(0); opacity: 1; }
-		}
-
-	.keyframe-chip.has-image img {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		border-radius: 4px;
-	}
-
-	.keyframe-chip.dragging {
-		opacity: 0.7;
-		cursor: grabbing;
-	}
-
-	.delete-kf-tl-btn {
-		position: absolute;
-		top: -4px;
-		right: -4px;
-		width: 14px;
-		height: 14px;
-		border-radius: 50%;
-		background: #ff4444;
-		color: white;
-		font-size: 9px;
-		border: none;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		opacity: 0;
-		transition: opacity 0.15s;
-		z-index: 3;
-	}
-
-	.keyframe-chip:hover .delete-kf-tl-btn {
-		opacity: 1;
-	}
-
-	.add-kf-tl-btn {
-		position: absolute;
-		top: 50%;
-		transform: translateY(-50%);
-		width: 20px;
-		height: 20px;
-		border-radius: 50%;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		cursor: pointer;
-		border: 1px dashed var(--border-light);
-		background: transparent;
-		color: var(--text-muted);
-		font-size: 14px;
-		transition: all 0.15s;
-	}
-
-	.add-kf-tl-btn:hover {
+	.pipe.active {
 		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-glow);
 	}
 
-	/* Global track */
-	.global-track-canvas {
+	/* ═══ PIPE HEADER ═══ */
+	.pipe-header {
 		display: flex;
+		align-items: center;
 		gap: 8px;
-		flex-wrap: wrap;
-	}
-
-	.global-track-canvas.empty-track {
-		justify-content: center;
-	}
-
-	.global-chip-tl {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		padding: 4px 10px;
+		padding: 5px 10px;
 		background: var(--bg-tertiary);
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		cursor: pointer;
-		font-size: 10px;
-		transition: all 0.15s;
+		border-bottom: 1px solid var(--border);
 	}
 
-	.global-chip-tl:hover {
-		border-color: var(--accent);
-		background: var(--accent-glow);
-	}
-
-	.global-chip-tl.disabled {
-		opacity: 0.5;
-	}
-
-	.global-text-tl {
-		font-family: 'JetBrains Mono', monospace;
-		color: var(--text-secondary);
-		max-width: 150px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	/* Segment timeline */
-	.segment-timeline-canvas {
-		position: relative;
-		height: 40px;
-		overflow: visible;
-	}
-
-	.segment-block {
-		position: absolute;
-		top: 4px;
-		bottom: 4px;
-		background: linear-gradient(135deg, rgba(89, 181, 255, 0.2), rgba(187, 136, 238, 0.2));
-		border: 1px solid var(--accent);
-		border-radius: 4px;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0 6px;
-		cursor: pointer;
-		transition: all 0.15s;
-		overflow: hidden;
-	}
-
-	.segment-block:hover {
-		background: linear-gradient(135deg, rgba(89, 181, 255, 0.3), rgba(187, 136, 238, 0.3));
-		box-shadow: 0 0 12px var(--accent-glow);
-	}
-
-	.segment-label {
-		font-size: 9px;
+	.pipe-label {
+		font-size: 0.65rem;
 		font-weight: 600;
 		color: var(--text-primary);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+
+	.pipe-meta {
+		flex: 1;
+		font-size: 0.6rem;
+		color: var(--text-muted);
 		font-family: 'JetBrains Mono', monospace;
 	}
 
-	.delete-segment-btn {
-		width: 16px;
-		height: 16px;
-		border-radius: 50%;
-		background: #ff4444;
-		color: white;
-		border: none;
-		cursor: pointer;
-		font-size: 10px;
+	/* ═══ KEYFRAME ROW ═══ */
+	.kf-row {
 		display: flex;
 		align-items: center;
+		gap: 5px;
+		padding: 7px 10px;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.kf-chip {
+		width: 52px;
+		height: 36px;
+		border-radius: 3px;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
 		justify-content: center;
-		opacity: 0;
-		transition: opacity 0.15s;
+		cursor: pointer;
+		position: relative;
+		overflow: hidden;
+		transition: all 0.12s;
 		flex-shrink: 0;
 	}
 
-	.segment-block:hover .delete-segment-btn {
+	.kf-filled {
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+	}
+
+	.kf-filled:hover {
+		border-color: var(--accent);
+	}
+
+	.kf-empty {
+		background: transparent;
+		border: 1px dashed var(--border);
+		color: var(--text-muted);
+	}
+
+	.kf-empty:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: var(--accent-glow);
+	}
+
+	.kf-img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+
+	.kf-label {
+		font-size: 0.65rem;
+		font-weight: 600;
+		color: var(--text-secondary);
+	}
+
+	.kf-empty-label {
+		font-size: 0.6rem;
+		color: var(--text-muted);
+	}
+
+	.kf-del {
+		position: absolute;
+		top: 1px;
+		right: 1px;
+		width: 13px;
+		height: 13px;
+		font-size: 0.55rem;
+		padding: 0;
+		background: rgba(0, 0, 0, 0.6);
+		border: none;
+		border-radius: 50%;
+		color: var(--text-muted);
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		opacity: 0;
+		transition: opacity 0.12s;
+	}
+
+	.kf-chip:hover .kf-del {
 		opacity: 1;
 	}
 
-	.tag-mini-chip {
-		padding: 2px 6px;
-		border-radius: 3px;
-		font-size: 8px;
-		font-weight: 600;
-		cursor: pointer;
-		background: var(--bg-tertiary);
-		transition: all 0.15s;
+	.kf-del:hover {
+		background: rgba(220, 38, 38, 0.8);
+		color: #fff;
 	}
 
-	.tag-mini-chip:hover {
-		opacity: 0.8;
+	/* ═══ FRAME RULER WRAP ═══ */
+	.ruler-wrap {
+		border-bottom: 1px solid var(--border);
 	}
 
-	/* Add segment */
-	.add-segment-track .track-canvas button {
-		width: 100%;
-		height: 100%;
-		background: transparent;
-		border: 1px dashed var(--border-light);
-		border-radius: 4px;
-		cursor: pointer;
-		color: var(--text-muted);
-		font-size: 11px;
-		transition: all 0.15s;
+	/* ═══ GLOBAL TRACK ═══ */
+	.global-track {
+		padding: 3px 10px;
+		border-bottom: 1px solid var(--border);
 	}
 
-	.add-segment-track .track-canvas button:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-glow);
-	}
-
-	/* QC track */
-	.qc-track .track-canvas {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		flex-wrap: wrap;
-	}
-
-	.qc-item {
+	.global-bar {
 		display: flex;
 		align-items: center;
 		gap: 6px;
+		height: 22px;
+		background: var(--accent-glow);
+		border: 1px solid var(--accent);
+		border-radius: 2px;
+		padding: 0 8px;
 	}
 
-	.qc-label {
-		font-size: 9px;
-		font-weight: 600;
-		color: var(--text-muted);
-		text-transform: uppercase;
-	}
-
-	.qc-value {
-		font-size: 10px;
-		color: var(--accent);
+	.global-text {
+		flex: 1;
+		font-size: 0.6rem;
+		color: var(--text-primary);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		font-family: 'JetBrains Mono', monospace;
-		min-width: 20px;
-		text-align: center;
 	}
 
-	.qc-item input[type="range"] {
-		width: 60px;
-		height: 4px;
-		accent-color: var(--accent);
+	.global-placeholder {
+		flex: 1;
+		font-size: 0.6rem;
+		color: var(--text-muted);
 	}
 
-	.length-item {
-		display: flex;
-		align-items: center;
-		gap: 4px;
+	/* ═══ TIMELINE TRACK ═══ */
+	.timeline-track {
+		padding: 3px 10px;
+		border-bottom: 1px solid var(--border);
 	}
 
-	.length-input {
-		width: 50px;
-		padding: 2px 4px;
+	.segment-row-list {
+		position: relative;
+		height: 28px;
 		background: var(--bg-primary);
 		border: 1px solid var(--border);
-		border-radius: 3px;
-		color: var(--accent);
-		font-size: 10px;
-		font-family: 'JetBrains Mono', monospace;
-		text-align: center;
+		border-radius: 2px;
+		overflow: visible;
+		margin-top: 2px;
 	}
 
-	.length-input:focus {
-		outline: none;
+	.seg-row {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 2px;
+		cursor: pointer;
+		transition: background 0.12s, border-color 0.12s;
+		overflow: visible;
+	}
+
+	.seg-row:hover {
+		background: var(--bg-hover);
 		border-color: var(--accent);
 	}
 
-	.qc-unit {
-		font-size: 9px;
-		color: var(--text-muted);
+	.seg-body {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 6px;
+		height: 14px;
 	}
 
-	/* Add pipe button */
-	.add-pipe-btn {
+	.seg-range {
+		font-size: 0.55rem;
+		color: var(--text-secondary);
+		font-family: 'JetBrains Mono', monospace;
+	}
+
+	.seg-tag-count {
+		font-size: 0.5rem;
+		color: var(--text-muted);
+		background: var(--bg-tertiary);
+		padding: 1px 3px;
+		border-radius: 2px;
+	}
+
+	.seg-tags {
+		position: absolute;
+		top: 14px;
+		left: 0;
+		right: 0;
+		height: 14px;
+	}
+
+	.tag-bar {
+		position: absolute;
+		top: 2px;
+		height: 10px;
+		border-radius: 2px;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		padding: 0 4px;
+		overflow: hidden;
+		transition: opacity 0.12s;
+		min-width: 18px;
+	}
+
+	.tag-bar:hover {
+		opacity: 0.8;
+	}
+
+	.tag-label {
+		font-size: 0.5rem;
+		color: rgba(0, 0, 0, 0.85);
+		font-weight: 600;
+		white-space: nowrap;
+		text-transform: uppercase;
+		letter-spacing: 0.03em;
+	}
+
+	.tag-prompt-trunc {
+		font-size: 0.48rem;
+		color: rgba(0, 0, 0, 0.6);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.btn-seg-tag {
+		position: absolute;
+		bottom: 1px;
+		right: 3px;
+		font-size: 0.5rem;
+		padding: 1px 3px;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border);
+		border-radius: 2px;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: all 0.12s;
+	}
+
+	.btn-seg-tag:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+
+	.seg-empty {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 8px;
-		padding: 12px;
-		border: 2px dashed var(--border-light);
-		border-radius: 8px;
+		height: 100%;
 		cursor: pointer;
-		transition: all 0.15s;
-		background: transparent;
 		color: var(--text-muted);
-		font-size: 12px;
-		font-weight: 500;
-		margin-top: 4px;
+		font-size: 0.6rem;
+		transition: color 0.12s;
 	}
 
-	.add-pipe-btn:hover {
+	.seg-empty:hover {
+		color: var(--accent);
+	}
+
+	/* ═══ ADD TRACK BUTTON ═══ */
+	.add-track-wrap {
+		padding: 5px 10px;
+		display: flex;
+		justify-content: center;
+	}
+
+	.btn-add-track {
+		width: 24px;
+		height: 24px;
+		border-radius: 50%;
+		border: 1px dashed var(--border);
+		background: transparent;
+		color: var(--text-muted);
+		font-size: 0.9rem;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.12s;
+	}
+
+	.btn-add-track:hover {
 		border-color: var(--accent);
 		color: var(--accent);
 		background: var(--accent-glow);
 	}
 
-	/* Modal styles */
-	.modal-backdrop {
+	/* ═══ ADD PIPE BUTTON ═══ */
+	.btn-add-pipe {
+		align-self: flex-start;
+		padding: 5px 14px;
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 3px;
+		color: var(--text-muted);
+		font-size: 0.7rem;
+		cursor: pointer;
+		transition: all 0.12s;
+		margin-top: 4px;
+		font-family: inherit;
+	}
+
+	.btn-add-pipe:hover {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: var(--accent-glow);
+	}
+
+	/* ═══ DROPDOWN MENU ═══ */
+	.dropdown-menu {
 		position: fixed;
-		top: 0;
-		left: 0;
-		right: 0;
-		bottom: 0;
-		background: rgba(0, 0, 0, 0.7);
+		min-width: 130px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 4px;
+		box-shadow: var(--shadow-md);
+		z-index: 1000;
+		padding: 4px;
+	}
+
+	.dropdown-label {
+		font-size: 0.55rem;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		padding: 3px 8px 1px;
+	}
+
+	.dropdown-item {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		width: 100%;
+		padding: 5px 8px;
+		background: transparent;
+		border: none;
+		border-radius: 3px;
+		color: var(--text-secondary);
+		font-size: 0.7rem;
+		cursor: pointer;
+		transition: all 0.1s;
+		text-align: left;
+		font-family: inherit;
+	}
+
+	.dropdown-item:hover {
+		background: var(--bg-hover);
+		color: var(--text-primary);
+	}
+
+	.dropdown-item.active {
+		background: var(--accent-glow);
+		color: var(--accent);
+	}
+
+	.dropdown-icon {
+		font-size: 0.75rem;
+		opacity: 0.7;
+	}
+
+	.tag-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.dropdown-actions {
+		display: flex;
+		gap: 6px;
+		padding: 4px 4px 2px;
+		border-top: 1px solid var(--border);
+		margin-top: 2px;
+	}
+
+	/* ═══ MODAL ═══ */
+	.modal-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		backdrop-filter: blur(4px);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		z-index: 1000;
+		z-index: 2000;
 	}
 
 	.modal {
 		background: var(--bg-secondary);
-		border: 1px solid var(--border);
-		border-radius: 12px;
-		min-width: 320px;
-		max-width: 500px;
-		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+		border: 1px solid var(--border-light);
+		border-radius: 6px;
+		box-shadow: var(--shadow-lg);
+		min-width: 300px;
+		max-width: 440px;
+		width: 90%;
 	}
 
 	.modal-header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 16px;
+		padding: 10px 14px;
 		border-bottom: 1px solid var(--border);
 	}
 
-	.modal-title {
-		font-size: 14px;
+	.modal-header h3 {
+		font-size: 0.8rem;
 		font-weight: 600;
 		color: var(--text-primary);
+		margin: 0;
 	}
 
-	.modal-close {
-		width: 24px;
-		height: 24px;
-		border-radius: 6px;
-		border: 1px solid var(--border);
-		background: var(--bg-tertiary);
+	.modal-sub {
+		font-size: 0.65rem;
 		color: var(--text-muted);
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: all 0.15s;
-	}
-
-	.modal-close:hover {
-		border-color: var(--accent);
-		color: var(--accent);
+		font-weight: 400;
 	}
 
 	.modal-body {
-		padding: 16px;
+		padding: 14px;
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
+		gap: 10px;
 	}
 
-	.form-group {
+	.mode-selector {
+		display: flex;
+		gap: 4px;
+	}
+
+	.mode-btn {
+		flex: 1;
+		padding: 5px 10px;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border);
+		border-radius: 3px;
+		color: var(--text-muted);
+		font-size: 0.68rem;
+		cursor: pointer;
+		transition: all 0.12s;
+		font-family: inherit;
+	}
+
+	.mode-btn:hover,
+	.mode-btn.active {
+		border-color: var(--accent);
+		color: var(--accent);
+		background: var(--accent-glow);
+	}
+
+	.modal-field {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 3px;
 	}
 
-	.form-label {
-		font-size: 11px;
-		font-weight: 600;
+	.modal-field label {
+		font-size: 0.6rem;
 		color: var(--text-muted);
 		text-transform: uppercase;
-		letter-spacing: 0.05em;
+		letter-spacing: 0.06em;
 	}
 
-	.form-group input[type="text"],
-	.form-group input[type="number"],
-	.form-group textarea {
-		padding: 8px 12px;
+	.modal-input,
+	.modal-textarea {
+		padding: 7px 9px;
 		background: var(--bg-primary);
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: 3px;
 		color: var(--text-primary);
-		font-size: 13px;
-		font-family: inherit;
-		transition: all 0.15s;
+		font-size: 0.78rem;
+		font-family: 'JetBrains Mono', monospace;
+		transition: border-color 0.12s;
 	}
 
-	.form-group input:focus,
-	.form-group textarea:focus {
+	.modal-input:focus,
+	.modal-textarea:focus {
 		outline: none;
 		border-color: var(--accent);
-		box-shadow: 0 0 0 2px var(--accent-glow);
 	}
 
-	.form-group textarea {
-		min-height: 80px;
+	.modal-textarea {
+		min-height: 72px;
 		resize: vertical;
 	}
 
-	.mode-buttons {
-		display: flex;
-		gap: 8px;
+	.segment-preview {
+		padding: 6px 0;
 	}
 
-	.mode-buttons button {
-		flex: 1;
-		padding: 8px 12px;
+	.preview-bar {
+		position: relative;
+		height: 14px;
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: 2px;
+		overflow: hidden;
+	}
+
+	.preview-seg {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		background: var(--accent-glow);
+		border: 1px solid var(--accent);
+	}
+
+	.preview-range {
+		display: block;
+		font-size: 0.6rem;
 		color: var(--text-muted);
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: all 0.15s;
-		font-family: inherit;
+		margin-top: 3px;
+		font-family: 'JetBrains Mono', monospace;
 	}
 
-	.mode-buttons button:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
-
-	.mode-buttons button.active {
-		background: var(--accent);
-		color: white;
-		border-color: var(--accent);
-	}
-
-	.modal-footer {
+	.modal-actions {
 		display: flex;
+		gap: 7px;
 		justify-content: flex-end;
-		gap: 8px;
-		padding: 16px;
+		padding: 10px 14px;
 		border-top: 1px solid var(--border);
 	}
 
-	.btn-cancel,
-	.btn-confirm {
-		padding: 8px 16px;
-		border-radius: 6px;
-		font-size: 12px;
-		font-weight: 500;
+	.btn-confirm,
+	.btn-cancel {
+		padding: 5px 14px;
+		border-radius: 3px;
+		font-size: 0.7rem;
 		cursor: pointer;
-		transition: all 0.15s;
+		transition: all 0.12s;
 		font-family: inherit;
-		border: 1px solid var(--border);
+	}
+
+	.btn-confirm {
+		background: var(--accent);
+		border: 1px solid var(--accent);
+		color: var(--text-inverse);
+	}
+
+	.btn-confirm:hover:not(:disabled) {
+		background: var(--accent-hover);
+		border-color: var(--accent-hover);
+	}
+
+	.btn-confirm:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
 	}
 
 	.btn-cancel {
-		background: var(--bg-tertiary);
+		background: transparent;
+		border: 1px solid var(--border);
 		color: var(--text-muted);
 	}
 
@@ -1790,63 +1162,50 @@
 		color: var(--text-primary);
 	}
 
-	.btn-confirm {
-		background: var(--accent);
-		color: white;
+	.btn-icon,
+	.btn-icon-sm {
+		width: 18px;
+		height: 18px;
+		padding: 0;
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 3px;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: 0.7rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.12s;
+	}
+
+	.btn-icon:hover,
+	.btn-icon-sm:hover {
 		border-color: var(--accent);
+		color: var(--accent);
 	}
 
-	.btn-confirm:hover:not(:disabled) {
-		opacity: 0.9;
-		transform: translateY(-1px);
+	.btn-del-sm:hover {
+		border-color: rgba(220, 38, 38, 0.5);
+		color: #ff6b6b;
+		background: rgba(220, 38, 38, 0.1);
 	}
 
-	.btn-confirm:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
+	/* ═══ SCROLLBAR ═══ */
+	.composer-panel::-webkit-scrollbar {
+		width: 4px;
 	}
 
-	/* Toast */
-	.toast {
-		position: fixed;
-		bottom: 20px;
-		right: 20px;
-		padding: 12px 20px;
-		border-radius: 8px;
-		font-size: 13px;
-		font-weight: 500;
-		box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-		z-index: 2000;
-		animation: slideIn 0.3s ease;
+	.composer-panel::-webkit-scrollbar-track {
+		background: transparent;
 	}
 
-	.toast-success {
-		background: var(--accent);
-		color: white;
+	.composer-panel::-webkit-scrollbar-thumb {
+		background: var(--border);
+		border-radius: 2px;
 	}
 
-	.toast-error {
-		background: #ff4444;
-		color: white;
-	}
-
-	@keyframes slideIn {
-		from {
-			transform: translateX(100%);
-			opacity: 0;
-		}
-		to {
-			transform: translateX(0);
-			opacity: 1;
-		}
-	}
-
-	/* Tag type display */
-	.tag-type-display {
-		font-size: 12px;
-		font-weight: 600;
-		padding: 4px 8px;
-		background: var(--bg-tertiary);
-		border-radius: 4px;
+	.composer-panel::-webkit-scrollbar-thumb:hover {
+		background: var(--border-light);
 	}
 </style>

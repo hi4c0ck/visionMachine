@@ -44,11 +44,15 @@ fn init_database_sync(app_data_dir: &std::path::Path) -> Result<Database, String
             .map_err(|e| format!("Failed to create database: {}", e))?;
 
         log::info!("[DB] Running migrations...");
-        db.migrate().await.map_err(|e| format!("Migration failed: {}", e))?;
+        db.migrate()
+            .await
+            .map_err(|e| format!("Migration failed: {}", e))?;
         log::info!("[DB] Migrations completed successfully");
 
         log::info!("[DB] Seeding default profile...");
-        db.seed_default_profile().await.map_err(|e| format!("Failed to seed profile: {}", e))?;
+        db.seed_default_profile()
+            .await
+            .map_err(|e| format!("Failed to seed profile: {}", e))?;
         log::info!("[DB] Default profile seeded");
 
         Ok::<Database, String>(db)
@@ -56,6 +60,19 @@ fn init_database_sync(app_data_dir: &std::path::Path) -> Result<Database, String
 }
 
 pub fn run() {
+    // Force WebView2 to use a unique isolated profile per process to avoid resource conflicts
+    let unique_profile = format!(
+        "C:\\Users\\Public\\Documents\\visionmachine_webview_{}",
+        std::process::id()
+    );
+    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &unique_profile);
+
+    if let Err(e) = std::fs::create_dir_all(&unique_profile) {
+        eprintln!("Warning: Failed to create webview profile: {}", e);
+    }
+
+    log::info!("[WebView2] Using isolated profile: {}", unique_profile);
+
     // Run pre-flight checks
     let report = run_preflight_checks();
     let report_str = report.format_report();
@@ -99,22 +116,8 @@ pub fn run() {
             commands::sessions::list_sessions,
             commands::sessions::update_session,
             commands::sessions::delete_session,
-            // Composer commands (v0.3.x)
             commands::composer::get_composer,
             commands::composer::save_composer,
-            commands::composer::add_pipe,
-            commands::composer::update_pipe_config,
-            commands::composer::remove_pipe,
-            commands::composer::set_keyframe,
-            commands::composer::clear_keyframe,
-            commands::composer::list_keyframes,
-            commands::composer::add_prompt_node,
-            commands::composer::update_prompt_node,
-            commands::composer::toggle_prompt_node,
-            commands::composer::remove_prompt_node,
-            commands::composer::update_session_settings,
-            commands::composer::get_session_settings,
-            commands::composer::generate_from_composer,
             // File management commands
             commands::artifacts::add_project_file,
             commands::artifacts::list_project_files,

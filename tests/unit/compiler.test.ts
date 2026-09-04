@@ -3,7 +3,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { compilePrompt, constructRule } from '../../src/lib/compiler';
-import type { PipeRow } from '../../src/types/app';
+import type { PipeRow, GlobalElement, TimelineElement, Segment, TagElement } from '../../src/types/app';
 import { TAG_SPECIFICATIONS } from '../../src/types/app';
 
 describe('constructRule', () => {
@@ -27,11 +27,11 @@ describe('constructRule', () => {
   });
 
   it('should format xml rule correctly', () => {
-    const spec = TAG_SPECIFICATIONS['lighting'];
-    const result = constructRule(spec, 'soft');
-    // lighting's constructRule is 'plain', not 'xml'
-    // The test was wrong - let's use a tag that actually has xml rule
-    expect(result).toBe('soft');
+    // Use a tag with xml constructRule - actually none exist in current spec
+    // Just test plain rule returns value as-is
+    const spec = TAG_SPECIFICATIONS['scene'];
+    const result = constructRule(spec, 'test value');
+    expect(result).toBe('test value');
   });
 });
 
@@ -39,42 +39,80 @@ describe('compilePrompt', () => {
   it('should compile an empty pipe', () => {
     const pipe: PipeRow = {
       id: '1',
+      name: 'Test',
       lengthFrames: 121,
       keyframes: [],
       qValue: 18,
       cValue: 7,
-      segments: [],
+      elements: [],
+      orderIndex: 0,
     };
     const result = compilePrompt(pipe);
     expect(result).toBe('');
   });
 
   it('should include global prompt first', () => {
+    const global: GlobalElement = {
+      id: 'g1',
+      tag: 'global_style',
+      value: 'main theme',
+      enabled: true,
+    };
     const pipe: PipeRow = {
       id: '1',
+      name: 'Test',
       lengthFrames: 121,
       keyframes: [],
       qValue: 18,
       cValue: 7,
-      segments: [],
-      globalPrompt: { text: 'main theme' },
+      elements: [global],
+      orderIndex: 0,
     };
     const result = compilePrompt(pipe);
     expect(result).toContain('main theme');
   });
 
   it('should compile segments sorted by frame position', () => {
+    const segment1: Segment = {
+      id: '2',
+      frameStart: 61,
+      frameEnd: 121,
+      tags: [{
+        id: 't1',
+        tag: 'camera',
+        frameStart: 61,
+        frameEnd: 121,
+        value: 90,
+        spec: TAG_SPECIFICATIONS['camera'],
+      }],
+    };
+    const segment2: Segment = {
+      id: '1',
+      frameStart: 1,
+      frameEnd: 60,
+      tags: [{
+        id: 't2',
+        tag: 'scene',
+        frameStart: 1,
+        frameEnd: 60,
+        prompt: 'forest',
+        spec: TAG_SPECIFICATIONS['scene'],
+      }],
+    };
+    const timeline: TimelineElement = {
+      id: 'tl1',
+      tag: 'timeline',
+      segments: [segment1, segment2],
+    };
     const pipe: PipeRow = {
       id: '1',
+      name: 'Test',
       lengthFrames: 121,
       keyframes: [],
       qValue: 18,
       cValue: 7,
-      segments: [
-        { id: '2', tag: 'camera', value: 90, prompt: '', frameStart: 61, frameEnd: 121, spec: { color: '#fff', name: 'Camera', constructRule: 'json' } },
-        { id: '1', tag: 'scene', value: 0, prompt: 'forest', frameStart: 1, frameEnd: 60, spec: { color: '#fff', name: 'Scene', constructRule: 'plain', usePrompt: true } },
-      ],
-      globalPrompt: null,
+      elements: [timeline],
+      orderIndex: 0,
     };
     const result = compilePrompt(pipe);
     const lines = result.split('\n').filter((l: string) => l.trim());
@@ -83,14 +121,39 @@ describe('compilePrompt', () => {
   });
 
   it('should handle pipe with global + segments', () => {
+    const global: GlobalElement = {
+      id: 'g1',
+      tag: 'global_style',
+      value: 'global theme',
+      enabled: true,
+    };
+    const segment: Segment = {
+      id: '1',
+      frameStart: 1,
+      frameEnd: 121,
+      tags: [{
+        id: 't1',
+        tag: 'scene',
+        frameStart: 1,
+        frameEnd: 121,
+        prompt: 'pipe1 scene',
+        spec: TAG_SPECIFICATIONS['scene'],
+      }],
+    };
+    const timeline: TimelineElement = {
+      id: 'tl1',
+      tag: 'timeline',
+      segments: [segment],
+    };
     const pipe: PipeRow = {
       id: '1',
+      name: 'Test',
       lengthFrames: 121,
       keyframes: [],
       qValue: 18,
       cValue: 7,
-      segments: [{ id: '1', tag: 'scene', value: 0, prompt: 'pipe1 scene', frameStart: 1, frameEnd: 121, spec: { color: '#fff', name: 'Scene', constructRule: 'plain', usePrompt: true } }],
-      globalPrompt: { text: 'global theme' },
+      elements: [global, timeline],
+      orderIndex: 0,
     };
     const result = compilePrompt(pipe);
     const lines = result.split('\n');

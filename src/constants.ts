@@ -3,8 +3,8 @@ const APP_VERSION = '0.4.0';
 const APP_CONSTANTS = {
   strings: {
     appName: 'VisionMachine',
-      version: APP_VERSION,
-      welcomeTitle: 'Welcome to VisionMachine',
+    version: APP_VERSION,
+    welcomeTitle: 'Welcome to VisionMachine',
     enterName: 'Enter your name to continue',
     namePlaceholder: 'Your name...',
     getStarted: 'Get Started',

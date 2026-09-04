@@ -3,15 +3,16 @@
 	import { APP_CONSTANTS } from '$constants';
 	import { compilePrompt } from '$lib/compiler';
 
-	let { 
-		session, 
-		project, 
+	let {
+		session,
+		project,
 		activeTool,
 		onselect,
 		ongenerate,
 		onfpschange,
 		onresolutionchange,
-		onorientationchange
+		onorientationchange,
+		unsynced = false
 	} = $props<{
 		session: SessionData | null;
 		project: ProjectData | null;
@@ -21,6 +22,7 @@
 		onfpschange?: (fps: number) => void;
 		onresolutionchange?: (resolution: string) => void;
 		onorientationchange?: (orientation: string) => void;
+		unsynced?: boolean;
 	}>();
 
 	let showModal = $state(false);
@@ -38,7 +40,6 @@
 
 	function confirmNewSession() {
 		if (!newSessionName.trim() || !project) return;
-		// This will be handled by the parent
 		console.log('[ToolsPanel] Create session:', newSessionName);
 		closeNewSessionModal();
 	}
@@ -72,7 +73,6 @@
 	// T6: Compiled prompt output (T6)
 	const compiledOutput = $derived.by(() => {
 		if (!session?.pipes?.length) return '';
-		// Use first pipe for compilation preview
 		return compilePrompt(session.pipes[0]);
 	});
 </script>
@@ -83,7 +83,7 @@
     <div class="section-header">
       <span class="section-title">Preview</span>
       {#if session}
-        <button class="btn-generate" onclick={ongenerate}>
+        <button class="btn-generate" onclick={ongenerate} disabled={!session.pipes?.length}>
           {APP_CONSTANTS.strings.generate}
         </button>
       {/if}
@@ -94,6 +94,9 @@
           <div class="preview-icon">🎬</div>
           <p class="preview-name">{session.name}</p>
           <p class="preview-meta">{session?.pipes?.length ?? 0} pipes · {stats.frames}f</p>
+          {#if unsynced}
+            <span class="unsynced-badge">Unsynced</span>
+          {/if}
         </div>
       {:else}
         <div class="preview-empty">
@@ -101,6 +104,20 @@
           <p>No preview available</p>
           <p class="hint">Select a session to see preview</p>
         </div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Compiler Preview -->
+  <div class="compiler-section">
+    <div class="section-header">
+      <span class="section-title">Compiler</span>
+    </div>
+    <div class="compiler-preview">
+      {#if compiledOutput}
+        <div class="compiler-output">{compiledOutput}</div>
+      {:else}
+        <div class="compiler-empty">No pipes to compile</div>
       {/if}
     </div>
   </div>
@@ -153,14 +170,14 @@
 
         <div class="setting-row">
           <label class="setting-label">Quality</label>
-          <input type="range" min="5" max="30" step="1" value="18" class="setting-slider" />
-          <span class="setting-value">18</span>
+          <input type="range" min="5" max="30" step="1" value={session?.qValue ?? 18} class="setting-slider" onchange={(e) => onfpschange?.(Number(e.currentTarget.value))} />
+          <span class="setting-value">{session?.qValue ?? 18}</span>
         </div>
 
         <div class="setting-row">
           <label class="setting-label">Creativity</label>
-          <input type="range" min="0.5" max="15" step="0.5" value="7" class="setting-slider" />
-          <span class="setting-value">7</span>
+          <input type="range" min="0.5" max="15" step="0.5" value={session?.cValue ?? 7} class="setting-slider" onchange={(e) => onresolutionchange?.(e.currentTarget.value)} />
+          <span class="setting-value">{session?.cValue ?? 7}</span>
         </div>
       </div>
     {:else}
@@ -246,7 +263,8 @@
   /* Sections */
   .preview-section,
   .settings-section,
-  .stats-section {
+  .stats-section,
+  .compiler-section {
     border-bottom: 1px solid var(--panel-right-border);
   }
 
@@ -297,171 +315,201 @@
     box-shadow: none;
   }
 
-  /* Preview Area */
+  /* Preview */
   .preview-area {
-    padding: 14px;
-    min-height: 110px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    padding: 16px;
   }
 
-  .preview-active {
+  .preview-active,
+  .preview-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     text-align: center;
+    gap: 6px;
+    padding: 12px 0;
   }
 
   .preview-icon {
-    font-size: 28px;
-    margin-bottom: 6px;
-    filter: drop-shadow(0 0 12px var(--panel-right-border));
+    font-size: 32px;
+    margin-bottom: 4px;
   }
 
   .preview-name {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
-    margin-bottom: 4px;
-    letter-spacing: -0.01em;
+    margin: 0;
+    word-break: break-word;
   }
 
   .preview-meta {
-    font-size: 10px;
-    color: var(--text-muted);
-  }
-
-  .preview-empty {
-    text-align: center;
-    color: var(--text-muted);
-  }
-
-  .preview-empty .preview-icon {
-    font-size: 22px;
-    opacity: 0.4;
-    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin: 0;
   }
 
   .preview-empty p {
-    font-size: 11px;
-    margin: 3px 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 4px 0;
   }
 
   .preview-empty .hint {
     font-size: 10px;
     color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  /* Unsynced badge */
+  .unsynced-badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 8px;
+    background: #fbbf24;
+    color: #000;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Compiler preview */
+  .compiler-preview {
+    padding: 10px 12px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .compiler-output {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 10px;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+    background: var(--bg-primary);
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  .compiler-empty {
+    padding: 10px 12px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-style: italic;
   }
 
   /* Settings */
   .settings-content {
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    padding: 12px;
   }
 
   .setting-row {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
+    margin-bottom: 12px;
   }
 
   .setting-label {
-    font-size: 10px;
-    color: var(--text-muted);
-    min-width: 60px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 11px;
+    color: var(--text-secondary);
     font-weight: 500;
+    min-width: 70px;
   }
 
   .setting-select {
     flex: 1;
-    padding: 5px 8px;
+    padding: 6px 8px;
     background: var(--bg-tertiary);
-    border: 1px solid var(--border);
-    border-radius: 5px;
     color: var(--text-primary);
-    font-size: 11px;
-    cursor: pointer;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
     font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition-fast);
   }
 
   .setting-select:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-glow);
+    box-shadow: 0 0 0 3px var(--accent-glow);
   }
 
   .setting-slider {
     flex: 1;
     height: 4px;
-    appearance: none;
     background: var(--bg-tertiary);
     border-radius: 2px;
     outline: none;
-    border: 1px solid var(--border);
+    -webkit-appearance: none;
   }
 
   .setting-slider::-webkit-slider-thumb {
-    appearance: none;
-    width: 12px;
-    height: 12px;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
     border-radius: 50%;
-    background: var(--gradient-accent);
     cursor: pointer;
-    box-shadow: 0 0 6px var(--accent-glow);
-    border: 2px solid var(--bg-primary);
+    box-shadow: 0 2px 6px var(--accent-glow);
   }
 
   .setting-value {
-    font-size: 10px;
-    color: var(--accent);
-    min-width: 22px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    min-width: 24px;
     text-align: right;
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 500;
   }
 
   .no-session-hint {
     padding: 16px;
     text-align: center;
-    color: var(--text-muted);
+  }
+
+  .no-session-hint p {
     font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   /* Stats */
   .stats-content {
-    padding: 10px 12px;
+    padding: 12px;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
+    gap: 12px;
   }
 
   .stat-item {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 10px 8px;
+    padding: 10px;
     background: var(--bg-tertiary);
     border-radius: 8px;
     border: 1px solid var(--border);
   }
 
   .stat-value {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
-    background: var(--gradient-accent);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    line-height: 1;
+    margin-bottom: 4px;
   }
 
   .stat-label {
-    font-size: 9px;
-    color: var(--text-muted);
+    font-size: 10px;
+    color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-top: 3px;
+    letter-spacing: 0.05em;
     font-weight: 500;
   }
 
@@ -469,30 +517,39 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(0, 0, 0, 0.6);
     backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: 100;
   }
 
   .modal {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-light);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
     border-radius: 12px;
     width: 360px;
     max-width: 90vw;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: var(--shadow-lg);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: modalIn 0.15s ease-out;
+  }
+
+  @keyframes modalIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
   .modal-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    justify-content: space-between;
     padding: 14px 16px;
     border-bottom: 1px solid var(--border);
   }
@@ -504,17 +561,24 @@
   }
 
   .modal-close {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 20px;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 18px;
     cursor: pointer;
-    padding: 4px;
-    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
   }
 
   .modal-close:hover {
-    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .modal-body {
@@ -522,24 +586,24 @@
   }
 
   .form-label {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 8px;
     display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+    font-weight: 500;
   }
 
   .modal-input {
     width: 100%;
     padding: 10px 12px;
-    background: var(--bg-tertiary);
+    background: var(--bg-primary);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 8px;
     color: var(--text-primary);
-    font-size: 13px;
+    font-size: 14px;
     font-family: inherit;
+    transition: all var(--transition-fast);
+    box-sizing: border-box;
   }
 
   .modal-input:focus {

@@ -1,14 +1,10 @@
-// Convert frontend elements structure to backend prompt_nodes format
-#[derive(serde::Deserialize, Clone)]
-pub struct FrontendGlobalElement {
-    pub id: String,
-    pub tag: String,
-    pub value: String,
-    pub enabled: bool,
-}
+// Clean conversion: frontend PipeRow -> backend ComposerConfig
+// No legacy prompt_nodes - pipes stored directly as JSON
+
+use crate::models::{ComposerConfig, GlobalElement, Keyframe, Pipe, PipeElement, Segment, TagElement, TagType, TimelineElement};
 
 #[derive(serde::Deserialize, Clone)]
-pub struct FrontendTagElement {
+pub struct FrontendTag {
     pub id: String,
     pub tag: String,
     pub frameStart: u32,
@@ -23,7 +19,7 @@ pub struct FrontendSegment {
     pub id: String,
     pub frameStart: u32,
     pub frameEnd: u32,
-    pub tags: Vec<FrontendTagElement>,
+    pub tags: Vec<FrontendTag>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -33,148 +29,131 @@ pub struct FrontendTimelineElement {
 }
 
 #[derive(serde::Deserialize, Clone)]
-#[serde(untagged)]
+pub struct FrontendGlobalElement {
+    pub id: String,
+    pub value: String,
+    pub enabled: bool,
+}
+
+#[derive(serde::Deserialize, Clone)]
+#[serde(tag = "tag")]
 pub enum FrontendPipeElement {
-    Global(FrontendGlobalElement),
+    #[serde(rename = "timeline")]
     Timeline(FrontendTimelineElement),
+    #[serde(rename = "global_style")]
+    Global(FrontendGlobalElement),
 }
 
 #[derive(serde::Deserialize, Clone)]
-pub struct FrontendPipeRow {
+pub struct FrontendKeyframe {
     pub id: String,
-    pub lengthFrames: u32,
-    pub keyframes: Vec<serde_json::Value>,
-    pub qValue: u32,
-    pub cValue: f32,
+    pub frame: u32,
+    pub slot_index: u8,
+    pub type_: String,
+    pub image_src: Option<String>,
+    pub prompt: Option<String>,
+    pub reference_url: Option<String>,
+    pub status: String,
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct FrontendPipe {
+    pub id: String,
+    pub name: String,
+    pub length_frames: u32,
+    pub q_value: u32,
+    pub c_value: f32,
+    pub keyframes: Vec<FrontendKeyframe>,
     pub elements: Vec<FrontendPipeElement>,
+    pub order_index: usize,
 }
 
 #[derive(serde::Deserialize, Clone)]
-pub struct FrontendComposerConfig {
-    pub id: String,
+pub struct FrontendComposerInput {
     pub session_id: String,
     pub name: String,
-    pub pipes: Vec<FrontendPipeRow>,
+    pub pipes: Vec<FrontendPipe>,
 }
 
-impl FrontendComposerConfig {
-    /// Convert frontend elements format to backend prompt_nodes format
-    pub fn to_backend(self) -> crate::models::ComposerConfig {
+impl FrontendComposerInput {
+    pub fn to_config(&self) -> ComposerConfig {
         let now = chrono::Utc::now();
         
-        // Create base composer config
-        let mut composer = crate::models::ComposerConfig {
-            id: self.id,
+        let pipes: Vec<Pipe> = self.pipes.iter().map(|p| {
+            let elements: Vec<crate::models::PipeElement> = p.elements.iter().map(|el| match el {
+                FrontendPipeElement::Timeline(t) => {
+                    let segments: Vec<Segment> = t.segments.iter().map(|s| {
+                        let tags: Vec<TagElement> = s.tags.iter().map(|t| {
+                            TagElement {
+                                id: t.id.clone(),
+                                tag: match t.tag.as_str() {
+                                    "scene" => crate::models::TagType::Scene,
+                                    "camera" => crate::models::TagType::Camera,
+                                    "rotation" => crate::models::TagType::Rotation,
+                                    "lighting" => crate::models::TagType::Lighting,
+                                    "zoom" => crate::models::TagType::Zoom,
+                                    "transition" => crate::models::TagType::Transition,
+                                    _ => crate::models::TagType::Scene,
+                                },
+                                frame_start: t.frameStart,
+                                frame_end: t.frameEnd,
+                                value: t.value,
+                                prompt: t.prompt.clone(),
+                            }
+                        }).collect();
+                        Segment {
+                            id: s.id.clone(),
+                            frame_start: s.frameStart,
+                            frame_end: s.frameEnd,
+                            tags,
+                        }
+                    }).collect();
+                    crate::models::PipeElement::Timeline(crate::models::TimelineElement {
+                        id: t.id.clone(),
+                        segments,
+                    })
+                }
+                FrontendPipeElement::Global(g) => {
+                    crate::models::PipeElement::Global(crate::models::GlobalElement {
+                        id: g.id.clone(),
+                        value: g.value.clone(),
+                        enabled: g.enabled,
+                    })
+                }
+            }).collect();
+            
+            let keyframes: Vec<Keyframe> = p.keyframes.iter().map(|kf| {
+                Keyframe {
+                    id: kf.id.clone(),
+                    frame: kf.frame,
+                    slot_index: kf.slot_index,
+                    kind: kf.type_.clone(),
+                    image_src: kf.image_src.clone(),
+                    prompt: kf.prompt.clone(),
+                    reference_url: kf.reference_url.clone(),
+                    status: kf.status.clone(),
+                }
+            }).collect();
+            
+            Pipe {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                length_frames: p.length_frames,
+                q_value: p.q_value,
+                c_value: p.c_value,
+                keyframes,
+                elements,
+                order_index: p.order_index,
+            }
+        }).collect();
+        
+        ComposerConfig {
+            id: uuid::Uuid::new_v4().to_string(),
             session_id: self.session_id.clone(),
-            name: self.name,
-            description: None,
-            pipes: Vec::new(),
-            session_settings: None,
-            state: crate::models::ComposerState::Ready,
-            version: 1,
-            task_id: None,
+            name: self.name.clone(),
+            pipes,
             created_at: Some(now),
             updated_at: Some(now),
-        };
-        
-        // Convert each pipe
-        for frontend_pipe in self.pipes {
-            let pipe_id = frontend_pipe.id.clone();
-            
-            // Convert elements to prompt_nodes
-            let mut prompt_nodes: Vec<crate::models::PromptNode> = Vec::new();
-            
-            for element in frontend_pipe.elements {
-                match element {
-                    FrontendPipeElement::Global(global) => {
-                        // Global style node
-                        prompt_nodes.push(crate::models::PromptNode {
-                            id: format!("global-{}", global.id),
-                            pipe_id: pipe_id.clone(),
-                            parent_id: None,
-                            tag: crate::models::PromptTag::GlobalStyle,
-                            value: global.value.clone(),
-                            frame_start: None,
-                            frame_end: None,
-                            enabled: global.enabled,
-                            created_at: Some(now),
-                            updated_at: Some(now),
-                        });
-                    }
-                    FrontendPipeElement::Timeline(timeline) => {
-                        // Convert timeline segments to nodes
-                        for segment in timeline.segments {
-                            // Segment boundary marker
-                            prompt_nodes.push(crate::models::PromptNode {
-                                id: format!("seg-{}", segment.id),
-                                pipe_id: pipe_id.clone(),
-                                parent_id: None,
-                                tag: crate::models::PromptTag::Segment,
-                                value: format!("{},{}", segment.frameStart, segment.frameEnd),
-                                frame_start: Some(segment.frameStart),
-                                frame_end: Some(segment.frameEnd),
-                                enabled: true,
-                                created_at: Some(now),
-                                updated_at: Some(now),
-                            });
-                            
-                            // Convert tags within segment
-                            for tag in segment.tags {
-                                let prompt_tag = match tag.tag.as_str() {
-                                    "scene" => crate::models::PromptTag::Segment,
-                                    "camera" => crate::models::PromptTag::Movement,
-                                    "rotation" => crate::models::PromptTag::Rotation,
-                                    "lighting" => crate::models::PromptTag::Lighting,
-                                    "effect" => crate::models::PromptTag::LensEffect,
-                                    "zoom" => crate::models::PromptTag::Exposure,
-                                    "transition" => crate::models::PromptTag::Segment,
-                                    _ => crate::models::PromptTag::Segment,
-                                };
-                                
-                                prompt_nodes.push(crate::models::PromptNode {
-                                    id: tag.id,
-                                    pipe_id: pipe_id.clone(),
-                                    parent_id: Some(format!("seg-{}", segment.id)),
-                                    tag: prompt_tag,
-                                    value: if let Some(prompt) = tag.prompt {
-                                        prompt
-                                    } else {
-                                        format!("{}", tag.value as u32)
-                                    },
-                                    frame_start: Some(tag.frameStart),
-                                    frame_end: Some(tag.frameEnd),
-                                    enabled: true,
-                                    created_at: Some(now),
-                                    updated_at: Some(now),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Create backend pipe row
-            let pipe = crate::models::PipeRow {
-                id: pipe_id,
-                session_id: self.session_id.clone(),
-                composer_id: composer.id.clone(),
-                name: format!("Pipe {}", frontend_pipe.id.chars().take(8).collect::<String>()),
-                order_index: 0,
-                num_inference_steps: frontend_pipe.qValue,
-                cfg_scale: frontend_pipe.cValue,
-                target_frames: Some(frontend_pipe.lengthFrames),
-                task_id: None,
-                status: crate::models::PipeStatus::Idle,
-                last_error: None,
-                keyframes: Vec::new(),
-                prompt_nodes,
-                created_at: Some(now),
-                updated_at: Some(now),
-            };
-            
-            composer.pipes.push(pipe);
         }
-        
-        composer
     }
 }

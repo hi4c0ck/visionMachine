@@ -1,5 +1,0 @@
-const fs = require('fs');
-const c = fs.readFileSync('D:/work/horizonsMachine/VisionMachine/src/components/Workspace.svelte', 'utf8');
-const newC = c.replace('{#if selectedSession.pipes && selectedSession.pipes.length > 0}', '{#if selectedSession?.pipes && selectedSession.pipes.length > 0}');
-fs.writeFileSync('D:/work/horizonsMachine/VisionMachine/src/components/Workspace.svelte', newC);
-console.log('Fixed Workspace.svelte');

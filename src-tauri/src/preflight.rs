@@ -1,5 +1,5 @@
 //! Pre-flight environment validation system
-//! 
+//!
 //! Performs critical environment checks before app startup.
 //! Blocking failures prevent the app from starting.
 
@@ -16,7 +16,7 @@ impl CheckResult {
     pub fn is_blocking_failure(&self) -> bool {
         matches!(self, CheckResult::Fail(_))
     }
-    
+
     pub fn category(&self) -> &str {
         match self {
             CheckResult::Pass(_) => "pass",
@@ -24,7 +24,7 @@ impl CheckResult {
             CheckResult::Warning(_) => "warning",
         }
     }
-    
+
     pub fn message(&self) -> &str {
         match self {
             CheckResult::Pass(msg) | CheckResult::Fail(msg) | CheckResult::Warning(msg) => msg,
@@ -51,7 +51,7 @@ impl PreflightReport {
             passed: true,
         }
     }
-    
+
     pub fn add_check(&mut self, result: CheckResult) {
         let is_fail = result.is_blocking_failure();
         self.checks.push(result);
@@ -59,13 +59,16 @@ impl PreflightReport {
             self.passed = false;
         }
     }
-    
+
     pub fn format_report(&self) -> String {
         let mut report = String::from("=== VisionMachine Pre-flight Report ===\n\n");
         report.push_str(&format!("Timestamp: {}\n", self.timestamp));
         report.push_str(&format!("OS: {} ({})\n", self.os_name, self.arch));
-        report.push_str(&format!("Status: {}\n\n", if self.passed { "PASSED" } else { "FAILED" }));
-        
+        report.push_str(&format!(
+            "Status: {}\n\n",
+            if self.passed { "PASSED" } else { "FAILED" }
+        ));
+
         report.push_str("Checks:\n");
         for check in &self.checks {
             match check {
@@ -74,7 +77,7 @@ impl PreflightReport {
                 CheckResult::Warning(msg) => report.push_str(&format!("  [WARN] {}\n", msg)),
             }
         }
-        
+
         if !self.passed {
             report.push_str("\n=====================================\n");
             report.push_str("BLOCKING ISSUES - App cannot start\n");
@@ -114,7 +117,10 @@ fn check_memory() -> CheckResult {
                             let total_mb = kb / 1024;
                             const MIN_MB: u64 = 2048;
                             if total_mb < MIN_MB {
-                                return CheckResult::Fail(format!("Insufficient RAM: {} MB (need {} MB)", total_mb, MIN_MB));
+                                return CheckResult::Fail(format!(
+                                    "Insufficient RAM: {} MB (need {} MB)",
+                                    total_mb, MIN_MB
+                                ));
                             }
                             return CheckResult::Pass(format!("Memory OK: {} MB total", total_mb));
                         }
@@ -123,7 +129,7 @@ fn check_memory() -> CheckResult {
             }
         }
     }
-    
+
     // For other platforms, use a simplified check
     #[cfg(not(target_os = "linux"))]
     {
@@ -148,7 +154,9 @@ fn check_webview_runtime() -> CheckResult {
         if edge_path.exists() {
             return CheckResult::Pass("WebView2 runtime found".to_string());
         }
-        return CheckResult::Warning("WebView2 may not be installed. App will attempt to install.".to_string());
+        return CheckResult::Warning(
+            "WebView2 may not be installed. App will attempt to install.".to_string(),
+        );
     }
     #[cfg(target_os = "macos")]
     {
@@ -164,25 +172,25 @@ fn check_webview_runtime() -> CheckResult {
 
 pub fn run_preflight_checks() -> PreflightReport {
     let mut report = PreflightReport::new();
-    
+
     report.add_check(check_memory());
     report.add_check(check_disk_space());
     report.add_check(check_webview_runtime());
-    
+
     report
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_preflight_report_format() {
         let report = PreflightReport::new();
         let formatted = report.format_report();
         assert!(formatted.contains("VisionMachine Pre-flight Report"));
     }
-    
+
     #[test]
     fn test_check_result_categories() {
         assert!(!CheckResult::Pass("test".into()).is_blocking_failure());

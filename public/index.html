@@ -4,13 +4,57 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VisionMachine - AI Video Generator</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231a1a2e'/><text x='50' y='70' font-size='60' font-family='Arial' font-weight='bold' text-anchor='middle' fill='%234ade80'>V</text></svg>">
   <link rel="stylesheet" href="/css/design-system.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./assets/index-BrKkZQ_4.css">
+  <style>
+    body { margin: 0; background: #0a0a0f; }
+    #debug-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px; z-index: 9999;
+      background: #0a0a0f; color: #fff; font-family: Inter, sans-serif;
+    }
+    #debug-overlay.hidden { display: none; }
+    .debug-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .debug-dot.ok { background: #4ade80; }
+    .debug-dot.fail { background: #f87171; }
+    .debug-dot.wait { background: #fbbf24; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  </style>
 </head>
 <body>
+  <div id="debug-overlay">
+    <div style="font-size: 24px; font-weight: 600;">VisionMachine</div>
+    <div id="debug-status" style="font-size: 14px; color: #888;">Initializing...</div>
+  </div>
   <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>
+  <script>
+    const statusEl = document.getElementById('debug-status');
+    const overlayEl = document.getElementById('debug-overlay');
+    function setDebug(msg, type) {
+      statusEl.textContent = msg;
+      statusEl.style.color = type === 'ok' ? '#4ade80' : type === 'fail' ? '#f87171' : '#888';
+    }
+  </script>
+  <script>
+    // Hide overlay once app is ready
+    setTimeout(() => {
+      if (!document.getElementById('app').hasChildNodes()) {
+        setDebug('Loading...', 'wait');
+      }
+    }, 2000);
+    const observer = new MutationObserver(() => {
+      if (document.getElementById('app').children.length > 0) {
+        overlayEl.classList.add('hidden');
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.getElementById('app'), { childList: true });
+  </script>
 </body>
 </html>

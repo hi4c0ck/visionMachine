@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [svelte({
@@ -16,8 +17,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '$types': '/src/types',
-      '$constants': '/src/constants',
+      '$types': resolve(__dirname, 'src/types'),
+      '$constants': resolve(__dirname, 'src/constants'),
+      '$lib': resolve(__dirname, 'src/lib'),
     },
   },
 });

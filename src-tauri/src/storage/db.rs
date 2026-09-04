@@ -11,19 +11,19 @@ impl Database {
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
     }
-    
+
     /// Create a new database connection (async - use during setup)
     pub async fn new(path: &str) -> Result<Self, String> {
         if path.contains("..") {
             return Err("Invalid path".to_string());
         }
-        
+
         // Ensure parent directory exists
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
         }
-        
+
         // Connect with ?mode=rwc to allow creating/connecting to existing DB
         let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", path))
             .await
@@ -31,7 +31,7 @@ impl Database {
 
         Ok(Self { pool })
     }
-    
+
     pub async fn migrate(&self) -> Result<(), String> {
         // Run migrations from SQL files - execute each file as a whole
         self.execute_migration_sql(include_str!("../../migrations/0001_create_schema.sql"))
@@ -39,11 +39,13 @@ impl Database {
         self.execute_migration_sql(include_str!("../../migrations/0002_composer_schema.sql"))
             .await?;
         self.run_additive_columns().await?;
-        
+        self.execute_migration_sql(include_str!("../../migrations/0004_clean_composer_schema.sql"))
+            .await?;
+
         log::info!("[DB] All migrations completed");
         Ok(())
     }
-    
+
     /// Strip inline SQL comments (-- to end of line)
     fn strip_inline_comment(line: &str) -> String {
         let mut result = String::with_capacity(line.len());
@@ -75,14 +77,17 @@ impl Database {
 
         result
     }
-    
+
     /// Execute a complete SQL migration file - split by statement boundaries
     async fn execute_migration_sql(&self, sql: &str) -> Result<(), String> {
         // First, strip all comments from the SQL
         let sql_no_comments = Self::strip_all_comments(sql);
-        
-        log::info!("[DB] SQL after comment stripping (first 500 chars):\n{}", &sql_no_comments[..sql_no_comments.len().min(500)]);
-        
+
+        log::info!(
+            "[DB] SQL after comment stripping (first 500 chars):\n{}",
+            &sql_no_comments[..sql_no_comments.len().min(500)]
+        );
+
         // Split the SQL into individual statements by looking for semicolons
         // that are not inside parentheses
         let mut statements = Vec::new();
@@ -91,7 +96,7 @@ impl Database {
 
         for line in sql_no_comments.lines() {
             let trimmed = line.trim();
-            
+
             // Skip empty lines
             if trimmed.is_empty() {
                 continue;
@@ -120,20 +125,23 @@ impl Database {
                     }
                 }
             }
-            
+
             // Add newline to preserve formatting
             if !trimmed.is_empty() {
                 current.push('\n');
             }
         }
-        
+
         // Handle any remaining text
         if !current.trim().is_empty() {
             statements.push(current.trim().to_string());
         }
 
-        log::info!("[DB] Parsed {} statements from migration SQL", statements.len());
-        
+        log::info!(
+            "[DB] Parsed {} statements from migration SQL",
+            statements.len()
+        );
+
         // Execute each statement
         for stmt in statements {
             if stmt.is_empty() {
@@ -141,23 +149,21 @@ impl Database {
             }
 
             log::info!("[DB] Executing: {}", stmt);
-            let r = sqlx::query(&stmt)
-                .execute(&self.pool)
-                .await;
+            let r = sqlx::query(&stmt).execute(&self.pool).await;
             if let Err(e) = r {
                 log::error!("[DB] Failed to execute: {:?}, error: {}", stmt, e);
                 return Err(format!("Migration error: {}", e));
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Strip all SQL comments (both inline and multi-line)
     fn strip_all_comments(sql: &str) -> String {
         let mut result = String::with_capacity(sql.len());
         let mut chars = sql.chars().peekable();
-        
+
         while let Some(ch) = chars.next() {
             // Check for -- comment
             if ch == '-' {
@@ -174,7 +180,7 @@ impl Database {
                     }
                 }
             }
-            
+
             // Check for /* */ multi-line comment
             if ch == '/' {
                 if let Some(&next) = chars.peek() {
@@ -199,13 +205,13 @@ impl Database {
                     }
                 }
             }
-            
+
             result.push(ch);
         }
-        
+
         result
     }
-    
+
     async fn run_additive_columns(&self) -> Result<(), String> {
         // Add columns that live code writes but migration files don't have
         let columns = [
@@ -235,7 +241,7 @@ impl Database {
 
         Ok(())
     }
-    
+
     /// Seed default profile if missing (Phase 1.4)
     pub async fn seed_default_profile(&self) -> Result<(), String> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM profiles WHERE id = ?")
@@ -243,7 +249,7 @@ impl Database {
             .fetch_one(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        
+
         if count == 0 {
             sqlx::query("INSERT INTO profiles (id, name) VALUES (?, ?)")
                 .bind("default")
@@ -252,15 +258,16 @@ impl Database {
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        
+
         Ok(())
     }
-    
+
     // Profile operations
     pub async fn create_profile(&self, name: &str) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO profiles (id, name) VALUES (?, ?)")
-            .bind(&id).bind(name)
+            .bind(&id)
+            .bind(name)
             .execute(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
@@ -269,7 +276,11 @@ impl Database {
     }
 
     /// Get or create a profile for a given ID (uses upsert logic)
-    pub async fn get_or_create_profile(&self, profile_id: &str, name: &str) -> Result<serde_json::Value, String> {
+    pub async fn get_or_create_profile(
+        &self,
+        profile_id: &str,
+        name: &str,
+    ) -> Result<serde_json::Value, String> {
         // Try to get existing profile
         let row = sqlx::query("SELECT id, name, created_at FROM profiles WHERE id = ?")
             .bind(profile_id)
@@ -299,14 +310,16 @@ impl Database {
             "created_at": chrono::Utc::now().to_rfc3339(),
         }))
     }
-    
+
     pub async fn list_profiles(&self) -> Result<Vec<serde_json::Value>, String> {
-        let rows = sqlx::query("SELECT id, name, created_at FROM profiles ORDER BY created_at DESC")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        
-        let profiles: Vec<serde_json::Value> = rows.iter()
+        let rows =
+            sqlx::query("SELECT id, name, created_at FROM profiles ORDER BY created_at DESC")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        let profiles: Vec<serde_json::Value> = rows
+            .iter()
             .map(|row| {
                 serde_json::json!({
                     "id": row.get::<String, usize>(0),
@@ -315,33 +328,41 @@ impl Database {
                 })
             })
             .collect();
-        
+
         Ok(profiles)
     }
-    
+
     // Project operations
-    pub async fn create_project(&self, profile_id: &str, name: &str, directory_path: Option<&str>) -> Result<String, String> {
+    pub async fn create_project(
+        &self,
+        profile_id: &str,
+        name: &str,
+        directory_path: Option<&str>,
+    ) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO projects (id, profile_id, name, directory_path) VALUES (?, ?, ?, ?)")
-            .bind(&id)
-            .bind(profile_id)
-            .bind(name)
-            .bind(directory_path)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-        
+        sqlx::query(
+            "INSERT INTO projects (id, profile_id, name, directory_path) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(profile_id)
+        .bind(name)
+        .bind(directory_path)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
         Ok(id)
     }
-    
+
     pub async fn list_projects(&self, profile_id: &str) -> Result<Vec<serde_json::Value>, String> {
         let rows = sqlx::query("SELECT id, profile_id, name, directory_path, created_at FROM projects WHERE profile_id = ? ORDER BY created_at DESC")
             .bind(profile_id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        
-        let projects: Vec<serde_json::Value> = rows.iter()
+
+        let projects: Vec<serde_json::Value> = rows
+            .iter()
             .map(|row| {
                 serde_json::json!({
                     "id": row.get::<String, usize>(0),
@@ -352,12 +373,18 @@ impl Database {
                 })
             })
             .collect();
-        
+
         Ok(projects)
     }
-    
+
     // Session operations
-    pub async fn create_session(&self, project_id: &str, name: &str, pipes_json: Option<&str>, files_metadata: Option<&str>) -> Result<String, String> {
+    pub async fn create_session(
+        &self,
+        project_id: &str,
+        name: &str,
+        pipes_json: Option<&str>,
+        files_metadata: Option<&str>,
+    ) -> Result<String, String> {
         let id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO sessions (id, project_id, name, pipes_json, files_metadata) VALUES (?, ?, ?, ?, ?)")
             .bind(&id)
@@ -371,15 +398,16 @@ impl Database {
 
         Ok(id)
     }
-    
+
     pub async fn list_sessions(&self, project_id: &str) -> Result<Vec<serde_json::Value>, String> {
         let rows = sqlx::query("SELECT id, project_id, name, fps, resolution, orientation, pipes_json, total_generated_frames, created_at FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
             .bind(project_id)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| e.to_string())?;
-        
-        let sessions: Vec<serde_json::Value> = rows.iter()
+
+        let sessions: Vec<serde_json::Value> = rows
+            .iter()
             .map(|row| {
                 serde_json::json!({
                     "id": row.get::<String, usize>(0),
@@ -394,11 +422,15 @@ impl Database {
                 })
             })
             .collect();
-        
+
         Ok(sessions)
     }
-    
-    pub async fn update_session(&self, session_id: &str, updates: &serde_json::Value) -> Result<(), String> {
+
+    pub async fn update_session(
+        &self,
+        session_id: &str,
+        updates: &serde_json::Value,
+    ) -> Result<(), String> {
         // Build dynamic update query
         let mut set_clauses = Vec::new();
         let mut has_params = false;
@@ -465,7 +497,9 @@ impl Database {
             let resolution = updates.get("resolution").and_then(|v| v.as_str());
             let orientation = updates.get("orientation").and_then(|v| v.as_str());
             let pipes_json = updates.get("pipes_json").and_then(|v| v.as_str());
-            let total_frames = updates.get("total_generated_frames").and_then(|v| v.as_i64());
+            let total_frames = updates
+                .get("total_generated_frames")
+                .and_then(|v| v.as_i64());
 
             sqlx::query(&sql)
                 .bind(name)
@@ -482,7 +516,7 @@ impl Database {
 
         Ok(())
     }
-    
+
     pub async fn delete_session(&self, session_id: &str) -> Result<(), String> {
         sqlx::query("DELETE FROM sessions WHERE id = ?")
             .bind(session_id)
@@ -528,7 +562,8 @@ impl Database {
         .await
         .map_err(|e| e.to_string())?;
 
-        let files: Vec<serde_json::Value> = rows.iter()
+        let files: Vec<serde_json::Value> = rows
+            .iter()
             .map(|row| {
                 serde_json::json!({
                     "id": row.get::<String, usize>(0),

@@ -1,16 +1,20 @@
 <script lang="ts">
+	import type { Segment } from '$types';
+	
 	let {
 		totalFrames = 1200,
 		markerInterval = 8,
 		zoomLevel = 1,
 		selectedFrame = 0,
-		onframeSelect
+		onframeSelect,
+		segments = [] as Segment[]
 	} = $props<{
 		totalFrames?: number;
 		markerInterval?: number;
 		zoomLevel?: number;
 		selectedFrame?: number;
 		onframeSelect?: (frame: number) => void;
+		segments?: Segment[];
 	}>();
 
 	// Use $derived instead of $: reactive statements
@@ -23,6 +27,15 @@
 			{ length: Math.ceil(totalFrames / actualMarkerInterval) },
 			(_, i) => i * actualMarkerInterval
 		)
+	);
+
+	// Segment positions for visualization on ruler
+	let segmentPositions = $derived(
+		(segments || []).map((seg: any) => ({
+			start: (seg.frameStart / totalFrames) * 100,
+			end: (seg.frameEnd / totalFrames) * 100,
+			color: seg.tags?.length > 0 ? seg.tags[0]?.spec?.color ?? '#59B5FF' : '#59B5FF'
+		}))
 	);
 
 	function formatFrame(frame: number): string {
@@ -47,6 +60,11 @@
 <div class="frame-ruler" onkeydown={(e) => e.key === 'Enter' && onframeSelect?.(selectedFrame)} tabindex="0" role="slider" aria-valuenow={selectedFrame} aria-valuemin={0} aria-valuemax={totalFrames}>
 	<div class="ruler-bar">
 		<div class="ruler-line"></div>
+		
+		<!-- Segment visualization bars -->
+		{#each segmentPositions as seg (seg.start + seg.end)}
+			<div class="segment-bar" style="left: {seg.start}%; width: {(seg.end - seg.start)}%; background: {seg.color}; opacity: 0.3;"></div>
+		{/each}
 
 		{#each markers as frame (frame)}
 			<div
@@ -110,6 +128,15 @@
 		right: 0;
 		height: 1px;
 		background: #3a3a3a;
+	}
+
+	/* Segment visualization bars */
+	.segment-bar {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		pointer-events: none;
+		border-radius: 1px;
 	}
 
 	.marker {

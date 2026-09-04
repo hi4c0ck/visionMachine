@@ -8,17 +8,14 @@ pub struct LoginInput {
 }
 
 #[tauri::command]
-pub async fn login_user(
-    input: LoginInput,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+pub async fn login_user(input: LoginInput, state: State<'_, AppState>) -> Result<String, String> {
     if input.username.is_empty() {
         return Err("Username cannot be empty".to_string());
     }
-    
+
     let mut username = state.username.lock().await;
     *username = Some(input.username.clone());
-    
+
     Ok(format!("Welcome, {}!", input.username))
 }
 

@@ -20,9 +20,13 @@ pub async fn create_project(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let db = state.db.lock().await;
-    db.create_project(&input.profile_id, &input.name, input.directory_path.as_deref())
-        .await
-        .map_err(|e| e.to_string())
+    db.create_project(
+        &input.profile_id,
+        &input.name,
+        input.directory_path.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -31,5 +35,7 @@ pub async fn list_projects(
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let db = state.db.lock().await;
-    db.list_projects(&input.profile_id).await.map_err(|e| e.to_string())
+    db.list_projects(&input.profile_id)
+        .await
+        .map_err(|e| e.to_string())
 }
