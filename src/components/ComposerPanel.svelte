@@ -29,7 +29,7 @@
 		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 	} from '$lib/composerStore';
 import { snapTo8 } from '$lib/frameMath';
-import { createFrameGeometry as createFrameGeometryShim, type FrameGeometry, framePercent, pointerToFrame, snapFrame, pxDeltaToFrame } from '$lib/frameGeometry';
+import { createFrameGeometry, type FrameGeometry, framePercent, pointerToFrame, snapFrame, pxDeltaToFrame } from '$lib/frameGeometry';
 import { useFrameGeometry } from '$lib/useFrameGeometry';
 
 	let {
