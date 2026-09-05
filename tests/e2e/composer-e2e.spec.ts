@@ -42,43 +42,14 @@ test.describe('Composer E2E Tests', () => {
     await expect(addPipeBtn).toContainText(/Add Pipe/i);
   });
 
-  test('should have functional FPS controls', async ({ page }) => {
-    // Tools panel should be visible in landscape mode with session
-    const toolsPanel = page.locator('.tools-panel');
-    const isVisible = await toolsPanel.isVisible().catch(() => false);
-    
-    if (isVisible) {
-      // Check that FPS settings exist
-      const fpsLabel = toolsPanel.locator('.setting-label').filter({ hasText: 'FPS' });
-      await expect(fpsLabel).toBeVisible();
-      
-      const fpsSelect = toolsPanel.locator('.setting-select').first();
-      await expect(fpsSelect).toBeVisible();
-    }
+  test('should show segment empty placeholder', async ({ page }) => {
+    const emptyState = page.locator('.seg-empty.full-width');
+    await expect(emptyState).toBeVisible();
+    await expect(emptyState).toContainText(/Add first segment/i);
   });
 
-  test('should have functional resolution controls', async ({ page }) => {
-    const toolsPanel = page.locator('.tools-panel');
-    const isVisible = await toolsPanel.isVisible().catch(() => false);
-    
-    if (isVisible) {
-      // Check that resolution controls exist
-      const resLabel = toolsPanel.locator('.setting-label').filter({ hasText: 'Resolution' });
-      await expect(resLabel).toBeVisible();
-      
-      const resSelect = toolsPanel.locator('.setting-select').nth(1);
-      await expect(resSelect).toBeVisible();
-    }
-  });
-});
-
-test.describe('Composer Timeline E2E', () => {
-  test.beforeEach(async ({ page }) => {
-    await setupComposer(page);
-  });
-
-  test('should display timeline ruler', async ({ page }) => {
-    const timelineRuler = page.locator('.frame-ruler');
-    await expect(timelineRuler).toBeVisible();
+  test('should have frame ruler', async ({ page }) => {
+    const frameRuler = page.locator('.frame-ruler');
+    await expect(frameRuler).toBeVisible();
   });
 });
