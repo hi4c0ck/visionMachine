@@ -64,7 +64,7 @@ export class TagServiceImpl implements TagService {
     if (!segment) return { errors: ['Segment not found'] };
 
     const maxSegmentEnd = pipe.lengthFrames - 1;
-    const { snapped: [snappedStart, snappedEnd], errors } = validateTagFrames(
+    const { snapped: [snappedStart, snappedEnd], errors, valid } = validateTagFrames(
       newStart,
       newEnd,
       segment.frameStart,
@@ -72,10 +72,12 @@ export class TagServiceImpl implements TagService {
       maxSegmentEnd,
     );
 
-    const tag = segment.tags.find(t => t.id === tagId);
-    if (tag) {
-      tag.frameStart = snappedStart;
-      tag.frameEnd = snappedEnd;
+    if (valid) {
+      const tag = segment.tags.find(t => t.id === tagId);
+      if (tag) {
+        tag.frameStart = snappedStart;
+        tag.frameEnd = snappedEnd;
+      }
     }
 
     return { errors };
