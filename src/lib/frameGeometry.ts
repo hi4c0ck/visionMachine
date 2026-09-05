@@ -17,19 +17,15 @@ export interface FrameGeometry {
 	width: number;
 }
 
-/**
- * Create a FrameGeometry from total frame count and rendered pixel width.
- * Throws if inputs are invalid.
- */
 export function createFrameGeometry(
 	totalFrames: number,
 	width: number
 ): FrameGeometry {
-	if (!Number.isFinite(totalFrames) || totalFrames < 2) {
+	if (!Number.isInteger(totalFrames) || totalFrames < 2) {
 		throw new Error(`Invalid totalFrames: ${totalFrames}`);
 	}
 	if (!Number.isFinite(width) || width <= 0) {
-		throw new Error(`Invalid ruler width: ${width}`);
+		throw new Error(`Invalid width: ${width}`);
 	}
 	return {
 		totalFrames,
@@ -38,92 +34,111 @@ export function createFrameGeometry(
 	};
 }
 
-/**
- * Convert a valid content frame to exact pixel coordinate.
- * frame 0       → 0
- * frame N-1     → width
- */
-export function frameToPx(frame: number, geometry: FrameGeometry): number {
-	const clamped = clamp(frame, 0, geometry.contentEndFrame);
-	return (clamped / geometry.contentEndFrame) * geometry.width;
+export function clampFrame(
+	frame: number,
+	geometry: FrameGeometry
+): number {
+	return Math.min(geometry.contentEndFrame, Math.max(0, frame));
 }
 
-/**
- * Convert an exact pixel coordinate back into the nearest frame.
- * Returns UNSNAPPED frame — snapping is a separate operation.
- */
-export function pxToFrame(x: number, geometry: FrameGeometry): number {
-	const clampedX = clamp(x, 0, geometry.width);
-	return (clampedX / geometry.width) * geometry.contentEndFrame;
-}
-
-/**
- * Snap any frame value to the nearest timeline boundary (multiple of 8).
- */
 export function snapFrame(frame: number): number {
 	return Math.round(frame / FRAME_STEP) * FRAME_STEP;
 }
 
-/**
- * Snap down (floor to nearest multiple of 8).
- */
 export function snapFrameDown(frame: number): number {
 	return Math.floor(frame / FRAME_STEP) * FRAME_STEP;
 }
 
-/**
- * Snap up (ceil to nearest multiple of 8).
- */
 export function snapFrameUp(frame: number): number {
 	return Math.ceil(frame / FRAME_STEP) * FRAME_STEP;
 }
 
 /**
- * Convert clientX directly into a snapped frame using a DOM rect.
+ * Frame -> pixel.
+ * 0 => 0, contentEndFrame => width
  */
-export function pointerToFrame(
-	clientX: number,
-	rect: DOMRect,
+export function frameToPx(
+	frame: number,
 	geometry: FrameGeometry
 ): number {
-	const localX = clientX - rect.left;
-	const rawFrame = pxToFrame(localX, geometry);
-	return clamp(snapFrame(rawFrame), 0, geometry.contentEndFrame);
+	const value = clampFrame(frame, geometry);
+	return (value / geometry.contentEndFrame) * geometry.width;
 }
 
 /**
- * Convert a frame to percentage for static CSS positioning.
- * Use frameToPx() for draggable/interactive elements instead.
+ * Frame -> percentage.
+ * Only use this for CSS percentage positioning.
+ * Interactive geometry should use frameToPx().
  */
-export function framePercent(frame: number, geometry: FrameGeometry): number {
+export function frameToPercent(
+	frame: number,
+	geometry: FrameGeometry
+): number {
 	return (frameToPx(frame, geometry) / geometry.width) * 100;
 }
 
 /**
- * Pixel width of a frame range.
+ * Pixel -> unsnapped frame.
  */
+export function pxToFrame(
+	x: number,
+	geometry: FrameGeometry
+): number {
+	const clampedX = Math.min(geometry.width, Math.max(0, x));
+	return (clampedX / geometry.width) * geometry.contentEndFrame;
+}
+
+/**
+ * Pixel -> snapped frame.
+ */
+export function pxToSnappedFrame(
+	x: number,
+	geometry: FrameGeometry
+): number {
+	return clampFrame(snapFrame(pxToFrame(x, geometry)), geometry);
+}
+
+/**
+ * clientX -> snapped frame using DOM rect.
+ */
+export function clientXToFrame(
+	clientX: number,
+	rect: DOMRect,
+	geometry: FrameGeometry
+): number {
+	return pxToSnappedFrame(clientX - rect.left, geometry);
+}
+
+/**
+ * Pixel delta -> frame delta.
+ * Do NOT snap this value independently when doing body drags.
+ * Calculate frame position from original frame + snapped delta.
+ */
+export function pxDeltaToFrame(
+	pxDelta: number,
+	geometry: FrameGeometry
+): number {
+	return (pxDelta / geometry.width) * geometry.contentEndFrame;
+}
+
 export function rangeWidthPx(
 	startFrame: number,
 	endFrame: number,
 	geometry: FrameGeometry
 ): number {
-	return Math.max(0, frameToPx(endFrame, geometry) - frameToPx(startFrame, geometry));
+	return Math.max(
+		0,
+		frameToPx(endFrame, geometry) -
+		frameToPx(startFrame, geometry)
+	);
 }
 
-/**
- * Convert a frame delta into an exact pixel delta.
- */
-export function frameDeltaToPx(frameDelta: number, geometry: FrameGeometry): number {
-	return (frameDelta / geometry.contentEndFrame) * geometry.width;
-}
-
-/**
- * Convert a pixel delta to frame space.
- */
-export function pxDeltaToFrame(pxDelta: number, geometry: FrameGeometry): number {
-	return (pxDelta / geometry.width) * geometry.contentEndFrame;
-}
-
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(max, Math.max(min, value));
+export function rangeStyle(
+	startFrame: number,
+	endFrame: number,
+	geometry: FrameGeometry
+): string {
+	const left = frameToPx(startFrame, geometry);
+	const width = rangeWidthPx(startFrame, endFrame, geometry);
+	return `left:${left}px;width:${width}px;`;
 }

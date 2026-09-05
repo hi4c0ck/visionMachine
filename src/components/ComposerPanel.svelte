@@ -29,8 +29,18 @@
 		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 	} from '$lib/composerStore';
 import { snapTo8 } from '$lib/frameMath';
-import { createFrameGeometry, type FrameGeometry, framePercent, pointerToFrame, snapFrame, pxDeltaToFrame } from '$lib/frameGeometry';
-import { useFrameGeometry } from '$lib/useFrameGeometry';
+import {
+	createFrameGeometry,
+	type FrameGeometry,
+	frameToPx,
+	frameToPercent,
+	clientXToFrame,
+	snapFrame,
+	pxDeltaToFrame,
+	rangeWidthPx,
+	FRAME_STEP,
+	MIN_SPAN
+} from '$lib/frameGeometry';
 
 	let {
 		session,
@@ -125,26 +135,30 @@ import { useFrameGeometry } from '$lib/useFrameGeometry';
 
 	// Drag state for segments and tags
 	// ── Drag state ────────────────────────────────────────────────────────────
+	type DragState = {
+		type: 'segment' | 'tag';
+		id: string;
+		segmentId?: string;
+		handle: 'left' | 'right' | 'body';
+		startFrame: number;
+		endFrame: number;
+		pointerStartFrame: number;
+		captureElement: HTMLElement;
+		pointerId: number;
+	};
+
 	// Transient preview state for visual feedback during drag
 	let previewDragState = $state<{
 		type: 'segment' | 'tag';
 		id: string;
 		segmentId?: string;
-		handle: 'left' | 'right' | 'body';
+		handle?: 'left' | 'right' | 'body';
 		startFrame: number;
 		endFrame: number;
 	} | null>(null);
 
 	// Actual drag state for tracking interaction
-	let dragState = $state<{
-		type: 'segment' | 'tag';
-		id: string;
-		segmentId?: string;
-		handle: 'left' | 'right' | 'body';
-		startFrame: number;
-		endFrame: number;
-		mouseStartX: number;
-	} | null>(null);
+	let dragState = $state<DragState | null>(null);
 
 	// Close menus on outside click
 	$effect(() => {
@@ -155,22 +169,6 @@ import { useFrameGeometry } from '$lib/useFrameGeometry';
 		}
 		document.addEventListener('click', handler);
 		return () => document.removeEventListener('click', handler);
-	});
-
-	// Drag listeners for segments and tags — attached via $effect per Svelte 5 pattern
-	$effect(() => {
-		function onPointerMove(e: MouseEvent) {
-			handlePointerMove(e);
-		}
-		function onPointerUp() {
-			handlePointerUp();
-		}
-		document.addEventListener('pointermove', onPointerMove);
-		document.addEventListener('pointerup', onPointerUp);
-		return () => {
-			document.removeEventListener('pointermove', onPointerMove);
-			document.removeEventListener('pointerup', onPointerUp);
-		};
 	});
 
 	// ── Helpers ─────────────────────────────────────────────────────────────
@@ -396,18 +394,68 @@ import { useFrameGeometry } from '$lib/useFrameGeometry';
 		return rulerGeometry;
 	}
 
+	// Frame to pixels for rendering — uses geometry when available
+	function frameToPixels(frame: number): number {
+		if (rulerGeometry) {
+			return frameToPx(frame, rulerGeometry);
+		}
+		return 0;
+	}
+
 	// ── Segment interactions ────────────────────────────────────────────────
 
-	function handleSegmentPointerDown(e: PointerEvent, seg: Segment, handle: 'left' | 'right' | 'body') {
+	function calculateSegmentDrag(
+		drag: DragState,
+		pointerFrame: number
+	): [number, number] {
+		const delta = snapFrame(pointerFrame - drag.pointerStartFrame);
+		let start = drag.startFrame;
+		let end = drag.endFrame;
+
+		if (drag.handle === 'body') {
+			const duration = end - start;
+			start += delta;
+			end += delta;
+			if (start < 0) {
+				start = 0;
+				end = duration;
+			}
+			if (end > totalFrames - 1) {
+				end = totalFrames - 1;
+				start = end - duration;
+			}
+			start = snapFrame(start);
+			end = start + duration;
+		}
+
+		if (drag.handle === 'left') {
+			start = snapFrame(drag.startFrame + delta);
+			start = Math.max(0, Math.min(start, end - MIN_SPAN));
+		}
+
+		if (drag.handle === 'right') {
+			end = snapFrame(drag.endFrame + delta);
+			end = Math.min(totalFrames - 1, Math.max(end, start + MIN_SPAN));
+		}
+
+		return [start, end];
+	}
+
+	function handleSegmentPointerDown(
+		e: PointerEvent,
+		seg: Segment,
+		handle: 'left' | 'right' | 'body'
+	) {
 		e.preventDefault();
 		e.stopPropagation();
-		const geo = getGeometry();
-		if (!geo) return;
-		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const startX = e.clientX;
 
-		// Capture pointer to ensure all subsequent events are received by this element
-		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+		if (!rulerElement || !rulerGeometry) return;
+
+		const element = e.currentTarget as HTMLElement;
+		const rect = rulerElement.getBoundingClientRect();
+		const pointerStartFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
+
+		element.setPointerCapture(e.pointerId);
 
 		dragState = {
 			type: 'segment',
@@ -416,116 +464,126 @@ import { useFrameGeometry } from '$lib/useFrameGeometry';
 			handle,
 			startFrame: seg.frameStart,
 			endFrame: seg.frameEnd,
-			mouseStartX: startX,
+			pointerStartFrame,
+			captureElement: element,
+			pointerId: e.pointerId
 		};
 
-		// Initialize preview with current values
 		previewDragState = {
 			type: 'segment',
 			id: seg.id,
 			handle,
 			startFrame: seg.frameStart,
-			endFrame: seg.frameEnd,
+			endFrame: seg.frameEnd
 		};
 	}
 
-	function handlePointerMove(e: MouseEvent) {
-		if (!dragState || !rulerGeometry) return;
-		e.preventDefault();
+	function handlePointerMove(e: PointerEvent) {
+		if (!dragState || !rulerElement || !rulerGeometry) return;
+		if (e.pointerId !== dragState.pointerId) return;
 
-		const dx = e.clientX - dragState.mouseStartX;
-		const frameDelta = pxDeltaToFrame(dx, rulerGeometry);
-		const snappedDelta = snapFrame(frameDelta);
+		const rect = rulerElement.getBoundingClientRect();
+		const pointerFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
 
 		if (dragState.type === 'segment') {
-			const start = dragState.startFrame;
-			const end = dragState.endFrame;
-			const duration = end - start;
-
-			let newStart: number;
-			let newEnd: number;
-
-			if (dragState.handle === 'body') {
-				newStart = snapFrame(Math.max(0, Math.min(start + snappedDelta, totalFrames - 1 - duration)));
-				newEnd = newStart + duration;
-			} else if (dragState.handle === 'left') {
-				newStart = snapFrame(Math.max(0, Math.min(start + snappedDelta, end - 8)));
-				newEnd = end;
-			} else {
-				newStart = start;
-				newEnd = snapFrame(Math.min(totalFrames - 1, Math.max(start + 8, end + snappedDelta)));
-			}
-
-			// Update preview only, not store
+			const [startFrame, endFrame] = calculateSegmentDrag(dragState, pointerFrame);
 			previewDragState = {
 				type: 'segment',
 				id: dragState.id,
-				handle: dragState.handle,
-				startFrame: newStart,
-				endFrame: newEnd,
-			};
-		} else if (dragState.type === 'tag') {
-			const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === dragState.segmentId);
-			if (!seg) return;
-			const segStart = seg.frameStart;
-			const segEnd = seg.frameEnd;
-			const duration = dragState.endFrame - dragState.startFrame;
-
-			let newStart: number;
-			let newEnd: number;
-
-			if (dragState.handle === 'body') {
-				newStart = snapFrame(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, segEnd - duration)));
-				newEnd = newStart + duration;
-			} else if (dragState.handle === 'left') {
-				newStart = snapFrame(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, dragState.endFrame - 4)));
-				newEnd = dragState.endFrame;
-			} else {
-				newStart = dragState.startFrame;
-				newEnd = snapFrame(Math.min(segEnd, Math.max(dragState.startFrame + 4, dragState.endFrame + snappedDelta)));
-			}
-
-			// Update preview only, not store
-			previewDragState = {
-				type: 'tag',
-				id: dragState.id,
 				segmentId: dragState.segmentId,
-				handle: dragState.handle,
-				startFrame: newStart,
-				endFrame: newEnd,
+				startFrame,
+				endFrame
 			};
+			return;
+		}
+
+		if (dragState.type === 'tag') {
+			updateTagPreview(dragState, pointerFrame);
 		}
 	}
 
-	function handlePointerUp() {
+	async function handlePointerUp(e: PointerEvent) {
 		if (!dragState) return;
+		if (e.pointerId !== dragState.pointerId) return;
 
-		// Commit the final preview state to store
-		if (previewDragState) {
-			if (previewDragState.type === 'segment') {
-				resizeSegmentAction(
-					session!.id,
-					pipes[activePipeIdx!].id,
-					previewDragState.startFrame,
-					previewDragState.endFrame
-				).catch(console.error);
-			} else if (previewDragState.type === 'tag') {
-				const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === previewDragState.segmentId);
-				if (seg) {
-					resizeTagElementAction(
-						session!.id,
-						pipes[activePipeIdx!].id,
-						previewDragState.segmentId!,
-						previewDragState.id,
-						previewDragState.startFrame,
-						previewDragState.endFrame
-					).catch(console.error);
-				}
-			}
+		const finalPreview = previewDragState;
+
+		try {
+			dragState.captureElement.releasePointerCapture(dragState.pointerId);
+		} catch {
+			// Already released
 		}
 
 		dragState = null;
+
+		if (!finalPreview || !session?.id) {
+			previewDragState = null;
+			return;
+		}
+
+		const pipe = pipes[activePipeIdx!];
+		if (!pipe) {
+			previewDragState = null;
+			return;
+		}
+
+		if (finalPreview.type === 'segment') {
+			const result = await resizeSegmentAction(
+				session.id,
+				pipe.id,
+				finalPreview.id,
+				finalPreview.startFrame,
+				finalPreview.endFrame
+			);
+			if (result.errors.length) {
+				console.error('[ComposerPanel] resizeSegment:', result.errors);
+			}
+		}
+
+		if (finalPreview.type === 'tag') {
+			const result = await resizeTagElementAction(
+				session.id,
+				pipe.id,
+				finalPreview.segmentId!,
+				finalPreview.id,
+				finalPreview.startFrame,
+				finalPreview.endFrame
+			);
+			if (result.errors.length) {
+				console.error('[ComposerPanel] resizeTag:', result.errors);
+			}
+		}
+
 		previewDragState = null;
+	}
+
+	function updateTagPreview(drag: DragState, pointerFrame: number) {
+		if (!rulerGeometry) return;
+		const delta = snapFrame(pointerFrame - drag.pointerStartFrame);
+		let start = drag.startFrame;
+		let end = drag.endFrame;
+
+		if (drag.handle === 'body') {
+			const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === drag.segmentId);
+			if (!seg) return;
+			const segStart = seg.frameStart;
+			const segEnd = seg.frameEnd;
+			const duration = end - start;
+			start = snapFrame(Math.max(segStart, Math.min(start + delta, segEnd - duration)));
+			end = start + duration;
+		} else if (drag.handle === 'left') {
+			start = snapFrame(Math.max(0, Math.min(drag.startFrame + delta, end - MIN_SPAN)));
+		} else {
+			end = snapFrame(Math.min(totalFrames - 1, Math.max(drag.startFrame + MIN_SPAN, drag.endFrame + delta)));
+		}
+
+		previewDragState = {
+			type: 'tag',
+			id: drag.id,
+			segmentId: drag.segmentId,
+			startFrame: start,
+			endFrame: end
+		};
 	}
 
 	// ── Segment add ─────────────────────────────────────────────────────────
@@ -778,27 +836,24 @@ import { useFrameGeometry } from '$lib/useFrameGeometry';
 
 			<!-- ═══ FRAME RULER (CANONICAL) ═══ -->
 			<div class="ruler-wrap ruler-aligned" bind:this={rulerElement}>
-				<FrameRuler 
-					{totalFrames} 
+				<FrameRuler
+					{totalFrames}
 					{selectedFrame}
-					segments={[]} 
+					{rulerGeometry}
 					onframeSelect={(f) => {
 						selectedFrame = f;
 						onframechange?.(f);
-					}} 
+					}}
 				/>
 			</div>
 
 			<!-- ═══ GLOBAL TRACK ═══ -->
 			{#each [getGlobal(pipe)] as global}
 				{#if global}
-					<div class="global-track ruler-aligned">
-						<MultiThumbSlider
-							geometry={createFrameGeometry(totalFrames, 0)}
-							values={[global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1]}
-							color="#59B5FF"
-							onchange={(vals) => handleGlobalRangeUpdate(pipeIdx, global.id, vals)}
-						/>
+					<div class="global-track ruler-aligned" style="position: relative;">
+						{#if rulerGeometry}
+							<div style="position: absolute; left: {frameToPx(global.frameStart ?? 0, rulerGeometry)}px; width: {rangeWidthPx(global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1, rulerGeometry)}px; top: 4px; height: 20px; background: #59B5FF; opacity: 0.3; border-radius: 2px;"></div>
+						{/if}
 						<div class="global-actions">
 							<button class="btn-icon-sm" onclick={() => handleToggleGlobal(pipeIdx, global.id)} title="Toggle global">
 								{#if global.enabled}◉{:else}○{/if}
@@ -816,132 +871,155 @@ import { useFrameGeometry } from '$lib/useFrameGeometry';
 						{#each tl.segments as seg (seg.id)}
 							<div class="segment-row">
 								<!-- Segment range bar -->
-								<div class="seg-bar">
-									<!-- Left thumb -->
-									<div
-										class="thumb left"
-										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'left')}
-										style={`left: ${frameToX(getPreviewSegment(seg)?.startFrame ?? seg.frameStart)}%`}
-										title="Drag to resize start">
-									</div>
-									<!-- Segment body -->
-									<div
-										class="seg-body"
-										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'body')}
-										style={`left: ${frameToX(getPreviewSegment(seg)?.startFrame ?? seg.frameStart)}%; width: ${frameToX(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd) - frameToX(getPreviewSegment(seg)?.startFrame ?? seg.frameStart)}%`}>
-										<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
-									</div>
-									<!-- Right thumb -->
-									<div
-										class="thumb right"
-										onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'right')}
-										style={`left: ${frameToX(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd)}%`}
-										title="Drag to resize end">
-									</div>
+								<div class="seg-bar" style="position: relative; height: 24px;">
+									{#if rulerGeometry}
+										<!-- Left thumb -->
+										<div
+											class="thumb left"
+											onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'left')}
+											onpointermove={handlePointerMove}
+											onpointerup={handlePointerUp}
+											style="position: absolute; left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px; top: 0; bottom: 0; width: 8px; cursor: ew-resize;"
+											title="Drag to resize start">
+										</div>
+										<!-- Segment body -->
+										<div
+											class="seg-body"
+											onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'body')}
+											onpointermove={handlePointerMove}
+											onpointerup={handlePointerUp}
+											style="position: absolute; left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px; top: 0; bottom: 0; cursor: move;">
+											<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
+										</div>
+										<!-- Right thumb -->
+										<div
+											class="thumb right"
+											onpointerdown={(e) => handleSegmentPointerDown(e, seg, 'right')}
+											onpointermove={handlePointerMove}
+											onpointerup={handlePointerUp}
+											style="position: absolute; left: {frameToPx(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px; top: 0; bottom: 0; width: 8px; cursor: ew-resize;"
+											title="Drag to resize end">
+										</div>
+									{/if}
 								</div>
 								
 								<!-- Tag sub-rows -->
 								{#each seg.tags as tag (tag.id)}
 									<div class="tag-row">
-										<div class="tag-track">
-											<!-- Tag bar with thumbs -->
-											<div 
-												class="tag-bar"
-												onclick={() => handleEditTagPrompt(pipeIdx, seg, tag)}
-												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Click to edit prompt">
-												<!-- Left thumb -->
+										<div class="tag-track" style="position: relative; height: 20px;">
+											{#if rulerGeometry}
+												<!-- Tag bar with thumbs -->
 												<div
-													class="thumb small left"
-													onpointerdown={(e) => {
-														e.stopPropagation();
-														const geo = getGeometry();
-														if (!geo) return;
-														const startX = e.clientX;
-														(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-														dragState = {
-															type: 'tag',
-															id: tag.id,
-															segmentId: seg.id,
-															handle: 'left',
-															startFrame: tag.frameStart,
-															endFrame: tag.frameEnd,
-															mouseStartX: startX,
-														};
-														previewDragState = {
-															type: 'tag',
-															id: tag.id,
-															segmentId: seg.id,
-															handle: 'left',
-															startFrame: tag.frameStart,
-															endFrame: tag.frameEnd,
-														};
-													}}
-													style={`left: ${frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%`}>
+													class="tag-bar"
+													onclick={() => handleEditTagPrompt(pipeIdx, seg, tag)}
+													title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Click to edit prompt"
+													style="position: absolute; left: {frameToPx(tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(tag.frameStart, tag.frameEnd, rulerGeometry)}px; top: 0; bottom: 0;">
+													<!-- Left thumb -->
+													<div
+														class="thumb small left"
+														onpointerdown={(e) => {
+															e.stopPropagation();
+															if (!rulerElement || !rulerGeometry) return;
+															const element = e.currentTarget as HTMLElement;
+															const rect = rulerElement.getBoundingClientRect();
+															const pointerStartFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
+															element.setPointerCapture(e.pointerId);
+															dragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'left',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
+																pointerStartFrame,
+																captureElement: element,
+																pointerId: e.pointerId
+															};
+															previewDragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd
+															};
+														}}
+														onpointermove={handlePointerMove}
+														onpointerup={handlePointerUp}
+														style="position: absolute; left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; top: 0; bottom: 0; width: 6px; cursor: ew-resize;">
+													</div>
+													<!-- Tag body -->
+													<div
+														class="tag-body"
+														onpointerdown={(e) => {
+															e.stopPropagation();
+															if (!rulerElement || !rulerGeometry) return;
+															const element = e.currentTarget as HTMLElement;
+															const rect = rulerElement.getBoundingClientRect();
+															const pointerStartFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
+															element.setPointerCapture(e.pointerId);
+															dragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'body',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
+																pointerStartFrame,
+																captureElement: element,
+																pointerId: e.pointerId
+															};
+															previewDragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd
+															};
+														}}
+														onpointermove={handlePointerMove}
+														onpointerup={handlePointerUp}
+														style="position: absolute; left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; top: 0; bottom: 0; cursor: move;">
+														<span class="tag-name">{tag.spec?.name || tag.tag}</span>
+														{#if tag.prompt}
+															<span class="tag-prompt">{tag.prompt}</span>
+														{/if}
+													</div>
+													<!-- Right thumb -->
+													<div
+														class="thumb small right"
+														onpointerdown={(e) => {
+															e.stopPropagation();
+															if (!rulerElement || !rulerGeometry) return;
+															const element = e.currentTarget as HTMLElement;
+															const rect = rulerElement.getBoundingClientRect();
+															const pointerStartFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
+															element.setPointerCapture(e.pointerId);
+															dragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'right',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
+																pointerStartFrame,
+																captureElement: element,
+																pointerId: e.pointerId
+															};
+															previewDragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd
+															};
+														}}
+														onpointermove={handlePointerMove}
+														onpointerup={handlePointerUp}
+														style="position: absolute; left: {frameToPx(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; top: 0; bottom: 0; width: 6px; cursor: ew-resize;">
+													</div>
 												</div>
-												<!-- Tag body -->
-												<div
-													class="tag-body"
-													onpointerdown={(e) => {
-														e.stopPropagation();
-														const geo = getGeometry();
-														if (!geo) return;
-														const startX = e.clientX;
-														(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-														dragState = {
-															type: 'tag',
-															id: tag.id,
-															segmentId: seg.id,
-															handle: 'body',
-															startFrame: tag.frameStart,
-															endFrame: tag.frameEnd,
-															mouseStartX: startX,
-														};
-														previewDragState = {
-															type: 'tag',
-															id: tag.id,
-															segmentId: seg.id,
-															handle: 'body',
-															startFrame: tag.frameStart,
-															endFrame: tag.frameEnd,
-														};
-													}}
-													style={`left: ${frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%; width: ${frameToX(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd) - frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%`}>
-													<span class="tag-name">{tag.spec?.name || tag.tag}</span>
-													{#if tag.prompt}
-														<span class="tag-prompt">{tag.prompt}</span>
-													{/if}
-												</div>
-												<!-- Right thumb -->
-												<div
-													class="thumb small right"
-													onpointerdown={(e) => {
-														e.stopPropagation();
-														const geo = getGeometry();
-														if (!geo) return;
-														const startX = e.clientX;
-														(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-														dragState = {
-															type: 'tag',
-															id: tag.id,
-															segmentId: seg.id,
-															handle: 'right',
-															startFrame: tag.frameStart,
-															endFrame: tag.frameEnd,
-															mouseStartX: startX,
-														};
-														previewDragState = {
-															type: 'tag',
-															id: tag.id,
-															segmentId: seg.id,
-															handle: 'right',
-															startFrame: tag.frameStart,
-															endFrame: tag.frameEnd,
-														};
-													}}
-													style={`left: ${frameToX(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd)}%`}>
-												</div>
-											</div>
-											<button 
+											{/if}
+											<button
 												class="btn-del-tag"
 												onclick={(e) => { e.stopPropagation(); handleRemoveTag(pipeIdx, seg.id, tag.id); }}
 												title="Remove tag">×</button>
