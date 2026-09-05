@@ -28,15 +28,12 @@
 		updateSubjectRefUrl as updateSubjectRefUrlAction,
 		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 	} from '$lib/composerStore';
-import { snapTo8 } from '$lib/frameMath';
 import {
 	createFrameGeometry,
 	type FrameGeometry,
 	frameToPx,
-	frameToPercent,
 	clientXToFrame,
 	snapFrame,
-	pxDeltaToFrame,
 	rangeWidthPx,
 	FRAME_STEP,
 	MIN_SPAN
@@ -204,15 +201,6 @@ import {
 
 	function getGlobal(pipe: PipeRow): any {
 		return pipe.elements.find((e: any) => e.tag === 'global_style') ?? null;
-	}
-
-	// Frame to percentage for rendering — DEPRECATED, use framePercent() from geometry
-	// Kept for backward compat during migration
-	function frameToX(frame: number): number {
-		if (rulerGeometry) {
-			return framePercent(frame, rulerGeometry);
-		}
-		return (frame / Math.max(totalFrames - 1, 1)) * 100;
 	}
 
 	// Get preview state for a segment during drag
