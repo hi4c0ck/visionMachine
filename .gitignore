@@ -84,6 +84,9 @@ yarn-error.log*
 .agnes-workspace/
 $null
 
+# Hermes Agent (local development tooling)
+.hermes/
+
 # Docker
 .docker/
 docker-compose.override.yml
@@ -94,6 +97,8 @@ coverage/
 .pytest_cache/
 .tox/
 .nox/
+test-results/
+playwright-report/
 
 # Documentation builds
 docs/_build/
