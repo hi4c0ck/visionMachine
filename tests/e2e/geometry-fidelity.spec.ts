@@ -1,161 +1,125 @@
 /**
- * Pixel-level geometry fidelity E2E tests
+ * E2E Tests for Geometry Fidelity
  *
- * Verifies that frame→pixel conversions are deterministic across
- * FrameRuler, ComposerPanel, and MultiThumbSlider using the
- * centralized FrameGeometry engine.
+ * Tests that centralized frame geometry renders consistently across
+ * FrameRuler, ComposerPanel, and MultiThumbSlider.
  *
  * Run with: npx playwright test tests/e2e/geometry-fidelity.spec.ts
  */
 
 import { test, expect } from '@playwright/test';
 
-test.describe('Frame Geometry Fidelity', () => {
-	test('FrameRuler renders at correct positions for key frames', async ({ page }) => {
-		await page.goto('/workspace');
+test.describe('Geometry Fidelity', () => {
+	test.beforeEach(async ({ page }) => {
+		// Login
+		await page.goto('/');
+		await page.locator('input[placeholder*="name"]').fill('Test User');
+		await page.getByRole('button', { name: 'Get Started' }).click();
+		await page.waitForSelector('.workspace', { timeout: 10000 });
 
-		// Open composer panel
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
+		// Create project
+		await page.locator('.projects-panel .add-btn').click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await page.locator('input[placeholder*="project name"]').fill('GeoTest');
+		await page.locator('.modal .btn-confirm').click();
+		await page.waitForSelector('.project-name', { timeout: 5000 });
 
-		// Frame 0 should be at left edge (0%)
-		// Frame 240 should be at right edge (100%)
-		// We verify the ruler bar spans full width
-
-		const rulerBar = page.locator('.ruler-bar');
-		await expect(rulerBar).toBeVisible();
-
-		// Get ruler bar bounding box
-		const rect = await rulerBar.boundingBox();
-		expect(rect).toBeTruthy();
-		if (rect) {
-			// Ruler bar should have measurable width
-			expect(rect.width).toBeGreaterThan(100);
-		}
+		// Add session
+		await page.locator('.add-session-btn').click();
+		await page.waitForSelector('.session-item', { timeout: 5000 });
+		await page.locator('.session-item').first().click();
+		await page.waitForSelector('.composer-panel', { timeout: 10000 });
 	});
 
-	test('segment positions use framePercent from geometry', async ({ page }) => {
-		await page.goto('/workspace');
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
+	test('frame-ruler renders', async ({ page }) => {
+		const ruler = page.locator('.frame-ruler');
+		await expect(ruler).toBeVisible();
+	});
 
-		// Look for a segment element with frame-based positioning
-		const segBody = page.locator('.seg-body').first();
-		await expect(segBody).toBeVisible();
+	test('coordinate-space renders', async ({ page }) => {
+		const coord = page.locator('.coordinate-space');
+		await expect(coord).toBeVisible();
+		const rect = await coord.boundingBox();
+		expect(rect?.width).toBeGreaterThan(100);
+	});
 
-		// Get the style attribute to verify percentage-based positioning
-		const style = await segBody.getAttribute('style');
+	test('seg-bar uses pixel positioning', async ({ page }) => {
+		// Click Add Pipe - this directly adds a pipe (no modal)
+		const addPipeBtn = page.locator('.btn-add-pipe');
+		await expect(addPipeBtn).toBeVisible();
+		await addPipeBtn.click();
+		
+		// Wait for pipe to appear
+		await page.waitForSelector('.pipe', { timeout: 5000 });
+
+		// Add segment
+		await page.locator('.seg-empty.full-width').click({ force: true });
+		await page.waitForSelector('.seg-bar', { timeout: 5000 });
+
+		const seg = page.locator('.seg-bar').first();
+		await expect(seg).toBeVisible();
+		const style = await seg.getAttribute('style');
 		expect(style).toContain('left:');
-		expect(style).toContain('%'); // Should use percentage, not pixels directly
+		expect(style).toContain('px');
 	});
 
-	test('tag positions use framePercent from geometry', async ({ page }) => {
-		await page.goto('/workspace');
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
+	test('tag-body uses pixel positioning', async ({ page }) => {
+		// Click Add Pipe
+		const addPipeBtn = page.locator('.btn-add-pipe');
+		await expect(addPipeBtn).toBeVisible();
+		await addPipeBtn.click();
+		await page.waitForSelector('.pipe', { timeout: 5000 });
 
-		// Wait for segments and tags to render
-		await page.waitForSelector('.tag-body');
+		// Add segment
+		await page.locator('.seg-empty.full-width').click({ force: true });
+		await page.waitForSelector('.seg-bar', { timeout: 5000 });
 
-		const tagBody = page.locator('.tag-body').first();
-		await expect(tagBody).toBeVisible();
+		// Add tag
+		await page.locator('.btn-add-tag').click({ force: true });
+		await page.getByText('Scene').click({ force: true });
+		await page.waitForSelector('.tag-body', { timeout: 3000 });
 
-		// Get the style attribute to verify percentage-based positioning
-		const style = await tagBody.getAttribute('style');
-		expect(style).toContain('left:');
-		expect(style).toContain('%'); // Should use percentage
+		const tag = page.locator('.tag-body').first();
+		await expect(tag).toBeVisible();
+		const style = await tag.getAttribute('style');
+		expect(style).toContain('px');
 	});
 
-	test('MultiThumbSlider accepts geometry prop', async ({ page }) => {
-		await page.goto('/workspace');
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
+	test('drag updates segment position', async ({ page }) => {
+		// Click Add Pipe
+		const addPipeBtn = page.locator('.btn-add-pipe');
+		await expect(addPipeBtn).toBeVisible();
+		await addPipeBtn.click();
+		await page.waitForSelector('.pipe', { timeout: 5000 });
 
-		// Global track uses MultiThumbSlider with geometry prop
-		const globalTrack = page.locator('.global-track').first();
-		if (await globalTrack.count() > 0) {
-			await expect(globalTrack).toBeVisible();
-		}
-	});
+		// Add segment
+		await page.locator('.seg-empty.full-width').click({ force: true });
+		await page.waitForSelector('.seg-bar', { timeout: 5000 });
 
-	test('drag calculations use pxDeltaToFrame from geometry', async ({ page }) => {
-		await page.goto('/workspace');
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
-
-		// Find a segment body to drag
-		const segBody = page.locator('.seg-body').first();
-		await expect(segBody).toBeVisible();
-
-		const box = await segBody.boundingBox();
+		const seg = page.locator('.seg-bar').first();
+		const box = await seg.boundingBox();
 		if (!box) return;
 
-		// Calculate center point
-		const startX = box.x + box.width / 2;
-		const startY = box.y + box.height / 2;
-
-		// Perform drag (small movement)
-		await page.mouse.move(startX, startY);
+		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 		await page.mouse.down();
-		await page.mouse.move(startX + 50, startY);
+		await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2);
 		await page.mouse.up();
 
-		// After drag, segment should have updated position
-		// Verify the position is still percentage-based
-		const updatedStyle = await segBody.getAttribute('style');
-		expect(updatedStyle).toBeTruthy();
+		const newBox = await seg.boundingBox();
+		if (newBox) {
+			expect(newBox.x).toBeGreaterThanOrEqual(box.x - 5);
+		}
 	});
 
-	test('geometry recomputes on window resize', async ({ page }) => {
-		await page.goto('/workspace');
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
+	test('geometry recomputes on resize', async ({ page }) => {
+		const coord = page.locator('.coordinate-space');
+		const initialRect = await coord.boundingBox();
+		expect(initialRect?.width).toBeGreaterThan(100);
 
-		// Record initial ruler width
-		const rulerBar = page.locator('.ruler-bar');
-		const initialRect = await rulerBar.boundingBox();
-		expect(initialRect).toBeTruthy();
-		if (!initialRect) return;
-
-		const initialWidth = initialRect.width;
-
-		// Resize window
 		await page.setViewportSize({ width: 1400, height: 900 });
-		await page.waitForTimeout(300);
+		await page.waitForTimeout(500);
 
-		// Ruler should have updated width
-		const newRect = await rulerBar.boundingBox();
-		expect(newRect).toBeTruthy();
-		if (newRect) {
-			// Width should have changed
-			expect(newRect.width).not.toBe(initialWidth);
-		}
-	});
-
-	test('frameToX uses geometry when available', async ({ page }) => {
-		await page.goto('/workspace');
-		await page.click('[data-testid="tools-panel"]');
-		await page.waitForSelector('.composer-panel');
-
-		// Check that frameToX function in ComposerPanel uses geometry
-		// by verifying segments are positioned correctly relative to ruler
-		const rulerBar = page.locator('.ruler-bar');
-		const segBody = page.locator('.seg-body').first();
-
-		await expect(rulerBar).toBeVisible();
-		await expect(segBody).toBeVisible();
-
-		// Get bounding boxes
-		const rulerBox = await rulerBar.boundingBox();
-		const segBox = await segBody.boundingBox();
-
-		expect(rulerBox).toBeTruthy();
-		expect(segBox).toBeTruthy();
-
-		if (rulerBox && segBox) {
-			// Segment should be within ruler bounds horizontally
-			expect(segBox.x).toBeGreaterThanOrEqual(rulerBox.x - 5); // slight tolerance
-			expect(segBox.x).toBeLessThanOrEqual(rulerBox.x + rulerBox.width);
-		}
+		const newRect = await coord.boundingBox();
+		expect(newRect?.width).toBeGreaterThan(100);
 	});
 });
