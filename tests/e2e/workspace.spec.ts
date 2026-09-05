@@ -71,7 +71,7 @@ test.describe('Workspace Layout', () => {
     
     // Composer should unlock
     await expect(page.locator('.composer-panel')).toBeVisible();
-    await expect(page.locator('.pipe-row')).toBeVisible();
+    await expect(page.locator('.pipe')).toBeVisible();
   });
 
   test('should show tools panel when landscape layout and session selected', async ({ page }) => {

@@ -190,14 +190,14 @@ test.describe('White Screen Integration Tests', () => {
     });
     
     // Add segment
-    await page.locator('.add-param-row').click();
+    await page.locator('.add-segment-btn').click();
     await page.waitForSelector('.type-grid', { timeout: 3000 });
     
     // Click on Scene type
     await page.locator('.type-btn:has-text("Scene")').click();
     
     // Verify segment was added
-    await expect(page.locator('.param-row')).toBeVisible();
+    await expect(page.locator('.tag-row')).toBeVisible();
     
     // Verify no console errors
     expect(consoleErrors.length).toBe(0);

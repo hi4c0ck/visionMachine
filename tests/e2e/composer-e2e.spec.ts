@@ -18,8 +18,8 @@ test.describe('Composer E2E Tests', () => {
     const timelineBtn = page.getByRole('button', { name: 'Timeline' });
     await timelineBtn.click();
     
-    const timelineContainer = page.locator('.timeline-container');
-    await expect(timelineContainer).toBeVisible();
+    const timelineTrack = page.locator('.timeline-track');
+    await expect(timelineTrack).toBeVisible();
 
     const listViewBtn = page.getByRole('button', { name: 'List' });
     await listViewBtn.click();
@@ -29,7 +29,7 @@ test.describe('Composer E2E Tests', () => {
   });
 
   test('should add a new pipe', async ({ page }) => {
-    const initialPipeCount = page.locator('.pipe-row').count();
+    const initialPipeCount = page.locator('.pipe').count();
     
     const addPipeBtn = page.getByRole('button', { name: /Add Pipe/i });
     await addPipeBtn.click();
@@ -37,12 +37,12 @@ test.describe('Composer E2E Tests', () => {
     const confirmBtn = page.getByRole('button', { name: 'Add' });
     await confirmBtn.click();
     
-    const newPipeCount = page.locator('.pipe-row').count();
+    const newPipeCount = page.locator('.pipe').count();
     await expect(newPipeCount).toBeGreaterThan(initialPipeCount);
   });
 
   test('should delete a pipe (when more than one)', async ({ page }) => {
-    const pipeRows = page.locator('.pipe-row');
+    const pipeRows = page.locator('.pipe');
     const initialCount = await pipeRows.count();
     
     if (initialCount > 1) {
@@ -50,20 +50,20 @@ test.describe('Composer E2E Tests', () => {
       const deleteBtn = secondPipe.locator('[title="Delete Pipe"]');
       await deleteBtn.click();
       
-      const newCount = await page.locator('.pipe-row').count();
+      const newCount = await page.locator('.pipe').count();
       await expect(newCount).toBeLessThan(initialCount);
     }
   });
 
   test('should add a segment with validation', async ({ page }) => {
-    const firstPipe = page.locator('.pipe-row').first();
+    const firstPipe = page.locator('.pipe').first();
     const addSegmentBtn = firstPipe.getByRole('button', { name: /Add Segment/i });
     await addSegmentBtn.click();
     
     const sceneType = page.getByText('Scene');
     await sceneType.click();
     
-    const segments = page.locator('.param-row');
+    const segments = page.locator('.tag-row');
     await expect(segments).toBeVisible();
   });
 
@@ -124,7 +124,7 @@ test.describe('Composer Timeline E2E', () => {
     const sceneType = page.getByText('Scene');
     await sceneType.click();
     
-    const segmentBlocks = page.locator('.segment-block');
+    const segmentBlocks = page.locator('.seg-bar');
     await expect(segmentBlocks).toBeVisible();
   });
 
@@ -144,7 +144,7 @@ test.describe('Composer Persistence', () => {
     
     await page.reload();
     
-    const pipes = page.locator('.pipe-row');
+    const pipes = page.locator('.pipe');
     const count = await pipes.count();
     await expect(count).toBeGreaterThan(0);
   });

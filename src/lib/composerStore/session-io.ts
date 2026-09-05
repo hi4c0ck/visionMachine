@@ -77,7 +77,7 @@ export class SessionServiceImpl implements SessionService {
           id: r.id,
           imageUrl: r.imageUrl || '',
           useFrames,
-          ...(useFrames ? {
+          ...(useFrames && (r.frameStart !== undefined || r.frameEnd !== undefined) ? {
             frameStart: r.frameStart ?? 0,
             frameEnd: r.frameEnd ?? 240,
           } : {}),
