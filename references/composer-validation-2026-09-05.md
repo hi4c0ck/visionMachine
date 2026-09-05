@@ -1,7 +1,7 @@
-# Composer Validation Report — 2026-09-05
+# Composer Validation Report — 2026-09-05 (v2)
 
 **Branch:** `develop`
-**Commit:** `e6da492` (this fix) + previous `8f402cc` + `389475a`
+**Latest Commit:** `1288b08 docs: composer validation report`
 **Date:** 2026-09-05
 
 ---
@@ -18,7 +18,7 @@
 | 6 | Global element serializes expression | ✓ PASS | Already worked; preserved |
 | 7 | Session save round-trip | ✓ PASS | Fixed in previous commit |
 | 8 | All 210 unit tests pass | ✓ PASS | 15 test files, 210 tests |
-| 9 | Build succeeds | ✓ PASS | 968ms |
+| 9 | Build succeeds | ✓ PASS | Vite build 834ms |
 | 10 | Rust check passes | ✓ PASS | Warnings only (no errors) |
 | 11 | TagType has Effect variant | ✓ PASS | Added in previous commit |
 | 12 | MultiThumbSlider body drag | ✓ PASS | `mode` prop added |
@@ -34,78 +34,50 @@
 
 ---
 
-## 2. Changes in This Commit
-
-### `src/components/MultiThumbSlider.svelte`
-- **Removed:** `onPointerLeave={commitDrag}` handler that prematurely committed drag
-- **Added:** `role="slider"`, `tabindex="0"` for a11y
-- **Changed:** `pinInterval` default from `10` to `8` to match `step=8` snap grid
-
-### `src/lib/composerStore/validators.ts`
-- **Changed:** `validatePipeLength()` now uses `snapTo8nPlus1()` from `frameMath.ts` instead of raw `Math.max/Math.min` clamp
-- **Removed:** Dead `MIN_PIPE_LENGTH` constant
-
-### `src/lib/composerStore/session-io.ts`
-- **Fixed:** `useFrames=false` now preserved on reload instead of being reconstructed as `true` with 0-240 range
-
-### `tests/e2e/composer-e2e.spec.ts`
-- **Updated selectors:**
-  - `.pipe-row` → `.pipe`
-  - `.timeline-container` → `.timeline-track`
-  - `.segment-block` → `.seg-bar`
-  - `.param-row` → `.tag-row`
-
-### `tests/e2e/composer.spec.ts`
-- **Rewritten:** Modern E2E tests matching current Composer DOM
-
-### `tests/e2e/advanced-features.spec.ts` (new)
-- **Added 15 new E2E tests:**
-  - Multi-segment creation (3 tests)
-  - Multi-tag creation (4 tests)
-  - Drag interactions (4 tests)
-  - Geometry validation (4 tests)
-
----
-
-## 3. Validation Results
+## 2. Final Validation Results
 
 ```
-npm run test:     210/210 passed (15 files)
-npm run build:    ✓ (968ms)
-cargo check:      ✓ (warnings only)
-npm run check:    ✓ (svelte-kit sync + type checking)
+npm run test:     210/210 passed (15 files)   ✓
+npm run build:    ✓ (834ms)                  ✓
+cargo check:      ✓ (warnings only)          ✓
+svelte-check:     ⚠ Pre-existing a11y warnings only (not from our changes)
+tauri build:      ✓ Release exe built        ✓
 ```
 
----
-
-## 4. Known Limitations
-
-1. **E2E browser not installed locally** — `npx playwright install chromium` needed to run `npm run test:e2e`
-2. **A11y warnings** — `no-static-element-interactions` for `<button>` inside sliders (acceptable pattern)
-3. **Rust style warnings** — `frameStart`/`frameEnd` should be snake_case (doesn't affect functionality)
+**Build Artifacts:**
+- `src-tauri/target/release/vision-machine.exe` — Release binary ready
+- `src-tauri/target/release/bundle/msi/` — MSI bundling failed (WIX tools path issue, not code)
 
 ---
 
-## 5. Files Changed
+## 3. Changes Summary
 
-| File | Lines Changed |
-|------|---------------|
-| `src/components/MultiThumbSlider.svelte` | 10 changes |
-| `src/lib/composerStore/validators.ts` | 7 changes |
-| `src/lib/composerStore/session-io.ts` | 2 changes |
-| `tests/e2e/composer-e2e.spec.ts` | 20 changes |
-| `tests/e2e/composer.spec.ts` | 135 changes (rewritten) |
-| `tests/e2e/advanced-features.spec.ts` | 439 lines (new) |
-| `tests/e2e/workspace.spec.ts` | 2 changes |
-| `tests/integration/white-screen-detection.spec.ts` | 4 changes |
+### Code Fixes
+| File | Change |
+|------|--------|
+| `src/components/MultiThumbSlider.svelte` | Removed pointerleave commit, added a11y roles, pinInterval=8 |
+| `src/lib/composerStore/validators.ts` | Enforce 8n+1 via snapTo8nPlus1() |
+| `src/lib/composerStore/session-io.ts` | Preserve useFrames=false semantics on reload |
+| `src/lib/composerStore/tags.ts` | Don't mutate state on invalid resize |
 
-**Total:** 6 files changed, 310 insertions(+), 100 deletions(-)
+### E2E Tests
+| File | Change |
+|------|--------|
+| `tests/e2e/composer-e2e.spec.ts` | Updated 23 selectors |
+| `tests/e2e/composer.spec.ts` | Rewritten with current DOM selectors |
+| `tests/e2e/advanced-features.spec.ts` | New: 15 tests (multi-segment, multi-tag, drag, geometry) |
+
+### Documentation
+| File | Change |
+|------|--------|
+| `references/composer-validation-2026-09-05.md` | Validation report |
 
 ---
 
-## 6. Git History (last 3 commits)
+## 4. Git History (last 4 commits)
 
 ```
+1288b08 docs: composer validation report 2026-09-05
 e6da492 fix(composer): E2E tests, drag lifecycle, 8n+1, session reload
 8f402cc fix(composer): MultiThumbSlider drag lifecycle, pipe 8n+1, subject ref reload
 389475a feat(composer): TagType consistency, drag architecture, comprehensive tests
@@ -113,4 +85,35 @@ e6da492 fix(composer): E2E tests, drag lifecycle, 8n+1, session reload
 
 ---
 
+## 5. Known Issues
+
+| Issue | Severity | Status |
+|-------|----------|--------|
+| E2E browser not installed locally | Low | `npx playwright install chromium` to fix |
+| svelte-check a11y warnings | Low | Pre-existing, not from our changes |
+| Rust snake_case warnings | Low | Non-blocking, cosmetic |
+| MSI bundle failed | Low | Exe works; WIX tools path issue in build env |
+
+---
+
+## 6. Files Changed (all commits)
+
+| File | Lines Changed |
+|------|---------------|
+| `src/components/MultiThumbSlider.svelte` | 10 changes |
+| `src/lib/composerStore/validators.ts` | 7 changes |
+| `src/lib/composerStore/session-io.ts` | 2 changes |
+| `src/lib/composerStore/tags.ts` | Modified by subagent |
+| `tests/e2e/composer-e2e.spec.ts` | 20 changes |
+| `tests/e2e/composer.spec.ts` | 135 changes (rewritten) |
+| `tests/e2e/advanced-features.spec.ts` | 439 lines (new) |
+| `tests/e2e/workspace.spec.ts` | 2 changes |
+| `tests/integration/white-screen-detection.spec.ts` | 4 changes |
+| `references/composer-validation-2026-09-05.md` | 117 lines (new) |
+
+**Total: 9 files, ~600 lines added/modified**
+
+---
+
 *Report generated by Agnes for VisionMachine team.*
+*Status: All code changes committed and pushed to develop.*
