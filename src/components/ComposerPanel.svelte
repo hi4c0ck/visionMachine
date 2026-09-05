@@ -886,7 +886,7 @@
 								<div class="tag-add-row">
 									<button 
 										class="btn-add-tag"
-										onclick={(e) => handleOpenTagMenu(seg.id, e, pipeIdx)}
+										onclick={(e) => { e.stopPropagation(); handleOpenTagMenu(seg.id, e, pipeIdx); }}
 										title="Add tag to segment">
 										+ Tag
 									</button>
