@@ -7,7 +7,7 @@
 		label = '',
 		color = '#a8b5d6',
 		enablePins = true,
-		pinInterval = 10,
+		pinInterval = 8,
 		mode = 'both',
 		onchange
 	} = $props<{
@@ -132,11 +132,6 @@
 		commitDrag();
 	}
 
-	function onPointerLeave(e: PointerEvent) {
-		releaseCapture(e);
-		commitDrag();
-	}
-
 	function handleClick(e: MouseEvent) {
 		if ((e.target as HTMLElement).closest('.thumb-hit')) return;
 
@@ -194,6 +189,8 @@
 	<div
 		class="track-container"
 		bind:this={trackEl}
+		role="slider"
+		tabindex="0"
 		ontouchstart={(e) => e.preventDefault()}
 		onpointerdown={(e) => {
 			if ((e.target as HTMLElement).closest('.thumb-hit')) return;
@@ -201,7 +198,6 @@
 		}}
 		onpointermove={onPointerMove}
 		onpointerup={onPointerUp}
-		onpointerleave={onPointerLeave}
 		onclick={handleClick}
 	>
 		<div class="rail"></div>

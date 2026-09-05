@@ -1,18 +1,19 @@
 // Frame validation utilities for composer timeline
 // Encapsulates 8n+1 rule logic
 
-import { snapTo8, getMaxFrames } from '$lib/frameMath';
+import { snapTo8, snapTo8nPlus1, getMaxFrames } from '$lib/frameMath';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MIN_SEGMENT_SPAN = 8;
-const MIN_PIPE_LENGTH = 41; // 8*5+1
 
 // ── Validation Functions ──────────────────────────────────────────────────────
 
 export function validatePipeLength(frames: number, resolution: string): number {
   const maxFrames = getMaxFrames(resolution);
-  return Math.max(MIN_PIPE_LENGTH, Math.min(maxFrames, frames));
+  const MIN_LENGTH = 41; // 8*5+1 = 41
+  const snapped = snapTo8nPlus1(frames);
+  return Math.max(MIN_LENGTH, Math.min(snapped, maxFrames));
 }
 
 export function validateSegmentFrames(

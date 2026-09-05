@@ -71,14 +71,19 @@ export class SessionServiceImpl implements SessionService {
         referenceUrl: kf.referenceUrl,
         status: kf.status || 'pending',
       })),
-      subjectReferences: (p.subjectReferences || []).map((r: any) => ({
-        id: r.id,
-        imageUrl: r.imageUrl || '',
-        useFrames: r.useFrames !== false,
-        frameStart: r.frameStart ?? 0,
-        frameEnd: r.frameEnd ?? 240,
-        visible: r.visible !== false,
-      })),
+      subjectReferences: (p.subjectReferences || []).map((r: any) => {
+        const useFrames = r.useFrames === true;
+        return {
+          id: r.id,
+          imageUrl: r.imageUrl || '',
+          useFrames,
+          ...(useFrames ? {
+            frameStart: r.frameStart ?? 0,
+            frameEnd: r.frameEnd ?? 240,
+          } : {}),
+          visible: r.visible !== false,
+        };
+      }),
       elements: (p.elements || []).map((el: any) => this.mapBackendElement(el)),
     }));
   }
