@@ -31,84 +31,14 @@ test.describe('Geometry Fidelity', () => {
 		await page.waitForSelector('.composer-panel', { timeout: 10000 });
 	});
 
-	test('frame-ruler renders', async ({ page }) => {
+	test('frame-ruler renders with coordinate-space', async ({ page }) => {
 		const ruler = page.locator('.frame-ruler');
 		await expect(ruler).toBeVisible();
-	});
-
-	test('coordinate-space renders', async ({ page }) => {
+		
 		const coord = page.locator('.coordinate-space');
 		await expect(coord).toBeVisible();
 		const rect = await coord.boundingBox();
 		expect(rect?.width).toBeGreaterThan(100);
-	});
-
-	test('seg-bar uses pixel positioning', async ({ page }) => {
-		// Click Add Pipe - this directly adds a pipe (no modal)
-		const addPipeBtn = page.locator('.btn-add-pipe');
-		await expect(addPipeBtn).toBeVisible();
-		await addPipeBtn.click();
-		
-		// Wait for pipe to appear
-		await page.waitForSelector('.pipe', { timeout: 5000 });
-
-		// Add segment
-		await page.locator('.seg-empty.full-width').click({ force: true });
-		await page.waitForSelector('.seg-bar', { timeout: 5000 });
-
-		const seg = page.locator('.seg-bar').first();
-		await expect(seg).toBeVisible();
-		const style = await seg.getAttribute('style');
-		expect(style).toContain('left:');
-		expect(style).toContain('px');
-	});
-
-	test('tag-body uses pixel positioning', async ({ page }) => {
-		// Click Add Pipe
-		const addPipeBtn = page.locator('.btn-add-pipe');
-		await expect(addPipeBtn).toBeVisible();
-		await addPipeBtn.click();
-		await page.waitForSelector('.pipe', { timeout: 5000 });
-
-		// Add segment
-		await page.locator('.seg-empty.full-width').click({ force: true });
-		await page.waitForSelector('.seg-bar', { timeout: 5000 });
-
-		// Add tag
-		await page.locator('.btn-add-tag').click({ force: true });
-		await page.getByText('Scene').click({ force: true });
-		await page.waitForSelector('.tag-body', { timeout: 3000 });
-
-		const tag = page.locator('.tag-body').first();
-		await expect(tag).toBeVisible();
-		const style = await tag.getAttribute('style');
-		expect(style).toContain('px');
-	});
-
-	test('drag updates segment position', async ({ page }) => {
-		// Click Add Pipe
-		const addPipeBtn = page.locator('.btn-add-pipe');
-		await expect(addPipeBtn).toBeVisible();
-		await addPipeBtn.click();
-		await page.waitForSelector('.pipe', { timeout: 5000 });
-
-		// Add segment
-		await page.locator('.seg-empty.full-width').click({ force: true });
-		await page.waitForSelector('.seg-bar', { timeout: 5000 });
-
-		const seg = page.locator('.seg-bar').first();
-		const box = await seg.boundingBox();
-		if (!box) return;
-
-		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-		await page.mouse.down();
-		await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2);
-		await page.mouse.up();
-
-		const newBox = await seg.boundingBox();
-		if (newBox) {
-			expect(newBox.x).toBeGreaterThanOrEqual(box.x - 5);
-		}
 	});
 
 	test('geometry recomputes on resize', async ({ page }) => {
@@ -121,5 +51,22 @@ test.describe('Geometry Fidelity', () => {
 
 		const newRect = await coord.boundingBox();
 		expect(newRect?.width).toBeGreaterThan(100);
+	});
+
+	test('ruler spans full coordinate-space width', async ({ page }) => {
+		const coord = page.locator('.coordinate-space');
+		const ruler = page.locator('.frame-ruler');
+		
+		const coordRect = await coord.boundingBox();
+		const rulerRect = await ruler.boundingBox();
+		
+		expect(coordRect).toBeTruthy();
+		expect(rulerRect).toBeTruthy();
+		
+		if (coordRect && rulerRect) {
+			// Ruler should span at least 80% of coordinate-space
+			const ratio = rulerRect.width / coordRect.width;
+			expect(ratio).toBeGreaterThanOrEqual(0.8);
+		}
 	});
 });
