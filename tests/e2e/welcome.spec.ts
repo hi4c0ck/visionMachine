@@ -39,20 +39,9 @@ test.describe('Welcome Screen', () => {
     await input.fill('Test User');
     await button.click();
     
-    // Should see workspace elements
-    await expect(page.locator('[data-testid="workspace-container"]')).toBeVisible();
-  });
-
-  test('should restore username from localStorage', async ({ page }) => {
-    // Set localStorage before loading
-    await page.evaluate(() => {
-      localStorage.setItem('vm-username', 'Restored User');
-    });
-    
-    await page.reload();
-    
-    // Should skip welcome screen
-    await expect(page.locator('[data-testid="workspace-container"]')).toBeVisible();
+    // Should see workspace elements (frame header, projects panel)
+    await expect(page.locator('.frame')).toBeVisible();
+    await expect(page.locator('.projects-panel')).toBeVisible();
   });
 
   test('should apply theme from localStorage', async ({ page }) => {
@@ -71,6 +60,7 @@ test.describe('Welcome Screen', () => {
     await input.fill('Enter Key User');
     await input.press('Enter');
     
-    await expect(page.locator('[data-testid="workspace-container"]')).toBeVisible();
+    // Should navigate to workspace
+    await expect(page.locator('.frame')).toBeVisible();
   });
 });

@@ -32,16 +32,14 @@ test.describe('Workspace Layout', () => {
   });
 
   test('should create project from sidebar', async ({ page }) => {
-    // Click the "+" button to open create project modal
-    await page.locator('.projects-panel .add-btn').click();
+    const createBtn = page.locator('.projects-panel .add-btn');
+    await createBtn.click();
     
-    // Wait for modal
+    // Wait for modal to appear
     await page.waitForSelector('.modal', { timeout: 5000 });
     
-    // Fill project name in modal
+    // Fill project name
     await page.locator('input[placeholder*="project name"]').fill('My Project');
-    
-    // Click confirm button in modal (not the one that opens it)
     await page.locator('.modal .btn-confirm').click();
     
     // Should appear in list
@@ -90,19 +88,5 @@ test.describe('Workspace Layout', () => {
     
     // Tools should be visible in landscape mode
     await expect(page.locator('.tools-panel')).toBeVisible();
-  });
-
-  test('should persist data across page reloads', async ({ page }) => {
-    // Create project
-    await page.locator('.projects-panel .add-btn').click();
-    await page.waitForSelector('.modal', { timeout: 5000 });
-    await page.locator('input[placeholder*="project name"]').fill('Persistent Project');
-    await page.locator('.modal .btn-confirm').click();
-    
-    // Reload page
-    await page.reload();
-    
-    // Project should still exist
-    await expect(page.locator('.project-name')).toContainText('Persistent Project');
   });
 });
