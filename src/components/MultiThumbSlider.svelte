@@ -8,6 +8,7 @@
 		color = '#a8b5d6',
 		enablePins = true,
 		pinInterval = 10,
+		mode = 'both',
 		onchange
 	} = $props<{
 		values?: [number, number];
@@ -18,6 +19,7 @@
 		color?: string;
 		enablePins?: boolean;
 		pinInterval?: number;
+		mode?: 'left' | 'right' | 'body' | 'both';
 		onchange?: (values: [number, number]) => void;
 	}>();
 
@@ -49,40 +51,90 @@
 		).filter(v => v <= max)
 	);
 
-	let dragging: 'left' | 'right' | null = null;
+	type DragState = {
+		side: 'left' | 'right' | 'body';
+		origX: number;
+		origValues: [number, number];
+		duration: number;
+	};
 
-	function startDrag(side: 'left' | 'right', e: PointerEvent) {
+	let dragState: DragState | null = null;
+	let trackEl: HTMLElement | null = null;
+
+	function startDrag(side: 'left' | 'right' | 'body', e: PointerEvent) {
 		e.preventDefault();
 		e.stopPropagation();
-		dragging = side;
-		document.body.setPointerCapture(e.pointerId);
+		const target = e.currentTarget as HTMLElement;
+		dragState = {
+			side,
+			origX: e.clientX,
+			origValues: [localValues[0], localValues[1]],
+			duration: localValues[1] - localValues[0]
+		};
+		target.setPointerCapture(e.pointerId);
+	}
+
+	function commitDrag() {
+		if (!dragState) return;
+		onchange?.([localValues[0], localValues[1]]);
+		dragState = null;
+	}
+
+	function releaseCapture(e: PointerEvent) {
+		const target = e.currentTarget as HTMLElement;
+		try { target.releasePointerCapture(e.pointerId); } catch {}
 	}
 
 	function onPointerMove(e: PointerEvent) {
-		if (!dragging) return;
+		if (!dragState) return;
 
 		const track = e.currentTarget as HTMLElement;
 		const rect = track.getBoundingClientRect();
-		const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-		const rawValue = fromPercent(percent * 100);
-		const snapped = Math.round(rawValue / step) * step;
-		const clamped = Math.max(min, Math.min(max, snapped));
+		const pxDelta = e.clientX - dragState.origX;
+		const valueDelta = (pxDelta / rect.width) * (max - min);
+		const snappedDelta = Math.round(valueDelta / step) * step;
 
-		if (dragging === 'left') {
-			const maxLeft = localValues[1] - MIN_GAP;
-			localValues[0] = Math.min(clamped, maxLeft);
-			if (localValues[0] < min) localValues[0] = min;
+		const baseLeft = dragState.origValues[0];
+		const baseRight = dragState.origValues[1];
+
+		if (dragState.side === 'left') {
+			const newVal = baseLeft + snappedDelta;
+			const maxLeft = baseRight - MIN_GAP;
+			localValues[0] = Math.min(newVal, maxLeft);
+			localValues[0] = Math.max(min, localValues[0]);
+		} else if (dragState.side === 'right') {
+			const newVal = baseRight + snappedDelta;
+			const minRight = baseLeft + MIN_GAP;
+			localValues[1] = Math.max(newVal, minRight);
+			localValues[1] = Math.min(max, localValues[1]);
 		} else {
-			const minRight = localValues[0] + MIN_GAP;
-			localValues[1] = Math.max(clamped, minRight);
-			if (localValues[1] > max) localValues[1] = max;
+			// body drag: translate both thumbs, preserve duration
+			const newLeft = baseLeft + snappedDelta;
+			const newRight = baseRight + snappedDelta;
+			const clampedLeft = Math.max(min, Math.min(max, newLeft));
+			const clampedRight = Math.max(min, Math.min(max, newRight));
+			// If clamping pushes one thumb to edge, keep the other at same offset
+			if (clampedLeft === min) {
+				localValues[0] = min;
+				localValues[1] = Math.min(max, min + dragState.duration);
+			} else if (clampedRight === max) {
+				localValues[1] = max;
+				localValues[0] = Math.max(min, max - dragState.duration);
+			} else {
+				localValues[0] = clampedLeft;
+				localValues[1] = clampedRight;
+			}
 		}
-
-		onchange?.(localValues);
 	}
 
-	function onPointerUp() {
-		dragging = null;
+	function onPointerUp(e: PointerEvent) {
+		releaseCapture(e);
+		commitDrag();
+	}
+
+	function onPointerLeave(e: PointerEvent) {
+		releaseCapture(e);
+		commitDrag();
 	}
 
 	function handleClick(e: MouseEvent) {
@@ -116,6 +168,13 @@
 	function getSnapStatus(v: number): boolean {
 		return Math.abs(v % pinInterval) < 3;
 	}
+
+	function getThumbVisibility(side: 'left' | 'right'): boolean {
+		if (mode === 'both') return true;
+		if (mode === 'left') return side === 'left';
+		if (mode === 'right') return side === 'right';
+		return false;
+	}
 </script>
 
 <div class="slider" style={`--c: ${color}`}>
@@ -132,26 +191,42 @@
 		</div>
 	{/if}
 
-	<div class="track-container" onclick={handleClick} onpointermove={onPointerMove} onpointerup={onPointerUp} onpointerleave={onPointerUp}>
+	<div
+		class="track-container"
+		bind:this={trackEl}
+		ontouchstart={(e) => e.preventDefault()}
+		onpointerdown={(e) => {
+			if ((e.target as HTMLElement).closest('.thumb-hit')) return;
+			startDrag('body', e);
+		}}
+		onpointermove={onPointerMove}
+		onpointerup={onPointerUp}
+		onpointerleave={onPointerLeave}
+		onclick={handleClick}
+	>
 		<div class="rail"></div>
 		<div
 			class="fill"
 			style={`left: ${toPercent(Math.min(localValues[0], localValues[1]))}%; width: ${Math.abs(toPercent(localValues[1]) - toPercent(localValues[0]))}%`}
 		></div>
 
+		{#if getThumbVisibility('left')}
 		<div class="thumb-hit" onpointerdown={(e) => startDrag('left', e)} style={`left: ${toPercent(localValues[0])}%`}>
 			<div class="thumb thumb-a">
 				{#if getSnapStatus(localValues[0])}<span class="guide-line"></span>{/if}
 				<span class="thumb-value">{Math.round(localValues[0])}</span>
 			</div>
 		</div>
+		{/if}
 
+		{#if getThumbVisibility('right')}
 		<div class="thumb-hit" onpointerdown={(e) => startDrag('right', e)} style={`left: ${toPercent(localValues[1])}%`}>
 			<div class="thumb thumb-b">
 				{#if getSnapStatus(localValues[1])}<span class="guide-line"></span>{/if}
 				<span class="thumb-value">{Math.round(localValues[1])}</span>
 			</div>
 		</div>
+		{/if}
 	</div>
 
 	<div class="readout">
@@ -228,6 +303,7 @@
 		position: relative;
 		height: 36px;
 		cursor: pointer;
+		user-select: none;
 	}
 
 	:global(.rail) {

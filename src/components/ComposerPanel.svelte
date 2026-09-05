@@ -126,7 +126,7 @@
 		return () => document.removeEventListener('click', handler);
 	});
 
-	// Drag listeners for segments and tags
+	// Drag listeners for segments and tags — attached via $effect per Svelte 5 pattern
 	$effect(() => {
 		function onPointerMove(e: MouseEvent) {
 			handlePointerMove(e);
@@ -188,6 +188,20 @@
 			return null;
 		}
 		return previewDragState;
+	}
+
+	// Get preview state for a tag during drag
+	function getPreviewTag(tagId: string) {
+		if (!previewDragState || previewDragState.type !== 'tag' || previewDragState.id !== tagId) {
+			return null;
+		}
+		return previewDragState;
+	}
+
+	// Find the ruler-aligned ancestor for coordinate calculations
+	function findRulerWidth(target: HTMLElement): number {
+		const ruler = target.closest('.ruler-aligned') as HTMLElement;
+		return ruler?.getBoundingClientRect().width ?? 0;
 	}
 
 	// ── Actions ─────────────────────────────────────────────────────────────
@@ -350,13 +364,16 @@
 
 	// ── Segment interactions ────────────────────────────────────────────────
 
-	function handleSegmentPointerDown(e: MouseEvent, seg: Segment, handle: 'left' | 'right' | 'body') {
+	function handleSegmentPointerDown(e: PointerEvent, seg: Segment, handle: 'left' | 'right' | 'body') {
 		e.preventDefault();
 		e.stopPropagation();
 		const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
 		if (!ruler) return;
 		const rect = ruler.getBoundingClientRect();
 		const startX = e.clientX;
+
+		// Capture pointer to ensure all subsequent events are received by this element
+		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
 		dragState = {
 			type: 'segment',
@@ -457,7 +474,6 @@
 				resizeSegmentAction(
 					session!.id,
 					pipes[activePipeIdx!].id,
-					previewDragState.id,
 					previewDragState.startFrame,
 					previewDragState.endFrame
 				).catch(console.error);
@@ -811,6 +827,8 @@
 														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
 														if (ruler) {
 															const rect = ruler.getBoundingClientRect();
+															const startX = e.clientX;
+															(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 															dragState = {
 																type: 'tag',
 																id: tag.id,
@@ -818,12 +836,20 @@
 																handle: 'left',
 																startFrame: tag.frameStart,
 																endFrame: tag.frameEnd,
-																mouseStartX: e.clientX,
+																mouseStartX: startX,
 																rulerWidth: rect.width,
+															};
+															previewDragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'left',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
 															};
 														}
 													}}
-													style={`left: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.startFrame : tag.frameStart)}%`}>
+													style={`left: ${frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%`}>
 												</div>
 												<!-- Tag body -->
 												<div 
@@ -833,6 +859,8 @@
 														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
 														if (ruler) {
 															const rect = ruler.getBoundingClientRect();
+															const startX = e.clientX;
+															(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 															dragState = {
 																type: 'tag',
 																id: tag.id,
@@ -840,12 +868,20 @@
 																handle: 'body',
 																startFrame: tag.frameStart,
 																endFrame: tag.frameEnd,
-																mouseStartX: e.clientX,
+																mouseStartX: startX,
 																rulerWidth: rect.width,
+															};
+															previewDragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'body',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
 															};
 														}
 													}}
-													style={`left: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.startFrame : tag.frameStart)}%; width: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.endFrame : tag.frameEnd) - frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.startFrame : tag.frameStart)}%`}>
+													style={`left: ${frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%; width: ${frameToX(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd) - frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%`}>
 													<span class="tag-name">{tag.spec?.name || tag.tag}</span>
 													{#if tag.prompt}
 														<span class="tag-prompt">{tag.prompt}</span>
@@ -859,6 +895,8 @@
 														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
 														if (ruler) {
 															const rect = ruler.getBoundingClientRect();
+															const startX = e.clientX;
+															(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 															dragState = {
 																type: 'tag',
 																id: tag.id,
@@ -866,12 +904,20 @@
 																handle: 'right',
 																startFrame: tag.frameStart,
 																endFrame: tag.frameEnd,
-																mouseStartX: e.clientX,
+																mouseStartX: startX,
 																rulerWidth: rect.width,
+															};
+															previewDragState = {
+																type: 'tag',
+																id: tag.id,
+																segmentId: seg.id,
+																handle: 'right',
+																startFrame: tag.frameStart,
+																endFrame: tag.frameEnd,
 															};
 														}
 													}}
-													style={`left: ${frameToX(previewDragState?.type === 'tag' && previewDragState?.id === tag.id ? previewDragState.endFrame : tag.frameEnd)}%`}>
+													style={`left: ${frameToX(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd)}%`}>
 												</div>
 											</div>
 											<button 
@@ -960,15 +1006,6 @@
 	{/if}
 </div>
 
-<!-- Document-wide pointer handlers for drag -->
-<div 
-	onpointermove={handlePointerMove}
-	onpointerup={handlePointerUp}
-	onpointerleave={handlePointerUp}
-	style="position: fixed; inset: 0; pointer-events: none;"
-	aria-hidden="true">
-</div>
-
 <!-- ═══ KEYFRAME MODAL ═══ -->
 {#if showKeyframeModal}
 	<div class="modal-overlay" onclick={() => showKeyframeModal = false} role="presentation">
@@ -998,14 +1035,14 @@
 					</div>
 				{:else if kfType === 'img2img'}
 					<div class="modal-field">
-						<label id="kf-ref-label">Reference URL</label>
-						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-ref-label" />
+						<label id="kf-img-url-label">Reference Image URL</label>
+						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-img-url-label" />
 					</div>
 				{/if}
 			</div>
-			<div class="modal-actions">
-				<button class="btn-confirm" onclick={confirmKeyframe}>Save</button>
+			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => showKeyframeModal = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirmKeyframe} disabled={!kfValue.trim()}>Confirm</button>
 			</div>
 		</div>
 	</div>
@@ -1032,20 +1069,17 @@
 				{#if srUseFrames}
 					<div class="modal-field">
 						<label id="sr-start-label">Start Frame</label>
-						<input type="number" bind:value={srStart} step={8} min={0} max={totalFrames - 8} class="modal-input" aria-labelledby="sr-start-label" />
+						<input type="number" bind:value={srStart} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="sr-start-label" />
 					</div>
 					<div class="modal-field">
 						<label id="sr-end-label">End Frame</label>
-						<input type="number" bind:value={srEnd} step={8} min={srStart + 8} max={totalFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />
-					</div>
-					<div class="modal-hint">
-						Duration: {srEnd - srStart} frames ({((srEnd - srStart) / 24).toFixed(1)}s @ 24fps)
+						<input type="number" bind:value={srEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />
 					</div>
 				{/if}
 			</div>
-			<div class="modal-actions">
-				<button class="btn-confirm" onclick={confirmSubjectRef}>Save</button>
+			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => showSubjectRefModal = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirmSubjectRef} disabled={!srImageUrl.trim()}>Confirm</button>
 			</div>
 		</div>
 	</div>
@@ -1056,21 +1090,21 @@
 	<div class="modal-overlay" onclick={() => showSegmentModal = false} role="presentation">
 		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<div class="modal-header">
-				<h3>Add Segment <span class="modal-sub">Frames {segStart}–{segEnd}</span></h3>
+				<h3>Add Segment</h3>
 			</div>
 			<div class="modal-body">
 				<div class="modal-field">
 					<label id="seg-start-label">Start Frame</label>
-					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 8} class="modal-input" aria-labelledby="seg-start-label" />
+					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-start-label" />
 				</div>
 				<div class="modal-field">
 					<label id="seg-end-label">End Frame</label>
-					<input type="number" bind:value={segEnd} step={8} min={segStart + 8} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />
+					<input type="number" bind:value={segEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />
 				</div>
 			</div>
-			<div class="modal-actions">
-				<button class="btn-confirm" onclick={confirmSegment}>Save</button>
+			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => showSegmentModal = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirmSegment} disabled={Math.min(snapTo8(segEnd), totalFrames - 1) <= snapTo8(segStart)}>Confirm</button>
 			</div>
 		</div>
 	</div>
@@ -1086,885 +1120,711 @@
 			<div class="modal-body">
 				<div class="modal-field">
 					<label id="tag-prompt-label">Prompt</label>
-					<textarea bind:value={tagPrompt} placeholder="Describe the tag's visual intent..." class="modal-textarea" aria-labelledby="tag-prompt-label"></textarea>
+					<textarea bind:value={tagPrompt} placeholder="Enter tag prompt..." class="modal-textarea" aria-labelledby="tag-prompt-label"></textarea>
 				</div>
 			</div>
-			<div class="modal-actions">
-				<button class="btn-confirm" onclick={confirmTagPrompt}>Save</button>
+			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => showTagPromptModal = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirmTagPrompt}>Confirm</button>
 			</div>
 		</div>
 	</div>
 {/if}
 
 <style>
-	/* ── Main Panel ── */
+	/* Base styles */
 	.composer-panel {
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
-		padding: 12px;
-		background: var(--bg-surface, #0f1117);
-		border-right: 1px solid var(--border, #2a2d37);
-		height: 100%;
-		overflow-y: auto;
-		overflow-x: hidden;
+		gap: 16px;
+		padding: 16px;
+		background: var(--bg-primary);
+		color: var(--text-primary);
+		min-height: 100%;
 	}
 
-	/* ── Pipe ── */
 	.pipe {
-		background: var(--bg-elevated, #161820);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 4px;
-		padding: 10px;
-		position: relative;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 12px;
+		background: var(--bg-secondary);
+		border-radius: 8px;
+		border: 1px solid var(--border-color);
 	}
 
 	.pipe.active {
-		border-color: var(--accent, #59b5ff);
-		box-shadow: 0 0 0 1px var(--accent, #59b5ff);
+		border-color: var(--accent-color);
+		box-shadow: 0 0 0 2px var(--accent-color);
 	}
 
-	/* ── Pipe Header ── */
 	.pipe-header {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		margin-bottom: 10px;
-		padding-bottom: 8px;
-		border-bottom: 1px solid var(--border, #2a2d37);
 	}
 
 	.pipe-label {
-		font-size: 11px;
 		font-weight: 600;
-		color: var(--text-primary, #c8d0e0);
-		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		font-size: 14px;
 	}
 
 	.pipe-meta {
-		font-size: 10px;
-		color: var(--text-secondary, #6e7681);
+		font-size: 12px;
+		color: var(--text-secondary);
 		margin-left: auto;
 	}
 
-	/* ── Row Group ── */
 	.row-group {
-		margin-bottom: 8px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
 	}
 
 	.row-header {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		margin-bottom: 4px;
-		padding-left: 2px;
-	}
-
-	.row-label {
-		font-size: 9px;
+		gap: 8px;
+		font-size: 11px;
 		font-weight: 600;
-		color: var(--text-muted, #4a5060);
+		color: var(--text-secondary);
 		text-transform: uppercase;
-		letter-spacing: 0.8px;
+		letter-spacing: 0.5px;
 	}
 
 	.row-count {
-		font-size: 9px;
-		color: var(--text-secondary, #6e7681);
 		margin-left: auto;
+		opacity: 0.7;
 	}
 
-	/* ── Keyframe Row ── */
 	.kf-row {
 		display: flex;
-		gap: 6px;
+		gap: 8px;
 		align-items: center;
-		padding: 6px 2px;
-		background: var(--bg-muted, #1a1d26);
-		border-radius: 3px;
-		border: 1px solid var(--border, #2a2d37);
+		min-height: 48px;
 	}
 
 	.kf-chip {
 		display: flex;
 		align-items: center;
-		gap: 4px;
-		padding: 4px 8px;
-		border-radius: 3px;
+		gap: 8px;
+		padding: 8px 12px;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+		min-width: 80px;
+		justify-content: center;
+	}
+
+	.kf-filled {
+		background: var(--accent-bg);
+		border-color: var(--accent-color);
+	}
+
+	.kf-empty {
+		opacity: 0.6;
 		cursor: pointer;
-		transition: all 0.12s;
-		position: relative;
-		user-select: none;
 	}
 
-	.kf-chip.kf-filled {
-		background: var(--accent-light, rgba(89, 181, 255, 0.15));
-		border: 1px solid var(--accent, #59b5ff);
-	}
-
-	.kf-chip.kf-filled:hover {
-		background: var(--accent-light, rgba(89, 181, 255, 0.25));
-	}
-
-	.kf-chip.kf-empty {
-		background: transparent;
-		border: 1px dashed var(--border, #2a2d37);
-		color: var(--text-muted, #4a5060);
-	}
-
-	.kf-chip.kf-empty:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
+	.kf-empty:hover {
+		opacity: 1;
+		background: var(--bg-tertiary);
 	}
 
 	.kf-img {
-		width: 20px;
-		height: 20px;
+		width: 24px;
+		height: 24px;
 		object-fit: cover;
-		border-radius: 2px;
+		border-radius: 4px;
 	}
 
 	.kf-label {
-		font-size: 10px;
 		font-weight: 600;
-		color: var(--accent, #59b5ff);
 	}
 
 	.kf-empty-label {
-		font-size: 10px;
-		color: var(--text-muted, #4a5060);
+		font-size: 12px;
 	}
 
 	.kf-del {
-		width: 14px;
-		height: 14px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
+		background: none;
 		border: none;
-		color: var(--text-muted, #4a5060);
+		color: var(--text-secondary);
 		cursor: pointer;
-		font-size: 12px;
-		line-height: 1;
-		border-radius: 2px;
-		opacity: 0;
-		transition: opacity 0.12s;
-	}
-
-	.kf-chip:hover .kf-del {
-		opacity: 1;
+		padding: 2px 4px;
+		border-radius: 4px;
 	}
 
 	.kf-del:hover {
-		background: rgba(255, 89, 89, 0.2);
-		color: #ff5959;
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
 	}
 
-	/* ── Subject Reference Row ── */
 	.sr-row {
 		display: flex;
-		gap: 6px;
+		gap: 8px;
 		align-items: center;
-		padding: 6px 2px;
-		background: var(--bg-muted, #1a1d26);
-		border-radius: 3px;
-		border: 1px solid var(--border, #2a2d37);
+		flex-wrap: wrap;
+		min-height: 48px;
 	}
 
 	.sr-chip {
 		display: flex;
 		align-items: center;
-		gap: 4px;
-		padding: 3px 6px;
-		border-radius: 3px;
-		background: var(--bg-elevated, #161820);
-		border: 1px solid var(--border, #2a2d37);
-		cursor: pointer;
-		transition: all 0.12s;
-	}
-
-	.sr-chip:hover {
-		border-color: var(--accent, #59b5ff);
+		gap: 6px;
+		padding: 6px 10px;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+		font-size: 12px;
 	}
 
 	.sr-eye {
+		background: none;
+		border: none;
+		color: var(--text-secondary);
+		cursor: pointer;
+		padding: 2px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 14px;
-		height: 14px;
-		background: transparent;
-		border: none;
-		color: var(--text-muted, #4a5060);
-		cursor: pointer;
-		padding: 0;
 	}
 
 	.sr-eye:hover {
-		color: var(--accent, #59b5ff);
+		color: var(--text-primary);
 	}
 
 	.sr-img {
 		width: 20px;
 		height: 20px;
 		object-fit: cover;
-		border-radius: 2px;
-		flex-shrink: 0;
+		border-radius: 3px;
 	}
 
 	.sr-dot {
-		width: 8px;
-		height: 8px;
+		width: 20px;
+		height: 20px;
 		border-radius: 50%;
-		background: var(--accent, #59b5ff);
-		flex-shrink: 0;
+		background: var(--accent-color);
 	}
 
-	.sr-label {
-		font-size: 9px;
-		color: var(--text-secondary, #6e7681);
-	}
-
-	.sr-range {
-		font-size: 9px;
-		color: var(--text-secondary, #6e7681);
+	.sr-range, .sr-label {
+		font-size: 11px;
+		color: var(--text-secondary);
 	}
 
 	.sr-del {
-		width: 14px;
-		height: 14px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
+		background: none;
 		border: none;
-		color: var(--text-muted, #4a5060);
+		color: var(--text-secondary);
 		cursor: pointer;
-		font-size: 12px;
-		line-height: 1;
-		border-radius: 2px;
-		opacity: 0;
-		transition: opacity 0.12s;
-	}
-
-	.sr-chip:hover .sr-del {
-		opacity: 1;
+		padding: 2px 4px;
+		border-radius: 4px;
 	}
 
 	.sr-del:hover {
-		background: rgba(255, 89, 89, 0.2);
-		color: #ff5959;
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
 	}
 
 	.sr-add {
-		padding: 3px 8px;
-		background: transparent;
-		border: 1px dashed var(--border, #2a2d37);
-		border-radius: 3px;
-		color: var(--text-muted, #4a5060);
-		font-size: 10px;
+		background: none;
+		border: 1px dashed var(--border-color);
+		color: var(--text-secondary);
 		cursor: pointer;
-		transition: all 0.12s;
+		padding: 6px 12px;
+		border-radius: 6px;
+		font-size: 12px;
 	}
 
 	.sr-add:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
+		border-color: var(--accent-color);
+		color: var(--accent-color);
 	}
 
-	/* ── Frame Ruler ── */
 	.ruler-wrap {
-		margin: 8px 0;
-	}
-
-	/* Shared alignment for ruler-aligned elements */
-	.ruler-aligned {
 		position: relative;
 		width: 100%;
 	}
 
-	/* ── Global Track ── */
 	.global-track {
 		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		padding: 8px 0;
-		border-top: 1px solid var(--border, #2a2d37);
-		border-bottom: 1px solid var(--border, #2a2d37);
-		margin: 8px 0;
+		align-items: center;
+		gap: 8px;
+		padding: 8px;
+		background: var(--bg-tertiary);
+		border-radius: 6px;
 	}
 
 	.global-actions {
 		display: flex;
 		gap: 4px;
-		justify-content: flex-end;
 	}
 
-	/* ── Timeline Track ── */
 	.timeline-track {
-		padding: 8px 0;
-		border-top: 1px solid var(--border, #2a2d37);
-		margin: 8px 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
 	}
 
 	.segment-row {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
 		position: relative;
-		margin-bottom: 4px;
 	}
 
-	/* Segment bar - full width aligned with ruler */
 	.seg-bar {
 		position: relative;
-		height: 28px;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 2px;
-		overflow: visible;
+		height: 32px;
+		background: var(--bg-tertiary);
+		border-radius: 4px;
+		overflow: hidden;
+		cursor: pointer;
 	}
 
-	/* Segment body - positioned absolutely within seg-bar */
-	.seg-body {
-		position: absolute;
-		top: 2px;
-		bottom: 2px;
-		background: var(--accent, #59b5ff);
-		border-radius: 2px;
-		cursor: move;
-		display: flex;
-		align-items: center;
-		padding: 0 8px;
-		min-width: 24px;
-		opacity: 0.7;
-		transition: opacity 0.12s;
-	}
-
-	.seg-body:hover {
-		opacity: 1;
-	}
-
-	.seg-label {
-		font-size: 9px;
-		font-weight: 600;
-		color: rgba(0, 0, 0, 0.7);
-		white-space: nowrap;
-	}
-
-	/* Segment thumbs */
 	.thumb {
 		position: absolute;
 		top: 0;
 		bottom: 0;
 		width: 8px;
-		background: var(--accent, #59b5ff);
-		border: 1px solid rgba(255, 255, 255, 0.3);
-		border-radius: 1px;
+		background: var(--accent-color);
 		cursor: ew-resize;
+		opacity: 0.5;
 		z-index: 2;
+	}
+
+	.thumb:hover,
+	.thumb.left:active,
+	.thumb.right:active {
+		opacity: 1;
 	}
 
 	.thumb.left {
 		left: 0;
-		border-radius: 2px 0 0 2px;
+		border-radius: 4px 0 0 4px;
 	}
 
 	.thumb.right {
 		right: 0;
-		border-radius: 0 2px 2px 0;
+		border-radius: 0 4px 4px 0;
 	}
 
 	.thumb.small {
 		width: 6px;
-		background: currentColor;
-		opacity: 0.6;
 	}
 
-	/* ── Tag Rows ── */
+	.seg-body {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		background: var(--accent-color);
+		opacity: 0.8;
+		cursor: grab;
+		display: flex;
+		align-items: center;
+		padding: 0 8px;
+	}
+
+	.seg-body:active {
+		cursor: grabbing;
+	}
+
+	.seg-label {
+		font-size: 11px;
+		font-weight: 600;
+		color: white;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
 	.tag-row {
-		position: relative;
-		height: 20px;
-		margin-top: 2px;
+		display: flex;
+		gap: 4px;
+		align-items: center;
 	}
 
 	.tag-track {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		flex: 1;
 		position: relative;
-		height: 100%;
 	}
 
 	.tag-bar {
-		position: absolute;
-		top: 2px;
-		bottom: 2px;
-		border-radius: 2px;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
+		position: relative;
+		height: 24px;
+		background: var(--bg-tertiary);
+		border-radius: 4px;
 		overflow: hidden;
-		min-width: 20px;
-		transition: opacity 0.12s;
-	}
-
-	.tag-bar:hover {
-		opacity: 0.85;
+		cursor: pointer;
+		flex: 1;
 	}
 
 	.tag-body {
 		position: absolute;
 		top: 0;
 		bottom: 0;
+		background: var(--tag-color, var(--accent-color));
+		opacity: 0.7;
+		cursor: grab;
 		display: flex;
 		align-items: center;
 		padding: 0 6px;
-		gap: 4px;
-		min-width: 20px;
-		cursor: move;
+		overflow: hidden;
+	}
+
+	.tag-body:active {
+		cursor: grabbing;
 	}
 
 	.tag-name {
-		font-size: 8px;
+		font-size: 10px;
 		font-weight: 600;
-		color: rgba(0, 0, 0, 0.8);
-		white-space: nowrap;
-	}
-
-	.tag-prompt {
-		font-size: 7px;
-		color: rgba(0, 0, 0, 0.6);
+		color: white;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
 
-	/* ── Add Tag Row ── */
+	.tag-prompt {
+		font-size: 9px;
+		color: rgba(255, 255, 255, 0.8);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 100px;
+	}
+
 	.tag-add-row {
-		position: relative;
-		height: 16px;
-		margin-top: 2px;
+		margin-top: 4px;
 	}
 
-	.btn-add-tag {
-		position: absolute;
-		left: 0;
-		top: 0;
-		padding: 2px 6px;
-		background: transparent;
-		border: 1px dashed var(--border, #2a2d37);
-		border-radius: 2px;
-		color: var(--text-muted, #4a5060);
-		font-size: 8px;
+	.btn-add-tag,
+	.btn-add-track,
+	.btn-add-pipe {
+		background: var(--bg-tertiary);
+		border: 1px dashed var(--border-color);
+		color: var(--text-secondary);
 		cursor: pointer;
-		transition: all 0.12s;
-	}
-
-	.btn-add-tag:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
-	}
-
-	/* ── Delete buttons ── */
-	.btn-del-tag {
-		position: absolute;
-		right: 2px;
-		top: 50%;
-		transform: translateY(-50%);
-		width: 14px;
-		height: 14px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
-		border: none;
-		color: var(--text-muted, #4a5060);
-		cursor: pointer;
-		font-size: 10px;
-		opacity: 0;
-		transition: opacity 0.12s;
-		border-radius: 2px;
-	}
-
-	.tag-row:hover .btn-del-tag {
-		opacity: 1;
-	}
-
-	.btn-del-tag:hover {
-		background: rgba(255, 89, 89, 0.2);
-		color: #ff5959;
-	}
-
-	.seg-del {
-		position: absolute;
-		right: 4px;
-		top: 50%;
-		transform: translateY(-50%);
-		opacity: 0;
-	}
-
-	.segment-row:hover .seg-del {
-		opacity: 1;
-	}
-
-	/* ── Empty State ── */
-	.seg-empty {
-		padding: 8px;
-		text-align: center;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px dashed var(--border, #2a2d37);
-		border-radius: 2px;
-		color: var(--text-muted, #4a5060);
-		font-size: 10px;
-		cursor: pointer;
-		transition: all 0.12s;
-		width: 100%;
-		box-sizing: border-box;
-	}
-
-	.seg-empty:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
-	}
-
-	/* ── Controls ── */
-	.btn-icon-sm {
-		width: 18px;
-		height: 18px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 2px;
-		color: var(--text-muted, #4a5060);
-		cursor: pointer;
+		padding: 6px 12px;
+		border-radius: 6px;
 		font-size: 12px;
-		line-height: 1;
-		transition: all 0.12s;
+		transition: all 0.2s;
 	}
 
+	.btn-add-tag:hover,
+	.btn-add-track:hover,
+	.btn-add-pipe:hover {
+		border-color: var(--accent-color);
+		color: var(--accent-color);
+	}
+
+	.btn-icon,
+	.btn-icon-sm {
+		background: none;
+		border: none;
+		color: var(--text-secondary);
+		cursor: pointer;
+		padding: 4px 8px;
+		border-radius: 4px;
+		font-size: 14px;
+		transition: all 0.2s;
+	}
+
+	.btn-icon:hover,
 	.btn-icon-sm:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
 	}
 
 	.btn-icon-sm.btn-del-sm:hover {
-		border-color: #ff5959;
-		color: #ff5959;
-		background: rgba(255, 89, 89, 0.1);
+		background: var(--danger-bg);
+		color: var(--danger-color);
 	}
 
-	.btn-icon {
-		width: 20px;
-		height: 20px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: transparent;
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 3px;
-		color: var(--text-muted, #4a5060);
-		font-size: 14px;
+	.btn-del-tag {
+		background: none;
+		border: none;
+		color: var(--text-secondary);
 		cursor: pointer;
-		transition: all 0.12s;
-		line-height: 1;
+		padding: 2px 4px;
+		border-radius: 4px;
+		font-size: 12px;
 	}
 
-	.btn-icon:hover {
-		border-color: #ff5959;
-		color: #ff5959;
-		background: rgba(255, 89, 89, 0.1);
+	.btn-del-tag:hover {
+		background: var(--danger-bg);
+		color: var(--danger-color);
 	}
 
-	/* ── Add Track Button ── */
+	.seg-del {
+		margin-top: 4px;
+	}
+
+	.seg-empty {
+		padding: 16px;
+		text-align: center;
+		color: var(--text-secondary);
+		font-size: 12px;
+		border: 1px dashed var(--border-color);
+		border-radius: 6px;
+		cursor: pointer;
+		transition: all 0.2s;
+	}
+
+	.seg-empty:hover {
+		border-color: var(--accent-color);
+		color: var(--accent-color);
+	}
+
 	.add-track-wrap {
 		margin-top: 8px;
-		display: flex;
-		justify-content: center;
 	}
 
-	.btn-add-track {
-		width: 28px;
-		height: 28px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px dashed var(--border, #2a2d37);
-		border-radius: 4px;
-		color: var(--text-muted, #4a5060);
-		font-size: 16px;
-		cursor: pointer;
-		transition: all 0.12s;
-	}
-
-	.btn-add-track:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
-		background: var(--accent-light, rgba(89, 181, 255, 0.1));
-	}
-
-	/* ── Add Pipe Button ── */
-	.btn-add-pipe {
-		width: 100%;
-		padding: 10px;
-		background: transparent;
-		border: 1px dashed var(--border, #2a2d37);
-		border-radius: 4px;
-		color: var(--text-muted, #4a5060);
-		font-size: 11px;
-		cursor: pointer;
-		transition: all 0.12s;
-		margin-top: 8px;
-	}
-
-	.btn-add-pipe:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
-	}
-
-	/* ── Dropdown Menu ── */
+	/* Dropdown menus */
 	.dropdown-menu {
 		position: fixed;
-		background: var(--bg-elevated, #161820);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 4px;
-		padding: 4px;
-		min-width: 120px;
+		background: var(--bg-secondary);
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+		min-width: 160px;
 		z-index: 1000;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+		overflow: hidden;
 	}
 
 	.dropdown-item {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		width: 100%;
-		padding: 6px 10px;
-		background: transparent;
+		padding: 10px 16px;
+		background: none;
 		border: none;
-		border-radius: 2px;
-		color: var(--text-primary, #c8d0e0);
-		font-size: 11px;
-		cursor: pointer;
+		width: 100%;
 		text-align: left;
-		transition: background 0.12s;
+		color: var(--text-primary);
+		cursor: pointer;
+		font-size: 13px;
+		transition: background 0.15s;
 	}
 
 	.dropdown-item:hover {
-		background: var(--bg-muted, #1a1d26);
+		background: var(--bg-tertiary);
 	}
 
-	.dropdown-item.active {
-		background: var(--accent-light, rgba(89, 181, 255, 0.15));
-		color: var(--accent, #59b5ff);
+	.dropdown-item.tag-item {
+		flex-direction: row;
+	}
+
+	.dropdown-item.tag-item .tag-dot {
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.dropdown-item.tag-item.active {
+		background: var(--accent-bg);
+		color: var(--accent-color);
 	}
 
 	.dropdown-icon {
-		font-size: 10px;
-		color: var(--text-muted, #4a5060);
+		font-size: 14px;
 	}
 
 	.dropdown-label {
-		font-size: 9px;
+		padding: 10px 16px 6px;
+		font-size: 11px;
 		font-weight: 600;
-		color: var(--text-muted, #4a5060);
+		color: var(--text-secondary);
 		text-transform: uppercase;
-		letter-spacing: 0.8px;
-		padding: 4px 10px 2px;
+		letter-spacing: 0.5px;
 	}
 
-	.tag-item {
+	.dropdown-actions {
+		display: flex;
+		gap: 8px;
+		padding: 8px;
+		border-top: 1px solid var(--border-color);
+	}
+
+	.dropdown-actions .btn-confirm,
+	.dropdown-actions .btn-cancel {
+		flex: 1;
+		padding: 8px;
+		border-radius: 6px;
+		font-size: 12px;
+		cursor: pointer;
+	}
+
+	.dropdown-actions .btn-confirm {
+		background: var(--accent-color);
+		color: white;
+		border: none;
+	}
+
+	.dropdown-actions .btn-confirm:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.dropdown-actions .btn-cancel {
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+		border: 1px solid var(--border-color);
+	}
+
+	/* Modal styles */
+	.modal-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.7);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 2000;
+	}
+
+	.modal {
+		background: var(--bg-secondary);
+		border: 1px solid var(--border-color);
+		border-radius: 12px;
+		width: 90%;
+		max-width: 480px;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+	}
+
+	.modal-header {
+		padding: 16px 20px;
+		border-bottom: 1px solid var(--border-color);
+	}
+
+	.modal-header h3 {
+		margin: 0;
+		font-size: 16px;
+		font-weight: 600;
 		display: flex;
 		align-items: center;
 		gap: 8px;
 	}
 
-	.tag-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		flex-shrink: 0;
-	}
-
-	.dropdown-actions {
-		display: flex;
-		gap: 4px;
-		padding: 4px;
-		margin-top: 4px;
-		border-top: 1px solid var(--border, #2a2d37);
-	}
-
-	/* ── Modal ── */
-	.modal-overlay {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.6);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 2000;
-		backdrop-filter: blur(2px);
-	}
-
-	.modal {
-		background: var(--bg-surface, #0f1117);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 6px;
-		min-width: 320px;
-		max-width: 420px;
-		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-	}
-
-	.modal-header {
-		padding: 12px 16px;
-		border-bottom: 1px solid var(--border, #2a2d37);
-	}
-
-	.modal-header h3 {
-		margin: 0;
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--text-primary, #c8d0e0);
-	}
-
 	.modal-sub {
+		font-size: 12px;
 		font-weight: 400;
-		color: var(--text-secondary, #6e7681);
-		margin-left: 6px;
+		color: var(--text-secondary);
 	}
 
 	.modal-body {
-		padding: 16px;
+		padding: 20px;
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-	}
-
-	.mode-selector {
-		display: flex;
-		gap: 4px;
-	}
-
-	.mode-btn {
-		flex: 1;
-		padding: 6px 10px;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 3px;
-		color: var(--text-secondary, #6e7681);
-		font-size: 10px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: all 0.12s;
-	}
-
-	.mode-btn:hover {
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
-	}
-
-	.mode-btn.active {
-		background: var(--accent-light, rgba(89, 181, 255, 0.15));
-		border-color: var(--accent, #59b5ff);
-		color: var(--accent, #59b5ff);
+		gap: 16px;
 	}
 
 	.modal-field {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: 6px;
 	}
 
 	.modal-field label {
-		font-size: 9px;
-		font-weight: 600;
-		color: var(--text-muted, #4a5060);
-		text-transform: uppercase;
-		letter-spacing: 0.5px;
+		font-size: 12px;
+		font-weight: 500;
+		color: var(--text-secondary);
 	}
 
-	.modal-input {
-		padding: 8px 10px;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 3px;
-		color: var(--text-primary, #c8d0e0);
-		font-size: 12px;
+	.modal-field input[type="text"],
+	.modal-field input[type="number"],
+	.modal-field textarea {
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+		padding: 10px 12px;
+		color: var(--text-primary);
+		font-size: 14px;
+		width: 100%;
+	}
+
+	.modal-field input:focus,
+	.modal-field textarea:focus {
 		outline: none;
-		transition: border-color 0.12s;
+		border-color: var(--accent-color);
 	}
 
-	.modal-input:focus {
-		border-color: var(--accent, #59b5ff);
-	}
-
-	.modal-textarea {
-		padding: 8px 10px;
-		background: var(--bg-muted, #1a1d26);
-		border: 1px solid var(--border, #2a2d37);
-		border-radius: 3px;
-		color: var(--text-primary, #c8d0e0);
-		font-size: 12px;
-		font-family: inherit;
+	.modal-field textarea {
+		min-height: 100px;
 		resize: vertical;
-		min-height: 80px;
-		outline: none;
-		transition: border-color 0.12s;
 	}
 
-	.modal-textarea:focus {
-		border-color: var(--accent, #59b5ff);
+	.modal-field input[type="checkbox"] {
+		margin-right: 8px;
 	}
 
-	.modal-hint {
-		font-size: 9px;
-		color: var(--text-secondary, #6e7681);
-		padding: 6px 8px;
-		background: var(--bg-muted, #1a1d26);
-		border-radius: 3px;
-	}
-
-	.modal-actions {
+	.modal-footer {
+		padding: 16px 20px;
+		border-top: 1px solid var(--border-color);
 		display: flex;
 		gap: 8px;
-		padding: 12px 16px;
-		border-top: 1px solid var(--border, #2a2d37);
 		justify-content: flex-end;
 	}
 
-	.btn-confirm, .btn-cancel {
-		padding: 6px 14px;
-		border-radius: 3px;
-		font-size: 11px;
-		font-weight: 500;
+	.modal-footer .btn-confirm,
+	.modal-footer .btn-cancel {
+		padding: 10px 20px;
+		border-radius: 6px;
+		font-size: 13px;
 		cursor: pointer;
-		transition: all 0.12s;
+		border: none;
 	}
 
-	.btn-confirm {
-		background: var(--accent, #59b5ff);
-		border: 1px solid var(--accent, #59b5ff);
-		color: #000;
+	.modal-footer .btn-confirm {
+		background: var(--accent-color);
+		color: white;
 	}
 
-	.btn-confirm:hover:not(:disabled) {
-		background: #7ac4ff;
-		border-color: #7ac4ff;
-	}
-
-	.btn-confirm:disabled {
-		opacity: 0.4;
+	.modal-footer .btn-confirm:disabled {
+		opacity: 0.5;
 		cursor: not-allowed;
 	}
 
-	.btn-cancel {
-		background: transparent;
-		border: 1px solid var(--border, #2a2d37);
-		color: var(--text-secondary, #6e7681);
+	.modal-footer .btn-cancel {
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+		border: 1px solid var(--border-color);
 	}
 
-	.btn-cancel:hover {
-		border-color: var(--text-muted, #4a5060);
-		color: var(--text-primary, #c8d0e0);
+	.mode-selector {
+		display: flex;
+		gap: 8px;
+	}
+
+	.mode-btn {
+		flex: 1;
+		padding: 10px;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+		color: var(--text-secondary);
+		cursor: pointer;
+		font-size: 13px;
+		transition: all 0.2s;
+	}
+
+	.mode-btn:hover {
+		border-color: var(--accent-color);
+		color: var(--text-primary);
+	}
+
+	.mode-btn.active {
+		background: var(--accent-bg);
+		border-color: var(--accent-color);
+		color: var(--accent-color);
+	}
+
+	.full-width {
+		width: 100%;
 	}
 </style>

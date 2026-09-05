@@ -38,6 +38,7 @@ pub enum TagType {
     Camera,
     Rotation,
     Lighting,
+    Effect,
     Zoom,
     Transition,
 }
