@@ -4,6 +4,7 @@
 	import FrameRuler from './FrameRuler.svelte';
 	import MultiThumbSlider from './MultiThumbSlider.svelte';
 	import { getNextAvailableRange } from '$lib/frameMath';
+	import { snapTo8 } from '$lib/frameMath';
 	import {
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
