@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { createFrameGeometry, frameToPx, pxDeltaToFrame, snapFrame } from '$lib/frameGeometry';
+	import type { FrameGeometry } from '$lib/frameGeometry';
+
 	let {
+		geometry,
 		values = [30, 70],
-		min = 0,
-		max = 100,
-		step = 1,
 		label = '',
 		color = '#a8b5d6',
 		enablePins = true,
@@ -11,10 +12,8 @@
 		mode = 'both',
 		onchange
 	} = $props<{
+		geometry?: FrameGeometry;
 		values?: [number, number];
-		min?: number;
-		max?: number;
-		step?: number;
 		label?: string;
 		color?: string;
 		enablePins?: boolean;
@@ -35,20 +34,12 @@
 		}
 	});
 
-	function toPercent(v: number): number {
-		return ((v - min) / (max - min)) * 100;
-	}
-
-	function fromPercent(p: number): number {
-		return min + (p / 100) * (max - min);
-	}
-
-	// Generate pin positions
+	// Generate pin positions from geometry
 	let pins = $derived(
 		Array.from(
-			{ length: Math.floor((max - min) / pinInterval) },
-			(_, i) => min + (i + 1) * pinInterval
-		).filter(v => v <= max)
+			{ length: Math.floor((geometry?.contentEndFrame ?? 0) / pinInterval) },
+			(_, i) => (i + 1) * pinInterval
+		).filter(v => v <= (geometry?.contentEndFrame ?? 0))
 	);
 
 	type DragState = {
@@ -86,40 +77,41 @@
 	}
 
 	function onPointerMove(e: PointerEvent) {
-		if (!dragState) return;
+		if (!dragState || !geometry) return;
 
 		const track = e.currentTarget as HTMLElement;
 		const rect = track.getBoundingClientRect();
 		const pxDelta = e.clientX - dragState.origX;
-		const valueDelta = (pxDelta / rect.width) * (max - min);
-		const snappedDelta = Math.round(valueDelta / step) * step;
+		const valueDelta = pxDeltaToFrame(pxDelta, geometry);
+		const snappedDelta = snapFrame(valueDelta);
 
 		const baseLeft = dragState.origValues[0];
 		const baseRight = dragState.origValues[1];
+		const contentEnd = geometry.contentEndFrame;
 
 		if (dragState.side === 'left') {
 			const newVal = baseLeft + snappedDelta;
 			const maxLeft = baseRight - MIN_GAP;
 			localValues[0] = Math.min(newVal, maxLeft);
-			localValues[0] = Math.max(min, localValues[0]);
+			localValues[0] = Math.max(0, localValues[0]);
 		} else if (dragState.side === 'right') {
 			const newVal = baseRight + snappedDelta;
 			const minRight = baseLeft + MIN_GAP;
 			localValues[1] = Math.max(newVal, minRight);
-			localValues[1] = Math.min(max, localValues[1]);
+			localValues[1] = Math.min(contentEnd, localValues[1]);
 		} else {
 			// body drag: translate both thumbs, preserve duration
 			const newLeft = baseLeft + snappedDelta;
 			const newRight = baseRight + snappedDelta;
-			const clampedLeft = Math.max(min, Math.min(max, newLeft));
-			const clampedRight = Math.max(min, Math.min(max, newRight));
+			const clampedLeft = Math.max(0, Math.min(contentEnd, newLeft));
+			const clampedRight = Math.max(0, Math.min(contentEnd, newRight));
 			// If clamping pushes one thumb to edge, keep the other at same offset
-			if (clampedLeft === min) {
-				localValues[0] = min;
-				localValues[1] = Math.min(max, min + dragState.duration);
-			} else if (clampedRight === max) {
-				localValues[1] = max;
-				localValues[0] = Math.max(min, max - dragState.duration);
+			if (clampedLeft === 0) {
+				localValues[0] = 0;
+				localValues[1] = Math.min(contentEnd, dragState.duration);
+			} else if (clampedRight === contentEnd) {
+				localValues[1] = contentEnd;
+				localValues[0] = Math.max(0, contentEnd - dragState.duration);
 			} else {
 				localValues[0] = clampedLeft;
 				localValues[1] = clampedRight;
@@ -134,25 +126,26 @@
 
 	function handleClick(e: MouseEvent) {
 		if ((e.target as HTMLElement).closest('.thumb-hit')) return;
+		if (!geometry) return;
 
 		const track = e.currentTarget as HTMLElement;
 		const rect = track.getBoundingClientRect();
-		const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-		const rawValue = fromPercent(percent * 100);
-		const snapped = Math.round(rawValue / step) * step;
-		const clamped = Math.max(min, Math.min(max, snapped));
+		const localX = e.clientX - rect.left;
+		const rawFrame = (localX / rect.width) * geometry.contentEndFrame;
+		const snapped = snapFrame(rawFrame);
+		const clamped = Math.max(0, Math.min(geometry.contentEndFrame, snapped));
 
 		const distToA = Math.abs(localValues[0] - clamped);
 		const distToB = Math.abs(localValues[1] - clamped);
 
 		if (distToA <= distToB) {
 			const newLeft = Math.min(clamped, localValues[1] - MIN_GAP);
-			if (newLeft >= min) {
+			if (newLeft >= 0) {
 				localValues[0] = newLeft;
 			}
 		} else {
 			const newRight = Math.max(clamped, localValues[0] + MIN_GAP);
-			if (newRight <= max) {
+			if (newRight <= geometry.contentEndFrame) {
 				localValues[1] = newRight;
 			}
 		}
@@ -178,7 +171,7 @@
 	{#if enablePins && pins.length > 0}
 		<div class="pins-ruler">
 			{#each pins as pin (pin)}
-				<div class="pin" style={`left: ${toPercent(pin)}%`}>
+				<div class="pin" style={`left: ${frameToPx(pin, geometry) / (geometry?.width ?? 1) * 100}%`}>
 					<span class="pin-line"></span>
 					<span class="pin-value">{pin}</span>
 				</div>
@@ -203,11 +196,11 @@
 		<div class="rail"></div>
 		<div
 			class="fill"
-			style={`left: ${toPercent(Math.min(localValues[0], localValues[1]))}%; width: ${Math.abs(toPercent(localValues[1]) - toPercent(localValues[0]))}%`}
+			style={`left: ${frameToPx(Math.min(localValues[0], localValues[1]), geometry)}px; width: ${Math.abs(frameToPx(localValues[1], geometry) - frameToPx(localValues[0], geometry))}px`}
 		></div>
 
 		{#if getThumbVisibility('left')}
-		<div class="thumb-hit" onpointerdown={(e) => startDrag('left', e)} style={`left: ${toPercent(localValues[0])}%`}>
+		<div class="thumb-hit" onpointerdown={(e) => startDrag('left', e)} style={`left: ${frameToPx(localValues[0], geometry)}px`}>
 			<div class="thumb thumb-a">
 				{#if getSnapStatus(localValues[0])}<span class="guide-line"></span>{/if}
 				<span class="thumb-value">{Math.round(localValues[0])}</span>
@@ -216,7 +209,7 @@
 		{/if}
 
 		{#if getThumbVisibility('right')}
-		<div class="thumb-hit" onpointerdown={(e) => startDrag('right', e)} style={`left: ${toPercent(localValues[1])}%`}>
+		<div class="thumb-hit" onpointerdown={(e) => startDrag('right', e)} style={`left: ${frameToPx(localValues[1], geometry)}px`}>
 			<div class="thumb thumb-b">
 				{#if getSnapStatus(localValues[1])}<span class="guide-line"></span>{/if}
 				<span class="thumb-value">{Math.round(localValues[1])}</span>

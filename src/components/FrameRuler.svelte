@@ -1,13 +1,17 @@
 <script lang="ts">
 	import type { Segment } from '$types';
-	
+	import { createFrameGeometry, frameToPx, pointerToFrame, framePercent } from '$lib/frameGeometry';
+	import type { FrameGeometry } from '$lib/frameGeometry';
+
 	let {
 		totalFrames = 1200,
 		markerInterval = 8,
 		zoomLevel = 1,
 		selectedFrame = 0,
 		onframeSelect,
-		segments = [] as Segment[]
+		segments = [] as Segment[],
+		geometry: geometryProp,
+		setCoordinateElement
 	} = $props<{
 		totalFrames?: number;
 		markerInterval?: number;
@@ -15,27 +19,37 @@
 		selectedFrame?: number;
 		onframeSelect?: (frame: number) => void;
 		segments?: Segment[];
+		geometry?: FrameGeometry | null;
+		setCoordinateElement?: (el: HTMLElement | null) => void;
 	}>();
 
-	// Use $derived instead of $: reactive statements
-	let visibleFrames = $derived(Math.floor(totalFrames * zoomLevel));
-	let actualMarkerInterval = $derived(Math.max(1, Math.floor(markerInterval / zoomLevel)));
+	let coordinateElement = $state<HTMLElement | null>(null);
+
+	// Notify parent of coordinate element reference
+	$effect(() => {
+		setCoordinateElement?.(coordinateElement);
+	});
+
+	// Use provided geometry or null (parent can supply geometry via prop)
+	let geometry = $derived(geometryProp ?? null);
 
 	// Generate marker positions
 	let markers = $derived(
 		Array.from(
-			{ length: Math.ceil(totalFrames / actualMarkerInterval) },
-			(_, i) => i * actualMarkerInterval
+			{ length: Math.ceil(totalFrames / markerInterval) },
+			(_, i) => i * markerInterval
 		)
 	);
 
-	// Segment positions for visualization on ruler
+	// Segment positions using geometry-based functions
 	let segmentPositions = $derived(
-		(segments || []).map((seg: any) => ({
-			start: (seg.frameStart / (totalFrames - 1)) * 100,
-			end: (seg.frameEnd / (totalFrames - 1)) * 100,
-			color: seg.tags?.length > 0 ? seg.tags[0]?.spec?.color ?? '#59B5FF' : '#59B5FF'
-		}))
+		(geometry && segments && segments.length > 0)
+			? segments.map((seg) => ({
+					start: framePercent(seg.frameStart, geometry),
+					end: framePercent(seg.frameEnd, geometry),
+					color: seg.tags?.[0]?.spec?.color ?? '#59B5FF'
+			  }))
+			: []
 	);
 
 	function formatFrame(frame: number): string {
@@ -45,22 +59,27 @@
 	}
 
 	let hoveredFrame = $state<number | null>(null);
-	let mouseX = $state(0);
 
 	function onMouseMove(e: MouseEvent, frame: number) {
 		hoveredFrame = frame;
-		mouseX = e.clientX;
 	}
 
 	function onMouseLeave() {
 		hoveredFrame = null;
 	}
+
+	function onPointerDown(e: PointerEvent) {
+		if (!geometry || !coordinateElement) return;
+		const rect = coordinateElement.getBoundingClientRect();
+		const frame = pointerToFrame(e.clientX, rect, geometry);
+		onframeSelect?.(frame);
+	}
 </script>
 
 <div class="frame-ruler" onkeydown={(e) => e.key === 'Enter' && onframeSelect?.(selectedFrame)} tabindex="0" role="slider" aria-valuenow={selectedFrame} aria-valuemin={0} aria-valuemax={totalFrames}>
-	<div class="ruler-bar">
+	<div class="ruler-bar" bind:this={coordinateElement} onpointerdown={onPointerDown}>
 		<div class="ruler-line"></div>
-		
+
 		<!-- Segment visualization bars -->
 		{#each segmentPositions as seg (seg.start + seg.end)}
 			<div class="segment-bar" style="left: {seg.start}%; width: {(seg.end - seg.start)}%; background: {seg.color}; opacity: 0.3;"></div>
@@ -85,14 +104,16 @@
 			</div>
 		{/each}
 
-		<div class="playhead" style="left: {(selectedFrame / (totalFrames - 1)) * 100}%">
-			<div class="playhead-tip"></div>
-			<div class="playhead-line"></div>
-		</div>
+		{#if geometry}
+			<div class="playhead" style="left: {framePercent(selectedFrame, geometry)}%">
+				<div class="playhead-tip"></div>
+				<div class="playhead-line"></div>
+			</div>
+		{/if}
 	</div>
 
 	{#if hoveredFrame !== null}
-		<div class="tooltip" style="left: {(hoveredFrame / (totalFrames - 1)) * 100}%">
+		<div class="tooltip" style="left: {geometry ? framePercent(hoveredFrame, geometry) : (hoveredFrame / Math.max(totalFrames - 1, 1)) * 100}%">
 			<span>Frame {hoveredFrame}</span>
 		</div>
 	{/if}

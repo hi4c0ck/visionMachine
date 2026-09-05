@@ -28,7 +28,9 @@
 		updateSubjectRefUrl as updateSubjectRefUrlAction,
 		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 	} from '$lib/composerStore';
-	import { snapTo8, frameToPercent } from '$lib/frameMath';
+import { snapTo8 } from '$lib/frameMath';
+import { createFrameGeometry as createFrameGeometryShim, type FrameGeometry, framePercent, pointerToFrame, snapFrame, pxDeltaToFrame } from '$lib/frameGeometry';
+import { useFrameGeometry } from '$lib/useFrameGeometry';
 
 	let {
 		session,
@@ -49,6 +51,36 @@
 	// ── Derived state ────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
 	let totalFrames = $derived(propTotalFrames ?? (pipes.length > 0 ? (pipes[0]?.lengthFrames ?? DEFAULT_FRAME_COUNT) : DEFAULT_FRAME_COUNT));
+
+	// ── Centralized geometry ───────────────────────────────────────────────
+	let rulerElement = $state<HTMLElement | null>(null);
+	let rulerGeometry = $state<FrameGeometry | null>(null);
+
+	function updateRulerGeometry() {
+		if (!rulerElement) {
+			rulerGeometry = null;
+			return;
+		}
+		const rect = rulerElement.getBoundingClientRect();
+		if (rect.width <= 0) {
+			rulerGeometry = null;
+			return;
+		}
+		rulerGeometry = createFrameGeometry(totalFrames, rect.width);
+	}
+
+	$effect(() => {
+		if (!rulerElement) return;
+		updateRulerGeometry();
+		const observer = new ResizeObserver(updateRulerGeometry);
+		observer.observe(rulerElement);
+		return () => observer.disconnect();
+	});
+
+	// Recompute geometry when totalFrames changes
+	$effect(() => {
+		if (rulerElement) updateRulerGeometry();
+	});
 
 	// ── UI state ─────────────────────────────────────────────────────────────
 	let activePipeIdx = $state<number | null>(null);
@@ -112,7 +144,6 @@
 		startFrame: number;
 		endFrame: number;
 		mouseStartX: number;
-		rulerWidth: number;
 	} | null>(null);
 
 	// Close menus on outside click
@@ -177,9 +208,13 @@
 		return pipe.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
 
-	// Frame to percentage for rendering
+	// Frame to percentage for rendering — DEPRECATED, use framePercent() from geometry
+	// Kept for backward compat during migration
 	function frameToX(frame: number): number {
-		return (frame / (totalFrames - 1)) * 100;
+		if (rulerGeometry) {
+			return framePercent(frame, rulerGeometry);
+		}
+		return (frame / Math.max(totalFrames - 1, 1)) * 100;
 	}
 
 	// Get preview state for a segment during drag
@@ -196,12 +231,6 @@
 			return null;
 		}
 		return previewDragState;
-	}
-
-	// Find the ruler-aligned ancestor for coordinate calculations
-	function findRulerWidth(target: HTMLElement): number {
-		const ruler = target.closest('.ruler-aligned') as HTMLElement;
-		return ruler?.getBoundingClientRect().width ?? 0;
 	}
 
 	// ── Actions ─────────────────────────────────────────────────────────────
@@ -362,14 +391,19 @@
 		if (result.errors.length > 0) console.error('[ComposerPanel] handleGlobalRangeUpdate:', result.errors);
 	}
 
+	// Find geometry context (centralized)
+	function getGeometry(): FrameGeometry | null {
+		return rulerGeometry;
+	}
+
 	// ── Segment interactions ────────────────────────────────────────────────
 
 	function handleSegmentPointerDown(e: PointerEvent, seg: Segment, handle: 'left' | 'right' | 'body') {
 		e.preventDefault();
 		e.stopPropagation();
-		const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
-		if (!ruler) return;
-		const rect = ruler.getBoundingClientRect();
+		const geo = getGeometry();
+		if (!geo) return;
+		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
 		const startX = e.clientX;
 
 		// Capture pointer to ensure all subsequent events are received by this element
@@ -383,7 +417,6 @@
 			startFrame: seg.frameStart,
 			endFrame: seg.frameEnd,
 			mouseStartX: startX,
-			rulerWidth: rect.width,
 		};
 
 		// Initialize preview with current values
@@ -397,13 +430,12 @@
 	}
 
 	function handlePointerMove(e: MouseEvent) {
-		if (!dragState) return;
+		if (!dragState || !rulerGeometry) return;
 		e.preventDefault();
 
 		const dx = e.clientX - dragState.mouseStartX;
-		const percentDelta = (dx / dragState.rulerWidth) * 100;
-		const frameDelta = Math.round((percentDelta / 100) * (totalFrames - 1));
-		const snappedDelta = snapTo8(frameDelta);
+		const frameDelta = pxDeltaToFrame(dx, rulerGeometry);
+		const snappedDelta = snapFrame(frameDelta);
 
 		if (dragState.type === 'segment') {
 			const start = dragState.startFrame;
@@ -414,14 +446,14 @@
 			let newEnd: number;
 
 			if (dragState.handle === 'body') {
-				newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, totalFrames - 1 - duration)));
+				newStart = snapFrame(Math.max(0, Math.min(start + snappedDelta, totalFrames - 1 - duration)));
 				newEnd = newStart + duration;
 			} else if (dragState.handle === 'left') {
-				newStart = snapTo8(Math.max(0, Math.min(start + snappedDelta, end - 8)));
+				newStart = snapFrame(Math.max(0, Math.min(start + snappedDelta, end - 8)));
 				newEnd = end;
 			} else {
 				newStart = start;
-				newEnd = snapTo8(Math.min(totalFrames - 1, Math.max(start + 8, end + snappedDelta)));
+				newEnd = snapFrame(Math.min(totalFrames - 1, Math.max(start + 8, end + snappedDelta)));
 			}
 
 			// Update preview only, not store
@@ -443,14 +475,14 @@
 			let newEnd: number;
 
 			if (dragState.handle === 'body') {
-				newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, segEnd - duration)));
+				newStart = snapFrame(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, segEnd - duration)));
 				newEnd = newStart + duration;
 			} else if (dragState.handle === 'left') {
-				newStart = snapTo8(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, dragState.endFrame - 8)));
+				newStart = snapFrame(Math.max(segStart, Math.min(dragState.startFrame + snappedDelta, dragState.endFrame - 4)));
 				newEnd = dragState.endFrame;
 			} else {
 				newStart = dragState.startFrame;
-				newEnd = snapTo8(Math.min(segEnd, Math.max(dragState.startFrame + 8, dragState.endFrame + snappedDelta)));
+				newEnd = snapFrame(Math.min(segEnd, Math.max(dragState.startFrame + 4, dragState.endFrame + snappedDelta)));
 			}
 
 			// Update preview only, not store
@@ -745,7 +777,7 @@
 			{/if}
 
 			<!-- ═══ FRAME RULER (CANONICAL) ═══ -->
-			<div class="ruler-wrap ruler-aligned">
+			<div class="ruler-wrap ruler-aligned" bind:this={rulerElement}>
 				<FrameRuler 
 					{totalFrames} 
 					{selectedFrame}
@@ -762,10 +794,8 @@
 				{#if global}
 					<div class="global-track ruler-aligned">
 						<MultiThumbSlider
+							geometry={createFrameGeometry(totalFrames, 0)}
 							values={[global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1]}
-							min={0}
-							max={totalFrames - 1}
-							step={8}
 							color="#59B5FF"
 							onchange={(vals) => handleGlobalRangeUpdate(pipeIdx, global.id, vals)}
 						/>
@@ -820,66 +850,60 @@
 												onclick={() => handleEditTagPrompt(pipeIdx, seg, tag)}
 												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Click to edit prompt">
 												<!-- Left thumb -->
-												<div 
+												<div
 													class="thumb small left"
 													onpointerdown={(e) => {
 														e.stopPropagation();
-														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
-														if (ruler) {
-															const rect = ruler.getBoundingClientRect();
-															const startX = e.clientX;
-															(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-															dragState = {
-																type: 'tag',
-																id: tag.id,
-																segmentId: seg.id,
-																handle: 'left',
-																startFrame: tag.frameStart,
-																endFrame: tag.frameEnd,
-																mouseStartX: startX,
-																rulerWidth: rect.width,
-															};
-															previewDragState = {
-																type: 'tag',
-																id: tag.id,
-																segmentId: seg.id,
-																handle: 'left',
-																startFrame: tag.frameStart,
-																endFrame: tag.frameEnd,
-															};
-														}
+														const geo = getGeometry();
+														if (!geo) return;
+														const startX = e.clientX;
+														(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+														dragState = {
+															type: 'tag',
+															id: tag.id,
+															segmentId: seg.id,
+															handle: 'left',
+															startFrame: tag.frameStart,
+															endFrame: tag.frameEnd,
+															mouseStartX: startX,
+														};
+														previewDragState = {
+															type: 'tag',
+															id: tag.id,
+															segmentId: seg.id,
+															handle: 'left',
+															startFrame: tag.frameStart,
+															endFrame: tag.frameEnd,
+														};
 													}}
 													style={`left: ${frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%`}>
 												</div>
 												<!-- Tag body -->
-												<div 
+												<div
 													class="tag-body"
 													onpointerdown={(e) => {
 														e.stopPropagation();
-														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
-														if (ruler) {
-															const rect = ruler.getBoundingClientRect();
-															const startX = e.clientX;
-															(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-															dragState = {
-																type: 'tag',
-																id: tag.id,
-																segmentId: seg.id,
-																handle: 'body',
-																startFrame: tag.frameStart,
-																endFrame: tag.frameEnd,
-																mouseStartX: startX,
-																rulerWidth: rect.width,
-															};
-															previewDragState = {
-																type: 'tag',
-																id: tag.id,
-																segmentId: seg.id,
-																handle: 'body',
-																startFrame: tag.frameStart,
-																endFrame: tag.frameEnd,
-															};
-														}
+														const geo = getGeometry();
+														if (!geo) return;
+														const startX = e.clientX;
+														(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+														dragState = {
+															type: 'tag',
+															id: tag.id,
+															segmentId: seg.id,
+															handle: 'body',
+															startFrame: tag.frameStart,
+															endFrame: tag.frameEnd,
+															mouseStartX: startX,
+														};
+														previewDragState = {
+															type: 'tag',
+															id: tag.id,
+															segmentId: seg.id,
+															handle: 'body',
+															startFrame: tag.frameStart,
+															endFrame: tag.frameEnd,
+														};
 													}}
 													style={`left: ${frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%; width: ${frameToX(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd) - frameToX(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart)}%`}>
 													<span class="tag-name">{tag.spec?.name || tag.tag}</span>
@@ -888,34 +912,31 @@
 													{/if}
 												</div>
 												<!-- Right thumb -->
-												<div 
+												<div
 													class="thumb small right"
 													onpointerdown={(e) => {
 														e.stopPropagation();
-														const ruler = (e.currentTarget as HTMLElement).closest('.ruler-aligned') as HTMLElement;
-														if (ruler) {
-															const rect = ruler.getBoundingClientRect();
-															const startX = e.clientX;
-															(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-															dragState = {
-																type: 'tag',
-																id: tag.id,
-																segmentId: seg.id,
-																handle: 'right',
-																startFrame: tag.frameStart,
-																endFrame: tag.frameEnd,
-																mouseStartX: startX,
-																rulerWidth: rect.width,
-															};
-															previewDragState = {
-																type: 'tag',
-																id: tag.id,
-																segmentId: seg.id,
-																handle: 'right',
-																startFrame: tag.frameStart,
-																endFrame: tag.frameEnd,
-															};
-														}
+														const geo = getGeometry();
+														if (!geo) return;
+														const startX = e.clientX;
+														(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+														dragState = {
+															type: 'tag',
+															id: tag.id,
+															segmentId: seg.id,
+															handle: 'right',
+															startFrame: tag.frameStart,
+															endFrame: tag.frameEnd,
+															mouseStartX: startX,
+														};
+														previewDragState = {
+															type: 'tag',
+															id: tag.id,
+															segmentId: seg.id,
+															handle: 'right',
+															startFrame: tag.frameStart,
+															endFrame: tag.frameEnd,
+														};
 													}}
 													style={`left: ${frameToX(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd)}%`}>
 												</div>

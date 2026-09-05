@@ -9,12 +9,12 @@
 //     e.g. for 241 total → last segment ends at 240
 //   - Minimum span: 8 frames (one inference batch)
 
+import { snapFrameDown, FRAME_STEP } from './frameGeometry';
+
 /**
- * Snap a frame number DOWN to the nearest multiple of 8.
+ * @deprecated Use snapFrameDown from './frameGeometry' instead.
  */
-export function snapTo8(frame: number): number {
-  return Math.floor(frame / 8) * 8;
-}
+export const snapTo8 = snapFrameDown;
 
 /**
  * Snap a total frame count to the nearest valid 8n+1 value.
@@ -56,19 +56,18 @@ export function getMaxSegmentEnd(totalFrames: number): number {
 }
 
 /**
- * Convert frame to x-coordinate percentage for rendering.
- * Uses (totalFrames - 1) as denominator since last frame is never used for content.
+ * @deprecated Use framePercent from './frameGeometry' instead.
  */
 export function frameToPercent(frame: number, totalFrames: number): number {
   return (frame / (totalFrames - 1)) * 100;
 }
 
 /**
- * Convert x-coordinate percentage back to a snapped frame position.
+ * @deprecated Use pxToFrame from './frameGeometry' instead.
  */
 export function percentToFrame(xPercent: number, totalFrames: number): number {
   const raw = (xPercent / 100) * (totalFrames - 1);
-  return snapTo8(Math.round(raw));
+  return snapFrameDown(Math.round(raw));
 }
 
 /**
