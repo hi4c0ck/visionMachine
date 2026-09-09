@@ -46,7 +46,6 @@ import { flashToast } from '$lib/flashToast';
 			totalFrames?: number;
 			selectedFrame?: number;
 			activePipeIdx?: number | null;
-			onUpdate?: (session: SessionData) => void;
 			onframechange?: (frame: number) => void;
 		}>();
 
@@ -223,6 +222,8 @@ import { flashToast } from '$lib/flashToast';
 			const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
 			// Clamp into the viewport: cap the right edge, and if the menu
 			// would overflow the bottom, flip it above the trigger button.
+			// magic numbers: track menu height 96px / width cap 180 — revisit
+			// if AddTrackMenu content changes.
 			const MENU_H = 96;
 			addMenuX = Math.max(8, Math.min(rect.left, window.innerWidth - 180));
 			let y = rect.bottom + 4;

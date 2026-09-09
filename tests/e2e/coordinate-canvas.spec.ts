@@ -11,7 +11,7 @@
 
 import { test, expect } from '@playwright/test';
 
-async function setupComposer(page: Parameters<typeof test.beforeEach>[0] extends { page: infer P } ? P : never) {
+async function setupComposer(page: any) {
 	// Login
 	await page.goto('/');
 	await page.locator('input[placeholder*="name"]').fill('Test User');
