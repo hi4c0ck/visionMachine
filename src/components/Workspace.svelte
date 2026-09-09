@@ -688,7 +688,7 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 			</div>
 			<div class="preview-frames">
 				{#each [0, 8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240] as frame}
-					{#if frame <= totalFrames}
+					{#if frame < totalFrames}
 					<div class="preview-tick" style={`left: ${(frame / (totalFrames - 1)) * 100}%`}>
 						{#if frame % 32 === 0}<span class="tick-label">{frame}</span>{/if}
 					</div>
