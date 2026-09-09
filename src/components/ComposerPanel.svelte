@@ -1,11 +1,12 @@
 <script lang="ts">
 	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, SubjectReference } from '$types';
-	import { TAG_SPECIFICATIONS } from '$types';
 	import FrameRuler from './FrameRuler.svelte';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
 	import TagPromptModal from './ComposerModals/TagPromptModal.svelte';
+	import AddTrackMenu from './ComposerMenus/AddTrackMenu.svelte';
+	import TagSelectorMenu from './ComposerMenus/TagSelectorMenu.svelte';
 	import { getNextAvailableRange } from '$lib/frameMath';
 	import {
 		addPipe as addPipeAction,
@@ -136,10 +137,9 @@ import {
 	let addMenuX = $state(0);
 	let addMenuY = $state(0);
 
-	// Tag selector menu
+	// Tag selector menu — selection state now lives in TagSelectorMenu
 	let showTagMenu = $state(false);
 	let selectedSegmentId = $state<string>('');
-	let selectedTagType = $state<TagType | null>(null);
 	let tagMenuX = $state(0);
 	let tagMenuY = $state(0);
 
@@ -537,28 +537,27 @@ import {
 	function handleOpenTagMenu(segId: string, e: MouseEvent, idx: number) {
 		activePipeIdx = idx;
 		selectedSegmentId = segId;
-		selectedTagType = null;
 		tagMenuX = e.clientX;
 		tagMenuY = e.clientY;
 		showTagMenu = true;
 		showAddMenu = false;
 	}
 
-	async function confirmTagSelector() {
-		if (!selectedTagType || !session?.id) return;
+	// TagSelectorMenu calls back with the chosen tag type
+	async function confirmTagSelector(tagType: TagType) {
+		if (!session?.id) return;
 		const pipe = pipes[activePipeIdx!];
 		if (!pipe) return;
 		const tl = getTimeline(pipe);
 		if (!tl) return;
 		const seg = tl.segments.find((s: Segment) => s.id === selectedSegmentId);
 		if (!seg) return;
-		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, selectedTagType);
+		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, tagType);
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] addTag:', result.errors);
 			return;
 		}
 		showTagMenu = false;
-		selectedTagType = null;
 	}
 
 	function handleEditTagPrompt(idx: number, seg: Segment, tag: TagElement) {
@@ -912,37 +911,22 @@ import {
 	<button class="btn-add-pipe" onclick={handleAddPipe}>+ Add Pipe</button>
 
 	<!-- ═══ [+] DROPDOWN MENU ═══ -->
-	{#if showAddMenu && activePipeIdx !== null}
-		<div class="dropdown-menu" style="left: {addMenuX}px; top: {addMenuY}px;"
-			onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-			<button class="dropdown-item" onclick={() => handleAddTimeline(activePipeIdx)}>
-				<span class="dropdown-icon">▬</span> Timeline
-			</button>
-			<button class="dropdown-item" onclick={() => handleAddGlobal(activePipeIdx)}>
-				<span class="dropdown-icon">◈</span> Global
-			</button>
-		</div>
-	{/if}
+	<AddTrackMenu
+		open={showAddMenu}
+		x={addMenuX}
+		y={addMenuY}
+		onAddTimeline={() => activePipeIdx !== null && handleAddTimeline(activePipeIdx)}
+		onAddGlobal={() => activePipeIdx !== null && handleAddGlobal(activePipeIdx)}
+	/>
 
 	<!-- ═══ TAG SELECTOR DROPDOWN ═══ -->
-	{#if showTagMenu}
-		<div class="dropdown-menu tag-menu" style="left: {tagMenuX}px; top: {tagMenuY}px;"
-			onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-			<div class="dropdown-label">Add Tag</div>
-			{#each ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'] as tagType}
-				<button class="dropdown-item tag-item"
-					class:active={selectedTagType === tagType}
-					onclick={() => selectedTagType = tagType as TagType}>
-					<span class="tag-dot" style="background: {TAG_SPECIFICATIONS[tagType as TagType].color}"></span>
-					<span>{TAG_SPECIFICATIONS[tagType as TagType].name}</span>
-				</button>
-			{/each}
-			<div class="dropdown-actions">
-				<button class="btn-confirm" onclick={confirmTagSelector} disabled={!selectedTagType}>Add</button>
-				<button class="btn-cancel" onclick={closeMenus}>Cancel</button>
-			</div>
-		</div>
-	{/if}
+	<TagSelectorMenu
+		open={showTagMenu}
+		x={tagMenuX}
+		y={tagMenuY}
+		onConfirm={(t) => confirmTagSelector(t)}
+		onClose={() => closeMenus()}
+	/>
 </div>
 
 <!-- ═══ KEYFRAME MODAL ═══ -->
@@ -1510,100 +1494,7 @@ import {
 		color: var(--accent-color);
 	}
 
-	/* Dropdown menus */
-	.dropdown-menu {
-		position: fixed;
-		background: var(--bg-secondary);
-		border: 1px solid var(--border-color);
-		border-radius: 8px;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-		min-width: 160px;
-		z-index: 1000;
-		overflow: hidden;
-	}
-
-	.dropdown-item {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 10px 16px;
-		background: none;
-		border: none;
-		width: 100%;
-		text-align: left;
-		color: var(--text-primary);
-		cursor: pointer;
-		font-size: 13px;
-		transition: background 0.15s;
-	}
-
-	.dropdown-item:hover {
-		background: var(--bg-tertiary);
-	}
-
-	.dropdown-item.tag-item {
-		flex-direction: row;
-	}
-
-	.dropdown-item.tag-item .tag-dot {
-		width: 12px;
-		height: 12px;
-		border-radius: 50%;
-		flex-shrink: 0;
-	}
-
-	.dropdown-item.tag-item.active {
-		background: var(--accent-bg);
-		color: var(--accent-color);
-	}
-
-	.dropdown-icon {
-		font-size: 14px;
-	}
-
-	.dropdown-label {
-		padding: 10px 16px 6px;
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--text-secondary);
-		text-transform: uppercase;
-		letter-spacing: 0.5px;
-	}
-
-	.dropdown-actions {
-		display: flex;
-		gap: 8px;
-		padding: 8px;
-		border-top: 1px solid var(--border-color);
-	}
-
-	.dropdown-actions .btn-confirm,
-	.dropdown-actions .btn-cancel {
-		flex: 1;
-		padding: 8px;
-		border-radius: 6px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-
-	.dropdown-actions .btn-confirm {
-		background: var(--accent-color);
-		color: white;
-		border: none;
-	}
-
-	.dropdown-actions .btn-confirm:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.dropdown-actions .btn-cancel {
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-		border: 1px solid var(--border-color);
-	}
-
-		/* Modal styles live in ./composer-modal.css (shared by ComposerModals/*) */
+		/* Dropdown menu styles live in ComposerMenus/* ; modal styles in ./composer-modal.css */
 
 	.full-width {
 		width: 100%;
