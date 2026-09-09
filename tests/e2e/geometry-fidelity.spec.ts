@@ -2,7 +2,7 @@
  * E2E Tests for Geometry Fidelity
  *
  * Tests that centralized frame geometry renders consistently across
- * FrameRuler, ComposerPanel, and MultiThumbSlider.
+ * FrameRuler, ComposerPanel, and TimelineSection.
  *
  * Run with: npx playwright test tests/e2e/geometry-fidelity.spec.ts
  */

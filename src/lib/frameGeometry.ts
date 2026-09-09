@@ -1,7 +1,7 @@
 // Canonical frame geometry engine for VisionMachine composer timeline
 //
 // This is the ONE source of truth for frame↔pixel conversion.
-// Every timeline primitive (FrameRuler, Segment, Tag, MultiThumbSlider)
+// Every timeline primitive (FrameRuler, Segment, Tag, Global range)
 // consumes the same FrameGeometry instance.
 //
 // Invariant:

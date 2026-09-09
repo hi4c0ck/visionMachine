@@ -134,7 +134,8 @@ export interface Segment {
 
 /**
  * Global style element — temporal range spanning part or all of the pipe.
- * Uses MultiThumbSlider for draggable/resizable range.
+ * Rendered as a static range bar in the TimelineSection coordinate canvas
+ * (pointer-events: none; toggle/remove only — no drag-resize UI yet).
  */
 export interface GlobalElement {
   id: string;
