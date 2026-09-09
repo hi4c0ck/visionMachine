@@ -64,6 +64,19 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 		pipes.length > 0 ? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? 241) : 241
 	);
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
+
+	// Reset composer-local UI state whenever the active session changes so a
+	// stale activePipeIdx / selectedFrame from the previous session never
+	// points at a pipe that doesn't exist in the new one (which would break
+	// totalFrames + ruler alignment). Keyed on selectedSessionId: the effect
+	// body only *reads* that value, so it re-runs exactly on session change.
+	$effect(() => {
+		const id = selectedSessionId; // read-only: re-runs when the session changes
+		if (id !== undefined) {
+			activePipeIdx = 0;
+			selectedFrame = 0;
+		}
+	});
 	function handleKeyDown(e: KeyboardEvent) {
 		if (e.key === 'ArrowLeft') {
 			selectedFrame = Math.max(0, (selectedFrame || 0) - 8);
@@ -339,22 +352,29 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 			// Load fresh data from backend
 			const loadResult = await loadSession(sessionId);
 
-			// Update the project's session data with loaded pipes
 			if (loadResult.errors.length === 0) {
 				const loadedSession = sessions.get(sessionId);
 				if (loadedSession) {
-					// Update the project's session with loaded data
-						const updatedProjects = (projects || []).map((p: any) => {
-							if (p.id !== foundProject.id) return p;
-							return {
-								...p,
-								sessions: (p.sessions || []).map((s: any) =>
-									s.id === sessionId ? { ...s, ...loadedSession } : s
-								)
-							};
-						});
+					const updatedProjects = (projects || []).map((p: any) => {
+						if (p.id !== foundProject.id) return p;
+						return {
+							...p,
+							sessions: (p.sessions || []).map((s: any) =>
+								s.id === sessionId ? { ...s, ...loadedSession } : s
+							)
+						};
+					});
 					projects = updatedProjects;
 					saveProjects();
+				}
+			} else {
+				// Backend load failed (no Tauri backend in browser/E2E mode, or the
+				// composer row doesn't exist yet). Fall back to the local projects
+				// copy so the composer store always has the session's real data
+				// instead of a blank phantom.
+				if (!sessions.get(sessionId)) {
+					const local = foundProject.sessions.find((s: any) => s.id === sessionId);
+					if (local) hydrateSessions([local as any]);
 				}
 			}
 		}
@@ -583,8 +603,12 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 		);
 
 		selectedSessionId = newSession.id;
+		// Register the fallback session in the composer store so composer
+		// mutations don't hit a missing-session error (browser/dev mode has no
+		// backend to create it server-side).
+		hydrateSessions([newSession]);
 		saveProjects();
-	}
+		}
 
 	async function handleRenameSession(sessionId: string, newName: string) {
 		if (!selectedProject || !newName.trim()) return;

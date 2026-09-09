@@ -238,8 +238,15 @@ import { flashToast } from '$lib/flashToast';
 		showTagMenu = false;
 		if (showAddMenu) {
 			const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-			addMenuX = rect.left;
-			addMenuY = rect.bottom + 4;
+			// Clamp into the viewport: cap the right edge, and if the menu
+			// would overflow the bottom, flip it above the trigger button.
+			const MENU_H = 96;
+			addMenuX = Math.max(8, Math.min(rect.left, window.innerWidth - 180));
+			let y = rect.bottom + 4;
+			if (y + MENU_H > window.innerHeight) {
+				y = Math.max(8, rect.top - MENU_H - 4);
+			}
+			addMenuY = y;
 		}
 	}
 
@@ -313,8 +320,14 @@ import { flashToast } from '$lib/flashToast';
 	function handleOpenTagMenu(segId: string, e: MouseEvent, idx: number) {
 		activePipeIdx = idx;
 		selectedSegmentId = segId;
-		tagMenuX = e.clientX;
-		tagMenuY = e.clientY;
+		// Clamp the tag menu into the viewport (menu is ~360px tall)
+		const MENU_H = 360;
+		tagMenuX = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
+		let y = e.clientY;
+		if (y + MENU_H > window.innerHeight) {
+			y = Math.max(8, e.clientY - MENU_H);
+		}
+		tagMenuY = y;
 		showTagMenu = true;
 		showAddMenu = false;
 	}

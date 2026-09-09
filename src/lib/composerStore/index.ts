@@ -81,10 +81,35 @@ class ComposerStoreImpl implements ComposerStore {
     }
   }
 
-  private getService(sessionId: string) {
-    const session = this.getSession(sessionId);
-    if (!session) throw new Error('Session not found');
+  // Resolve the store's session for an id. The composer UI renders from
+  // Workspace's `selectedSession` (projects state), so any mutation can run
+  // even before the session is materialized in the `sessions` Map (e.g. a
+  // freshly created session in browser/E2E mode where the backend invoke is
+  // unavailable). Instead of throwing "Session not found" — which crashed the
+  // whole app via an unhandled rejection — fall back to a fresh blank session
+  // that gets registered in the Map so all later lookups hit it.
+  private resolveSession(sessionId: string, _name?: string): SessionData {
+    let session = this.getSession(sessionId);
+    if (!session) {
+      session = {
+        id: sessionId,
+        name: _name || 'Session',
+        pipes: [],
+        fps: 24,
+        resolution: '720p',
+        orientation: 'horizontal',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        directoryPath: '',
+        totalGeneratedFrames: 0,
+      };
+      sessions.set(sessionId, session);
+    }
+    return session;
+  }
 
+  private getService(sessionId: string, name?: string) {
+    const session = this.resolveSession(sessionId, name);
     return {
       pipes: new PipeServiceImpl(session),
       elements: new ElementServiceImpl(session),
@@ -100,8 +125,7 @@ class ComposerStoreImpl implements ComposerStore {
   // ── Public API ────────────────────────────────────────────────────────────
 
   async addPipe(sessionId: string): Promise<ServiceResult> {
-    const session = sessions.get(sessionId);
-    if (!session) return { errors: ['Session not found'] };
+    const session = this.resolveSession(sessionId);
 
     const pipes = new PipeServiceImpl(session);
     const result = await pipes.add(sessionId);
@@ -110,8 +134,7 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   async removePipe(sessionId: string, pipeId: string): Promise<ServiceResult> {
-    const session = sessions.get(sessionId);
-    if (!session) return { errors: ['Session not found'] };
+    const session = this.resolveSession(sessionId);
 
     const pipes = new PipeServiceImpl(session);
     const result = await pipes.remove(sessionId, pipeId);
@@ -192,8 +215,7 @@ class ComposerStoreImpl implements ComposerStore {
 
   // Segment operations
   async addSegment(sessionId: string, pipeId: string, frameStart: number, frameEnd: number): Promise<ServiceResult> {
-    const session = sessions.get(sessionId);
-    if (!session) return { errors: ['Session not found'] };
+    const session = this.resolveSession(sessionId);
 
     const segments = new SegmentServiceImpl(session, (pid: string) => session.pipes.find(p => p.id === pid));
     const result = await segments.add(sessionId, pipeId, frameStart, frameEnd);
@@ -318,16 +340,14 @@ class ComposerStoreImpl implements ComposerStore {
 
   // Session operations
   async updateFPS(sessionId: string, fps: number): Promise<ServiceResult> {
-    const session = sessions.get(sessionId);
-    if (!session) return { errors: ['Session not found'] };
+    const session = this.resolveSession(sessionId);
     session.fps = fps;
     unsynced.delete(sessionId);
     return { errors: [] };
   }
 
   async updateResolution(sessionId: string, resolution: string): Promise<ServiceResult> {
-    const session = sessions.get(sessionId);
-    if (!session) return { errors: ['Session not found'] };
+    const session = this.resolveSession(sessionId);
     session.resolution = resolution as any;
     unsynced.delete(sessionId);
     return { errors: [] };

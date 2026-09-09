@@ -41,8 +41,13 @@ test.describe('Coordinate Canvas Consistency', () => {
 		// Add a global + a timeline + a segment via the UI
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
-		await page.getByRole('button', { name: 'Global', exact: true }).click();
-		await page.getByRole('button', { name: 'Timeline', exact: true }).click();
+		// Menu items render as "◈ Global" / "▬ Timeline" (icon glyph is part of
+		// the accessible name) — match by CSS + visible text instead of exact role name.
+		// The menu closes after each selection, so re-open it for the second item.
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Global' }).click();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
 
 		// Segment: click the empty-slot placeholder, fill 0/240, confirm
 		await page.locator('.seg-empty.full-width').first().click();

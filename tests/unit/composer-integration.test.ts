@@ -93,9 +93,15 @@ describe('Composer Integration', () => {
       expect(session.pipes[2].name).toBe('Pipe 3');
     });
 
-    it('should return error for non-existent session', async () => {
+    it('should self-heal for non-existent session', async () => {
+      // A composer mutation on a session the store hasn't materialized yet
+      // registers a blank session instead of erroring (app stability over
+      // strictness — "Session not found" used to crash the whole app).
       const result = await addPipe('non-existent');
-      expect(result.errors).toEqual(['Session not found']);
+      expect(result.errors).toHaveLength(0);
+      const created = sessions.get('non-existent');
+      expect(created).toBeTruthy();
+      expect(created!.pipes.length).toBe(1);
     });
   });
 
