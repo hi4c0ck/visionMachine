@@ -5,10 +5,23 @@ use tauri::State;
 // ── Request/Response types ───────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveInput {
     pub session_id: String,
     pub name: String,
     pub pipes: Vec<serde_json::Value>,
+    #[serde(default = "default_fps")]
+    pub fps: u32,
+    #[serde(default)]
+    pub resolution: Option<String>,
+    #[serde(default)]
+    pub orientation: Option<String>,
+    #[serde(default)]
+    pub total_generated_frames: Option<u32>,
+}
+
+fn default_fps() -> u32 {
+    24
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -27,9 +40,13 @@ pub async fn get_composer(
     
     Ok(serde_json::json!({
         "id": composer.id,
-        "session_id": composer.session_id,
+        "sessionId": composer.session_id,
         "name": composer.name,
         "pipes": pipes,
+        "fps": composer.fps,
+        "resolution": composer.resolution,
+        "orientation": composer.orientation,
+        "totalGeneratedFrames": composer.total_generated_frames,
     }))
 }
 
@@ -45,11 +62,20 @@ pub async fn save_composer(
         .map(|p| serde_json::from_value(p.clone()).map_err(|e| e.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     
+    // Preserve existing composer id when one is already stored for this session
+    let existing = db.get_composer(&input.session_id).await.ok();
     let composer = crate::models::ComposerConfig {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: existing
+            .as_ref()
+            .map(|c| c.id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         session_id: input.session_id.clone(),
         name: input.name,
         pipes,
+        fps: input.fps,
+        resolution: input.resolution.unwrap_or_else(|| "720p".to_string()),
+        orientation: input.orientation.unwrap_or_else(|| "horizontal".to_string()),
+        total_generated_frames: input.total_generated_frames.unwrap_or(0),
         created_at: None,
         updated_at: None,
     };

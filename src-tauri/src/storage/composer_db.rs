@@ -44,7 +44,11 @@ impl Database {
                                 .unwrap_or_default()
                                 .into_iter()
                                 .map(|v| {
-                                    serde_json::from_value::<Pipe>(v).unwrap_or(Pipe::new("unknown", 121))
+                                    serde_json::from_value::<Pipe>(v.clone())
+                                        .unwrap_or_else(|e| {
+                                            eprintln!("[composer_db] pipes_json row parse failed ({}); using default pipe: {v:?}", e);
+                                            Pipe::new("unknown", 121)
+                                        })
                                 })
                                 .collect()
                         } else {
@@ -57,6 +61,10 @@ impl Database {
                             session_id: session_id.to_string(),
                             name: session_name,
                             pipes,
+                            fps: 24,
+                            resolution: "720p".to_string(),
+                            orientation: "horizontal".to_string(),
+                            total_generated_frames: 0,
                             created_at: None,
                             updated_at: None,
                         })

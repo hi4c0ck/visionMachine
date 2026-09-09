@@ -26,6 +26,7 @@ impl std::fmt::Display for TagType {
 
 /// A tag element within a segment
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TagElement {
     pub id: String,
     pub tag: TagType,
@@ -34,6 +35,8 @@ pub struct TagElement {
     pub value: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec: Option<serde_json::Value>,
 }
 
 impl TagElement {
@@ -45,12 +48,14 @@ impl TagElement {
             frame_end,
             value,
             prompt: None,
+            spec: None,
         }
     }
 }
 
 /// A timeline segment containing multiple tags
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Segment {
     pub id: String,
     pub frame_start: u32,
@@ -71,6 +76,7 @@ impl Segment {
 
 /// Global style element (applies to entire pipe)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GlobalElement {
     pub id: String,
     pub frame_start: u32,
@@ -91,18 +97,22 @@ impl GlobalElement {
 
 /// Subject reference for visual consistency across the pipe
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubjectReference {
     pub id: String,
     pub image_url: String,
-    #[serde(rename = "useFrames")]
+    #[serde(default)]
     pub use_frames: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "frameStart")]
     pub frame_start: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "frameEnd")]
     pub frame_end: Option<u32>,
+    #[serde(default = "default_true")]
     pub visible: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl SubjectReference {
@@ -120,6 +130,7 @@ impl SubjectReference {
 
 /// Timeline element containing segments
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimelineElement {
     pub id: String,
     pub segments: Vec<Segment>,
@@ -146,12 +157,13 @@ pub enum PipeElement {
 
 /// Keyframe in a pipe
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Keyframe {
     pub id: String,
     pub frame: u32,
-    #[serde(rename = "slotIndex")]
+    #[serde(default)]
     pub slot_index: u8,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub kind: String, // url, txt2img, img2img
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_src: Option<String>,
@@ -159,6 +171,7 @@ pub struct Keyframe {
     pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference_url: Option<String>,
+    #[serde(default)]
     pub status: String, // pending, generating, done, error
 }
 
@@ -179,17 +192,34 @@ impl Keyframe {
 
 /// A single pipe row - the main unit of composition
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Pipe {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_length_frames")]
     pub length_frames: u32,
+    #[serde(default = "default_q_value")]
     pub q_value: u32,
+    #[serde(default = "default_c_value")]
     pub c_value: f32,
+    #[serde(default)]
     pub keyframes: Vec<Keyframe>,
     #[serde(default)]
     pub subject_references: Vec<SubjectReference>,
+    #[serde(default)]
     pub elements: Vec<PipeElement>,
+    #[serde(default)]
     pub order_index: usize,
+}
+
+fn default_length_frames() -> u32 {
+    121
+}
+fn default_q_value() -> u32 {
+    18
+}
+fn default_c_value() -> f32 {
+    7.0
 }
 
 impl Pipe {
@@ -211,13 +241,32 @@ impl Pipe {
 
 /// Session composer config - JSON blob stored in database
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComposerConfig {
     pub id: String,
     pub session_id: String,
     pub name: String,
     pub pipes: Vec<Pipe>,
+    #[serde(default = "default_fps")]
+    pub fps: u32,
+    #[serde(default = "default_resolution")]
+    pub resolution: String,
+    #[serde(default = "default_orientation")]
+    pub orientation: String,
+    #[serde(default)]
+    pub total_generated_frames: u32,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+fn default_fps() -> u32 {
+    24
+}
+fn default_resolution() -> String {
+    "720p".to_string()
+}
+fn default_orientation() -> String {
+    "horizontal".to_string()
 }
 
 impl ComposerConfig {
@@ -228,6 +277,10 @@ impl ComposerConfig {
             session_id: session_id.to_string(),
             name: name.to_string(),
             pipes: vec![Pipe::new("Pipe 1", 121)],
+            fps: 24,
+            resolution: default_resolution(),
+            orientation: default_orientation(),
+            total_generated_frames: 0,
             created_at: Some(now),
             updated_at: Some(now),
         }
