@@ -1401,6 +1401,7 @@ import {
 		gap: 8px;
 		align-items: center;
 		min-height: 48px;
+		width: 100%;
 	}
 
 	.kf-chip {
@@ -1411,7 +1412,8 @@ import {
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border-color);
 		border-radius: 6px;
-		min-width: 80px;
+		flex: 1 1 0;
+		min-width: 0;
 		justify-content: center;
 	}
 
