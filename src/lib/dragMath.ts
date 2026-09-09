@@ -1,65 +1,75 @@
-// Pure frame-range drag math for the composer timeline.
-//
-// One coordinate system, one snap system: all bounds are frame numbers,
-// all results are snapped to FRAME_STEP multiples. No DOM access here —
-// this is testable pure math that ComposerPanel routes through in a single
-// code path for segments and tags.
+// Pure drag math for temporal elements (segments, tags).
+// Segments span the pipe; tags are strictly contained in their parent segment.
+// No DOM, no store — testable without a browser.
 
 import { snapFrame, MIN_SPAN } from './frameGeometry';
 
-/** Segment body drag: duration preserved, clamped to [0, maxEnd - duration]. */
-export function calcSegmentBodyDrag(
-	dragStart: number,
-	dragEnd: number,
-	delta: number,
-	maxEnd: number
-): [number, number] {
-	const duration = dragEnd - dragStart;
-	const nextStart = Math.max(0, Math.min(snapFrame(dragStart + delta), maxEnd - duration));
-	return [nextStart, nextStart + duration];
+export interface TemporalDragState {
+	type: 'segment' | 'tag';
+	id: string;
+	segmentId: string;
+	handle: 'left' | 'right' | 'body';
+	startFrame: number;
+	endFrame: number;
+	pointerStartFrame: number;
 }
 
-/** Segment handle drag (left or right), clamped with MIN_SPAN to [0, maxEnd]. */
-export function calcSegmentHandleDrag(
-	dragStart: number,
-	dragEnd: number,
-	delta: number,
-	handle: 'left' | 'right',
-	maxEnd: number
-): [number, number] {
-	if (handle === 'left') {
-		let start = snapFrame(dragStart + delta);
-		start = Math.max(0, Math.min(start, dragEnd - MIN_SPAN));
-		return [start, dragEnd];
+export interface DragBounds {
+	min: number;
+	max: number;
+}
+
+/** Segment: pipe [0, totalFrames-1]. Tag: parent segment [segStart, segEnd]. */
+export function getDragBounds(
+	drag: Pick<TemporalDragState, 'type' | 'segmentId'>,
+	totalFrames: number,
+	segment: { frameStart: number; frameEnd: number } | undefined
+): DragBounds {
+	if (drag.type === 'segment') {
+		return { min: 0, max: totalFrames - 1 };
 	}
-	let end = snapFrame(dragEnd + delta);
-	end = Math.min(maxEnd, Math.max(end, dragStart + MIN_SPAN));
-	return [dragStart, end];
+	return { min: segment?.frameStart ?? 0, max: segment?.frameEnd ?? totalFrames - 1 };
 }
 
 /**
- * Tag drag strictly contained in the parent segment [segStart, segEnd].
- * Body: duration preserved + clamped. Left/right: MIN_SPAN respected.
+ * Compute new [start, end] for a drag. Body drags preserve duration;
+ * thumb drags respect MIN_SPAN. All values snap to FRAME_STEP.
  */
-export function calcTagDrag(
-	segStart: number,
-	segEnd: number,
-	dragStart: number,
-	dragEnd: number,
-	delta: number,
-	handle: 'left' | 'right' | 'body'
+export function calculateElementDrag(
+	drag: TemporalDragState,
+	pointerFrame: number,
+	bounds: DragBounds
 ): [number, number] {
-	const duration = dragEnd - dragStart;
-	let start = dragStart;
-	let end = dragEnd;
-	if (handle === 'body') {
-		const nextStart = Math.max(segStart, Math.min(snapFrame(start + delta), segEnd - duration));
-		start = nextStart;
-		end = nextStart + duration;
-	} else if (handle === 'left') {
-		start = Math.max(segStart, Math.min(snapFrame(start + delta), end - MIN_SPAN));
-	} else {
-		end = Math.min(segEnd, Math.max(snapFrame(end + delta), start + MIN_SPAN));
+	const delta = snapFrame(pointerFrame - drag.pointerStartFrame);
+	let start = drag.startFrame;
+	let end = drag.endFrame;
+	const { min, max } = bounds;
+
+	if (drag.handle === 'body') {
+		const duration = end - start;
+		start += delta;
+		end += delta;
+		if (start < min) {
+			start = min;
+			end = min + duration;
+		}
+		if (end > max) {
+			end = max;
+			start = max - duration;
+		}
+		start = snapFrame(start);
+		end = start + duration;
 	}
+
+	if (drag.handle === 'left') {
+		start = snapFrame(drag.startFrame + delta);
+		start = Math.max(min, Math.min(start, end - MIN_SPAN));
+	}
+
+	if (drag.handle === 'right') {
+		end = snapFrame(drag.endFrame + delta);
+		end = Math.min(max, Math.max(end, start + MIN_SPAN));
+	}
+
 	return [start, end];
 }

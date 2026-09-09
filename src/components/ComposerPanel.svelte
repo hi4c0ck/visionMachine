@@ -2,7 +2,6 @@
 	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, SubjectReference } from '$types';
 	import { TAG_SPECIFICATIONS } from '$types';
 	import FrameRuler from './FrameRuler.svelte';
-	import MultiThumbSlider from './MultiThumbSlider.svelte';
 	import { getNextAvailableRange } from '$lib/frameMath';
 	import { snapTo8 } from '$lib/frameMath';
 	import {
@@ -11,7 +10,6 @@
 		addKeyframe as addKeyframeAction,
 		removeKeyframe as removeKeyframeAction,
 		addGlobalElement as addGlobalElementAction,
-		updateGlobalRange as updateGlobalRangeAction,
 		toggleGlobalElement as toggleGlobalElementAction,
 		removeGlobalElement as removeGlobalElementAction,
 		addTimelineElement as addTimelineElementAction,
@@ -38,13 +36,13 @@ import {
 	type FrameGeometry,
 	frameToPx,
 	clientXToFrame,
-	snapFrame,
 	rangeWidthPx,
 } from '$lib/frameGeometry';
 import {
-	calcSegmentBodyDrag,
-	calcSegmentHandleDrag,
-	calcTagDrag,
+	calculateElementDrag,
+	getDragBounds,
+	type TemporalDragState,
+	type DragBounds,
 } from '$lib/dragMath';
 
 	let {
@@ -52,6 +50,7 @@ import {
 			totalFrames: propTotalFrames = 241,
 			selectedFrame,
 			activePipeIdx = $bindable(null),
+			onframechange,
 		} = $props<{
 			session?: SessionData;
 			totalFrames?: number;
@@ -154,14 +153,7 @@ import {
 
 	// Drag state for segments and tags
 	// ── Drag state ────────────────────────────────────────────────────────────
-	type DragState = {
-		type: 'segment' | 'tag';
-		id: string;
-		segmentId?: string;
-		handle: 'left' | 'right' | 'body';
-		startFrame: number;
-		endFrame: number;
-		pointerStartFrame: number;
+	type DragState = TemporalDragState & {
 		captureElement: HTMLElement;
 		pointerId: number;
 		startClientX: number;
@@ -428,46 +420,10 @@ import {
 		showAddMenu = false;
 	}
 
-	// ── Global range update ─────────────────────────────────────────────────
-
-	async function handleGlobalRangeUpdate(idx: number, globalId: string, values: [number, number]) {
-		const pipe = pipes[idx];
-		if (!pipe || !session?.id) return;
-		const result = await updateGlobalRangeAction(session.id, pipe.id, globalId, values[0], values[1]);
-		if (result.errors.length > 0) console.error('[ComposerPanel] handleGlobalRangeUpdate:', result.errors);
-	}
-
 	// Single coordinate space: all px math resolves through rulerGeometry
 	// (the .timeline-coordinate element), never a per-lane fallback.
 
 	// ── Segment interactions ────────────────────────────────────────────────
-
-	// One temporal drag primitive for both segments and tags.
-	// Bounds: segments span the pipe (0..totalFrames-1); tags are clamped
-	// to their parent segment (tags live inside their segment by design).
-	function getDragBounds(drag: DragState): { min: number; max: number } {
-		if (drag.type === 'segment') {
-			return { min: 0, max: totalFrames - 1 };
-		}
-		const seg = getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === drag.segmentId);
-		return { min: seg ? seg.frameStart : 0, max: seg ? seg.frameEnd : totalFrames - 1 };
-	}
-
-	// Single math path for both element types — routes through the pure
-	// functions in $lib/dragMath so the calculators stay unit-testable.
-	function calculateElementDrag(drag: DragState, pointerFrame: number): [number, number] {
-		const delta = snapFrame(pointerFrame - drag.pointerStartFrame);
-		const { min, max } = getDragBounds(drag);
-		const start = drag.startFrame;
-		const end = drag.endFrame;
-
-		if (drag.type === 'segment') {
-			if (drag.handle === 'body') return calcSegmentBodyDrag(start, end, delta, max);
-			return calcSegmentHandleDrag(start, end, delta, drag.handle === 'left' ? 'left' : 'right', max);
-		}
-		// Tag: contained in [min, max] = parent segment bounds
-		return calcTagDrag(min, max, start, end, delta, drag.handle);
-	}
 
 	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body).
 	function handleElementPointerDown(
@@ -520,8 +476,14 @@ import {
 		const rect = rulerElement.getBoundingClientRect();
 		const pointerFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
 
-		// Single math path for both element types — bounds resolved per type
-		const [startFrame, endFrame] = calculateElementDrag(dragState, pointerFrame);
+		// Single math path for both element types — bounds resolved per type.
+		// Capture a non-null local so the closure below keeps the narrowing.
+		const d = dragState;
+		const seg = d.type === 'tag'
+			? getTimeline(pipes[activePipeIdx!])?.segments.find((s: Segment) => s.id === d.segmentId)
+			: undefined;
+		const bounds: DragBounds = getDragBounds(d, totalFrames, seg);
+		const [startFrame, endFrame] = calculateElementDrag(dragState, pointerFrame, bounds);
 		previewDragState = {
 			type: dragState.type,
 			id: dragState.id,
@@ -706,13 +668,6 @@ import {
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeGlobal:', result.errors);
 	}
 
-	async function handleRemoveSegment(idx: number, segId: string) {
-		const pipe = pipes[idx];
-		if (!pipe || !session?.id) return;
-		const result = await removeSegmentAction(session.id, pipe.id, segId);
-		if (result.errors.length > 0) console.error('[ComposerPanel] removeSegment:', result.errors);
-	}
-
 	async function handleToggleGlobal(idx: number, globalId: string) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
@@ -859,13 +814,13 @@ import {
 			<div class="timeline-area">
 			<div class="timeline-coordinate" bind:this={rulerElement}>
 				<div class="timeline-ruler">
-					<FrameRuler
-						{totalFrames}
-						{selectedFrame}
-						{rulerGeometry}
-						onframeSelect={(f) => { onframechange?.(f); }}
-					/>
-				</div>
+						<FrameRuler
+							{totalFrames}
+							{selectedFrame}
+							geometry={rulerGeometry}
+							onframeSelect={(f) => { onframechange?.(f); }}
+						/>
+					</div>
 
 				<!-- ═══ GLOBAL LANES (in coordinate space) ═══ -->
 				{#each [getGlobal(pipe)] as global}
