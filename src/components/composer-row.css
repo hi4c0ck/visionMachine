@@ -1,0 +1,24 @@
+/* Shared row chrome for composer top rows (KeyframesRow, SubjectRefsRow).
+   Each row component imports this:  <script>import '../composer-row.css';</script>
+   Svelte scoped CSS cannot be shared across components, so global import is the DRY option. */
+.row-group {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.row-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-secondary);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+.row-count {
+	margin-left: auto;
+	opacity: 0.7;
+}
