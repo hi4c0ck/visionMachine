@@ -26,7 +26,6 @@
 	let {
 		pipe,
 		sessionId,
-		activePipe,
 		totalFrames,
 		selectedFrame,
 		onFrameChange,
@@ -41,7 +40,6 @@
 	} = $props<{
 		pipe: PipeRow;
 		sessionId?: string;
-		activePipe?: PipeRow | null;
 		totalFrames: number;
 		selectedFrame?: number;
 		onFrameChange: (f: number) => void;
@@ -232,7 +230,9 @@
 			return;
 		}
 
-		if (!finalPreview || !sessionId || !activePipe) {
+		// Commit to THIS section's pipe, never another pipe: each pipe renders
+		// its own section, so the drag that started on pipe N must resize pipe N.
+		if (!finalPreview || !sessionId || !pipe) {
 			previewDragState = null;
 			return;
 		}
@@ -240,7 +240,7 @@
 		if (finalPreview.type === 'segment') {
 			const result = await resizeSegmentAction(
 				sessionId,
-				activePipe.id,
+				pipe.id,
 				finalPreview.id,
 				finalPreview.startFrame,
 				finalPreview.endFrame
@@ -253,7 +253,7 @@
 		if (finalPreview.type === 'tag') {
 			const result = await resizeTagElementAction(
 				sessionId,
-				activePipe.id,
+				pipe.id,
 				finalPreview.segmentId!,
 				finalPreview.id,
 				finalPreview.startFrame,

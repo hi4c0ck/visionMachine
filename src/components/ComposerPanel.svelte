@@ -434,7 +434,6 @@ import { flashToast } from '$lib/flashToast';
 			<TimelineSection
 				{pipe}
 				sessionId={session?.id}
-				activePipe={pipe}
 				{totalFrames}
 				{selectedFrame}
 				onFrameChange={(f) => onframechange?.(f)}
