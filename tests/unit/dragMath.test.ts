@@ -58,6 +58,24 @@ describe('calculateElementDrag (segment)', () => {
 		const d = drag({ handle: 'right', startFrame: 200, endFrame: 208, pointerStartFrame: 0 });
 		expect(calculateElementDrag(d, 1000, g)).toEqual([200, 240]);
 	});
+	it('body drag with duration > span clamps to the bound without drifting', () => {
+		// Invariant: duration (160) is larger than the room left near max. The
+		// single-clamp must pin start to (max - duration) and keep end at max,
+		// preserving duration exactly (no double-snap drift).
+		const d = drag({ handle: 'body', startFrame: 80, endFrame: 240, pointerStartFrame: 0 });
+		const [s, e] = calculateElementDrag(d, 1000, g);
+		expect(e).toBe(240);
+		expect(e - s).toBe(160); // duration preserved
+		expect(s).toBe(80); // start pinned at max - duration
+	});
+	it('body drag mid-range produces exactly start + delta (trailing snap gone)', () => {
+		// A mid-range move where start + delta is already 8n-aligned: the result
+		// must equal start + delta exactly — proving no second snapFrame is
+		// applied after the clamp (the old double-snap shape).
+		const d = drag({ handle: 'body', startFrame: 32, endFrame: 80, pointerStartFrame: 0 });
+		// +48 → wants 80, well within [0, 240 - 48 = 192]
+		expect(calculateElementDrag(d, 48, g)).toEqual([80, 128]);
+	});
 });
 
 describe('calculateElementDrag (tag, contained)', () => {

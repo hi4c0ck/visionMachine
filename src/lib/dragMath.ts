@@ -46,19 +46,14 @@ export function calculateElementDrag(
 	const { min, max } = bounds;
 
 	if (drag.handle === 'body') {
+		// Spec-prescribed single-clamp: move by delta, clamp the new start into
+		// [min, max - duration], snap ONCE. (An extra snapFrame after the clamp
+		// was the old double-snap; all inputs are already 8n-aligned so it is a
+		// no-op, but the shape now matches the spec.)
 		const duration = end - start;
-		start += delta;
-		end += delta;
-		if (start < min) {
-			start = min;
-			end = min + duration;
-		}
-		if (end > max) {
-			end = max;
-			start = max - duration;
-		}
-		start = snapFrame(start);
-		end = start + duration;
+		const nextStart = Math.max(min, Math.min(snapFrame(start + delta), max - duration));
+		start = nextStart;
+		end = nextStart + duration;
 	}
 
 	if (drag.handle === 'left') {
