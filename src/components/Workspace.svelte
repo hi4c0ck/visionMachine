@@ -834,7 +834,6 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 					{totalFrames}
 					{selectedFrame}
 					bind:activePipeIdx
-					onUpdate={handleSessionUpdate}
 					onframechange={(f) => selectedFrame = f}
 				/>
 			{:else}
