@@ -26,7 +26,6 @@
 	let {
 		pipe,
 		sessionId,
-		totalFrames,
 		selectedFrame,
 		onFrameChange,
 		onAddTrack,
@@ -40,7 +39,6 @@
 	} = $props<{
 		pipe: PipeRow;
 		sessionId?: string;
-		totalFrames: number;
 		selectedFrame?: number;
 		onFrameChange: (f: number) => void;
 		onAddTrack: (e: MouseEvent) => void;
@@ -52,6 +50,14 @@
 		onRemoveTag: (segId: string, tagId: string) => void;
 		onEditTagPrompt: (seg: Segment, tag: TagElement) => void;
 	}>();
+
+	// Every element inside a pipe lives in THAT pipe's frame-length space
+	// (8n+1 count → last usable frame = lengthFrames - 1). The section owns
+	// its frame space, so it derives totalFrames from its own pipe rather
+	// than receiving it from the panel (which would impose the *active*
+	// pipe's length on every section).
+	const DEFAULT_FRAME_COUNT = 241;
+	let totalFrames = $derived(pipe?.lengthFrames ?? DEFAULT_FRAME_COUNT);
 
 	// ── Geometry: this pipe's single canonical coordinate element ──────────
 	// Every track (global/timeline/tags) and the ruler resolve px math

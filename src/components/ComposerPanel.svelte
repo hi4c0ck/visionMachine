@@ -246,7 +246,8 @@ import { flashToast } from '$lib/flashToast';
 	function handleAddGlobal(idx: number) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
-		addGlobalElementAction(session.id, pipe.id, 0, totalFrames - 1).then(r => {
+		// Global spans the full length of THIS pipe (its own frame space).
+		addGlobalElementAction(session.id, pipe.id, 0, pipe.lengthFrames - 1).then(r => {
 			if (r.errors?.length) console.error('[ComposerPanel] addGlobal:', r.errors);
 		});
 		showAddMenu = false;
@@ -274,7 +275,8 @@ import { flashToast } from '$lib/flashToast';
 			const segs = tl?.segments ?? [];
 			const lastSeg = segs[segs.length - 1];
 			segStart = lastSeg ? lastSeg.frameEnd : 0;
-			segEnd = Math.min(segStart + 8, totalFrames - 1);
+			// Clamp to THIS pipe's frame space, not the active pipe's.
+			segEnd = Math.min(segStart + 8, pipe.lengthFrames - 1);
 		}
 		showSegmentModal = true;
 		closeMenus();
@@ -418,7 +420,6 @@ import { flashToast } from '$lib/flashToast';
 			<TimelineSection
 				{pipe}
 				sessionId={session?.id}
-				{totalFrames}
 				{selectedFrame}
 				onFrameChange={(f) => onframechange?.(f)}
 				onAddTrack={(e) => handleToggleAddMenu(pipeIdx, e)}

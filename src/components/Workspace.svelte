@@ -59,11 +59,24 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 	let selectedFrame = $state<number>(0);
 	let activePipeIdx = $state<number | null>(null);
 	let pipes = $derived(selectedSession?.pipes ?? []);
-	// totalFrames tracks the active pipe's length (canonical: last frame = totalFrames - 1)
+	// Session preview ruler frame count. The session video is the *result* of
+	// the generated pieces (its own artifact length) — NOT a mechanical sum of
+	// the pipes. Until that artifact is persisted (session-video entity, not
+	// yet modeled), the placeholder is the longest pipe (answer 1c). Pipes are
+	// 8n+1, so the max stays 8n+1.
 	let totalFrames = $derived(
-		pipes.length > 0 ? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? 241) : 241
+		pipes.length > 0 ? Math.max(...pipes.map(p => p?.lengthFrames ?? 0)) : 241
 	);
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
+
+	// Session-ruler tick strip, generated to the (placeholder) session length
+	// instead of a hardcoded [0..240] array that assumes 720p.
+	let previewTicks = $derived.by(() => {
+		const ticks: number[] = [];
+		const last = totalFrames - 1;
+		for (let f = 0; f <= last; f += 8) ticks.push(f);
+		return ticks;
+	});
 
 	// Reset composer-local UI state whenever the active session changes so a
 	// stale activePipeIdx / selectedFrame from the previous session never
@@ -785,12 +798,10 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 				<div class="playhead-line"></div>
 			</div>
 			<div class="preview-frames">
-				{#each [0, 8, 16, 24, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240] as frame}
-					{#if frame < totalFrames}
-					<div class="preview-tick" style={`left: ${(frame / (totalFrames - 1)) * 100}%`}>
+				{#each previewTicks as frame}
+					<div class="preview-tick" style={`left: ${(frame / Math.max(1, totalFrames - 1)) * 100}%`}>
 						{#if frame % 32 === 0}<span class="tick-label">{frame}</span>{/if}
 					</div>
-					{/if}
 				{/each}
 			</div>
 		</div>
