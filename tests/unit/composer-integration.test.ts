@@ -624,8 +624,10 @@ describe('Composer Integration', () => {
       const result = await saveSession(session.id);
 
       expect(result.errors).toHaveLength(0);
+      // Backend-driven persistence (38965d1): saveSession sends the object
+      // directly (no JSON.stringify) so Tauri can deserialize it losslessly.
       expect(mockInvoke).toHaveBeenCalledWith('save_composer', {
-        input: expect.stringContaining('"session_id":"session-1"'),
+        input: expect.objectContaining({ session_id: 'session-1' }),
       });
     });
 

@@ -52,7 +52,7 @@ test.describe('Multi-Tag Creation', () => {
 
   test('should show tag add button when segment exists', async ({ page }) => {
     // Check if any segments exist
-    const segBars = page.locator('.seg-bar');
+    const segBars = page.locator('.segment-body');
     const hasSegments = await segBars.count() > 0;
     
     if (hasSegments) {
@@ -72,8 +72,8 @@ test.describe('Drag Interactions', () => {
   });
 
   test('should show segment structure with thumbs', async ({ page }) => {
-    // Check that segment bars exist in the DOM structure
-    const segBar = page.locator('.seg-bar');
+    // Check that segment bodies exist in the DOM structure
+    const segBar = page.locator('.segment-body');
     const hasSegments = await segBar.count() > 0;
     
     if (hasSegments) {

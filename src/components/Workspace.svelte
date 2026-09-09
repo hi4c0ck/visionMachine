@@ -963,7 +963,8 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 	.composer-area {
 		flex: 1;
 		position: relative;
-		overflow: hidden;
+		overflow-y: auto;
+		overflow-x: hidden;
 		background: var(--panel-center-bg, rgba(255, 70, 70, 0.05));
 		border-left: 1px solid var(--panel-center-border, rgba(255, 70, 70, 0.3));
 		border-right: 1px solid var(--panel-right-border, rgba(255, 120, 190, 0.35));

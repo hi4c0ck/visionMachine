@@ -50,7 +50,7 @@ test.describe('Composer Panel', () => {
 
   test('should show tag add button when segment exists', async ({ page }) => {
     // Wait for any existing segments
-    const segBar = page.locator('.seg-bar').first();
+    const segBar = page.locator('.segment-body').first();
     const hasSegments = await segBar.count() > 0;
     
     if (hasSegments) {
