@@ -49,10 +49,12 @@ export class PipeServiceImpl implements PipeService {
   }
 
   async move(_sessionId: string, pipeId: string, newOrderIndex: number): Promise<ServiceResult> {
-    const pipe = this.getPipe(this.session, pipeId);
-    if (pipe) {
-      pipe.orderIndex = newOrderIndex;
-    }
+    const from = this.session.pipes.findIndex(p => p.id === pipeId);
+    if (from < 0) return { errors: ['Pipe not found'] };
+    const to = Math.max(0, Math.min(newOrderIndex, this.session.pipes.length - 1));
+    const [pipe] = this.session.pipes.splice(from, 1);
+    this.session.pipes.splice(to, 0, pipe);
+    reindexPipes(this.session.pipes);
     return { errors: [] };
   }
 

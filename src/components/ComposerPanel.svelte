@@ -28,7 +28,11 @@
 		toggleSubjectRef as toggleSubjectRefAction,
 		updateSubjectRefUrl as updateSubjectRefUrlAction,
 		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
+		movePipe as movePipeAction,
+		duplicatePipe as duplicatePipeAction,
+		setPipeLength as setPipeLengthAction,
 	} from '$lib/composerStore';
+import { flashToast } from '$lib/flashToast';
 import {
 	createFrameGeometry,
 	type FrameGeometry,
@@ -41,16 +45,18 @@ import {
 } from '$lib/frameGeometry';
 
 	let {
-		session,
-		totalFrames: propTotalFrames = 241,
-		selectedFrame,
-	} = $props<{
-		session?: SessionData;
-		totalFrames?: number;
-		selectedFrame?: number;
-		onUpdate?: (session: SessionData) => void;
-		onframechange?: (frame: number) => void;
-	}>();
+			session,
+			totalFrames: propTotalFrames = 241,
+			selectedFrame,
+			activePipeIdx = $bindable(null),
+		} = $props<{
+			session?: SessionData;
+			totalFrames?: number;
+			selectedFrame?: number;
+			activePipeIdx?: number | null;
+			onUpdate?: (session: SessionData) => void;
+			onframechange?: (frame: number) => void;
+		}>();
 
 	const MAX_KEYFRAMES = 3;
 	const MAX_SUBJECT_REFS = 5;
@@ -58,7 +64,11 @@ import {
 
 	// ── Derived state ────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
-	let totalFrames = $derived(propTotalFrames ?? (pipes.length > 0 ? (pipes[0]?.lengthFrames ?? DEFAULT_FRAME_COUNT) : DEFAULT_FRAME_COUNT));
+	let totalFrames = $derived(
+		pipes.length > 0
+			? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? DEFAULT_FRAME_COUNT)
+			: (propTotalFrames ?? DEFAULT_FRAME_COUNT)
+	);
 
 	// ── Centralized geometry ───────────────────────────────────────────────
 	let rulerElement = $state<HTMLElement | null>(null);
@@ -91,7 +101,12 @@ import {
 	});
 
 	// ── UI state ─────────────────────────────────────────────────────────────
-	let activePipeIdx = $state<number | null>(null);
+	// Clamp activePipeIdx when pipes shrink (removals) — prevents stale index
+	$effect(() => {
+		if (activePipeIdx !== null && activePipeIdx >= pipes.length) {
+			activePipeIdx = null;
+		}
+	});
 
 	// Keyframe modal
 	let showKeyframeModal = $state(false);
@@ -232,7 +247,42 @@ import {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
 		const result = await removePipeAction(session.id, pipe.id);
-		if (result.errors.length > 0) console.error('[ComposerPanel] removePipe:', result.errors);
+		if (result.errors.length > 0) {
+			flashToast(`Failed to remove pipe: ${result.errors.join(', ')}`);
+			console.error('[ComposerPanel] removePipe:', result.errors);
+		}
+	}
+
+	async function handleMovePipe(idx: number, dir: -1 | 1) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const target = idx + dir;
+		if (target < 0 || target >= pipes.length) return;
+		const result = await movePipeAction(session.id, pipe.id, target);
+		if (result.errors.length > 0) {
+			flashToast(`Failed to reorder pipe: ${result.errors.join(', ')}`);
+		}
+	}
+
+	async function handleDuplicatePipe(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await duplicatePipeAction(session.id, pipe.id);
+		if (result.errors.length > 0) {
+			flashToast(`Failed to duplicate pipe: ${result.errors.join(', ')}`);
+			console.error('[ComposerPanel] duplicatePipe:', result.errors);
+		}
+	}
+
+	async function handlePipeLengthChange(idx: number, raw: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		if (!Number.isFinite(raw)) return;
+		const clamped = Math.max(41, raw); // min 8*5+1
+		const result = await setPipeLengthAction(session.id, pipe.id, clamped);
+		if (result.errors.length > 0) {
+			flashToast(`Failed to set pipe length: ${result.errors.join(', ')}`);
+		}
 	}
 
 	// ── Keyframe ────────────────────────────────────────────────────────────
@@ -264,6 +314,7 @@ import {
 		const slotIndex = editingKeyframeSlot;
 		const result = await addKeyframeAction(session.id, pipe.id, slotIndex, kfFrame, kfType, kfValue);
 		if (result.errors.length > 0) {
+			flashToast(result.errors[0] || 'Failed to save keyframe');
 			console.error('[ComposerPanel] confirmKeyframe:', result.errors);
 			return;
 		}
@@ -318,6 +369,7 @@ import {
 			result = await addSubjectRefAction(session.id, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
 		}
 		if (result.errors.length > 0) {
+			flashToast(result.errors[0] || 'Failed to save subject reference');
 			console.error('[ComposerPanel] confirmSubjectRef:', result.errors);
 			return;
 		}
@@ -711,8 +763,18 @@ import {
 			<!-- ═══ PIPE HEADER ═══ -->
 			<div class="pipe-header">
 				<span class="pipe-label">Pipe {pipeIdx + 1}</span>
-				<span class="pipe-meta">{totalFrames}f</span>
-				<button class="btn-icon" onclick={() => handleRemovePipe(pipeIdx)} title="Remove pipe">×</button>
+				<span class="pipe-meta">{pipe.lengthFrames}f</span>
+				<span class="pipe-ops">
+					<button class="btn-icon" onclick={() => handleMovePipe(pipeIdx, -1)} disabled={pipeIdx === 0} title="Move pipe up">↑</button>
+					<button class="btn-icon" onclick={() => handleMovePipe(pipeIdx, 1)} disabled={pipeIdx === pipes.length - 1} title="Move pipe down">↓</button>
+					<button class="btn-icon" onclick={() => handleDuplicatePipe(pipeIdx)} title="Duplicate pipe">⧉</button>
+					<label class="pipe-len" title="Pipe length in frames (min 41)">
+						<span>len</span>
+						<input type="number" min="41" step="8" value={pipe.lengthFrames}
+							onchange={(e) => handlePipeLengthChange(pipeIdx, Number(e.currentTarget.value))} />
+					</label>
+					<button class="btn-icon pipe-del" onclick={() => handleRemovePipe(pipeIdx)} title="Remove pipe">×</button>
+				</span>
 			</div>
 
 			<!-- ═══ KEYFRAME ROW ═══ -->
@@ -1261,6 +1323,55 @@ import {
 		font-size: 12px;
 		color: var(--text-secondary);
 		margin-left: auto;
+	}
+
+	.pipe-ops {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin-left: 4px;
+	}
+
+	.pipe-ops .btn-icon {
+		min-width: 24px;
+		height: 24px;
+		font-size: 14px;
+	}
+
+	.pipe-ops .btn-icon:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
+	}
+
+	.pipe-len {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 11px;
+		color: var(--text-secondary);
+	}
+
+	.pipe-len input {
+		width: 52px;
+		padding: 3px 5px;
+		font-size: 12px;
+		border: 1px solid var(--border);
+		border-radius: 5px;
+		background: var(--surface-2);
+		color: var(--text-primary);
+	}
+
+	.pipe-len input:focus {
+		outline: none;
+		border-color: var(--accent);
+	}
+
+	.pipe-del {
+		color: var(--text-secondary);
+	}
+
+	.pipe-del:hover {
+		color: #ef4444;
 	}
 
 	.row-group {

@@ -8,7 +8,7 @@
 	import type { ProjectData, SessionData, PipeRow } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 import { migratePipe } from '$lib/composerStore';
-import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } from '$lib/composerStore';
+import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, updateQ, updateC } from '$lib/composerStore';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -57,14 +57,32 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 
 	// Keyboard navigation for playhead
 	let selectedFrame = $state<number>(0);
-	let totalFrames = $state(241);
+	let activePipeIdx = $state<number | null>(null);
 	let pipes = $derived(selectedSession?.pipes ?? []);
+	// totalFrames tracks the active pipe's length (canonical: last frame = totalFrames - 1)
+	let totalFrames = $derived(
+		pipes.length > 0 ? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? 241) : 241
+	);
+	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
 	function handleKeyDown(e: KeyboardEvent) {
 		if (e.key === 'ArrowLeft') {
 			selectedFrame = Math.max(0, (selectedFrame || 0) - 8);
 		} else if (e.key === 'ArrowRight') {
-			selectedFrame = Math.min(totalFrames, (selectedFrame || 0) + 8);
+			selectedFrame = Math.min(totalFrames - 1, (selectedFrame || 0) + 8);
 		}
+	}
+
+	// Quality / Creativity edits target the ACTIVE pipe (per-pipe fields)
+	async function handleQValueChange(q: number) {
+		if (!selectedSession || !activePipe) return;
+		const r = await updateQ(selectedSession.id, activePipe.id, q);
+		if (r.errors.length > 0) console.error('[Workspace] updateQ:', r.errors);
+	}
+
+	async function handleCValueChange(c: number) {
+		if (!selectedSession || !activePipe) return;
+		const r = await updateC(selectedSession.id, activePipe.id, c);
+		if (r.errors.length > 0) console.error('[Workspace] updateC:', r.errors);
 	}
 
 	// Load projects from backend
@@ -664,7 +682,7 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 	{#if selectedSession && selectedProject}
 	<div class="preview-area">
 		<div class="preview-canvas">
-			<div class="preview-playhead" style={`left: ${((selectedFrame || 0) / totalFrames) * 100}%`}>
+			<div class="preview-playhead" style={`left: ${((selectedFrame || 0) / Math.max(1, totalFrames - 1)) * 100}%`}>
 				<div class="playhead-tip"></div>
 				<div class="playhead-line"></div>
 			</div>
@@ -717,6 +735,7 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 					session={selectedSession}
 					{totalFrames}
 					{selectedFrame}
+					bind:activePipeIdx
 					onUpdate={handleSessionUpdate}
 					onframechange={(f) => selectedFrame = f}
 				/>
@@ -735,6 +754,10 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore } fr
 				{selectedProject}
 				{activeTool}
 				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
+				qValue={activePipe?.qValue}
+				cValue={activePipe?.cValue}
+				onqvaluechange={handleQValueChange}
+				oncvaluechange={handleCValueChange}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
 				onfpschange={handleFpsChange}

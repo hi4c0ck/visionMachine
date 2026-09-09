@@ -12,6 +12,10 @@
 		onfpschange,
 		onresolutionchange,
 		onorientationchange,
+		qValue,
+		cValue,
+		onqvaluechange,
+		oncvaluechange,
 		unsynced = false
 	} = $props<{
 		session: SessionData | null;
@@ -22,6 +26,12 @@
 		onfpschange?: (fps: number) => void;
 		onresolutionchange?: (resolution: string) => void;
 		onorientationchange?: (orientation: string) => void;
+		/** Quality (inference steps) of the active pipe */
+		qValue?: number;
+		/** Creativity (cfg scale) of the active pipe */
+		cValue?: number;
+		onqvaluechange?: (q: number) => void;
+		oncvaluechange?: (c: number) => void;
 		unsynced?: boolean;
 	}>();
 
@@ -137,8 +147,10 @@
             value={session.fps}
             onchange={(e) => onfpschange?.(Number(e.currentTarget.value))}
           >
+            <option value="18">18 fps</option>
             <option value="24">24 fps</option>
             <option value="30">30 fps</option>
+            <option value="48">48 fps</option>
             <option value="60">60 fps</option>
           </select>
         </div>
@@ -170,14 +182,14 @@
 
         <div class="setting-row">
           <label class="setting-label">Quality</label>
-          <input type="range" min="5" max="30" step="1" value={session?.qValue ?? 18} class="setting-slider" onchange={(e) => onfpschange?.(Number(e.currentTarget.value))} />
-          <span class="setting-value">{session?.qValue ?? 18}</span>
+          <input type="range" min="5" max="30" step="1" value={qValue ?? 18} class="setting-slider" onchange={(e) => onqvaluechange?.(Number(e.currentTarget.value))} />
+          <span class="setting-value">{qValue ?? 18}</span>
         </div>
 
         <div class="setting-row">
           <label class="setting-label">Creativity</label>
-          <input type="range" min="0.5" max="15" step="0.5" value={session?.cValue ?? 7} class="setting-slider" onchange={(e) => onresolutionchange?.(e.currentTarget.value)} />
-          <span class="setting-value">{session?.cValue ?? 7}</span>
+          <input type="range" min="0.5" max="15" step="0.5" value={cValue ?? 7} class="setting-slider" onchange={(e) => oncvaluechange?.(Number(e.currentTarget.value))} />
+          <span class="setting-value">{cValue ?? 7}</span>
         </div>
       </div>
     {:else}
