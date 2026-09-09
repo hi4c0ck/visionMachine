@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { PipeRow, PipeKeyframe } from '$types';
+	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import '../composer-row.css';
 
-	// Keyframes row — owns its display helpers. The panel owns the
-	// keyframe store actions; this component fires callbacks.
+	// Keyframes row — display slots come from the shared keyframeSlots lib
+	// (single source of truth, also used by the panel's next-slot default).
+	// The panel owns the keyframe store actions; this component fires callbacks.
 	let {
 		pipe,
 		maxKeyframes,
@@ -16,30 +18,7 @@
 		onRemoveKeyframe: (kfId: string) => void;
 	}>();
 
-	function isKeyframeConfigured(pipe: PipeRow, slotIndex: number): boolean {
-		const kf = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === slotIndex);
-		if (!kf) return false;
-		switch (kf.type) {
-			case 'url': return !!(kf.imageSrc && kf.imageSrc.trim().length > 0);
-			case 'txt2img': return !!(kf.prompt && kf.prompt.trim().length > 0);
-			case 'img2img': return !!(kf.referenceUrl && kf.referenceUrl.trim().length > 0);
-			default: return false;
-		}
-	}
-
-	function getVisibleKeyframeSlots(pipe: PipeRow): number[] {
-		const visible: number[] = [];
-		for (let i = 1; i <= maxKeyframes; i++) {
-			if (i === 1) {
-				visible.push(i);
-			} else if (isKeyframeConfigured(pipe, i - 1)) {
-				visible.push(i);
-			} else {
-				break;
-			}
-		}
-		return visible;
-	}
+	const visibleSlots = () => getVisibleKeyframeSlots(pipe, maxKeyframes);
 </script>
 
 <div class="row-group">
@@ -48,7 +27,7 @@
 		<span class="row-count">{pipe.keyframes.length}/{maxKeyframes}</span>
 	</div>
 	<div class="kf-row">
-		{#each getVisibleKeyframeSlots(pipe) as kfNum}
+		{#each visibleSlots() as kfNum}
 			{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
 				{#if kf}
 					<div 

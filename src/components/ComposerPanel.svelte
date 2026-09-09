@@ -11,6 +11,7 @@
 	import SubjectRefsRow from './ComposerRows/SubjectRefsRow.svelte';
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
 	import { getNextAvailableRange } from '$lib/frameMath';
+	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import {
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
@@ -111,27 +112,9 @@ import { flashToast } from '$lib/flashToast';
 	});
 
 	// ── Helpers ─────────────────────────────────────────────────────────────
-	// Keyframe-row display helpers stay in the panel: openKeyframeModal
-	// computes the default next slot from getVisibleKeyframeSlots.
-
-	function getVisibleKeyframeSlots(pipe: PipeRow): number[] {
-		const visible: number[] = [];
-		for (let i = 1; i <= MAX_KEYFRAMES; i++) {
-			if (i === 1) {
-				visible.push(i);
-			} else if (pipe.keyframes.some((k: PipeKeyframe) =>
-				k.slotIndex === i - 1 &&
-				((k.type === 'url' && !!k.imageSrc?.trim()) ||
-				 (k.type === 'txt2img' && !!k.prompt?.trim()) ||
-				 (k.type === 'img2img' && !!k.referenceUrl?.trim()))
-			)) {
-				visible.push(i);
-			} else {
-				break;
-			}
-		}
-		return visible;
-	}
+	// Keyframe-row display slots come from $lib/keyframeSlots (single source
+	// of truth, shared with KeyframesRow). openKeyframeModal uses it to
+	// compute the default next slot.
 
 	function getTimeline(pipe: PipeRow): any {
 		return pipe.elements.find((e: any) => e.tag === 'timeline') ?? null;
@@ -193,7 +176,7 @@ import { flashToast } from '$lib/flashToast';
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
 		activePipeIdx = idx;
-		editingKeyframeSlot = slotIndex ?? (getVisibleKeyframeSlots(pipe).length + 1);
+		editingKeyframeSlot = slotIndex ?? (getVisibleKeyframeSlots(pipe, MAX_KEYFRAMES).length + 1);
 		showKeyframeModal = true;
 		closeMenus();
 	}
