@@ -27,17 +27,27 @@ export class KeyframeServiceImpl implements KeyframeService {
 
     const snappedFrame = snapTo8(frame);
 
-    const kf: PipeKeyframe = {
-      id: crypto.randomUUID(),
+    const fields: Omit<PipeKeyframe, 'id' | 'slotIndex'> = {
       frame: snappedFrame,
-      slotIndex,
       type,
       imageSrc: type === 'url' ? value : undefined,
       prompt: type !== 'url' ? value : undefined,
       referenceUrl: type === 'img2img' ? value : undefined,
       status: 'pending',
     };
-    pipe.keyframes.push(kf);
+
+    // Upsert: editing an existing slot replaces that keyframe instead of
+    // stacking a duplicate entry in the same slot.
+    const existing = pipe.keyframes.find((k) => k.slotIndex === slotIndex);
+    if (existing) {
+      Object.assign(existing, fields, { id: existing.id });
+    } else {
+      pipe.keyframes.push({
+        id: crypto.randomUUID(),
+        slotIndex,
+        ...fields,
+      });
+    }
 
     return { errors: [] };
   }
