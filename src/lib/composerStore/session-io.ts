@@ -9,7 +9,8 @@ import { TAG_SPECIFICATIONS } from '$types';
 export class SessionServiceImpl implements SessionService {
   async load(sessionId: string): Promise<ServiceResult & { session?: SessionData }> {
     try {
-      const result = await invoke('get_composer', { input: { session_id: sessionId } });
+      // get_composer takes session_id directly (Tauri camelCase arg matching)
+      const result = await invoke('get_composer', { sessionId });
       const backendData = result as any;
 
       const pipes: PipeRow[] = this.mapBackendPipes(backendData.pipes || []);

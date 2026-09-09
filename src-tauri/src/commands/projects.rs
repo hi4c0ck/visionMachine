@@ -39,3 +39,21 @@ pub async fn list_projects(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[derive(Deserialize)]
+pub struct DeleteProjectInput {
+    pub project_id: String,
+}
+
+/// Delete a project and cascade-remove its sessions, composers, files, and
+/// generated frames (FK-safe order, single transaction).
+#[tauri::command]
+pub async fn delete_project(
+    input: DeleteProjectInput,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.delete_project(&input.project_id)
+        .await
+        .map_err(|e| e.to_string())
+}

@@ -111,6 +111,7 @@ pub fn run() {
             commands::profiles::get_user_profile,
             commands::projects::create_project,
             commands::projects::list_projects,
+            commands::projects::delete_project,
             commands::sessions::create_session,
             commands::sessions::list_sessions,
             commands::sessions::update_session,

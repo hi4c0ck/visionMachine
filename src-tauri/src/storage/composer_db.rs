@@ -27,7 +27,7 @@ impl Database {
                 // Read from sessions.pipes_json without creating a composer entry
                 use sqlx::Row;
                 match sqlx::query(
-                    "SELECT name, pipes_json FROM sessions WHERE id = ?",
+                    "SELECT name, pipes_json, fps, resolution, orientation, total_generated_frames FROM sessions WHERE id = ?",
                 )
                 .bind(session_id)
                 .fetch_optional(&self.pool)
@@ -37,6 +37,26 @@ impl Database {
                     Some(row) => {
                         let session_name: String = row.get("name");
                         let pipes_json: Option<String> = row.get("pipes_json");
+                        let fps: u32 = row
+                            .try_get("fps")
+                            .ok()
+                            .flatten()
+                            .unwrap_or(24);
+                        let resolution: String = row
+                            .try_get("resolution")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| "720p".to_string());
+                        let orientation: String = row
+                            .try_get("orientation")
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| "horizontal".to_string());
+                        let total_generated_frames: u32 = row
+                            .try_get("total_generated_frames")
+                            .ok()
+                            .flatten()
+                            .unwrap_or(0);
 
                         let pipes = if let Some(pj) = pipes_json {
                             serde_json::from_str::<Vec<serde_json::Value>>(&pj)
@@ -61,10 +81,10 @@ impl Database {
                             session_id: session_id.to_string(),
                             name: session_name,
                             pipes,
-                            fps: 24,
-                            resolution: "720p".to_string(),
-                            orientation: "horizontal".to_string(),
-                            total_generated_frames: 0,
+                            fps,
+                            resolution,
+                            orientation,
+                            total_generated_frames,
                             created_at: None,
                             updated_at: None,
                         })

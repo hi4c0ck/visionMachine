@@ -8,7 +8,7 @@
 	import type { ProjectData, SessionData, PipeRow } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 import { migratePipe } from '$lib/composerStore';
-import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, updateQ, updateC } from '$lib/composerStore';
+import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC } from '$lib/composerStore';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -240,13 +240,19 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 		}
 	}
 
-	// Register store update callback - reload session from backend when changed
-	setOnUpdate(async (sessionId) => {
+	// Register store update callback.
+	// Two jobs:
+	//  1. Re-sync the mutated store session back into `projects` so
+	//     selectedSession -> ComposerPanel re-renders (store mutates in place).
+	//  2. Persist composer mutations to SQLite via saveSession (debounced).
+	//     SQLite is the source of truth; no longer routes through saveProjects.
+	const saveTimers = new Map<string, number>();
+	setOnUpdate((sessionId) => {
+		// 1) UI re-sync - only for the session the user is currently viewing
 		if (selectedSessionId === sessionId && selectedProject) {
-			// Update the project's session data with loaded pipes
 			const freshSession = sessions.get(sessionId);
 			if (freshSession) {
-				const updatedProjects = (projects || []).map((p: any) => {
+				projects = (projects || []).map((p: any) => {
 					if (p.id !== selectedProject.id) return p;
 					return {
 						...p,
@@ -255,27 +261,44 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 						)
 					};
 				});
-				projects = updatedProjects;
-				saveProjects();
 			}
 		}
+
+		// 2) Persistence - debounced per session
+		const pending = saveTimers.get(sessionId);
+		if (pending !== undefined) window.clearTimeout(pending);
+		saveTimers.set(sessionId, window.setTimeout(() => {
+			saveTimers.delete(sessionId);
+			if (!isTauri()) {
+				// Browser dev mode: no backend - keep the legacy local path
+				saveProjects();
+				return;
+			}
+			saveSession(sessionId).then((r) => {
+				if (r.errors.length > 0) console.error('[Workspace] saveSession:', r.errors);
+			});
+		}, 800));
 	});
 
-	// Save projects to backend and localStorage (hybrid approach)
+	// Persist UI selection + (browser-only) project snapshot.
+	// In Tauri, SQLite is the source of truth for projects/sessions/composers,
+	// so the localStorage project blob is intentionally NOT written - it would
+	// be a shadow copy that can silently diverge. Selection prefs are harmless
+	// UI state and stay in localStorage in both modes.
 	async function saveProjects() {
 		try {
-			// Save to backend
-			// Note: This would need a proper backend command that handles full project update
-			// For now, we'll just save to localStorage as fallback
-			localStorage.setItem(`vm-projects-${userName}`, JSON.stringify(projects));
-			
+			if (!isTauri()) {
+				// Browser dev mode: localStorage is the only persistence available
+				localStorage.setItem(`vm-projects-${userName}`, JSON.stringify(projects));
+			}
+
 			if (selectedProjectId) {
 				localStorage.setItem(`vm-selected-project-${userName}`, selectedProjectId);
 				if (selectedSessionId) {
 					localStorage.setItem(`vm-selected-session-${userName}`, selectedSessionId);
 				}
 			}
-			
+
 			if (onprojectsupdate) {
 				onprojectsupdate(projects);
 			}
@@ -407,13 +430,35 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 		saveProjects();
 	}
 
-	function handleDeleteProject(projectId: string) {
+	async function handleDeleteProject(projectId: string) {
+		// Delete via backend cascade (sessions, composers, generated_frames, files)
+		if (isTauri()) {
+			try {
+				await invoke('delete_project', {
+					input: { project_id: projectId }
+				});
+			} catch (e) {
+				console.error('[Workspace] Failed to delete project in backend:', e);
+				return;
+			}
+		}
+		// Capture the project's session ids BEFORE filtering so we can
+		// cancel their pending saves and evict them from the store Map.
+		const removedProject = projects.find(p => p.id === projectId);
+		const removedSessionIds = (removedProject?.sessions ?? []).map((s: any) => s.id);
+		for (const sid of removedSessionIds) {
+			const pending = saveTimers.get(sid);
+			if (pending !== undefined) {
+				window.clearTimeout(pending);
+				saveTimers.delete(sid);
+			}
+			sessions.delete(sid);
+		}
 		projects = projects.filter(p => p.id !== projectId);
 		if (selectedProjectId === projectId) {
 			selectedProjectId = null;
 			selectedSessionId = null;
 		}
-		// Clear store for deleted project's sessions
 		hydrateSessions((projects || []).flatMap((p: any) => p.sessions || []));
 		saveProjects();
 	}
@@ -541,9 +586,27 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 		saveProjects();
 	}
 
-	function handleRenameSession(sessionId: string, newName: string) {
-		if (!selectedProject) return;
-		
+	async function handleRenameSession(sessionId: string, newName: string) {
+		if (!selectedProject || !newName.trim()) return;
+
+		// Persist the rename to SQLite (sessions.name)
+		if (isTauri()) {
+			try {
+				await invoke('update_session', {
+					input: { session_id: sessionId, updates: { name: newName } }
+				});
+			} catch (e) {
+				console.error('[Workspace] Failed to rename session in backend:', e);
+				return;
+			}
+		}
+
+		// Sync the store's in-memory copy so the next saveSession writes the new name
+		const storeSession = sessions.get(sessionId);
+		if (storeSession) {
+			storeSession.name = newName;
+		}
+
 		const updatedSessions = (selectedProject?.sessions || []).map((s: any) =>
 			s.id === sessionId ? { ...s, name: newName, updatedAt: Date.now() } : s
 		);
@@ -561,18 +624,30 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 	}
 
 	async function handleDeleteSession(projectId: string, sessionId: string) {
-		try {
-			// Delete via backend
+		// Delete via backend cascade (composers, session_settings, generated_frames)
+		if (isTauri()) {
+			try {
 				await invoke('delete_session', {
 					input: { session_id: sessionId }
 				});
-		} catch (e) {
-			console.error('[Workspace] Failed to delete session:', e);
+			} catch (e) {
+				console.error('[Workspace] Failed to delete session:', e);
+				return;
+			}
 		}
-		
+
+		// Cancel any pending debounced save for this session - it no longer exists
+		const pending = saveTimers.get(sessionId);
+		if (pending !== undefined) {
+			window.clearTimeout(pending);
+			saveTimers.delete(sessionId);
+		}
+		// Remove from the store's in-memory Map (hydrateSessions only adds)
+		sessions.delete(sessionId);
+
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
-		
+
 		const updatedSessions = project.sessions.filter(s => s.id !== sessionId);
 		const updatedProject: ProjectData = {
 			...project,
@@ -583,11 +658,10 @@ import { hydrateSessions, setOnUpdate, loadSession, sessions, composerStore, upd
 		projects = (projects || []).map((p: any) =>
 			p.id === projectId ? updatedProject : p
 		);
-		
+
 		if (selectedSessionId === sessionId) {
 			selectedSessionId = null;
 		}
-		// Remove deleted session from store
 		hydrateSessions(updatedSessions);
 		saveProjects();
 	}

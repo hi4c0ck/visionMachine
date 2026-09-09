@@ -29,6 +29,13 @@ impl Database {
             .await
             .map_err(|e| format!("Failed to connect to database: {}", e))?;
 
+        // SQLite enforces FKs only when the pragma is ON per-connection.
+        // Without it, all ON DELETE CASCADE declarations are inert.
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .map_err(|e| format!("Failed to enable foreign keys: {}", e))?;
+
         Ok(Self { pool })
     }
 
@@ -345,6 +352,65 @@ impl Database {
         Ok(projects)
     }
 
+    /// Deterministically remove a project and everything that hangs off it.
+    /// Runs in one transaction and issues explicit deletes in FK-safe order,
+    /// so it is correct even on pooled connections where the foreign-key
+    /// pragma did not take effect.
+    pub async fn delete_project(&self, project_id: &str) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+
+        // Composer blobs are keyed to session_id — clean them first.
+        sqlx::query(
+            "DELETE FROM composers WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Session-level settings rows are keyed to session_id too.
+        sqlx::query(
+            "DELETE FROM session_settings WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Generated frames are keyed to session_id as well.
+        sqlx::query(
+            "DELETE FROM generated_frames WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        // Project files are keyed to project_id.
+        sqlx::query("DELETE FROM project_files WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Sessions are keyed to project_id.
+        sqlx::query("DELETE FROM sessions WHERE project_id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Finally the project itself.
+        sqlx::query("DELETE FROM projects WHERE id = ?")
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     // Session operations
     pub async fn create_session(
         &self,
@@ -486,12 +552,30 @@ impl Database {
     }
 
     pub async fn delete_session(&self, session_id: &str) -> Result<(), String> {
-        sqlx::query("DELETE FROM sessions WHERE id = ?")
+        // Explicit cascade — do not rely on the per-connection FK pragma,
+        // which is not guaranteed on every pooled connection.
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM composers WHERE session_id = ?")
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
-
+        sqlx::query("DELETE FROM session_settings WHERE session_id = ?")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM generated_frames WHERE session_id = ?")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 

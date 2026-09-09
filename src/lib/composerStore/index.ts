@@ -335,13 +335,14 @@ class ComposerStoreImpl implements ComposerStore {
 
   async loadSession(sessionId: string): Promise<ServiceResult & { session?: SessionData }> {
     try {
-      const result = await invoke('get_session', { sessionId });
-      const session = result as SessionData;
-      if (session) {
-        sessions.set(sessionId, session);
+      // Load via get_composer (the sessions table has no full-session command);
+      // session-io maps the backend payload into frontend PipeRow shape.
+      const result = await this.services.session.load(sessionId);
+      if (result.session) {
+        sessions.set(sessionId, result.session);
         unsynced.delete(sessionId);
       }
-      return { errors: [], session };
+      return result;
     } catch (e) {
       console.error('[ComposerStore] Failed to load session:', e);
       return { errors: ['Failed to load session'] };
@@ -354,7 +355,7 @@ class ComposerStoreImpl implements ComposerStore {
 
     try {
       await invoke('save_composer', {
-        input: JSON.stringify({
+        input: {
           session_id: session.id,
           name: session.name,
           pipes: session.pipes.map((pipe: any) => ({
@@ -408,7 +409,7 @@ class ComposerStoreImpl implements ComposerStore {
           resolution: session.resolution,
           orientation: session.orientation,
           totalGeneratedFrames: session.totalGeneratedFrames,
-        }),
+        },
       });
       unsynced.delete(sessionId);
       return { errors: [] };

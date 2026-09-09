@@ -5,7 +5,6 @@ use tauri::State;
 // ── Request/Response types ───────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SaveInput {
     pub session_id: String,
     pub name: String,
@@ -16,7 +15,7 @@ pub struct SaveInput {
     pub resolution: Option<String>,
     #[serde(default)]
     pub orientation: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "totalGeneratedFrames")]
     pub total_generated_frames: Option<u32>,
 }
 
