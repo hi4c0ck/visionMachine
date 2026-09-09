@@ -1,0 +1,152 @@
+/* Shared modal chrome for composer modals.
+   Each modal component imports this:  import '../../composer-modal.css';
+   Svelte scoped CSS cannot be shared across components, so a global import
+   is the DRY option. Keep the .mode-* keyframe-modal-specific rules here too
+   (only KeyframeModal uses them). */
+
+.modal-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.7);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 2000;
+}
+
+.modal {
+	background: var(--bg-secondary);
+	border: 1px solid var(--border-color);
+	border-radius: 12px;
+	width: 90%;
+	max-width: 480px;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.modal-header {
+	padding: 16px 20px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.modal-sub {
+	font-size: 12px;
+	font-weight: 400;
+	color: var(--text-secondary);
+}
+
+.modal-body {
+	padding: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.modal-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.modal-field label {
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-secondary);
+}
+
+.modal-field input[type="text"],
+.modal-field input[type="number"],
+.modal-field textarea {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	padding: 10px 12px;
+	color: var(--text-primary);
+	font-size: 14px;
+	width: 100%;
+}
+
+.modal-field input:focus,
+.modal-field textarea:focus {
+	outline: none;
+	border-color: var(--accent-color);
+}
+
+.modal-field textarea {
+	min-height: 100px;
+	resize: vertical;
+}
+
+.modal-field input[type="checkbox"] {
+	margin-right: 8px;
+}
+
+.modal-footer {
+	padding: 16px 20px;
+	border-top: 1px solid var(--border-color);
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+}
+
+.modal-footer .btn-confirm,
+.modal-footer .btn-cancel {
+	padding: 10px 20px;
+	border-radius: 6px;
+	font-size: 13px;
+	cursor: pointer;
+	border: none;
+}
+
+.modal-footer .btn-confirm {
+	background: var(--accent-color);
+	color: white;
+}
+
+.modal-footer .btn-confirm:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.modal-footer .btn-cancel {
+	background: var(--bg-tertiary);
+	color: var(--text-primary);
+	border: 1px solid var(--border-color);
+}
+
+/* Keyframe modal mode selector */
+.mode-selector {
+	display: flex;
+	gap: 8px;
+}
+
+.mode-btn {
+	flex: 1;
+	padding: 10px;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	color: var(--text-secondary);
+	cursor: pointer;
+	font-size: 13px;
+	transition: all 0.2s;
+}
+
+.mode-btn:hover {
+	border-color: var(--accent-color);
+	color: var(--text-primary);
+}
+
+.mode-btn.active {
+	background: var(--accent-bg);
+	border-color: var(--accent-color);
+	color: var(--accent-color);
+}

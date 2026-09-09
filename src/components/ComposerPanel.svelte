@@ -2,12 +2,14 @@
 	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, SubjectReference } from '$types';
 	import { TAG_SPECIFICATIONS } from '$types';
 	import FrameRuler from './FrameRuler.svelte';
+	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
+	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
+	import SegmentModal from './ComposerModals/SegmentModal.svelte';
+	import TagPromptModal from './ComposerModals/TagPromptModal.svelte';
 	import { getNextAvailableRange } from '$lib/frameMath';
-	import { snapTo8 } from '$lib/frameMath';
 	import {
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
-		addKeyframe as addKeyframeAction,
 		removeKeyframe as removeKeyframeAction,
 		addGlobalElement as addGlobalElementAction,
 		toggleGlobalElement as toggleGlobalElementAction,
@@ -20,12 +22,8 @@
 		removeTagElement as removeTagElementAction,
 		resizeTagElement as resizeTagElementAction,
 		updateTagPrompt as updateTagPromptAction,
-		addSubjectRef as addSubjectRefAction,
-		updateSubjectRefRange as updateSubjectRefRangeAction,
 		removeSubjectRef as removeSubjectRefAction,
 		toggleSubjectRef as toggleSubjectRefAction,
-		updateSubjectRefUrl as updateSubjectRefUrlAction,
-		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
 		movePipe as movePipeAction,
 		duplicatePipe as duplicatePipeAction,
 		setPipeLength as setPipeLengthAction,
@@ -113,22 +111,16 @@ import {
 		}
 	});
 
+	// ── Modal open-state (field state now lives in the ComposerModals components) ──
 	// Keyframe modal
 	let showKeyframeModal = $state(false);
 	let editingKeyframeSlot = $state<number | null>(null);
-	let kfType = $state<'url' | 'txt2img' | 'img2img'>('url');
-	let kfValue = $state('');
-	let kfFrame = $state(0);
 
 	// Subject reference modal
 	let showSubjectRefModal = $state(false);
 	let editingSubjectRefId = $state<string | null>(null);
-	let srImageUrl = $state('');
-	let srUseFrames = $state(false);
-	let srStart = $state(0);
-	let srEnd = $state(8);
 
-	// Segment modal
+	// Segment modal — panel keeps the pre-seed start/end (handleAddSegment computes them)
 	let showSegmentModal = $state(false);
 	let segStart = $state(0);
 	let segEnd = $state(8);
@@ -136,8 +128,8 @@ import {
 	// Tag prompt modal
 	let showTagPromptModal = $state(false);
 	let editingTagId = $state<string>('');
-	let tagPrompt = $state('');
 	let editingSegmentId = $state<string>('');
+	let tagPrompt = $state('');
 
 	// [+] menu
 	let showAddMenu = $state(false);
@@ -291,34 +283,8 @@ import {
 		if (!pipe || !session?.id) return;
 		activePipeIdx = idx;
 		editingKeyframeSlot = slotIndex ?? (getVisibleKeyframeSlots(pipe).length + 1);
-		const existing = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === editingKeyframeSlot);
-		if (existing) {
-			kfType = existing.type;
-			kfValue = existing.imageSrc ?? existing.prompt ?? existing.referenceUrl ?? '';
-			kfFrame = existing.frame;
-		} else {
-			kfType = 'url';
-			kfValue = '';
-			kfFrame = snapTo8(pipe.keyframes.length > 0 ? pipe.keyframes[0].frame : 0);
-		}
 		showKeyframeModal = true;
 		closeMenus();
-	}
-
-	async function confirmKeyframe() {
-		const pipe = pipes[activePipeIdx!];
-		if (!pipe || !session?.id || editingKeyframeSlot === null) return;
-		if (!kfValue.trim()) return;
-
-		const slotIndex = editingKeyframeSlot;
-		const result = await addKeyframeAction(session.id, pipe.id, slotIndex, kfFrame, kfType, kfValue);
-		if (result.errors.length > 0) {
-			flashToast(result.errors[0] || 'Failed to save keyframe');
-			console.error('[ComposerPanel] confirmKeyframe:', result.errors);
-			return;
-		}
-		showKeyframeModal = false;
-		kfValue = '';
 	}
 
 	async function handleRemoveKeyframe(idx: number, kfId: string) {
@@ -334,45 +300,9 @@ import {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
 		activePipeIdx = idx;
-		const existing = refId ? (pipe.subjectReferences ?? []).find(r => r.id === refId) : null;
-		if (existing) {
-			editingSubjectRefId = existing.id;
-			srImageUrl = existing.imageUrl;
-			srUseFrames = existing.useFrames ?? false;
-			srStart = existing.frameStart ?? 0;
-			srEnd = existing.frameEnd ?? Math.min(8, totalFrames - 1);
-		} else {
-			editingSubjectRefId = null;
-			srImageUrl = '';
-			srUseFrames = false;
-			srStart = 0;
-			srEnd = Math.min(8, totalFrames - 1);
-		}
+		editingSubjectRefId = refId ?? null;
 		showSubjectRefModal = true;
 		closeMenus();
-	}
-
-	async function confirmSubjectRef() {
-		const pipe = pipes[activePipeIdx!];
-		if (!pipe || !session?.id) return;
-		if (!srImageUrl.trim()) return;
-
-		if (!editingSubjectRefId && (pipe.subjectReferences?.length ?? 0) >= MAX_SUBJECT_REFS) return;
-
-		let result;
-		if (editingSubjectRefId) {
-			result = await updateSubjectRefRangeAction(session.id, pipe.id, editingSubjectRefId, srStart, srEnd);
-			await updateSubjectRefUrlAction(session.id, pipe.id, editingSubjectRefId, srImageUrl);
-			await updateSubjectRefUseFramesAction(session.id, pipe.id, editingSubjectRefId, srUseFrames);
-		} else {
-			result = await addSubjectRefAction(session.id, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
-		}
-		if (result.errors.length > 0) {
-			flashToast(result.errors[0] || 'Failed to save subject reference');
-			console.error('[ComposerPanel] confirmSubjectRef:', result.errors);
-			return;
-		}
-		showSubjectRefModal = false;
 	}
 
 	async function handleToggleSubjectRef(idx: number, refId: string) {
@@ -583,12 +513,10 @@ import {
 		closeMenus();
 	}
 
-	async function confirmSegment() {
+	// SegmentModal calls back with the snapped start/end it computed
+	async function confirmSegment(start: number, end: number) {
 		const pipe = pipes[activePipeIdx!];
 		if (!pipe || !session?.id) return;
-		const start = snapTo8(segStart);
-		const end = Math.min(snapTo8(segEnd), totalFrames - 1);
-		if (end <= start) return;
 		const result = await addSegmentAction(session.id, pipe.id, start, end);
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] addSegment:', result.errors);
@@ -642,16 +570,17 @@ import {
 		closeMenus();
 	}
 
-	async function confirmTagPrompt() {
+	// TagPromptModal calls back with its edited prompt on confirm
+	async function confirmTagPrompt(prompt: string) {
 		const pipe = pipes[activePipeIdx!];
 		if (!pipe || !session?.id) return;
-		const result = await updateTagPromptAction(session.id, pipe.id, editingSegmentId, editingTagId, tagPrompt);
+		const result = await updateTagPromptAction(session.id, pipe.id, editingSegmentId, editingTagId, prompt);
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] updateTagPrompt:', result.errors);
 			return;
 		}
+		tagPrompt = prompt;
 		showTagPromptModal = false;
-		tagPrompt = '';
 	}
 
 	async function handleRemoveTag(idx: number, segId: string, tagId: string) {
@@ -1017,128 +946,48 @@ import {
 </div>
 
 <!-- ═══ KEYFRAME MODAL ═══ -->
-{#if showKeyframeModal}
-	<div class="modal-overlay" onclick={() => showKeyframeModal = false} role="presentation">
-		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-			<div class="modal-header">
-				<h3>{editingKeyframeSlot ? 'Edit Keyframe' : 'Add Keyframe'} <span class="modal-sub">Slot {editingKeyframeSlot ?? '?'}</span></h3>
-			</div>
-			<div class="modal-body">
-				<div class="mode-selector">
-					<button class="mode-btn {kfType === 'url' ? 'active' : ''}" onclick={() => kfType = 'url'}>URL</button>
-					<button class="mode-btn {kfType === 'txt2img' ? 'active' : ''}" onclick={() => kfType = 'txt2img'}>Txt2Img</button>
-					<button class="mode-btn {kfType === 'img2img' ? 'active' : ''}" onclick={() => kfType = 'img2img'}>Img2Img</button>
-				</div>
-				<div class="modal-field">
-					<label id="kf-frame-label">Frame</label>
-					<input type="number" bind:value={kfFrame} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="kf-frame-label" />
-				</div>
-				{#if kfType === 'url'}
-					<div class="modal-field">
-						<label id="kf-url-label">Image URL</label>
-						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />
-					</div>
-				{:else if kfType === 'txt2img'}
-					<div class="modal-field">
-						<label id="kf-prompt-label">Prompt</label>
-						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-prompt-label"></textarea>
-					</div>
-				{:else if kfType === 'img2img'}
-					<div class="modal-field">
-						<label id="kf-img-url-label">Reference Image URL</label>
-						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-img-url-label" />
-					</div>
-				{/if}
-			</div>
-			<div class="modal-footer">
-				<button class="btn-cancel" onclick={() => showKeyframeModal = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirmKeyframe} disabled={!kfValue.trim()}>Confirm</button>
-			</div>
-		</div>
-	</div>
+{#if activePipeIdx !== null}
+	<KeyframeModal
+		pipe={pipes[activePipeIdx]}
+		sessionId={session?.id}
+		maxFrames={totalFrames}
+		editingSlot={editingKeyframeSlot}
+		bind:open={showKeyframeModal}
+	/>
 {/if}
 
 <!-- ═══ SUBJECT REFERENCE MODAL ═══ -->
-{#if showSubjectRefModal}
-	<div class="modal-overlay" onclick={() => showSubjectRefModal = false} role="presentation">
-		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-			<div class="modal-header">
-				<h3>{editingSubjectRefId ? 'Edit Subject Reference' : 'Add Subject Reference'}</h3>
-			</div>
-			<div class="modal-body">
-				<div class="modal-field">
-					<label id="sr-url-label">Image URL</label>
-					<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-url-label" />
-				</div>
-				<div class="modal-field">
-					<label>
-						<input type="checkbox" bind:checked={srUseFrames} />
-						Use frame range
-					</label>
-				</div>
-				{#if srUseFrames}
-					<div class="modal-field">
-						<label id="sr-start-label">Start Frame</label>
-						<input type="number" bind:value={srStart} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="sr-start-label" />
-					</div>
-					<div class="modal-field">
-						<label id="sr-end-label">End Frame</label>
-						<input type="number" bind:value={srEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />
-					</div>
-				{/if}
-			</div>
-			<div class="modal-footer">
-				<button class="btn-cancel" onclick={() => showSubjectRefModal = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirmSubjectRef} disabled={!srImageUrl.trim()}>Confirm</button>
-			</div>
-		</div>
-	</div>
+{#if activePipeIdx !== null}
+	<SubjectRefModal
+		pipe={pipes[activePipeIdx]}
+		sessionId={session?.id}
+		maxFrames={totalFrames}
+		editingRefId={editingSubjectRefId}
+		maxSubjectRefs={MAX_SUBJECT_REFS}
+		bind:open={showSubjectRefModal}
+	/>
 {/if}
 
 <!-- ═══ SEGMENT MODAL ═══ -->
-{#if showSegmentModal}
-	<div class="modal-overlay" onclick={() => showSegmentModal = false} role="presentation">
-		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-			<div class="modal-header">
-				<h3>Add Segment</h3>
-			</div>
-			<div class="modal-body">
-				<div class="modal-field">
-					<label id="seg-start-label">Start Frame</label>
-					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-start-label" />
-				</div>
-				<div class="modal-field">
-					<label id="seg-end-label">End Frame</label>
-					<input type="number" bind:value={segEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />
-				</div>
-			</div>
-			<div class="modal-footer">
-				<button class="btn-cancel" onclick={() => showSegmentModal = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirmSegment} disabled={Math.min(snapTo8(segEnd), totalFrames - 1) <= snapTo8(segStart)}>Confirm</button>
-			</div>
-		</div>
-	</div>
-{/if}
+<SegmentModal
+	startFrame={segStart}
+	endFrame={segEnd}
+	totalFrames={totalFrames}
+	bind:open={showSegmentModal}
+	onConfirm={(s, e) => confirmSegment(s, e)}
+/>
 
 <!-- ═══ TAG PROMPT MODAL ═══ -->
-{#if showTagPromptModal}
-	<div class="modal-overlay" onclick={() => showTagPromptModal = false} role="presentation">
-		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-			<div class="modal-header">
-				<h3>Edit Tag Prompt</h3>
-			</div>
-			<div class="modal-body">
-				<div class="modal-field">
-					<label id="tag-prompt-label">Prompt</label>
-					<textarea bind:value={tagPrompt} placeholder="Enter tag prompt..." class="modal-textarea" aria-labelledby="tag-prompt-label"></textarea>
-				</div>
-			</div>
-			<div class="modal-footer">
-				<button class="btn-cancel" onclick={() => showTagPromptModal = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirmTagPrompt}>Confirm</button>
-			</div>
-		</div>
-	</div>
+{#if activePipeIdx !== null}
+	<TagPromptModal
+		sessionId={session?.id}
+		pipeId={pipes[activePipeIdx].id}
+		segmentId={editingSegmentId}
+		tagId={editingTagId}
+		prompt={tagPrompt}
+		bind:open={showTagPromptModal}
+		onConfirm={(p) => confirmTagPrompt(p)}
+	/>
 {/if}
 
 <style>
@@ -1754,152 +1603,7 @@ import {
 		border: 1px solid var(--border-color);
 	}
 
-	/* Modal styles */
-	.modal-overlay {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.7);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 2000;
-	}
-
-	.modal {
-		background: var(--bg-secondary);
-		border: 1px solid var(--border-color);
-		border-radius: 12px;
-		width: 90%;
-		max-width: 480px;
-		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-	}
-
-	.modal-header {
-		padding: 16px 20px;
-		border-bottom: 1px solid var(--border-color);
-	}
-
-	.modal-header h3 {
-		margin: 0;
-		font-size: 16px;
-		font-weight: 600;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
-	.modal-sub {
-		font-size: 12px;
-		font-weight: 400;
-		color: var(--text-secondary);
-	}
-
-	.modal-body {
-		padding: 20px;
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
-	}
-
-	.modal-field {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.modal-field label {
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--text-secondary);
-	}
-
-	.modal-field input[type="text"],
-	.modal-field input[type="number"],
-	.modal-field textarea {
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 6px;
-		padding: 10px 12px;
-		color: var(--text-primary);
-		font-size: 14px;
-		width: 100%;
-	}
-
-	.modal-field input:focus,
-	.modal-field textarea:focus {
-		outline: none;
-		border-color: var(--accent-color);
-	}
-
-	.modal-field textarea {
-		min-height: 100px;
-		resize: vertical;
-	}
-
-	.modal-field input[type="checkbox"] {
-		margin-right: 8px;
-	}
-
-	.modal-footer {
-		padding: 16px 20px;
-		border-top: 1px solid var(--border-color);
-		display: flex;
-		gap: 8px;
-		justify-content: flex-end;
-	}
-
-	.modal-footer .btn-confirm,
-	.modal-footer .btn-cancel {
-		padding: 10px 20px;
-		border-radius: 6px;
-		font-size: 13px;
-		cursor: pointer;
-		border: none;
-	}
-
-	.modal-footer .btn-confirm {
-		background: var(--accent-color);
-		color: white;
-	}
-
-	.modal-footer .btn-confirm:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.modal-footer .btn-cancel {
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-		border: 1px solid var(--border-color);
-	}
-
-	.mode-selector {
-		display: flex;
-		gap: 8px;
-	}
-
-	.mode-btn {
-		flex: 1;
-		padding: 10px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 6px;
-		color: var(--text-secondary);
-		cursor: pointer;
-		font-size: 13px;
-		transition: all 0.2s;
-	}
-
-	.mode-btn:hover {
-		border-color: var(--accent-color);
-		color: var(--text-primary);
-	}
-
-	.mode-btn.active {
-		background: var(--accent-bg);
-		border-color: var(--accent-color);
-		color: var(--accent-color);
-	}
+		/* Modal styles live in ./composer-modal.css (shared by ComposerModals/*) */
 
 	.full-width {
 		width: 100%;
