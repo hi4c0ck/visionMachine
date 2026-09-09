@@ -46,38 +46,6 @@ impl Database {
         Ok(())
     }
 
-    /// Strip inline SQL comments (-- to end of line)
-    fn strip_inline_comment(line: &str) -> String {
-        let mut result = String::with_capacity(line.len());
-        let mut in_single_quote = false;
-        let mut in_double_quote = false;
-        let mut prev_char = '\0';
-
-        for ch in line.chars() {
-            // Check for comment start (-- not inside quotes)
-            if ch == '-' && prev_char == '-' && !in_single_quote && !in_double_quote {
-                break; // Skip rest of line
-            }
-
-            match ch {
-                '\'' if !in_double_quote => {
-                    in_single_quote = !in_single_quote;
-                    result.push(ch);
-                }
-                '"' if !in_single_quote => {
-                    in_double_quote = !in_double_quote;
-                    result.push(ch);
-                }
-                _ => {
-                    result.push(ch);
-                }
-            }
-            prev_char = ch;
-        }
-
-        result
-    }
-
     /// Execute a complete SQL migration file - split by statement boundaries
     async fn execute_migration_sql(&self, sql: &str) -> Result<(), String> {
         // First, strip all comments from the SQL

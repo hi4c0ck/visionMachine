@@ -1,3 +1,0 @@
-fn main() {
-    vision_machine::run();
-}

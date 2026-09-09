@@ -1,5 +1,5 @@
 use super::db::Database;
-use crate::models::{ComposerConfig, Pipe, TagElement, TagType};
+use crate::models::{ComposerConfig, Pipe};
 use chrono::Utc;
 
 impl Database {

@@ -1,3 +1,10 @@
+//! RESERVED STATE-MACHINE INFRASTRUCTURE
+//!
+//! MVI view-model layer (ViewModel, FrameViewModel, ComposerViewModel, ToolsViewModel,
+//! GenerationTask/PipeState). Intentionally kept as dead code: the product may revive
+//! the state-machine architecture later. Do NOT delete without re-architecting.
+#![allow(dead_code)]
+
 use super::tool::ToolDefinition;
 use std::collections::HashMap;
 use std::sync::Arc;

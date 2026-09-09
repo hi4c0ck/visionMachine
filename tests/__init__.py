@@ -1,1 +1,0 @@
-"""VisionMachine tests package."""

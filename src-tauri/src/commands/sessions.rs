@@ -1,5 +1,5 @@
 use crate::AppState;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tauri::State;
 
 #[derive(Deserialize)]
@@ -19,20 +19,6 @@ pub struct UpdateSessionInput {
 #[derive(Deserialize)]
 pub struct DeleteSessionInput {
     pub session_id: String,
-}
-
-#[derive(Serialize)]
-pub struct SessionResponse {
-    pub id: String,
-    pub name: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub directory_path: String,
-    pub pipes_json: Option<String>,
-    pub fps: f64,
-    pub resolution: String,
-    pub orientation: String,
-    pub total_generated_frames: u32,
 }
 
 #[tauri::command]

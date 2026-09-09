@@ -5,31 +5,6 @@ use serde::{Deserialize, Serialize};
 // CLEAN SCHEMA - No legacy compatibility
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// Resolution preset
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Resolution {
-    P480,
-    P720,
-    P1080,
-}
-
-impl Default for Resolution {
-    fn default() -> Self {
-        Self::P720
-    }
-}
-
-impl Resolution {
-    pub fn max_frames(&self) -> u32 {
-        match self {
-            Self::P480 => 441,
-            Self::P720 => 241,
-            Self::P1080 => 121,
-        }
-    }
-}
-
 /// Tag type for pipeline elements
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

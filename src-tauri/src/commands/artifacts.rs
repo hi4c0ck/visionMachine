@@ -1,7 +1,6 @@
 use crate::AppState;
 use serde::Deserialize;
 use tauri::State;
-use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct AddFileInput {

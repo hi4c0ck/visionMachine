@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tauri::Manager;
 
 mod preflight;
 pub use preflight::{run_preflight_checks, PreflightReport};

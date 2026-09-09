@@ -1,3 +1,6 @@
+//! Tool registry model for the reserved state-machine layer.
+#![allow(dead_code)]
+
 #[derive(Debug, Clone)]
 pub struct ToolDefinition {
     pub id: String,

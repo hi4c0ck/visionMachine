@@ -1,3 +1,0 @@
-impl Default for AspectRatio {
-    fn default() -> Self { Self::R16x9 }
-}
