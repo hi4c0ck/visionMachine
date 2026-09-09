@@ -405,21 +405,17 @@
 							</div>
 						</div>
 					{/each}
-
-					{#if tl.segments.length === 0}
-						<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
-							onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
-							<span>+ Add first segment</span>
-						</div>
-					{/if}
-				{:else}
-					<!-- No timeline — offer direct segment creation (auto-creates timeline) -->
-					<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
-						onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
-						<span>+ Add first segment</span>
-					</div>
 				{/if}
 			{/each}
+
+			<!-- No segments yet (no timeline, or empty timeline) — one placeholder,
+			     segment add auto-creates the timeline when needed. -->
+			{#if (getTimeline(pipe)?.segments.length ?? 0) === 0}
+				<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
+					onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
+					<span>+ Add first segment</span>
+				</div>
+			{/if}
 		</div>
 
 		<!-- ═══ [+] BUTTON (chrome column, outside coordinate space) ═══ -->
