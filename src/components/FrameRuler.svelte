@@ -1,8 +1,6 @@
 <script lang="ts">
-	import type { Segment } from '$types';
 	import {
 		frameToPx,
-		frameToPercent,
 		clientXToFrame,
 		type FrameGeometry
 	} from '$lib/frameGeometry';
@@ -11,14 +9,12 @@
 		totalFrames,
 		selectedFrame = 0,
 		onframeSelect,
-		geometry,
-		coordinateElement
+		geometry
 	} = $props<{
 		totalFrames: number;
 		selectedFrame?: number;
 		onframeSelect?: (frame: number) => void;
 		geometry: FrameGeometry | null;
-		coordinateElement?: HTMLElement | null;
 	}>();
 
 	let markers = $derived(
@@ -45,7 +41,6 @@
 <div class="frame-ruler">
 	<div
 		class="coordinate-space"
-		bind:this={coordinateElement}
 		onpointerdown={onPointerDown}
 	>
 		<div class="ruler-line"></div>
@@ -58,7 +53,6 @@
 					style={`left: ${frameToPx(frame, geometry)}px`}
 					onclick={() => selectFrame(frame)}
 					aria-label={`Frame ${frame}`}>
-				>
 					<span class="tick"></span>
 					{#if frame % 100 === 0 && frame !== 0}
 						<span class="label">{frame}</span>
@@ -69,7 +63,7 @@
 			<div
 				class="playhead"
 				style={`left: ${frameToPx(selectedFrame, geometry)}px`}>
-			></div>
+			</div>
 		{/if}
 	</div>
 </div>

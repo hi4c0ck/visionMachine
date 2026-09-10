@@ -80,6 +80,67 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     return { errors: [] };
   }
 
+  /**
+   * Atomic full update of a subject reference. Validates the image URL and
+   * clamps the frame range to the pipe's own space, applies the temporal range
+   * only when useFrames is true (dropping it otherwise), and returns a single
+   * aggregated ServiceResult. Exactly one mutation; the caller triggers a
+   * single notifyUpdate().
+   */
+  async update(
+    _sessionId: string,
+    pipeId: string,
+    refId: string,
+    update: {
+      imageUrl: string;
+      useFrames: boolean;
+      frameStart?: number;
+      frameEnd?: number;
+    },
+  ): Promise<ServiceResult> {
+    const pipe = this.getPipe(pipeId);
+    if (!pipe) return { errors: ['Pipe not found'] };
+    const ref = pipe.subjectReferences.find(r => r.id === refId);
+    if (!ref) return { errors: ['Subject reference not found'] };
+
+    const errors: string[] = [];
+    const trimmedUrl = (update.imageUrl ?? '').trim();
+    if (!trimmedUrl) {
+      errors.push('Image URL must not be empty');
+    }
+
+    let start: number | undefined;
+    let end: number | undefined;
+    if (update.useFrames) {
+      const maxEnd = pipe.lengthFrames - 1;
+      if (update.frameStart === undefined || update.frameEnd === undefined) {
+        errors.push('Frame range requires both start and end frames');
+      } else {
+        start = snapTo8(Math.max(0, update.frameStart));
+        end = snapTo8(Math.min(maxEnd, update.frameEnd));
+        if (start > end) {
+          errors.push('Frame start cannot exceed frame end');
+        }
+      }
+    }
+
+    // Apply as one logical mutation only when everything validates, so a
+    // failure never leaves a partial update behind.
+    if (errors.length === 0) {
+      ref.imageUrl = trimmedUrl;
+      ref.useFrames = update.useFrames;
+      if (update.useFrames) {
+        ref.frameStart = start;
+        ref.frameEnd = end;
+      } else {
+        delete ref.frameStart;
+        delete ref.frameEnd;
+      }
+    }
+
+    return { errors };
+  }
+
   private getPipe(pipeId: string): PipeRow | undefined {
     return this.session.pipes.find(p => p.id === pipeId);
   }

@@ -62,17 +62,157 @@ describe('Keyframe Service', () => {
       expect(pipe.keyframes[0].imageSrc).toBeUndefined();
     });
 
-    it('should add img2img type keyframe', async () => {
+    it('should add img2img type keyframe (referenceUrl + prompt, both required)', async () => {
       const session = createMockSession();
       sessions.set(session.id, session);
       await addPipe(session.id);
 
       const pipe = session.pipes[0];
-      const result = await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'https://example.com/ref.jpg');
+      const result = await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        'make it cinematic',
+        'https://example.com/ref.jpg',
+      );
 
       expect(result.errors).toHaveLength(0);
       expect(pipe.keyframes[0].type).toBe('img2img');
       expect(pipe.keyframes[0].referenceUrl).toBe('https://example.com/ref.jpg');
+      expect(pipe.keyframes[0].prompt).toBe('make it cinematic');
+      // img2img never stores imageSrc
+      expect(pipe.keyframes[0].imageSrc).toBeUndefined();
+    });
+
+    it('should reject an incomplete img2img keyframe (no reference URL)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const result = await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'a prompt');
+
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(pipe.keyframes).toHaveLength(0);
+    });
+
+    it('should reject an img2img keyframe with an empty prompt', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const result = await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        '   ',
+        'https://example.com/ref.jpg',
+      );
+
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(pipe.keyframes).toHaveLength(0);
+    });
+
+    it('should edit an existing img2img keyframe in place, preserving its ID', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        'old prompt',
+        'https://example.com/old.jpg',
+      );
+      const originalId = pipe.keyframes[0].id;
+
+      const result = await addKeyframe(
+        session.id, pipe.id, 2, 88, 'img2img',
+        'new prompt',
+        'https://example.com/new.jpg',
+      );
+
+      expect(result.errors).toHaveLength(0);
+      expect(pipe.keyframes).toHaveLength(1); // upsert, not a second entry
+      expect(pipe.keyframes[0].id).toBe(originalId);
+      expect(pipe.keyframes[0].referenceUrl).toBe('https://example.com/new.jpg');
+      expect(pipe.keyframes[0].prompt).toBe('new prompt');
+      expect(pipe.keyframes[0].frame).toBe(88);
+    });
+
+    it('should reject an incomplete img2img edit without overwriting the existing keyframe', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        'good prompt',
+        'https://example.com/good.jpg',
+      );
+
+      const result = await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        'new prompt', // prompt ok but missing referenceUrl
+      );
+
+      expect(result.errors.length).toBeGreaterThan(0);
+      // existing data intact — no partial clobber
+      expect(pipe.keyframes[0].referenceUrl).toBe('https://example.com/good.jpg');
+      expect(pipe.keyframes[0].prompt).toBe('good prompt');
+    });
+
+    it('should persist an img2img keyframe round-trip (referenceUrl + prompt survive save/load)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        'persisted prompt',
+        'https://example.com/rt.jpg',
+      );
+
+      const savedPipes = JSON.parse(JSON.stringify(session.pipes));
+      sessions.clear();
+
+      const restoredSession = createMockSession(savedPipes);
+      sessions.set(session.id, restoredSession);
+
+      const restored = restoredSession.pipes[0].keyframes[0];
+      expect(restored.type).toBe('img2img');
+      expect(restored.referenceUrl).toBe('https://example.com/rt.jpg');
+      expect(restored.prompt).toBe('persisted prompt');
+    });
+
+    it('should keep url and txt2img keyframe behavior unchanged', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const urlRes = await addKeyframe(session.id, pipe.id, 0, 0, 'url', 'https://example.com/kf.jpg');
+      const txtRes = await addKeyframe(session.id, pipe.id, 1, 40, 'txt2img', 'a sunset');
+
+      expect(urlRes.errors).toHaveLength(0);
+      expect(txtRes.errors).toHaveLength(0);
+      expect(pipe.keyframes[0].imageSrc).toBe('https://example.com/kf.jpg');
+      expect(pipe.keyframes[0].prompt).toBeUndefined();
+      expect(pipe.keyframes[0].referenceUrl).toBeUndefined();
+      expect(pipe.keyframes[1].prompt).toBe('a sunset');
+      expect(pipe.keyframes[1].imageSrc).toBeUndefined();
+      expect(pipe.keyframes[1].referenceUrl).toBeUndefined();
+    });
+
+    it('should reject an empty txt2img prompt', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const result = await addKeyframe(session.id, pipe.id, 1, 40, 'txt2img', '   ');
+
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(pipe.keyframes).toHaveLength(0);
     });
 
     it('should snap frame to 8n boundary', async () => {
@@ -127,7 +267,7 @@ describe('Keyframe Service', () => {
       expect(pipe.keyframes).toHaveLength(2);
 
       // Add slot 2
-      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'https://example.com/3.jpg');
+      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'img2img prompt 3', 'https://example.com/3.jpg');
       expect(pipe.keyframes).toHaveLength(3);
     });
 
@@ -139,7 +279,7 @@ describe('Keyframe Service', () => {
       const pipe = session.pipes[0];
       
       // Add slot 2 first
-      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'https://example.com/3.jpg');
+      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'img2img prompt 3', 'https://example.com/3.jpg');
       expect(pipe.keyframes).toHaveLength(1);
 
       // Add slot 0 second
@@ -164,7 +304,7 @@ describe('Keyframe Service', () => {
       
       await addKeyframe(session.id, pipe.id, 0, 0, 'url', 'https://example.com/1.jpg');
       await addKeyframe(session.id, pipe.id, 1, 40, 'txt2img', 'prompt 2');
-      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'https://example.com/3.jpg');
+      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'img2img prompt 3', 'https://example.com/3.jpg');
 
       expect(pipe.keyframes).toHaveLength(3);
     });
@@ -300,7 +440,7 @@ describe('Keyframe Service', () => {
       const pipe = session.pipes[0];
       await addKeyframe(session.id, pipe.id, 0, 0, 'url', 'https://example.com/1.jpg');
       await addKeyframe(session.id, pipe.id, 1, 40, 'txt2img', 'prompt 2');
-      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'https://example.com/3.jpg');
+      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'img2img prompt 3', 'https://example.com/3.jpg');
 
       // Simulate save/reload
       const savedPipes = JSON.parse(JSON.stringify(session.pipes));

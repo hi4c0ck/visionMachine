@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-import { sessions, addPipe, addSubjectRef, removeSubjectRef, toggleSubjectRef, updateSubjectRefRange, updateSubjectRefUrl, updateSubjectRefUseFrames } from '../../src/lib/composerStore';
+import { sessions, addPipe, addSubjectRef, removeSubjectRef, toggleSubjectRef, updateSubjectRefRange, updateSubjectRefUrl, updateSubjectRefUseFrames, updateSubjectRef } from '../../src/lib/composerStore';
 import type { SessionData, PipeRow } from '../../src/types/app';
 
 function createMockSession(pipes: PipeRow[] = []): SessionData {
@@ -356,6 +356,163 @@ describe('Subject Reference Service', () => {
       expect(restoredPipe.subjectReferences[0].visible).toBe(false);
       expect(restoredPipe.subjectReferences[1].imageUrl).toBe('https://example.com/ref2.jpg');
       expect(restoredPipe.subjectReferences[1].visible).toBe(true);
+    });
+  });
+
+  // ── Atomic subject-reference edit (updateSubjectRef) ─────────────────────
+  // One logical mutation for URL + frame range + useFrames. The modal's old
+  // three-write path is replaced by this single aggregated operation.
+
+  describe('updateSubjectRef (atomic)', () => {
+    it('performs a complete successful edit as one mutation', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, 'https://example.com/old.jpg', false);
+      const refId = pipe.subjectReferences[0].id;
+
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/new.jpg',
+        useFrames: true,
+        frameStart: 16,
+        frameEnd: 96,
+      });
+
+      expect(result.errors).toHaveLength(0);
+      const ref = pipe.subjectReferences[0];
+      expect(ref.imageUrl).toBe('https://example.com/new.jpg');
+      expect(ref.useFrames).toBe(true);
+      expect(ref.frameStart).toBe(16);
+      expect(ref.frameEnd).toBe(96);
+    });
+
+    it('rejects an invalid frame range (start > end) without a partial write', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, 'https://example.com/a.jpg', true, 0, 120);
+      const refId = pipe.subjectReferences[0].id;
+
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/b.jpg',
+        useFrames: true,
+        frameStart: 80,
+        frameEnd: 32,
+      });
+
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Nothing was applied — original values intact
+      expect(pipe.subjectReferences[0].imageUrl).toBe('https://example.com/a.jpg');
+      expect(pipe.subjectReferences[0].frameStart).toBe(0);
+      expect(pipe.subjectReferences[0].frameEnd).toBe(120);
+    });
+
+    it('rejects a missing/empty URL without clobbering the range', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, 'https://example.com/a.jpg', true, 0, 120);
+      const refId = pipe.subjectReferences[0].id;
+
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: '   ',
+        useFrames: true,
+        frameStart: 16,
+        frameEnd: 96,
+      });
+
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(pipe.subjectReferences[0].imageUrl).toBe('https://example.com/a.jpg');
+    });
+
+    it('clamps the frame range to the pipe frame space', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, 'https://example.com/a.jpg', true, 0, 120);
+      const refId = pipe.subjectReferences[0].id;
+
+      // maxEnd for a 121-frame pipe is 120
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/b.jpg',
+        useFrames: true,
+        frameStart: -10,
+        frameEnd: 999,
+      });
+
+      expect(result.errors).toHaveLength(0);
+      expect(pipe.subjectReferences[0].frameStart).toBe(0);
+      expect(pipe.subjectReferences[0].frameEnd).toBe(120);
+    });
+
+    it('removes the stored range when useFrames is turned off', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, 'https://example.com/a.jpg', true, 16, 96);
+      const refId = pipe.subjectReferences[0].id;
+
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/c.jpg',
+        useFrames: false,
+      });
+
+      expect(result.errors).toHaveLength(0);
+      expect(pipe.subjectReferences[0].useFrames).toBe(false);
+      expect(pipe.subjectReferences[0].frameStart).toBeUndefined();
+      expect(pipe.subjectReferences[0].frameEnd).toBeUndefined();
+    });
+
+    it('persists an atomic edit through save/load (round-trip)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, 'https://example.com/a.jpg', false);
+      const refId = pipe.subjectReferences[0].id;
+
+      await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/edited.jpg',
+        useFrames: true,
+        frameStart: 8,
+        frameEnd: 40,
+      });
+
+      const savedPipes = JSON.parse(JSON.stringify(session.pipes));
+      sessions.clear();
+      const restored = createMockSession(savedPipes);
+      sessions.set(session.id, restored);
+
+      const ref = restored.pipes[0].subjectReferences[0];
+      expect(ref.id).toBe(refId);
+      expect(ref.imageUrl).toBe('https://example.com/edited.jpg');
+      expect(ref.useFrames).toBe(true);
+      expect(ref.frameStart).toBe(8);
+      expect(ref.frameEnd).toBe(40);
+    });
+
+    it('errors when the reference id does not exist', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const result = await updateSubjectRef(session.id, session.pipes[0].id, 'missing-ref', {
+        imageUrl: 'https://example.com/x.jpg',
+        useFrames: false,
+      });
+
+      expect(result.errors.length).toBeGreaterThan(0);
     });
   });
 });

@@ -274,9 +274,9 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   // Keyframe operations
-  async addKeyframe(sessionId: string, pipeId: string, slotIndex: number, frame: number, type: 'url' | 'txt2img' | 'img2img', value: string): Promise<ServiceResult> {
+  async addKeyframe(sessionId: string, pipeId: string, slotIndex: number, frame: number, type: 'url' | 'txt2img' | 'img2img', value: string, referenceUrl?: string): Promise<ServiceResult> {
     const s = this.getService(sessionId);
-    const result = await s.keyframes.add(sessionId, pipeId, slotIndex, frame, type, value);
+    const result = await s.keyframes.add(sessionId, pipeId, slotIndex, frame, type, value, referenceUrl);
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }
@@ -338,18 +338,54 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
-  // Session operations
+  /**
+   * Atomic subject-reference edit: one logical mutation (URL + frame range +
+   * useFrames) with a single notifyUpdate(). Modal closes only on success.
+   */
+  async updateSubjectRef(
+    sessionId: string,
+    pipeId: string,
+    refId: string,
+    update: {
+      imageUrl: string;
+      useFrames: boolean;
+      frameStart?: number;
+      frameEnd?: number;
+    },
+  ): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.subjectRefs.update(sessionId, pipeId, refId, update);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  // Session operations.
+  // Canonical mutation path: store state mutates, then notifyUpdate() marks
+  // the session unsynced and fires the Workspace onUpdate callback, which
+  // re-syncs the UI view and debounces saveSession() → SQLite. Settings
+  // never mutate Workspace's selectedSession directly, so a later composer
+  // mutation can never overwrite them with stale store values.
   async updateFPS(sessionId: string, fps: number): Promise<ServiceResult> {
     const session = this.resolveSession(sessionId);
     session.fps = fps;
-    unsynced.delete(sessionId);
+    this.notifyUpdate(sessionId);
     return { errors: [] };
   }
 
   async updateResolution(sessionId: string, resolution: string): Promise<ServiceResult> {
     const session = this.resolveSession(sessionId);
     session.resolution = resolution as any;
-    unsynced.delete(sessionId);
+    this.notifyUpdate(sessionId);
+    return { errors: [] };
+  }
+
+  async updateOrientation(sessionId: string, orientation: string): Promise<ServiceResult> {
+    const session = this.resolveSession(sessionId);
+    if (orientation !== 'horizontal' && orientation !== 'vertical') {
+      return { errors: ['Invalid orientation: must be horizontal or vertical'] };
+    }
+    session.orientation = orientation as any;
+    this.notifyUpdate(sessionId);
     return { errors: [] };
   }
 
@@ -486,8 +522,10 @@ export const removeSubjectRef = composerStore.removeSubjectRef.bind(composerStor
 export const toggleSubjectRef = composerStore.toggleSubjectRef.bind(composerStore);
 export const updateSubjectRefUrl = composerStore.updateSubjectRefUrl.bind(composerStore);
 export const updateSubjectRefUseFrames = composerStore.updateSubjectRefUseFrames.bind(composerStore);
+export const updateSubjectRef = composerStore.updateSubjectRef.bind(composerStore);
 export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
+export const updateOrientation = composerStore.updateOrientation.bind(composerStore);
 export const loadSession = composerStore.loadSession.bind(composerStore);
 export const saveSession = composerStore.saveSession.bind(composerStore);
 export const hydrateSessions = composerStore.hydrateSessions.bind(composerStore);

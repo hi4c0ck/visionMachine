@@ -2,9 +2,7 @@
 	import type { PipeRow, SubjectReference } from '$types';
 	import {
 		addSubjectRef as addSubjectRefAction,
-		updateSubjectRefRange as updateSubjectRefRangeAction,
-		updateSubjectRefUrl as updateSubjectRefUrlAction,
-		updateSubjectRefUseFrames as updateSubjectRefUseFramesAction,
+		updateSubjectRef as updateSubjectRefAction,
 	} from '$lib/composerStore';
 	import { flashToast } from '$lib/flashToast';
 
@@ -57,9 +55,14 @@
 
 		let result;
 		if (editingRefId) {
-			result = await updateSubjectRefRangeAction(sessionId, pipe.id, editingRefId, srStart, srEnd);
-			await updateSubjectRefUrlAction(sessionId, pipe.id, editingRefId, srImageUrl);
-			await updateSubjectRefUseFramesAction(sessionId, pipe.id, editingRefId, srUseFrames);
+			// Atomic: one operation updates URL + range + useFrames together,
+			// so a failure can't leave a partial edit behind.
+			result = await updateSubjectRefAction(sessionId, pipe.id, editingRefId, {
+				imageUrl: srImageUrl,
+				useFrames: srUseFrames,
+				frameStart: srUseFrames ? srStart : undefined,
+				frameEnd: srUseFrames ? srEnd : undefined,
+			});
 		} else {
 			result = await addSubjectRefAction(sessionId, pipe.id, srImageUrl, srUseFrames, srUseFrames ? srStart : undefined, srUseFrames ? srEnd : undefined);
 		}

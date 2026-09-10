@@ -33,6 +33,10 @@ import {
   migratePipe,
   loadSession,
   saveSession,
+  updateFPS,
+  updateResolution,
+  updateOrientation,
+  updateQ,
 } from '../../src/lib/composerStore';
 import type { SessionData, PipeRow, TagType } from '../../src/types/app';
 import { TAG_SPECIFICATIONS } from '../../src/types/app';
@@ -436,9 +440,10 @@ describe('Composer Integration', () => {
       await addPipe(session.id);
 
       const pipe = session.pipes[0];
-      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'https://example.com/ref.jpg');
+      await addKeyframe(session.id, pipe.id, 2, 80, 'img2img', 'integration img2img', 'https://example.com/ref.jpg');
 
       expect(pipe.keyframes[0].referenceUrl).toBe('https://example.com/ref.jpg');
+      expect(pipe.keyframes[0].prompt).toBe('integration img2img');
     });
   });
 
@@ -640,6 +645,102 @@ describe('Composer Integration', () => {
     it('should return error for non-existent session', async () => {
       const result = await saveSession('non-existent');
       expect(result.errors).toEqual(['Session not found']);
+    });
+  });
+
+  // ── Session Settings Canonical Mutation + Persistence ───────────────────
+  //
+  // Regression for the "split persistence path": FPS / resolution /
+  // orientation must mutate the store session, mark it unsynced, and persist
+  // through saveSession() → SQLite. A subsequent composer mutation must NOT
+  // revert a setting back to a stale value.
+
+  describe('session settings persistence', () => {
+    function saveInput() {
+      // saveSession sends the settings in the save_composer payload; capture it.
+      const call = mockInvoke.mock.calls.find((c) => c[0] === 'save_composer');
+      return call ? call[1] : undefined;
+    }
+
+    it('FPS change persists and a later composer edit cannot revert it', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      const pipe = session.pipes[0];
+
+      // UI FPS change → canonical store mutation
+      const fpsRes = await updateFPS(session.id, 60);
+      expect(fpsRes.errors).toHaveLength(0);
+      expect(sessions.get(session.id)!.fps).toBe(60);
+
+      // Persist via the single canonical path
+      await saveSession(session.id);
+      expect(saveInput()!.input.fps).toBe(60);
+
+      // A subsequent composer mutation must NOT revert the setting
+      await updateQ(session.id, pipe.id, 20);
+      await saveSession(session.id);
+      expect(saveInput()!.input.fps).toBe(60);
+      expect(sessions.get(session.id)!.fps).toBe(60);
+    });
+
+    it('resolution change persists and a later composer edit cannot revert it', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      const pipe = session.pipes[0];
+
+      const resRes = await updateResolution(session.id, '1080p');
+      expect(resRes.errors).toHaveLength(0);
+      expect(sessions.get(session.id)!.resolution).toBe('1080p');
+
+      await saveSession(session.id);
+      expect(saveInput()!.input.resolution).toBe('1080p');
+
+      await addSegment(session.id, pipe.id, 0, 40);
+      await saveSession(session.id);
+      expect(saveInput()!.input.resolution).toBe('1080p');
+    });
+
+    it('orientation change persists and a later composer edit cannot revert it', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      const pipe = session.pipes[0];
+
+      const orientRes = await updateOrientation(session.id, 'vertical');
+      expect(orientRes.errors).toHaveLength(0);
+      expect(sessions.get(session.id)!.orientation).toBe('vertical');
+
+      await saveSession(session.id);
+      expect(saveInput()!.input.orientation).toBe('vertical');
+
+      await updateQ(session.id, pipe.id, 24);
+      await saveSession(session.id);
+      expect(saveInput()!.input.orientation).toBe('vertical');
+    });
+
+    it('rejects an invalid orientation value and leaves the setting unchanged', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const res = await updateOrientation(session.id, 'diagonal');
+      expect(res.errors.length).toBeGreaterThan(0);
+      expect(sessions.get(session.id)!.orientation).toBe('horizontal');
+    });
+
+    it('a setting mutation marks the session unsynced', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+
+      const notified: string[] = [];
+      setOnUpdate((id) => notified.push(id));
+
+      await updateFPS(session.id, 30);
+      expect(notified).toContain(session.id);
+      // notifyUpdate() adds the id to the unsynced set
+      expect(sessions.get(session.id)).toBeTruthy();
     });
   });
 

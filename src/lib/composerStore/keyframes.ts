@@ -21,23 +21,33 @@ export class KeyframeServiceImpl implements KeyframeService {
     frame: number,
     type: 'url' | 'txt2img' | 'img2img',
     value: string,
+    referenceUrl?: string,
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
 
     const snappedFrame = snapTo8(frame);
 
+    // img2img = referenceUrl + prompt. Both are required; reject an incomplete
+    // keyframe rather than silently storing a half-formed record.
+    if (type === 'img2img' && !(referenceUrl ?? '').trim()) {
+      return { errors: ['img2img keyframe requires a reference image URL'] };
+    }
+    if (type !== 'url' && !value.trim()) {
+      return { errors: ['Keyframe prompt must not be empty'] };
+    }
+
     const fields: Omit<PipeKeyframe, 'id' | 'slotIndex'> = {
       frame: snappedFrame,
       type,
       imageSrc: type === 'url' ? value : undefined,
       prompt: type !== 'url' ? value : undefined,
-      referenceUrl: type === 'img2img' ? value : undefined,
+      referenceUrl: type === 'img2img' ? (referenceUrl ?? undefined) : undefined,
       status: 'pending',
     };
 
     // Upsert: editing an existing slot replaces that keyframe instead of
-    // stacking a duplicate entry in the same slot.
+    // stacking a duplicate entry in the same slot. Existing ID preserved.
     const existing = pipe.keyframes.find((k) => k.slotIndex === slotIndex);
     if (existing) {
       Object.assign(existing, fields, { id: existing.id });

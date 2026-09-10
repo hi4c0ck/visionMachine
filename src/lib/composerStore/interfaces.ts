@@ -75,6 +75,7 @@ export interface KeyframeService {
     frame: number,
     type: 'url' | 'txt2img' | 'img2img',
     value: string,
+    referenceUrl?: string,
   ): Promise<ServiceResult>;
   remove(sessionId: string, pipeId: string, keyframeId: string): Promise<ServiceResult>;
   move(sessionId: string, pipeId: string, keyframeId: string, newFrame: number): Promise<ServiceResult>;
@@ -89,6 +90,23 @@ export interface SubjectReferenceService {
   updateRange(sessionId: string, pipeId: string, refId: string, frameStart: number, frameEnd: number): Promise<ServiceResult>;
   updateImageUrl(sessionId: string, pipeId: string, refId: string, imageUrl: string): Promise<ServiceResult>;
   updateUseFrames(sessionId: string, pipeId: string, refId: string, useFrames: boolean): Promise<ServiceResult>;
+  /**
+   * Atomic full update of a subject reference. Validates/clamps the frame
+   * range against the pipe's own frame space, drops the temporal range when
+   * useFrames is false, and applies everything as one logical mutation
+   * returning a single aggregated ServiceResult.
+   */
+  update(
+    sessionId: string,
+    pipeId: string,
+    refId: string,
+    update: {
+      imageUrl: string;
+      useFrames: boolean;
+      frameStart?: number;
+      frameEnd?: number;
+    },
+  ): Promise<ServiceResult>;
 }
 
 // ── Session Service Interface ─────────────────────────────────────────────────

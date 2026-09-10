@@ -465,89 +465,88 @@ impl Database {
         session_id: &str,
         updates: &serde_json::Value,
     ) -> Result<(), String> {
-        // Build dynamic update query
-        let mut set_clauses = Vec::new();
-        let mut has_params = false;
+        // Collect only the fields that are actually present AND type-correct.
+        // Field names are hard-coded. The same vector drives both the SQL SET
+        // clause and the bind order, so placeholders and values always match 1:1.
+        //
+        // Values are bound as TEXT. The fps / total_generated_frames columns
+        // carry INTEGER affinity, so SQLite coerces a well-formed numeric
+        // string back to an INTEGER on store; list_sessions reads them as i64.
+        let mut sets: Vec<(&'static str, String)> = Vec::new();
 
-        if let Some(val) = updates.get("name") {
-            if let Some(_s) = val.as_str() {
-                set_clauses.push("name = ?".to_string());
-                has_params = true;
-            }
+        if let Some(name) = updates.get("name").and_then(|v| v.as_str()) {
+            sets.push(("name", name.to_string()));
         }
-        if let Some(val) = updates.get("fps") {
-            if let Some(_n) = val.as_i64() {
-                set_clauses.push("fps = ?".to_string());
-                has_params = true;
-            }
+        if let Some(fps) = updates.get("fps").and_then(|v| v.as_i64()) {
+            sets.push(("fps", fps.to_string()));
         }
-        if let Some(val) = updates.get("resolution") {
-            if let Some(_s) = val.as_str() {
-                set_clauses.push("resolution = ?".to_string());
-                has_params = true;
-            }
+        if let Some(resolution) = updates.get("resolution").and_then(|v| v.as_str()) {
+            sets.push(("resolution", resolution.to_string()));
         }
-        if let Some(val) = updates.get("orientation") {
-            if let Some(_s) = val.as_str() {
-                set_clauses.push("orientation = ?".to_string());
-                has_params = true;
-            }
+        if let Some(orientation) = updates.get("orientation").and_then(|v| v.as_str()) {
+            sets.push(("orientation", orientation.to_string()));
         }
-        if let Some(val) = updates.get("pipes_json") {
-            if let Some(_s) = val.as_str() {
-                set_clauses.push("pipes_json = ?".to_string());
-                has_params = true;
-            }
+        if let Some(pipes_json) = updates.get("pipes_json").and_then(|v| v.as_str()) {
+            sets.push(("pipes_json", pipes_json.to_string()));
         }
-        if let Some(val) = updates.get("total_generated_frames") {
-            if let Some(_n) = val.as_i64() {
-                set_clauses.push("total_generated_frames = ?".to_string());
-                has_params = true;
-            }
+        if let Some(total_frames) = updates
+            .get("total_generated_frames")
+            .and_then(|v| v.as_i64())
+        {
+            sets.push(("total_generated_frames", total_frames.to_string()));
         }
 
-        if set_clauses.is_empty() {
-            return Ok(());
+        if sets.is_empty() {
+            // Nothing to change — still confirm the session exists.
+            return self.assert_session_exists(session_id).await;
         }
 
-        let sql = format!(
-            "UPDATE sessions SET {} WHERE id = ?",
-            set_clauses.join(", ")
-        );
+        // Build SQL with one '?' per present field, in deterministic order.
+        let mut sql = String::from("UPDATE sessions SET ");
+        let mut first = true;
+        for (field, _) in &sets {
+            if !first {
+                sql.push_str(", ");
+            }
+            sql.push_str(field);
+            sql.push_str(" = ?");
+            first = false;
+        }
+        sql.push_str(" WHERE id = ?");
 
-        // Execute without dynamic params since we need to bind individually
-        // This is a simplified approach - in production use proper prepared statements
-        if !has_params {
-            sqlx::query(&sql)
-                .bind(session_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
-        } else {
-            // For dynamic params, use individual binds based on which fields changed
-            // Build a tuple of all possible values
-            let name = updates.get("name").and_then(|v| v.as_str());
-            let fps = updates.get("fps").and_then(|v| v.as_i64());
-            let resolution = updates.get("resolution").and_then(|v| v.as_str());
-            let orientation = updates.get("orientation").and_then(|v| v.as_str());
-            let pipes_json = updates.get("pipes_json").and_then(|v| v.as_str());
-            let total_frames = updates
-                .get("total_generated_frames")
-                .and_then(|v| v.as_i64());
+        // Bind exactly the values for the present fields, in the same order,
+        // then the session id. No NULLs, no bind-count mismatch.
+        let mut query = sqlx::query(&sql);
+        for (_, value) in &sets {
+            query = query.bind(value);
+        }
+        query = query.bind(session_id);
 
-            sqlx::query(&sql)
-                .bind(name)
-                .bind(fps)
-                .bind(resolution)
-                .bind(orientation)
-                .bind(pipes_json)
-                .bind(total_frames)
-                .bind(session_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| e.to_string())?;
+        let result = query
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to update session: {e}"))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!(
+                "Session not found: {session_id} (partial update affected 0 rows)"
+            ));
         }
 
+        Ok(())
+    }
+
+    /// Confirm the target session exists; used both when a partial update has
+    /// no valid fields and to turn "0 rows affected" into a real error.
+    async fn assert_session_exists(&self, session_id: &str) -> Result<(), String> {
+        let exists = sqlx::query("SELECT 1 FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| format!("Failed to check session existence: {e}"))?;
+        if exists.is_none() {
+            return Err(format!("Session not found: {session_id}"));
+        }
         Ok(())
     }
 
@@ -640,5 +639,118 @@ impl Database {
             .map_err(|e| e.to_string())?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod update_session_tests {
+    use super::Database;
+
+    async fn setup() -> (Database, String, String) {
+        let dir = std::env::temp_dir().join(format!(
+            "vm_updsess_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("update_session_test.db").to_string_lossy().to_string();
+        let db = Database::new(&path).await.unwrap();
+        db.migrate().await.unwrap();
+        db.seed_default_profile().await.unwrap();
+        let project_id = db.create_project("default", "T", None).await.unwrap();
+        let session_id = db.create_session(&project_id, "S", None, None).await.unwrap();
+        (db, project_id, session_id)
+    }
+
+    #[tokio::test]
+    async fn test_name_only_update() {
+        let (db, project_id, session_id) = setup().await;
+        db.update_session(
+            &session_id,
+            &serde_json::json!({ "name": "Renamed" }),
+        )
+        .await
+        .unwrap();
+        let sessions = db.list_sessions(&project_id).await.unwrap();
+        assert_eq!(sessions[0]["name"], "Renamed");
+        // Untouched fields keep their defaults.
+        assert_eq!(sessions[0]["fps"], 24);
+        assert_eq!(sessions[0]["orientation"], "horizontal");
+    }
+
+    #[tokio::test]
+    async fn test_fps_only_update() {
+        let (db, project_id, session_id) = setup().await;
+        db.update_session(
+            &session_id,
+            &serde_json::json!({ "fps": 60 }),
+        )
+        .await
+        .unwrap();
+        let sessions = db.list_sessions(&project_id).await.unwrap();
+        assert_eq!(sessions[0]["fps"], 60);
+        // name untouched
+        assert_eq!(sessions[0]["name"], "S");
+    }
+
+    #[tokio::test]
+    async fn test_resolution_only_update() {
+        let (db, project_id, session_id) = setup().await;
+        db.update_session(
+            &session_id,
+            &serde_json::json!({ "resolution": "1080p" }),
+        )
+        .await
+        .unwrap();
+        let sessions = db.list_sessions(&project_id).await.unwrap();
+        assert_eq!(sessions[0]["resolution"], "1080p");
+    }
+
+    #[tokio::test]
+    async fn test_orientation_only_update() {
+        let (db, project_id, session_id) = setup().await;
+        db.update_session(
+            &session_id,
+            &serde_json::json!({ "orientation": "vertical" }),
+        )
+        .await
+        .unwrap();
+        let sessions = db.list_sessions(&project_id).await.unwrap();
+        assert_eq!(sessions[0]["orientation"], "vertical");
+    }
+
+    #[tokio::test]
+    async fn test_multi_field_update() {
+        let (db, project_id, session_id) = setup().await;
+        db.update_session(
+            &session_id,
+            &serde_json::json!({
+                "name": "Multi",
+                "fps": 30,
+                "resolution": "4k",
+                "orientation": "vertical",
+                "total_generated_frames": 42
+            }),
+        )
+        .await
+        .unwrap();
+        let sessions = db.list_sessions(&project_id).await.unwrap();
+        assert_eq!(sessions[0]["name"], "Multi");
+        assert_eq!(sessions[0]["fps"], 30);
+        assert_eq!(sessions[0]["resolution"], "4k");
+        assert_eq!(sessions[0]["orientation"], "vertical");
+        assert_eq!(sessions[0]["total_generated_frames"], 42);
+    }
+
+    #[tokio::test]
+    async fn test_nonexistent_session_errors() {
+        let (db, _project_id, _session_id) = setup().await;
+        let missing = "no-such-session-id";
+        let res = db.update_session(
+            missing,
+            &serde_json::json!({ "name": "X" }),
+        )
+        .await;
+        assert!(res.is_err(), "expected error for missing session, got Ok");
+        assert!(res.unwrap_err().contains("no-such-session-id"));
     }
 }

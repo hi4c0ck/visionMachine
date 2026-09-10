@@ -8,7 +8,7 @@
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 import { migratePipe } from '$lib/composerStore';
-import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC } from '$lib/composerStore';
+import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -725,46 +725,10 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 		saveProjects();
 	}
 
-	// Handle session update from ComposerPanel
-	function handleSessionUpdate(updatedSession: SessionData) {
-		if (!selectedProject || !selectedSession) {
-			return;
-		}
-		
-		// Update locally
-		const updatedProjects = (projects || []).map((p: any) => {
-			if (p.id !== selectedProject.id) return p;
-			return {
-				...p,
-				sessions: (p.sessions || []).map((s: any) =>
-					s.id === updatedSession.id ? updatedSession : s
-				)
-			};
-		});
-		
-		projects = updatedProjects;
-		
-		// Also try to persist to backend
-			try {
-				invoke('update_session', {
-					input: {
-						session_id: updatedSession.id,
-						updates: {
-							name: updatedSession.name,
-							fps: updatedSession.fps,
-							resolution: updatedSession.resolution,
-							orientation: updatedSession.orientation,
-							pipes_json: JSON.stringify(updatedSession.pipes),
-							total_generated_frames: updatedSession.totalGeneratedFrames
-						}
-					}
-				}).catch(e => console.error('[Workspace] Backend update failed:', e));
-			} catch (e) {
-				console.error('[Workspace] Failed to update session backend:', e);
-			}
-		
-		saveProjects();
-	}
+	// Settings (FPS / resolution / orientation) mutate through the
+	// composerStore (updateFPS / updateResolution / updateOrientation), which
+	// notifies onUpdate → UI re-sync + debounced saveSession() → SQLite.
+	// There is no separate session-persistence path in this component.
 
 	function handleGenerate() {
 		if (!selectedSession || !selectedSession.pipes?.length) return;
@@ -774,14 +738,21 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 
 	function handleFpsChange(fps: number) {
 		if (!selectedSession) return;
-		selectedSession.fps = fps;
-		handleSessionUpdate(selectedSession);
+		// Canonical path: mutate the store session, then notifyUpdate() drives
+		// the UI re-sync + debounced saveSession() → SQLite. Never mutate
+		// selectedSession directly — that diverges from the store and lets a
+		// later composer mutation overwrite the setting with a stale value.
+		updateFPS(selectedSession.id, fps);
 	}
 
 	function handleResolutionChange(res: string) {
 		if (!selectedSession) return;
-		selectedSession.resolution = res as any;
-		handleSessionUpdate(selectedSession);
+		updateResolution(selectedSession.id, res);
+	}
+
+	function handleOrientationChange(orientation: string) {
+		if (!selectedSession) return;
+		updateOrientation(selectedSession.id, orientation);
 	}
 
 	function handleToolSelect(id: string) {
@@ -894,7 +865,8 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 				ongenerate={handleGenerate}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}
-			/>
+				onorientationchange={handleOrientationChange}
+				/>
 		{/if}
 	</div>
 </div>

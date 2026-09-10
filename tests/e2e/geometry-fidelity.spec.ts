@@ -56,17 +56,43 @@ test.describe('Geometry Fidelity', () => {
 	test('ruler spans full coordinate-space width', async ({ page }) => {
 		const coord = page.locator('.coordinate-space');
 		const ruler = page.locator('.frame-ruler');
-		
+
 		const coordRect = await coord.boundingBox();
 		const rulerRect = await ruler.boundingBox();
-		
+
 		expect(coordRect).toBeTruthy();
 		expect(rulerRect).toBeTruthy();
-		
+
 		if (coordRect && rulerRect) {
 			// Ruler should span at least 80% of coordinate-space
 			const ratio = rulerRect.width / coordRect.width;
 			expect(ratio).toBeGreaterThanOrEqual(0.8);
 		}
+	});
+
+	// Regression: FrameRuler previously leaked literal `>` text nodes after the
+	// marker <button> and playhead <div> opening tags. Those stray glyphs are
+	// stripped; the geometry still drives marker + playhead positioning.
+	test('frame-ruler has no stray text and renders markers + playhead', async ({ page }) => {
+		const ruler = page.locator('.frame-ruler');
+		await expect(ruler).toBeVisible();
+
+		// The ruler's intended text is frame labels only (digits). A stray `>`
+		// (from the buggy literal `>` nodes) would show up here as literal text.
+		const text = await ruler.innerText();
+		expect(text.includes('>')).toBe(false);
+
+		// Geometry present → markers and the playhead are mounted.
+		const coord = page.locator('.coordinate-space');
+		await expect(coord).toBeVisible();
+		const markers = coord.locator('.marker');
+		expect(await markers.count()).toBeGreaterThan(0);
+
+		const playhead = coord.locator('.playhead');
+		await expect(playhead).toBeVisible();
+
+		// Playhead left is driven by frameToPx → a concrete pixel value.
+		const playheadLeft = await playhead.evaluate((el) => el.style.left);
+		expect(playheadLeft).toMatch(/px$/);
 	});
 });
