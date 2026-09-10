@@ -311,8 +311,8 @@
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}
 					{#each tl.segments as seg (seg.id)}
-						<div class="segment-row" style="height: {28 + seg.tags.length * 24 + 24}px;">
-							<div class="segment-coordinate-row">
+						<div class="segment-row">
+							<div class="segment-coordinate-row" style="height: {28 + seg.tags.length * 24}px;">
 								{#if rulerGeometry}
 									<!-- Left handle -->
 									<div
@@ -485,22 +485,46 @@
 		gap: 4px;
 	}
 
+	/* NOTE: delimiters here must NOT shift the frame coordinate space.
+	   .timeline-coordinate is the single canvas that rulerGeometry measures;
+	   any padding/border on inner blocks offsets frameToPx() output and breaks
+	   lane alignment (see coordinate-canvas E2E "shared coordinate space").
+	   So all visual borders are drawn as inset shadows / absolute overlays. */
 	.timeline-lane {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
-		margin-top: 4px;
+		gap: 8px;
+		margin-top: 8px;
+		background: var(--surface-color);
+		border-radius: 8px;
+		box-shadow: inset 0 0 0 1px var(--border-color);
 	}
 
 	.segment-row {
 		position: relative;
 		width: 100%;
+		background: var(--bg-secondary);
+		border-radius: 6px;
+		box-shadow: inset 0 0 0 1px var(--border-color);
+	}
+
+	/* Left accent stripe — absolute overlay, zero layout shift */
+	.segment-row::before {
+		content: "";
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: 3px;
+		background: var(--accent-color);
+		border-radius: 3px 0 0 3px;
+		pointer-events: none;
 	}
 
 	.segment-coordinate-row {
 		position: relative;
 		width: 100%;
-		height: 28px;
+		min-height: 28px;
 	}
 
 	.segment-body {
@@ -508,8 +532,10 @@
 		top: 2px;
 		height: 24px;
 		background: var(--accent-color);
-		opacity: 0.85;
+		opacity: 0.9;
+		border: 1px solid rgba(255, 255, 255, 0.18);
 		border-radius: 4px;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 		cursor: grab;
 		display: flex;
 		align-items: center;
@@ -518,6 +544,7 @@
 		overflow: hidden;
 		z-index: 2;
 	}
+	.segment-body:hover { opacity: 1; }
 	.segment-body:active { cursor: grabbing; }
 
 	.segment-handle {
@@ -529,8 +556,22 @@
 		cursor: ew-resize;
 		z-index: 4;
 		background: var(--accent-color);
-		opacity: 0.75;
+		border-radius: 3px;
+		opacity: 0.95;
+		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 1px 3px rgba(0,0,0,0.4);
+		opacity: 0;
 	}
+	.segment-handle::after {
+		content: "";
+		position: absolute;
+		top: 8px;
+		bottom: 8px;
+		left: 4px;
+		width: 2px;
+		background: rgba(255, 255, 255, 0.8);
+		border-radius: 1px;
+	}
+	.segment-row:hover .segment-handle { opacity: 0.85; }
 	.segment-handle:hover,
 	.segment-handle:active { opacity: 1; }
 
@@ -541,13 +582,26 @@
 		height: 22px;
 	}
 
+	/* Divider between stacked tag rows → each tag visually its own line */
+	.tag-coordinate-row:not(:first-child)::before {
+		content: "";
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 0;
+		height: 1px;
+		background: var(--border-color);
+	}
+
 	.tag-body {
 		position: absolute;
 		top: 1px;
 		height: 20px;
 		background: var(--tag-color, var(--accent-color));
-		opacity: 0.85;
+		opacity: 0.92;
+		border: 1px solid rgba(0, 0, 0, 0.35);
 		border-radius: 3px;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 		cursor: grab;
 		display: flex;
 		align-items: center;
@@ -557,6 +611,7 @@
 		overflow: hidden;
 		z-index: 2;
 	}
+	.tag-body:hover { opacity: 1; }
 	.tag-body:active { cursor: grabbing; }
 
 	.tag-handle {
@@ -568,8 +623,21 @@
 		cursor: ew-resize;
 		z-index: 4;
 		background: var(--tag-color, var(--accent-color));
-		opacity: 0.6;
+		border-radius: 2px;
+		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+		opacity: 0.45;
 	}
+	.tag-handle::after {
+		content: "";
+		position: absolute;
+		top: 6px;
+		bottom: 6px;
+		left: 3px;
+		width: 2px;
+		background: rgba(255, 255, 255, 0.85);
+		border-radius: 1px;
+	}
+	.tag-coordinate-row:hover .tag-handle,
 	.tag-handle:hover,
 	.tag-handle:active { opacity: 1; }
 
@@ -577,7 +645,7 @@
 		position: absolute;
 		right: 0;
 		top: 0;
-		z-index: 3;
+		z-index: 5;
 		background: none;
 		border: none;
 		color: var(--text-secondary);
@@ -597,6 +665,9 @@
 		display: flex;
 		align-items: center;
 		gap: 4px;
+		border-top: 1px dashed var(--border-color);
+		margin-top: 4px;
+		padding-top: 2px;
 	}
 
 	.timeline-actions {
