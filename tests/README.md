@@ -70,7 +70,7 @@ npm run tauri build -- --debug
 - Frame validation (8n+1)
 
 ### 5. Data Persistence
-- localStorage save/load
+- SQLite save/load (Tauri backend, source of truth); localStorage fallback in browser/E2E
 - Project/Session CRUD persistence
 - Selection state persistence
 - Composer changes persistence

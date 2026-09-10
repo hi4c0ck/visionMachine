@@ -11,7 +11,7 @@ AI-powered video generation tool with professional composer interface.
 - **Global Prompts**: Set overall style prompts per pipe
 - **Quality/Creativity Controls**: Per-pipe Q/C sliders
 - **Project/Session Management**: Hierarchical organization of projects and sessions
-- **Data Persistence**: Auto-save to localStorage, restore on restart
+- **Data Persistence**: SQLite (Tauri backend, source of truth); localStorage only as browser/E2E fallback
 
 ## Tech Stack
 
@@ -78,8 +78,8 @@ src/
 
 ### Data Storage
 
-- Projects/sessions saved to `localStorage` (browser)
-- Database at `%LOCALAPPDATA%\com.visionmachine.desktop\visionmachine.db`
+- Database (source of truth) at `%LOCALAPPDATA%\com.visionmachine.desktop\visionmachine.db`
+- Projects/sessions also cached to `localStorage` in browser/E2E mode (no Tauri backend)
 - Logs at `%LOCALAPPDATA%\com.visionmachine.desktop\logs\`
 
 ## Branch Strategy
