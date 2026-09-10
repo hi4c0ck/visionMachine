@@ -1,36 +1,9 @@
-# Python
+# Python (project is Tauri/Rust + Svelte; keep only env/venv ignores)
 __pycache__/
 **/__pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-!src/lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.hypothesis/
-.pi
 .venv/
 venv/
-ENV/
 
 # Node.js
 node_modules/
@@ -77,7 +50,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
-npm-debug.log*
 yarn-error.log*
 
 # AGNES artifacts (internal tooling)
@@ -193,9 +165,6 @@ verify_production.py
 verify_production.sh
 package-lock.json
 uv.lock
-
-# Design sketches (temp)
-design-sketches-temp/
 
 # Design sketches (temp)
 design-sketches-temp/

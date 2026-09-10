@@ -1,6 +1,5 @@
-# VisionMachine v0.4.0
+# VisionMachine v0.5.0
 
-## v0.5.0 (in development)
 ### Stability
 - Fixed app-wide "Session not found" crash: composer store now self-heals
   missing sessions (register-on-mutate) instead of throwing; session-create
@@ -16,6 +15,22 @@
 - Drag commits now target the section's own pipe (no active-pipe shortcut)
 - Composer menus clamp/flip into the viewport; e2e coordinate-canvas suite
   gained a two-pipe drag regression test
+### Frame-space correctness (entity model)
+- Per-pipe frame space: every TimelineSection derives totalFrames from its
+  own pipe.lengthFrames (was: active pipe imposed on all sections)
+- Session preview ruler = result-video placeholder (longest pipe, 8n+1),
+  generated tick strip instead of hardcoded 0..240
+### Focus-driven tool panel
+- ComposerFocus levels: project / session / pipe / segment / tag drive a
+  context-sensitive inspector in the tool panel (modals stay the editing
+  surface)
+### Repository hygiene
+- Removed dev-session junk (read_file*.js, check-db.js, insert_debug.js,
+  composer-demo.html, feature_audit.ts, root main.ts, references/,
+  requirements.txt, uv.lock, root task-doc .md files)
+- Version aligned to 0.5.0 across Cargo.toml / Cargo.lock / tauri.conf.json /
+  package.json / APP_VERSION
+- .gitignore deduped
 
 ## v0.4.0
 
