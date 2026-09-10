@@ -211,6 +211,19 @@ export interface PipeRow {
 }
 
 /**
+ * Focus model for the context-sensitive tool panel.
+ * Levels: project (summary) → session (video settings + generation) →
+ * pipe (pipe generation settings + last-gen preview) → segment/tag (prompt
+ * + related settings). The tool panel renders one inspector per level.
+ */
+export type ComposerFocus =
+  | { level: 'project' }
+  | { level: 'session'; id: string }
+  | { level: 'pipe'; pipeId: string }
+  | { level: 'segment'; pipeId: string; segmentId: string }
+  | { level: 'tag'; pipeId: string; segmentId: string; tagId: string };
+
+/**
  * Session data
  */
 export interface SessionData {

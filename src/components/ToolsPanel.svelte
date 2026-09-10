@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SessionData, ProjectData } from '$types';
+	import type { SessionData, ProjectData, ComposerFocus, PipeRow, Segment, TagElement, TimelineElement } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { compilePrompt } from '$lib/compiler';
 
@@ -7,6 +7,7 @@
 		session,
 		project,
 		activeTool,
+		focus = { level: 'project' } as ComposerFocus,
 		onselect,
 		ongenerate,
 		onfpschange,
@@ -21,6 +22,8 @@
 		session: SessionData | null;
 		project: ProjectData | null;
 		activeTool: string | null;
+		/** Context-sensitive focus driving which inspector the panel shows. */
+		focus?: ComposerFocus;
 		onselect: (toolId: string) => void;
 		ongenerate: () => void;
 		onfpschange?: (fps: number) => void;
@@ -85,6 +88,40 @@
 		if (!session?.pipes?.length) return '';
 		return compilePrompt(session.pipes[0]);
 	});
+
+	// ── Focus → entity resolution for the context-sensitive inspector ────
+	// The focus model only carries ids; the panel holds the live session, so
+	// we resolve each level to its concrete entity here.
+	function findPipe(pipeId?: string): PipeRow | null {
+		if (!session?.pipes?.length || !pipeId) return null;
+		return session.pipes.find((p: PipeRow) => p.id === pipeId) ?? null;
+	}
+	function findTimeline(pipe: PipeRow | null): TimelineElement | null {
+		if (!pipe) return null;
+		return (pipe.elements.find((e: any) => e.tag === 'timeline') as TimelineElement | undefined) ?? null;
+	}
+	function findSegment(pipe: PipeRow | null, segmentId?: string): Segment | null {
+		if (!segmentId) return null;
+		return findTimeline(pipe)?.segments.find((s) => s.id === segmentId) ?? null;
+	}
+	function findTag(pipe: PipeRow | null, segmentId: string | undefined, tagId: string): TagElement | null {
+		return findSegment(pipe, segmentId)?.tags.find((t) => t.id === tagId) ?? null;
+	}
+
+	const focusedPipe = $derived(findPipe(focus.level === 'project' ? undefined : (focus as any).pipeId));
+	const focusedSegment = $derived(
+		focus.level === 'segment' ? findSegment(focusedPipe, (focus as any).segmentId) :
+		focus.level === 'tag' ? findSegment(focusedPipe, (focus as any).segmentId) : null
+	);
+	const focusedTag = $derived(
+		focus.level === 'tag' ? findTag(focusedPipe, (focus as any).segmentId, (focus as any).tagId) : null
+	);
+	const focusLabel = $derived(
+		focus.level === 'project' ? 'Project' :
+		focus.level === 'session' ? 'Session' :
+		focus.level === 'pipe' ? `Pipe · ${focusedPipe?.name ?? focusedPipe?.id ?? ''}` :
+		focus.level === 'segment' ? 'Segment' : 'Tag'
+	);
 </script>
 
 <div class="tools-panel">
@@ -199,6 +236,96 @@
     {/if}
   </div>
 
+  <!-- Context Inspector — one view per focus level -->
+  <div class="focus-section">
+    <div class="section-header">
+      <span class="section-title">Focus</span>
+      <span class="focus-level">{focusLabel}</span>
+    </div>
+
+    {#if focus.level === 'project'}
+      <div class="focus-body">
+        <p class="focus-hint">Project summary. Select a session to edit its video settings and pipes.</p>
+        <div class="focus-summary">
+          <span>{project?.sessions.length ?? 0} sessions</span>
+          <span>{project?.totalGenerations ?? 0} generations</span>
+        </div>
+      </div>
+
+    {:else if focus.level === 'session'}
+      <div class="focus-body">
+        <p class="focus-name">{session?.name}</p>
+        <p class="focus-hint">Overall video settings + generation. Pipes inherit fps/res/orientation.</p>
+        {#if session}
+          <button class="focus-generate" onclick={ongenerate} disabled={!session.pipes?.length}>
+            {APP_CONSTANTS.strings.generate}
+          </button>
+        {/if}
+      </div>
+
+    {:else if focus.level === 'pipe'}
+      <div class="focus-body">
+        {#if focusedPipe}
+          <p class="focus-name">{focusedPipe.name}</p>
+          <div class="focus-meta">
+            <span>{focusedPipe.lengthFrames}f</span>
+            <span>Q {focusedPipe.qValue}</span>
+            <span>C {focusedPipe.cValue}</span>
+          </div>
+          <p class="focus-hint">Pipe generation settings + last-gen preview. Elements live in this pipe's frame space.</p>
+          {#if focusedPipe.keyframes.length > 0}
+            <div class="focus-list">
+              {#each focusedPipe.keyframes as kf (kf.id)}
+                <span class="focus-list-item">k{kf.slotIndex} · f{kf.frame}</span>
+              {/each}
+            </div>
+          {:else}
+            <p class="focus-hint">No keyframes yet.</p>
+          {/if}
+          <!-- Last-gen preview placeholder (artifact not yet modeled) -->
+          <div class="focus-preview" aria-hidden="true">
+            <span class="focus-preview-empty">No last-gen preview</span>
+          </div>
+        {:else}
+          <p class="focus-hint">No pipe selected.</p>
+        {/if}
+      </div>
+
+    {:else if focus.level === 'segment'}
+      <div class="focus-body">
+        {#if focusedSegment}
+          <p class="focus-name">Segment {focusedSegment.frameStart}–{focusedSegment.frameEnd}</p>
+          <p class="focus-hint">{focusedSegment.tags.length} tag{(focusedSegment.tags.length !== 1 ? 's' : '')}. Prompt editing opens in the tag view.</p>
+          {#if focusedSegment.tags.length > 0}
+            <div class="focus-list">
+              {#each focusedSegment.tags as t (t.id)}
+                <span class="focus-list-item">{t.tag}</span>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <p class="focus-hint">No segment selected.</p>
+        {/if}
+      </div>
+
+    {:else}
+      <!-- tag level -->
+      <div class="focus-body">
+        {#if focusedTag}
+          <p class="focus-name">{focusedTag.tag}</p>
+          <p class="focus-hint">f{focusedTag.frameStart}–{focusedTag.frameEnd} · prompt view (edit via the tag-prompt modal)</p>
+          {#if focusedTag.prompt}
+            <div class="focus-prompt">{focusedTag.prompt}</div>
+          {:else}
+            <p class="focus-hint">No prompt set.</p>
+          {/if}
+        {:else}
+          <p class="focus-hint">No tag selected.</p>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
   <!-- Stats -->
   <div class="stats-section">
     <div class="section-header">
@@ -275,9 +402,95 @@
   /* Sections */
   .preview-section,
   .settings-section,
+  .focus-section,
   .stats-section,
   .compiler-section {
     border-bottom: 1px solid var(--panel-right-border);
+  }
+
+  /* Focus inspector */
+  .focus-level {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .focus-body {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .focus-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .focus-hint {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+  .focus-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .focus-summary {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .focus-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .focus-list-item {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--panel-right-bg);
+    border: 1px solid var(--panel-right-border);
+    color: var(--text-secondary);
+  }
+  .focus-generate {
+    padding: 7px 14px;
+    background: var(--gradient-btn);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    align-self: flex-start;
+  }
+  .focus-generate:disabled { opacity: 0.4; cursor: not-allowed; }
+  .focus-preview {
+    margin-top: 4px;
+    height: 56px;
+    border: 1px dashed var(--panel-right-border);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .focus-preview-empty {
+    font-size: 10px;
+    color: var(--text-secondary);
+    opacity: 0.7;
+  }
+  .focus-prompt {
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--panel-right-bg);
+    border: 1px solid var(--panel-right-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    white-space: pre-wrap;
   }
 
   .section-header {

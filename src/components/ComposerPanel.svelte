@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment } from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus } from '$types';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
@@ -40,12 +40,17 @@ import { flashToast } from '$lib/flashToast';
 			totalFrames: propTotalFrames = 241,
 			selectedFrame,
 			activePipeIdx = $bindable(null),
+			focus = $bindable({ level: 'project' } as ComposerFocus),
 			onframechange,
 		} = $props<{
 			session?: SessionData;
 			totalFrames?: number;
 			selectedFrame?: number;
 			activePipeIdx?: number | null;
+			/** Context-sensitive tool-panel focus. The panel is the source of
+			 * truth for what the user has selected in the composer; the tool
+			 * panel renders one inspector per level. */
+			focus?: ComposerFocus;
 			onframechange?: (frame: number) => void;
 		}>();
 
@@ -66,6 +71,32 @@ import { flashToast } from '$lib/flashToast';
 	$effect(() => {
 		if (activePipeIdx !== null && activePipeIdx >= pipes.length) {
 			activePipeIdx = null;
+		}
+	});
+
+	// ── Focus for the context-sensitive tool panel ─────────────────────────
+	// The panel is the source of truth for composer selection. Pipe selection
+	// (clicking a pipe, opening any of its modals/menus) focuses that pipe;
+	// while a tag-prompt edit is in flight the focus refines to that tag.
+	// Segment-level focus happens on segment add/edit (SegmentModal open).
+	$effect(() => {
+		if (activePipeIdx === null) {
+			focus = { level: 'session', id: session?.id ?? '' };
+			return;
+		}
+		const pipe = pipes[activePipeIdx];
+		if (!pipe) {
+			focus = { level: 'session', id: session?.id ?? '' };
+			return;
+		}
+		if (showTagPromptModal && editingTagId) {
+			focus = { level: 'tag', pipeId: pipe.id, segmentId: editingSegmentId, tagId: editingTagId };
+		} else if (showSegmentModal) {
+			// Segment being created — focus the segment level so the inspector
+			// shows pipe + segment context while the modal is up.
+			focus = { level: 'pipe', pipeId: pipe.id };
+		} else {
+			focus = { level: 'pipe', pipeId: pipe.id };
 		}
 	});
 

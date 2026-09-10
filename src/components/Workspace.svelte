@@ -5,7 +5,7 @@
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import type { ProjectData, SessionData, PipeRow } from '$types';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 import { migratePipe } from '$lib/composerStore';
 import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC } from '$lib/composerStore';
@@ -59,6 +59,22 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 	let selectedFrame = $state<number>(0);
 	let activePipeIdx = $state<number | null>(null);
 	let pipes = $derived(selectedSession?.pipes ?? []);
+	// Context-sensitive tool-panel focus. The ComposerPanel is the source of
+	// truth (it refines focus as the user works: session → pipe → tag).
+	// Project level = summary only; session = video settings + generation.
+	let focus = $state<ComposerFocus>({ level: 'project' });
+	$effect(() => {
+		// No active session → project summary view.
+		if (!selectedSession) {
+			focus = { level: 'project' };
+			return;
+		}
+		// With a session, the panel drives session/pipe/tag; on session
+		// change, fall back to the session level until the panel refines it.
+		if (focus.level === 'project' || (focus.level === 'session' && focus.id !== selectedSession.id)) {
+			focus = { level: 'session', id: selectedSession.id };
+		}
+	});
 	// Session preview ruler frame count. The session video is the *result* of
 	// the generated pieces (its own artifact length) — NOT a mechanical sum of
 	// the pipes. Until that artifact is persisted (session-video entity, not
@@ -845,6 +861,7 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 					{totalFrames}
 					{selectedFrame}
 					bind:activePipeIdx
+					bind:focus
 					onframechange={(f) => selectedFrame = f}
 				/>
 			{:else}
@@ -861,6 +878,7 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 				{selectedSession}
 				{selectedProject}
 				{activeTool}
+				{focus}
 				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
 				qValue={activePipe?.qValue}
 				cValue={activePipe?.cValue}
