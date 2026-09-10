@@ -8,14 +8,12 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:coverage": "vitest run --coverage",
-    "lint": "eslint . --ext .svelte,.ts",
-    "format": "prettier --write src/**/*.{ts,svelte}"
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.7.2",

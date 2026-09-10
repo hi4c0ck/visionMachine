@@ -250,6 +250,20 @@ export interface ProjectData {
   sessions: SessionData[];
   totalGenerations: number;
   profileId?: string;
+  /** Timestamp of last modification (set by Workspace on project mutations) */
+  updatedAt?: number;
+}
+
+/**
+ * A project-attached file (image/audio/etc. the user can reference in a session)
+ */
+export interface ProjectFile {
+  id: string;
+  fileName: string;
+  filePath: string;
+  fileType: string;
+  fileSize: number;
+  addedAt: number;
 }
 
 /**

@@ -39,7 +39,7 @@
 		retryCount++;
 	}
 
-	function getErrorMessage(err: Error): string {
+	function getErrorMessage(err: Error | null): string {
 		if (!err) return 'An unknown error occurred';
 		return err.message || String(err);
 	}
@@ -48,12 +48,12 @@
 {#if displayedError || error}
 	<div class="error-boundary">
 		{#if fallback}
-			{@render fallback(displayedError || error)}
+			{@render fallback(displayedError ?? error ?? null)}
 		{:else}
 			<div class="error-container">
 				<div class="error-icon">⚠️</div>
 				<h2>Something went wrong</h2>
-				<p class="error-message">{getErrorMessage(displayedError || error)}</p>
+				<p class="error-message">{getErrorMessage(displayedError ?? error ?? null)}</p>
 				<p class="error-hint">This might be a temporary issue. Try refreshing the app.</p>
 				<div class="error-actions">
 					<button class="btn-retry" onclick={retry}>

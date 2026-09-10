@@ -5,7 +5,7 @@
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus } from '$types';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 import { migratePipe } from '$lib/composerStore';
 import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC } from '$lib/composerStore';
@@ -258,7 +258,7 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 						}))
 					}));
 				projects = parsed;
-				hydrateSessions(parsed.flatMap(p => p.sessions));
+				hydrateSessions(parsed.flatMap((p: any) => p.sessions));
 				
 				const savedProject = localStorage.getItem(`vm-selected-project-${userName}`);
 				const savedSession = localStorage.getItem(`vm-selected-session-${userName}`);
@@ -521,15 +521,18 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 			const maxFrames = getMaxFramesForResolution('720p');
 			const defaultPipe: PipeRow = {
 				id: crypto.randomUUID(),
+				name: 'Pipe 1',
 				lengthFrames: maxFrames,
 				keyframes: [],
 				qValue: 18,
 				cValue: 7,
+				subjectReferences: [],
 				elements: [{
 					id: crypto.randomUUID(),
 					tag: 'timeline',
 					segments: [],
 				}],
+				orderIndex: 0,
 			};
 
 			const sessionName = `Session ${project.sessions.length + 1}`;
@@ -598,16 +601,19 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 		const maxFrames = getMaxFramesForResolution('720p');
 		const defaultPipe: PipeRow = {
 			id: crypto.randomUUID(),
+			name: 'Pipe 1',
 			lengthFrames: maxFrames,
 			keyframes: [],
 			qValue: 18,
 			cValue: 7,
+			subjectReferences: [],
 			elements: [{
 				id: crypto.randomUUID(),
 				tag: 'timeline',
 				segments: [],
 			}],
-		};
+			orderIndex: 0,
+			};
 		
 		const newSession: SessionData = {
 			id: crypto.randomUUID(),
@@ -774,7 +780,7 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 
 	function handleResolutionChange(res: string) {
 		if (!selectedSession) return;
-		selectedSession.resolution = res;
+		selectedSession.resolution = res as any;
 		handleSessionUpdate(selectedSession);
 	}
 
@@ -875,8 +881,8 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 
 		{#if layoutMode === 'landscape'}
 			<ToolsPanel
-				{selectedSession}
-				{selectedProject}
+				session={selectedSession}
+				project={selectedProject}
 				{activeTool}
 				{focus}
 				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}

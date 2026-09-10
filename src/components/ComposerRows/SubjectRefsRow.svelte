@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PipeRow } from '$types';
+	import type { PipeRow, SubjectReference } from '$types';
 	import '../composer-row.css';
 
 	// Subject references row — pure chrome. The panel owns the subject-ref
@@ -21,7 +21,7 @@
 
 	// Store mutations replace pipe arrays, so the counts must stay derived.
 	const refs = $derived(pipe.subjectReferences ?? []);
-	const visibleCount = $derived(refs.filter((r) => r.visible !== false).length);
+	const visibleCount = $derived(refs.filter((r: SubjectReference) => r.visible !== false).length);
 	const refNumber = $derived(refs.length);
 </script>
 

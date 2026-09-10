@@ -34,6 +34,7 @@ const APP_CONSTANTS = {
     // Tools
     preview: 'Preview',
     settings: 'Settings',
+    stats: 'Stats',
     generate: 'Generate',
     noPreview: 'No preview available',
     noPreviewHint: 'Generate your first video to see results here',

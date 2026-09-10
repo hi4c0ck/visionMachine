@@ -76,7 +76,7 @@
 		return {
 			sessions: project?.sessions.length || 0,
 			pipes: session?.pipes?.length ?? 0,
-			frames: (session?.pipes ?? []).reduce((acc, p) => acc + (p?.lengthFrames || 0), 0),
+			frames: (session?.pipes ?? []).reduce((acc: number, p: PipeRow) => acc + (p?.lengthFrames || 0), 0),
 			generations: session.totalGeneratedFrames,
 		};
 	}

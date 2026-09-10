@@ -15,15 +15,15 @@
 
 	// Calculate real stats from projects
 	let totalSessions = $derived(
-		projects.reduce((acc, p) => acc + p.sessions.length, 0)
+		projects.reduce((acc: number, p: ProjectData) => acc + p.sessions.length, 0)
 	);
 
 	let totalGenerations = $derived(
-		projects.reduce((acc, p) => acc + p.totalGenerations, 0)
+		projects.reduce((acc: number, p: ProjectData) => acc + p.totalGenerations, 0)
 	);
 
 	let storageUsed = $derived(
-		Math.round(projects.reduce((acc, p) => {
+		Math.round(projects.reduce((acc: number, p: ProjectData) => {
 			// Rough estimate: each project/session metadata is ~1KB
 			return acc + (1 + p.sessions.length) * 1;
 		}, 0))

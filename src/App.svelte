@@ -113,13 +113,13 @@
 	});
 </script>
 
-<ErrorHandler {runtimeError}>
+<ErrorHandler error={runtimeError}>
 	{#if showWelcome}
 		<div class="app">
 			<header class="header">
 				<div class="logo-section">
 					<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
-					<span class="version-badge">v{APP_CONSTANTS.version}</span>
+					<span class="version-badge">v{APP_CONSTANTS.strings.version}</span>
 				</div>
 				
 				<div class="controls">

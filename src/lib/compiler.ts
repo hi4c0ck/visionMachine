@@ -14,8 +14,10 @@ export function compilePrompt(pipe: PipeRow): string {
   // Global elements first (new two-layer model)
   for (const el of pipe.elements) {
     if ('tag' in el && el.tag === 'global_style') {
-      if (el.enabled !== false && el.value.trim()) {
-        lines.push(el.value);
+      // value is legacy/optional — guard before trim
+      const value = el.value;
+      if (value && el.enabled !== false && value.trim()) {
+        lines.push(value);
       }
     }
   }

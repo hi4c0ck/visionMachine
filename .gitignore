@@ -163,8 +163,6 @@ run.bat
 run_final_verification.py
 verify_production.py
 verify_production.sh
-package-lock.json
-uv.lock
 
 # Design sketches (temp)
 design-sketches-temp/
