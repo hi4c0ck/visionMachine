@@ -139,12 +139,15 @@
 /* ═══ TAG LANES: one horizontal line per tag TYPE across all zones ════ */
 /* All pills of the same type share this lane; a lane may carry several
    pills side-by-side when different zones declare the same tag type. */
-.tag-lane {
-	position: relative;
-	width: 100%;
-	height: 24px;
-}
-.tag-lane-track {
+	.tag-lane {
+		position: relative;
+		width: 100%;
+		height: 24px;
+	}
+	/* Empty lane (type once used, no pills right now) stays on its line,
+	   just faded — so lanes persist instead of reflowing when tags change. */
+	.tag-lane.empty .tag-lane-label { opacity: 0.4; }
+	.tag-lane-track {
 	position: absolute;
 	inset: 0;
 	background: var(--bg-tertiary);

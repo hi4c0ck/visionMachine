@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { PipeRow, Segment, TagElement } from '$types';
+	import { TAG_SPECIFICATIONS, type TagType } from '$types';
 	import FrameRuler from '../FrameRuler.svelte';
 	import '../composer-timeline.css';
 	import {
@@ -132,8 +133,27 @@
 	// thin tracks under them. Pure render grouping — the data model is
 	// unchanged (tags still live in segment.tags[], ranges stay parented
 	// to their zone for drag bounds).
+	//
+	// LANES PERSIST ON THE SAME LINE: the lane list is anchored to the fixed
+	// tag-type order (TagSelectorMenu TAG_TYPES), not to Map insertion order.
+	// Every type that has ever been used in THIS pipe keeps its row forever
+	// (even with zero pills right now); types not yet used stay hidden and
+	// appear in canonical order when first added — so lanes never reorder
+	// or jump when tags come and go.
+	const LANE_TYPE_ORDER: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
+
 	type TagLaneEntry = { tag: TagElement; seg: Segment };
 	type TagLane = { type: string; color: string; name: string; entries: TagLaneEntry[] };
+
+	// Types whose lane has ever been shown on THIS pipe stay on their line
+	// (rendered faded when empty) — rows only grow, never shrink or shift.
+	// Reset when the pipe changes so lanes are per-pipe, not session-wide.
+	let seenLanes = $state<Set<string>>(new Set());
+	let seenPipeId = $state<string>('');
+	if (pipe?.id !== seenPipeId) {
+		seenPipeId = pipe?.id ?? '';
+		seenLanes = new Set();
+	}
 
 	function getTagLanes(p: PipeRow): TagLane[] {
 		const tl = getTimeline(p);
@@ -143,10 +163,11 @@
 			for (const tag of seg.tags) {
 				let lane = lanes.get(tag.tag);
 				if (!lane) {
+					const spec = TAG_SPECIFICATIONS[tag.tag as TagType];
 					lane = {
 						type: tag.tag,
-						color: tag.spec?.color ?? 'var(--accent-color)',
-						name: tag.spec?.name ?? tag.tag,
+						color: spec?.color ?? tag.spec?.color ?? 'var(--accent-color)',
+						name: spec?.name ?? tag.spec?.name ?? tag.tag,
 						entries: [],
 					};
 					lanes.set(tag.tag, lane);
@@ -154,7 +175,21 @@
 				lane.entries.push({ tag, seg });
 			}
 		}
-		return [...lanes.values()];
+		// Persist ever-seen lanes on the same line (faded when empty).
+		for (const type of lanes.keys()) seenLanes.add(type);
+		return LANE_TYPE_ORDER
+			.filter((t) => lanes.has(t) || seenLanes.has(t))
+			.map((t) => {
+				const active = lanes.get(t);
+				if (active) return active;
+				const spec = TAG_SPECIFICATIONS[t];
+				return {
+					type: t,
+					color: spec?.color ?? 'var(--accent-color)',
+					name: spec?.name ?? t,
+					entries: [] as TagLaneEntry[],
+				};
+			});
 	}
 
 	function getGlobal(p: PipeRow): any {
@@ -402,7 +437,7 @@
 					     left→right by frame range. Drag is body-only so pills never
 					     overlap their own lane. -->
 					{#each getTagLanes(pipe) as lane (lane.type)}
-						<div class="tag-lane" style="--lane-color: {lane.color};">
+						<div class="tag-lane" class:empty={lane.entries.length === 0} style="--lane-color: {lane.color};">
 							<div class="tag-lane-track">
 								<span class="tag-lane-label" style="--lane-color: {lane.color};">{lane.name}</span>
 								{#if rulerGeometry}

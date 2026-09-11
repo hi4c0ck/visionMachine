@@ -119,4 +119,45 @@ test.describe('Appending zones', () => {
 			timeout: 5000,
 		});
 	});
+
+	test('tag lanes persist on the same line when tags come and go', async ({ page }) => {
+		// Set up a zone + timeline.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '120');
+
+		async function addTagOfType(typeText: string) {
+			await page.locator('.btn-add-tag').first().click();
+			await page.locator('.dropdown-menu .tag-item', { hasText: typeText }).click();
+			await page.locator('.dropdown-menu .btn-confirm').click();
+			await page.waitForTimeout(300);
+		}
+
+		// Add a Camera tag, then a Scene tag → both lanes appear in canonical
+		// order (Scene before Camera).
+		await addTagOfType('Camera');
+		let laneLabels = await page.locator('.tag-lane-label').allInnerTexts();
+		expect(laneLabels).toEqual(['Camera']);
+
+		await addTagOfType('Scene');
+		laneLabels = await page.locator('.tag-lane-label').allInnerTexts();
+		expect(laneLabels).toEqual(['Scene', 'Camera']);
+
+		// Now remove BOTH tags. The lanes must stay on their lines (faded,
+		// empty) — not disappear and shift the other lane up.
+		const delButtons = page.locator('.btn-del-tag');
+		await delButtons.first().click();
+		await page.waitForTimeout(300);
+		await delButtons.first().click();
+		await page.waitForTimeout(300);
+
+		expect(await page.locator('.tag-body').count()).toBe(0);
+		const emptyLanes = page.locator('.tag-lane.empty');
+		expect(await emptyLanes.count()).toBe(2);
+		const persistedLabels = await page.locator('.tag-lane-label').allInnerTexts();
+		expect(persistedLabels).toEqual(['Scene', 'Camera']);
+	});
 });
