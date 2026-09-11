@@ -348,16 +348,24 @@ import { flashToast } from '$lib/flashToast';
 		showAddMenu = false;
 	}
 
-	// TagSelectorMenu calls back with the chosen tag type
-	async function confirmTagSelector(tagType: TagType) {
+	// Zones the tag menu can attach to (one entry per existing zone).
+	// Derived, so it stays current when zones are added/removed.
+	let tagMenuSegments = $derived.by(() => {
+		if (activePipeIdx === null) return [];
+		const tl = getTimeline(pipes[activePipeIdx]);
+		return (tl?.segments ?? []).map((s: Segment, i: number) => ({ id: s.id, index: i + 1 }));
+	});
+
+	// TagSelectorMenu calls back with the chosen tag type + target zone
+	async function confirmTagSelector(tagType: TagType, segId: string) {
 		if (!session?.id) return;
 		const pipe = pipes[activePipeIdx!];
 		if (!pipe) return;
 		const tl = getTimeline(pipe);
 		if (!tl) return;
-		const seg = tl.segments.find((s: Segment) => s.id === selectedSegmentId);
+		const seg = tl.segments.find((s: Segment) => s.id === segId);
 		if (!seg) return;
-		const result = await addTagElementAction(session.id, pipe.id, selectedSegmentId, tagType);
+		const result = await addTagElementAction(session.id, pipe.id, segId, tagType);
 		if (result.errors.length > 0) {
 			console.error('[ComposerPanel] addTag:', result.errors);
 			return;
@@ -482,7 +490,9 @@ import { flashToast } from '$lib/flashToast';
 		open={showTagMenu}
 		x={tagMenuX}
 		y={tagMenuY}
-		onConfirm={(t) => confirmTagSelector(t)}
+		segments={tagMenuSegments}
+		defaultSegmentId={selectedSegmentId}
+		onConfirm={(t, segId) => confirmTagSelector(t, segId)}
 		onClose={() => closeMenus()}
 	/>
 </div>

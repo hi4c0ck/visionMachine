@@ -161,6 +161,38 @@ test.describe('Appending zones', () => {
 		expect(persistedLabels).toEqual(['Scene', 'Camera']);
 	});
 
+	test('shared + Tag menu picks a zone, then adds the tag to it', async ({ page }) => {
+		// Two zones so the zone picker appears.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '60');
+		await page.locator('.btn-add-zone').click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '60', '120');
+
+		// Open the shared + Tag menu: two zones → picker rows Z1/Z2, default Z1.
+		await page.locator('.btn-add-tag-shared').click();
+		await page.waitForSelector('.dropdown-menu .zone-item', { timeout: 5000 });
+		const zoneItems = page.locator('.dropdown-menu .zone-item');
+		expect(await zoneItems.count()).toBe(2);
+		// Default target is the invoking (first) zone → Z1 pre-selected.
+		expect(await zoneItems.first().evaluate((el) => el.className)).toContain('active');
+		expect(await zoneItems.nth(1).evaluate((el) => el.className)).not.toContain('active');
+
+		// Pick ZONE 2 explicitly, then add a Scene tag → pill lands in zone 2.
+		await zoneItems.nth(1).click();
+		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await page.waitForSelector('.tag-body', { timeout: 5000 });
+
+		const pill = page.locator('.tag-body').first();
+		// The pill carries its zone badge (Z2) so the shared lane stays unambiguous.
+		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z2');
+	});
+
 	test('tag pills expose left/right resize grips that commit to the store', async ({ page }) => {
 		// Set up a zone (0–120) + a Camera tag that inherits the full range.
 		const plus = page.locator('.btn-add-track').first();

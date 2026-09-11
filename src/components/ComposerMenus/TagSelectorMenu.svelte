@@ -9,24 +9,56 @@
 		open,
 		x,
 		y,
+		segments,
+		defaultSegmentId,
 		onConfirm,
 		onClose,
 	} = $props<{
 		open: boolean;
 		x: number;
 		y: number;
-		onConfirm: (type: TagType) => void;
+		/** Target zones to attach the new tag to (each renders as "Zone N"). */
+		segments: Array<{ id: string; index: number }>;
+		/** Zone pre-selected as the attach target (e.g. the invoking zone). */
+		defaultSegmentId?: string;
+		onConfirm: (type: TagType, segmentId: string) => void;
 		onClose: () => void;
 	}>();
 
 	const TAG_TYPES: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
 	let selectedType = $state<TagType | null>(null);
+	// Selected target zone. Seeded on first render; kept across re-opens so
+	// the user's last zone choice sticks. Falls back when the current
+	// selection disappears (zone deleted between opens).
+	let selectedSegId = $state<string>(defaultSegmentId ?? segments[0]?.id ?? '');
+	$effect(() => {
+		if (!open) return;
+		const ids: string[] = segments.map((s: { id: string }) => s.id);
+		if (!ids.includes(selectedSegId)) {
+			selectedSegId = ids.includes(defaultSegmentId ?? '')
+				? (defaultSegmentId as string)
+				: (ids[0] ?? '');
+		}
+	});
 </script>
 
 {#if open}
 	<div class="dropdown-menu tag-menu" role="menu" tabindex="-1" style="left: {x}px; top: {y}px;"
 		onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 		<div class="dropdown-label">Add Tag</div>
+		{#if segments.length > 1}
+			<div class="dropdown-label zone-label">Attach to zone</div>
+			{#each segments as s (s.id)}
+				<button class="dropdown-item zone-item" class:active={selectedSegId === s.id}
+					onclick={() => selectedSegId = s.id}>
+					<span class="zone-num">Z{s.index}</span>
+					<span>Zone {s.index}</span>
+				</button>
+			{/each}
+			{/if}
+		{#if segments.length === 1}
+			<div class="dropdown-zone-fixed">Zone {segments[0].index}</div>
+		{/if}
 		{#each TAG_TYPES as tagType (tagType)}
 			<button class="dropdown-item tag-item"
 				class:active={selectedType === tagType}
@@ -36,7 +68,7 @@
 			</button>
 		{/each}
 		<div class="dropdown-actions">
-			<button class="btn-confirm" onclick={() => selectedType && onConfirm(selectedType)} disabled={!selectedType}>Add</button>
+			<button class="btn-confirm" onclick={() => selectedType && onConfirm(selectedType, selectedSegId)} disabled={!selectedType || !selectedSegId}>Add</button>
 			<button class="btn-cancel" onclick={onClose}>Cancel</button>
 		</div>
 	</div>
@@ -96,6 +128,23 @@
 		color: var(--text-secondary);
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
+	}
+
+	.zone-label {
+		padding-top: 8px;
+	}
+	.zone-item .zone-num {
+		width: 12px;
+		flex-shrink: 0;
+		font-weight: 700;
+		font-size: 11px;
+		color: var(--accent-color);
+	}
+	/* Single-zone case: no picker, just show which zone the tag lands on. */
+	.dropdown-zone-fixed {
+		padding: 4px 16px 8px;
+		font-size: 11px;
+		color: var(--text-secondary);
 	}
 
 	.dropdown-actions {

@@ -177,19 +177,26 @@
 		}
 		// Persist ever-seen lanes on the same line (faded when empty).
 		for (const type of lanes.keys()) seenLanes.add(type);
-		return LANE_TYPE_ORDER
-			.filter((t) => lanes.has(t) || seenLanes.has(t))
-			.map((t) => {
-				const active = lanes.get(t);
-				if (active) return active;
-				const spec = TAG_SPECIFICATIONS[t];
-				return {
-					type: t,
-					color: spec?.color ?? 'var(--accent-color)',
-					name: spec?.name ?? t,
-					entries: [] as TagLaneEntry[],
-				};
-			});
+		// Lane order = canonical tag-type order (issue 8): never first-seen
+		// order, so lanes stay in a stable, predictable sequence.
+		const types: string[] = LANE_TYPE_ORDER.filter((t) => lanes.has(t) || seenLanes.has(t));
+		// Unknown types (e.g. legacy/custom) sort to the end, stable.
+		for (const t of lanes.keys()) {
+			if (!LANE_TYPE_ORDER.includes(t as TagType)) {
+				types.push(t);
+			}
+		}
+		return types.map((t) => {
+			const active = lanes.get(t);
+			if (active) return active;
+			const spec = TAG_SPECIFICATIONS[t as TagType];
+			return {
+				type: t,
+				color: spec?.color ?? 'var(--accent-color)',
+				name: spec?.name ?? t,
+				entries: [] as TagLaneEntry[],
+			};
+		});
 	}
 
 	function getGlobal(p: PipeRow): any {
@@ -449,17 +456,19 @@
 									{#each lane.entries as entry (entry.tag.id)}
 										{@const tag = entry.tag}
 										{@const seg = entry.seg}
+										{@const zoneIndex = tl.segments.indexOf(seg) + 1}
 										<div
 											class="tag-body"
 											style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
 											role="button"
 											tabindex="0"
-											title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {tl.segments.indexOf(seg) + 1} · Drag to move, grips to resize, click to edit prompt"
+											title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex} · Drag to move, grips to resize, click to edit prompt"
 											onclick={() => onEditTagPrompt(seg, tag)}
 											onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
 											onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
 											onpointermove={handlePointerMove}
 											onpointerup={handlePointerUp}>
+											<span class="tag-pill-zone">Z{zoneIndex}</span>
 											<span class="tag-pill-label">{tag.spec?.name}</span>
 											<button
 												class="btn-del-tag"
@@ -498,9 +507,11 @@
 						</div>
 					{/each}
 
-					<!-- Zone chrome: NOT part of the frame coordinate space -->
-					{#each tl.segments as seg (seg.id)}
+					<!-- Zone chrome: one row per zone (delete + zone badge), NOT
+						 part of the frame coordinate space. -->
+					{#each tl.segments as seg, segIdx (seg.id)}
 						<div class="segment-chrome">
+							<span class="seg-chrome-label">Zone {segIdx + 1}</span>
 							<button
 								class="btn-icon-sm btn-del-sm seg-del"
 								onclick={() => onDeleteSegment(seg.id)}
@@ -508,12 +519,10 @@
 						</div>
 					{/each}
 
-					<!-- Append affordance: always present so a second (and later)
-						 zone can be added — the empty placeholder above only covers
-						 the first zone. -->
-					<div class="segment-chrome">
+					<!-- Append affordance: one shared action row, not one per zone -->
+					<div class="segment-chrome segment-chrome-append">
 						<button
-							class="btn-add-tag btn-add-zone"
+							class="btn-add-zone"
 							onclick={onAddSegment}
 							onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
 							title="Append a new zone after the last one">+ Zone</button>
@@ -543,7 +552,7 @@
 				<button
 					class="btn-add-tag btn-add-tag-shared"
 					onclick={(e) => { e.stopPropagation(); onOpenTagMenu(firstSegment.id, e); }}
-					title="Add tag (lands on the shared tag lane)">+ Tag</button>
+					title="Add tag — pick type AND target zone in the menu">+ Tag</button>
 			{/if}
 		</div>
 	</div>
