@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PipeRow, Segment, TagElement } from '$types';
 	import FrameRuler from '../FrameRuler.svelte';
+	import '../composer-timeline.css';
 	import {
 		createFrameGeometry,
 		type FrameGeometry,
@@ -124,9 +125,54 @@
 		return p.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
+	// ── Tag lanes (design: one horizontal line per tag TYPE) ───────────────
+	// The reference layout groups tags by type across zones: all "Camera"
+	// tags (from any zone) share one horizontal lane, placed left→right by
+	// their frame ranges. Zones are the single slider rows; lanes are the
+	// thin tracks under them. Pure render grouping — the data model is
+	// unchanged (tags still live in segment.tags[], ranges stay parented
+	// to their zone for drag bounds).
+	type TagLaneEntry = { tag: TagElement; seg: Segment };
+	type TagLane = { type: string; color: string; name: string; entries: TagLaneEntry[] };
+
+	function getTagLanes(p: PipeRow): TagLane[] {
+		const tl = getTimeline(p);
+		if (!tl) return [];
+		const lanes = new Map<string, TagLane>();
+		for (const seg of (tl.segments ?? []) as Segment[]) {
+			for (const tag of seg.tags) {
+				let lane = lanes.get(tag.tag);
+				if (!lane) {
+					lane = {
+						type: tag.tag,
+						color: tag.spec?.color ?? 'var(--accent-color)',
+						name: tag.spec?.name ?? tag.tag,
+						entries: [],
+					};
+					lanes.set(tag.tag, lane);
+				}
+				lane.entries.push({ tag, seg });
+			}
+		}
+		return [...lanes.values()];
+	}
+
 	function getGlobal(p: PipeRow): any {
 		return p.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
+
+	// ── Ruler legend: color key for the lane system (zone/global + tag types
+	//    present in THIS pipe's timeline). Rendered inside the frame-ruler
+	//    space so it aligns with the shared coordinate canvas. ─────────────
+	let legend = $derived.by(() => {
+		const lanes = getTagLanes(pipe);
+		if (lanes.length === 0 && !getTimeline(pipe)) return null;
+		return {
+			zone: 'var(--accent-color)',
+			global: '#59B5FF',
+			tags: lanes.map((l) => ({ name: l.name, color: l.color })),
+		};
+	});
 
 	// Get preview state for a segment during drag
 	function getPreviewSegment(seg: Segment) {
@@ -282,6 +328,7 @@
 				{totalFrames}
 				{selectedFrame}
 				geometry={rulerGeometry}
+				legend={legend}
 				onframeSelect={(f) => onFrameChange(f)}
 			/>
 		</div>
@@ -310,118 +357,121 @@
 		<div class="timeline-lane">
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}
+					<!-- ═══ ZONES: one slider row per segment ═══ -->
 					{#each tl.segments as seg (seg.id)}
 						<div class="segment-row">
-							<div class="segment-coordinate-row" style="height: {28 + seg.tags.length * 24}px;">
+							{#if rulerGeometry}
+								<div
+									class="segment-body"
+									style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'body', seg.frameStart, seg.frameEnd)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}>
+									<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
+								</div>
+								<div
+									class="segment-handle segment-handle-left"
+									style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'left', seg.frameStart, seg.frameEnd)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}
+									title="Drag to resize zone start"></div>
+								<div
+									class="segment-handle segment-handle-right"
+									style="left: {frameToPx(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'right', seg.frameStart, seg.frameEnd)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={getPreviewSegment(seg)?.endFrame ?? seg.frameEnd}
+									title="Drag to resize zone end"></div>
+							{/if}
+						</div>
+					{/each}
+
+					<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
+					     Each tag type gets its own horizontal lane; every pill of
+					     that type (from any zone) sits on the same line, placed
+					     left→right by frame range. Drag is body-only so pills never
+					     overlap their own lane. -->
+					{#each getTagLanes(pipe) as lane (lane.type)}
+						<div class="tag-lane" style="--lane-color: {lane.color};">
+							<div class="tag-lane-track">
+								<span class="tag-lane-label" style="--lane-color: {lane.color};">{lane.name}</span>
 								{#if rulerGeometry}
-									<!-- Left handle -->
-									<div
-										class="segment-handle segment-handle-left"
-										style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px;"
-										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'left', seg.frameStart, seg.frameEnd)}
-										onpointermove={handlePointerMove}
-										onpointerup={handlePointerUp}
-										role="slider" aria-orientation="horizontal"
-										aria-valuemin={0} aria-valuemax={totalFrames - 1}
-										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}
-										title="Drag to resize start">
-									</div>
-									<!-- Body -->
-									<div
-										class="segment-body"
-										style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
-										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'body', seg.frameStart, seg.frameEnd)}
-										onpointermove={handlePointerMove}
-										onpointerup={handlePointerUp}
-										role="slider" aria-orientation="horizontal"
-										aria-valuemin={0} aria-valuemax={totalFrames - 1}
-										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}>
-										<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
-									</div>
-									<!-- Right handle -->
-									<div
-										class="segment-handle segment-handle-right"
-										style="left: {frameToPx(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
-										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'right', seg.frameStart, seg.frameEnd)}
-										onpointermove={handlePointerMove}
-										onpointerup={handlePointerUp}
-										role="slider" aria-orientation="horizontal"
-										aria-valuemin={0} aria-valuemax={totalFrames - 1}
-										aria-valuenow={getPreviewSegment(seg)?.endFrame ?? seg.frameEnd}
-										title="Drag to resize end">
-									</div>
-									<!-- Tags: absolute rows stacked below body, same coordinate space -->
-									{#each seg.tags as tag, tagIdx (tag.id)}
-										<div class="tag-coordinate-row" style="top: {28 + tagIdx * 24}px;">
-											<div
-												class="tag-handle tag-handle-left"
-												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
-												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'left', tag.frameStart, tag.frameEnd)}
-												onpointermove={handlePointerMove}
-												onpointerup={handlePointerUp}
-												role="slider" aria-orientation="horizontal"
-												aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
-												aria-valuenow={getPreviewTag(tag.id)?.startFrame ?? tag.frameStart}>
-											</div>
-											<div
-												class="tag-body"
-												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
-												role="button"
-												tabindex="0"
-												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Click to edit prompt"
-												onclick={() => onEditTagPrompt(seg, tag)}
-												onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
-												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
-												onpointermove={handlePointerMove}
-												onpointerup={handlePointerUp}>
-												<span class="tag-name">{tag.spec?.name || tag.tag}</span>
-												{#if tag.prompt}
-													<span class="tag-prompt">{tag.prompt}</span>
-												{/if}
-												<button
-													class="btn-del-tag"
-													onclick={(e) => { e.stopPropagation(); onRemoveTag(seg.id, tag.id); }}
-													title="Remove tag">×</button>
-											</div>
-											<div
-												class="tag-handle tag-handle-right"
-												style="left: {frameToPx(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
-												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'right', tag.frameStart, tag.frameEnd)}
-												onpointermove={handlePointerMove}
-												onpointerup={handlePointerUp}
-												role="slider" aria-orientation="horizontal"
-												aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
-												aria-valuenow={getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd}>
-											</div>
+									{#each lane.entries as entry (entry.tag.id)}
+										{@const tag = entry.tag}
+										{@const seg = entry.seg}
+										<div
+											class="tag-body"
+											style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
+											role="button"
+											tabindex="0"
+											title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {tl.segments.indexOf(seg) + 1} · Click to edit prompt"
+											onclick={() => onEditTagPrompt(seg, tag)}
+											onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
+											onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
+											onpointermove={handlePointerMove}
+											onpointerup={handlePointerUp}>
+											<button
+												class="btn-del-tag"
+												// The parent .tag-body's onpointerdown calls preventDefault()
+												// (to prevent text selection during drag), which suppresses the
+												// native click event on children. Stopping propagation here
+												// keeps the drag handler from running on this button so its
+												// onclick still fires.
+												onpointerdown={(e) => e.stopPropagation()}
+												onclick={(e) => { e.stopPropagation(); onRemoveTag(seg.id, tag.id); }}
+												title="Remove tag">×</button>
 										</div>
 									{/each}
 								{/if}
 							</div>
-
-							<!-- Chrome row: NOT part of frame coordinate space -->
-							<div class="segment-chrome">
-								<button
-									class="btn-add-tag"
-									onclick={(e) => { e.stopPropagation(); onOpenTagMenu(seg.id, e); }}
-									title="Add tag to segment">+ Tag</button>
-								<button
-									class="btn-icon-sm btn-del-sm seg-del"
-									onclick={() => onDeleteSegment(seg.id)}
-									title="Delete segment">×</button>
-							</div>
 						</div>
 					{/each}
+
+					<!-- Zone chrome: NOT part of the frame coordinate space -->
+					{#each tl.segments as seg (seg.id)}
+						<div class="segment-chrome">
+							<button
+								class="btn-add-tag"
+								onclick={(e) => { e.stopPropagation(); onOpenTagMenu(seg.id, e); }}
+								title="Add tag to zone">+ Tag</button>
+							<button
+								class="btn-icon-sm btn-del-sm seg-del"
+								onclick={() => onDeleteSegment(seg.id)}
+								title="Delete zone">×</button>
+						</div>
+					{/each}
+
+					<!-- Append affordance: always present so a second (and later)
+						 zone can be added — the empty placeholder above only covers
+						 the first zone. -->
+					<div class="segment-chrome">
+						<button
+							class="btn-add-tag btn-add-zone"
+							onclick={onAddSegment}
+							onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
+							title="Append a new zone after the last one">+ Zone</button>
+					</div>
+
+					<!-- No zones yet (no timeline, or empty timeline) — one placeholder,
+						 zone add auto-creates the timeline when needed. -->
+					{#if (tl.segments.length ?? 0) === 0}
+						<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
+							onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
+							<span>+ Add first zone</span>
+						</div>
+					{/if}
 				{/if}
 			{/each}
-
-			<!-- No segments yet (no timeline, or empty timeline) — one placeholder,
-			     segment add auto-creates the timeline when needed. -->
-			{#if (getTimeline(pipe)?.segments.length ?? 0) === 0}
-				<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
-					onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
-					<span>+ Add first segment</span>
-				</div>
-			{/if}
 		</div>
 
 		<!-- ═══ [+] BUTTON (chrome column, outside coordinate space) ═══ -->
@@ -436,335 +486,4 @@
 	</div>
 </div>
 
-<style>
-	/* ── One frame coordinate canvas + chrome column ─────────────── */
-	.timeline-area {
-		position: relative;
-		width: 100%;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		column-gap: 8px;
-		align-items: start;
-	}
 
-	.timeline-coordinate {
-		position: relative;
-		min-width: 0;
-		width: 100%;
-	}
-
-	.timeline-ruler {
-		position: relative;
-		width: 100%;
-	}
-
-	.global-lane {
-		position: relative;
-		width: 100%;
-		height: 36px;
-		background: var(--bg-tertiary);
-		border-radius: 6px;
-		margin-top: 4px;
-	}
-
-	.global-range {
-		position: absolute;
-		top: 7px;
-		height: 22px;
-		background: #59B5FF;
-		opacity: 0.3;
-		border-radius: 3px;
-		pointer-events: none;
-	}
-
-	.global-actions {
-		position: absolute;
-		right: 4px;
-		top: 8px;
-		display: flex;
-		gap: 4px;
-	}
-
-	/* NOTE: delimiters here must NOT shift the frame coordinate space.
-	   .timeline-coordinate is the single canvas that rulerGeometry measures;
-	   any padding/border on inner blocks offsets frameToPx() output and breaks
-	   lane alignment (see coordinate-canvas E2E "shared coordinate space").
-	   So all visual borders are drawn as inset shadows / absolute overlays. */
-	.timeline-lane {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-top: 8px;
-		background: var(--surface-color);
-		border-radius: 8px;
-		box-shadow: inset 0 0 0 1px var(--border-color);
-	}
-
-	.segment-row {
-		position: relative;
-		width: 100%;
-		background: var(--bg-secondary);
-		border-radius: 6px;
-		box-shadow: inset 0 0 0 1px var(--border-color);
-	}
-
-	/* Left accent stripe — absolute overlay, zero layout shift */
-	.segment-row::before {
-		content: "";
-		position: absolute;
-		left: 0;
-		top: 0;
-		bottom: 0;
-		width: 3px;
-		background: var(--accent-color);
-		border-radius: 3px 0 0 3px;
-		pointer-events: none;
-	}
-
-	.segment-coordinate-row {
-		position: relative;
-		width: 100%;
-		min-height: 28px;
-	}
-
-	.segment-body {
-		position: absolute;
-		top: 2px;
-		height: 24px;
-		background: var(--accent-color);
-		opacity: 0.9;
-		border: 1px solid rgba(255, 255, 255, 0.18);
-		border-radius: 4px;
-		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-		cursor: grab;
-		display: flex;
-		align-items: center;
-		padding: 0 8px;
-		box-sizing: border-box;
-		overflow: hidden;
-		z-index: 2;
-	}
-	.segment-body:hover { opacity: 1; }
-	.segment-body:active { cursor: grabbing; }
-
-	.segment-handle {
-		position: absolute;
-		top: 0;
-		height: 28px;
-		width: 10px;
-		transform: translateX(-50%);
-		cursor: ew-resize;
-		z-index: 4;
-		background: var(--accent-color);
-		border-radius: 3px;
-		opacity: 0.95;
-		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 1px 3px rgba(0,0,0,0.4);
-		opacity: 0;
-	}
-	.segment-handle::after {
-		content: "";
-		position: absolute;
-		top: 8px;
-		bottom: 8px;
-		left: 4px;
-		width: 2px;
-		background: rgba(255, 255, 255, 0.8);
-		border-radius: 1px;
-	}
-	.segment-row:hover .segment-handle { opacity: 0.85; }
-	.segment-handle:hover,
-	.segment-handle:active { opacity: 1; }
-
-	.tag-coordinate-row {
-		position: absolute;
-		left: 0;
-		right: 0;
-		height: 22px;
-	}
-
-	/* Divider between stacked tag rows → each tag visually its own line */
-	.tag-coordinate-row:not(:first-child)::before {
-		content: "";
-		position: absolute;
-		left: 0;
-		right: 0;
-		top: 0;
-		height: 1px;
-		background: var(--border-color);
-	}
-
-	.tag-body {
-		position: absolute;
-		top: 1px;
-		height: 20px;
-		background: var(--tag-color, var(--accent-color));
-		opacity: 0.92;
-		border: 1px solid rgba(0, 0, 0, 0.35);
-		border-radius: 3px;
-		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-		cursor: grab;
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		padding: 0 6px;
-		box-sizing: border-box;
-		overflow: hidden;
-		z-index: 2;
-	}
-	.tag-body:hover { opacity: 1; }
-	.tag-body:active { cursor: grabbing; }
-
-	.tag-handle {
-		position: absolute;
-		top: 0;
-		height: 22px;
-		width: 8px;
-		transform: translateX(-50%);
-		cursor: ew-resize;
-		z-index: 4;
-		background: var(--tag-color, var(--accent-color));
-		border-radius: 2px;
-		box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
-		opacity: 0.45;
-	}
-	.tag-handle::after {
-		content: "";
-		position: absolute;
-		top: 6px;
-		bottom: 6px;
-		left: 3px;
-		width: 2px;
-		background: rgba(255, 255, 255, 0.85);
-		border-radius: 1px;
-	}
-	.tag-coordinate-row:hover .tag-handle,
-	.tag-handle:hover,
-	.tag-handle:active { opacity: 1; }
-
-	.btn-del-tag {
-		position: absolute;
-		right: 0;
-		top: 0;
-		z-index: 5;
-		background: none;
-		border: none;
-		color: var(--text-secondary);
-		cursor: pointer;
-		padding: 2px 4px;
-		border-radius: 4px;
-		font-size: 12px;
-	}
-	.btn-del-tag:hover {
-		background: var(--danger-bg);
-		color: var(--danger-color);
-	}
-
-	.segment-chrome {
-		position: relative;
-		height: 24px;
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		border-top: 1px dashed var(--border-color);
-		margin-top: 4px;
-		padding-top: 2px;
-	}
-
-	.timeline-actions {
-		display: flex;
-		align-items: flex-start;
-	}
-	.timeline-actions .btn-add-track {
-		width: 32px;
-		height: 32px;
-		padding: 0;
-	}
-
-	.seg-label {
-		font-size: 11px;
-		font-weight: 600;
-		color: white;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.tag-name {
-		font-size: 10px;
-		font-weight: 600;
-		color: white;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.tag-prompt {
-		font-size: 9px;
-		color: rgba(255, 255, 255, 0.8);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 100px;
-	}
-
-	.btn-add-tag,
-	.btn-add-track {
-		background: var(--bg-tertiary);
-		border: 1px dashed var(--border-color);
-		color: var(--text-secondary);
-		cursor: pointer;
-		padding: 6px 12px;
-		border-radius: 6px;
-		font-size: 12px;
-		transition: all 0.2s;
-	}
-
-	.btn-add-tag:hover,
-	.btn-add-track:hover {
-		border-color: var(--accent-color);
-		color: var(--accent-color);
-	}
-
-	.btn-icon,
-	.btn-icon-sm {
-		background: none;
-		border: none;
-		color: var(--text-secondary);
-		cursor: pointer;
-		padding: 4px 8px;
-		border-radius: 4px;
-		font-size: 14px;
-		transition: all 0.2s;
-	}
-
-	.btn-icon:hover,
-	.btn-icon-sm:hover {
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-	}
-
-	.btn-icon-sm.btn-del-sm:hover {
-		background: var(--danger-bg);
-		color: var(--danger-color);
-	}
-
-	.seg-empty {
-		padding: 16px;
-		text-align: center;
-		color: var(--text-secondary);
-		font-size: 12px;
-		border: 1px dashed var(--border-color);
-		border-radius: 6px;
-		cursor: pointer;
-		transition: all 0.2s;
-	}
-
-	.seg-empty:hover {
-		border-color: var(--accent-color);
-		color: var(--accent-color);
-	}
-
-	.full-width {
-		width: 100%;
-	}
-</style>

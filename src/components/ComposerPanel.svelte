@@ -298,17 +298,16 @@ import { flashToast } from '$lib/flashToast';
 
 		// Use getNextAvailableRange to find first free gap, not just append after last
 		const available = getNextAvailableRange(tl?.segments ?? [], pipe.lengthFrames, 8);
-		if (available) {
-			segStart = available.start;
-			segEnd = available.end;
-		} else {
-			// Fallback: append at end (or from 0 when no segments yet)
-			const segs = tl?.segments ?? [];
-			const lastSeg = segs[segs.length - 1];
-			segStart = lastSeg ? lastSeg.frameEnd : 0;
-			// Clamp to THIS pipe's frame space, not the active pipe's.
-			segEnd = Math.min(segStart + 8, pipe.lengthFrames - 1);
+		if (!available) {
+			// Pipe is full — no gap fits the minimum 8-frame span.
+			// Opening the modal here would pre-fill a zero-span range and
+			// leave Confirm permanently disabled, so surface the reason instead.
+			flashToast('No free space for a new segment — shrink an existing segment first');
+			closeMenus();
+			return;
 		}
+		segStart = available.start;
+		segEnd = available.end;
 		showSegmentModal = true;
 		closeMenus();
 	}

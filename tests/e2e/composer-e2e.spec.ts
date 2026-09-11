@@ -45,7 +45,7 @@ test.describe('Composer E2E Tests', () => {
   test('should show segment empty placeholder', async ({ page }) => {
     const emptyState = page.locator('.seg-empty.full-width');
     await expect(emptyState).toBeVisible();
-    await expect(emptyState).toContainText(/Add first segment/i);
+    await expect(emptyState).toContainText(/Add first zone/i);
   });
 
   test('should have frame ruler', async ({ page }) => {

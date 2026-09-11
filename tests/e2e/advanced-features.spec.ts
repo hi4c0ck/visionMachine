@@ -35,7 +35,7 @@ test.describe('Multi-Segment Creation', () => {
   test('should show segment empty placeholder', async ({ page }) => {
     const addSegmentBtn = page.locator('.seg-empty.full-width');
     await expect(addSegmentBtn).toBeVisible();
-    await expect(addSegmentBtn).toContainText(/Add first segment/i);
+    await expect(addSegmentBtn).toContainText(/Add first zone/i);
   });
 
   test('should validate minimum frame length by showing placeholder', async ({ page }) => {

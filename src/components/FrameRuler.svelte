@@ -4,18 +4,33 @@
 		clientXToFrame,
 		type FrameGeometry
 	} from '$lib/frameGeometry';
+	import { TAG_SPECIFICATIONS, type TagType } from '$types';
 
 	let {
 		totalFrames,
 		selectedFrame = 0,
 		onframeSelect,
-		geometry
+		geometry,
+		legend = null
 	} = $props<{
 		totalFrames: number;
 		selectedFrame?: number;
 		onframeSelect?: (frame: number) => void;
 		geometry: FrameGeometry | null;
+		/** Optional legend strip (zone + global + tag color key). */
+		legend?: { zone: string; global: string; tags: Array<{ name: string; color: string }> } | null;
 	}>();
+
+	const TAG_TYPES: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
+
+	// Default legend key (all tag types from TAG_SPECIFICATIONS) when the
+	// caller enables the legend but passes no explicit tag list.
+	let legendEntries = $derived(
+		legend?.tags ??
+		TAG_TYPES.map((t) => ({ name: TAG_SPECIFICATIONS[t].name, color: TAG_SPECIFICATIONS[t].color }))
+	);
+	let legendZone = $derived(legend?.zone ?? 'var(--accent-color)');
+	let legendGlobal = $derived(legend?.global ?? '#59B5FF');
 
 	let markers = $derived(
 		geometry
@@ -39,6 +54,15 @@
 </script>
 
 <div class="frame-ruler">
+	{#if legend}
+		<div class="ruler-legend" aria-label="Timeline legend">
+			<span class="legend-item" title="Zone segment (accent)"><span class="legend-swatch" style="background: {legendZone}"></span>Zone</span>
+			<span class="legend-item" title="Global style range"><span class="legend-swatch legend-swatch-global" style="background: {legendGlobal}"></span>Global</span>
+			{#each legendEntries as entry (entry.name)}
+				<span class="legend-item" title={entry.name}><span class="legend-swatch" style="background: {entry.color}"></span>{entry.name}</span>
+			{/each}
+		</div>
+	{/if}
 	<div
 		class="coordinate-space"
 		onpointerdown={onPointerDown}
@@ -72,14 +96,45 @@
 	.frame-ruler {
 		position: relative;
 		width: 100%;
-		height: 28px;
-		overflow: visible;
+	}
+
+	/* Compact legend strip above the ruler ticks: zone/global + tag color key.
+	   Sits in the frame-ruler space so it aligns with the coordinate canvas.
+	   Adding it grows the ruler height by 16px; .coordinate-space keeps its
+	   fixed 28px so the shared-coordinate-space invariant is unchanged. */
+	.ruler-legend {
+		height: 16px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 9px;
+		color: var(--text-muted, #888);
+		white-space: nowrap;
+		overflow: hidden;
+		padding: 0 2px;
+	}
+
+	.legend-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+	}
+
+	.legend-swatch {
+		width: 8px;
+		height: 8px;
+		border-radius: 2px;
+		flex-shrink: 0;
+	}
+
+	.legend-swatch-global {
+		opacity: 0.5;
 	}
 
 	.coordinate-space {
 		position: relative;
 		width: 100%;
-		height: 100%;
+		height: 28px;
 		cursor: pointer;
 	}
 

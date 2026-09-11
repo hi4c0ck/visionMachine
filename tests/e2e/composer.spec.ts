@@ -45,7 +45,7 @@ test.describe('Composer Panel', () => {
   test('should show segment empty placeholder when no segments', async ({ page }) => {
     const addSegmentBtn = page.locator('.seg-empty.full-width');
     await expect(addSegmentBtn).toBeVisible();
-    await expect(addSegmentBtn).toContainText(/Add first segment/i);
+    await expect(addSegmentBtn).toContainText(/Add first zone/i);
   });
 
   test('should show tag add button when segment exists', async ({ page }) => {

@@ -1,0 +1,303 @@
+/* Composer timeline visual layer — global CSS shared by TimelineSection
+   (same pattern as composer-row.css / composer-modal.css).
+
+   COORDINATE INVARIANT: every block inside .timeline-lane is full-width with
+   ZERO left padding/border, so absolute `left: Xpx` from frameToPx() aligns
+   with the FrameRuler ticks. Visual borders are drawn as inset box-shadows /
+   absolute overlays, never as box borders (borders shift the x origin and
+   break the shared-coordinate-space E2E). */
+
+/* ── Canvas + chrome column ─────────────────────────────────────────────── */
+.timeline-area {
+	position: relative;
+	width: 100%;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	column-gap: 8px;
+	align-items: start;
+}
+.timeline-coordinate {
+	position: relative;
+	min-width: 0;
+	width: 100%;
+}
+.timeline-ruler {
+	position: relative;
+	width: 100%;
+}
+
+/* ── Global lane (static full-span range, toggle/remove only) ──────────── */
+.global-lane {
+	position: relative;
+	width: 100%;
+	height: 36px;
+	background: var(--bg-tertiary);
+	border-radius: 6px;
+	margin-top: 4px;
+	box-shadow: inset 0 0 0 1px var(--border-color);
+}
+.global-range {
+	position: absolute;
+	top: 7px;
+	left: 0;
+	height: 22px;
+	background: #59B5FF;
+	opacity: 0.3;
+	border-radius: 3px;
+	pointer-events: none;
+}
+.global-actions {
+	position: absolute;
+	right: 4px;
+	top: 8px;
+	display: flex;
+	gap: 4px;
+}
+
+/* ── Timeline lane card (inset shadow only — no padding, no border) ────── */
+.timeline-lane {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 8px;
+	background: var(--surface-color);
+	border-radius: 8px;
+	box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+/* ═══ ZONE ROWS: one slider row per segment ═══════════════════════════ */
+/* Full-width track; the colored slider pill + round grips live inside. */
+.segment-row {
+	position: relative;
+	width: 100%;
+	height: 28px;
+	background: var(--bg-tertiary);
+	border-radius: 5px;
+	box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+/* The zone slider pill (accent). Left/width come from frameToPx. */
+.segment-body {
+	position: absolute;
+	top: 3px;
+	height: 22px;
+	background: var(--accent-color);
+	opacity: 0.9;
+	border: 1px solid rgba(255, 255, 255, 0.25);
+	border-radius: 11px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+	cursor: grab;
+	display: flex;
+	align-items: center;
+	padding: 0 10px;
+	box-sizing: border-box;
+	overflow: hidden;
+	z-index: 2;
+}
+.segment-body:hover { opacity: 1; }
+.segment-body:active { cursor: grabbing; }
+
+/* Frame-range label inside the pill — clipped, never overflows the pipe. */
+.seg-label {
+	font-size: 10px;
+	font-weight: 600;
+	color: #fff;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Round resize grips, revealed on row hover (E2E expects ±5px centers). */
+.segment-handle {
+	position: absolute;
+	top: 0;
+	height: 28px;
+	width: 10px;
+	transform: translateX(-50%);
+	cursor: ew-resize;
+	z-index: 4;
+	background: var(--accent-color);
+	border-radius: 6px;
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 1px 3px rgba(0, 0, 0, 0.4);
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+.segment-handle::after {
+	content: "";
+	position: absolute;
+	top: 8px;
+	bottom: 8px;
+	left: 4px;
+	width: 2px;
+	border-radius: 1px;
+	background: rgba(255, 255, 255, 0.9);
+}
+.segment-row:hover .segment-handle { opacity: 0.9; }
+.segment-handle:hover,
+.segment-handle:active { opacity: 1; }
+
+/* ═══ TAG LANES: one horizontal line per tag TYPE across all zones ════ */
+/* All pills of the same type share this lane; a lane may carry several
+   pills side-by-side when different zones declare the same tag type. */
+.tag-lane {
+	position: relative;
+	width: 100%;
+	height: 24px;
+}
+.tag-lane-track {
+	position: absolute;
+	inset: 0;
+	background: var(--bg-tertiary);
+	border-radius: 5px;
+	box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+/* Type badge: colored dot + name, floats over the track left edge.
+   pointer-events:none so it never blocks pill or grip interactions. */
+.tag-lane-label {
+	position: absolute;
+	left: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	padding: 1px 7px;
+	font-size: 10px;
+	font-weight: 600;
+	color: var(--text-secondary);
+	background: var(--bg-secondary);
+	border-radius: 8px;
+	box-shadow: 0 0 0 1px var(--border-color);
+	white-space: nowrap;
+	overflow: hidden;
+	pointer-events: none;
+	max-width: 110px;
+}
+.tag-lane-label::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--lane-color, var(--accent-color));
+	flex-shrink: 0;
+}
+
+/* Tag pill (colored per type via --tag-color). Body-drag only: pills in a
+   lane keep their frame range; overlap is allowed and painted in DOM order. */
+.tag-body {
+	position: absolute;
+	top: 4px;
+	height: 16px;
+	background: var(--tag-color, var(--accent-color));
+	border: 1px solid rgba(0, 0, 0, 0.4);
+	border-radius: 8px;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+	cursor: grab;
+	z-index: 2;
+	overflow: hidden;
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+}
+.tag-body:hover { filter: brightness(1.12); }
+.tag-body:active { cursor: grabbing; }
+
+.btn-del-tag {
+	position: absolute;
+	right: 2px;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 5;
+	background: none;
+	border: none;
+	color: var(--text-secondary);
+	cursor: pointer;
+	padding: 1px 4px;
+	border-radius: 4px;
+	font-size: 12px;
+	line-height: 1;
+}
+.btn-del-tag:hover {
+	background: var(--danger-bg);
+	color: var(--danger-color);
+}
+
+/* ═══ Zone chrome (action rows, OUTSIDE the coordinate math) ═══════════ */
+.segment-chrome {
+	position: relative;
+	height: 22px;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	border-top: 1px dashed var(--border-color);
+	margin-top: 2px;
+}
+
+/* ── Add-track [+], buttons, empty state ──────────────────────────────── */
+.timeline-actions {
+	display: flex;
+	align-items: flex-start;
+}
+.timeline-actions .btn-add-track {
+	width: 32px;
+	height: 32px;
+	padding: 0;
+}
+
+.btn-add-tag,
+.btn-add-track {
+	background: var(--bg-tertiary);
+	border: 1px dashed var(--border-color);
+	color: var(--text-secondary);
+	cursor: pointer;
+	padding: 6px 12px;
+	border-radius: 6px;
+	font-size: 12px;
+	transition: all 0.2s;
+}
+.btn-add-tag:hover,
+.btn-add-track:hover {
+	border-color: var(--accent-color);
+	color: var(--accent-color);
+}
+
+/* NOTE: `.btn-icon` is owned by PipeHeader.svelte (scoped). This global
+   file only styles the composer-specific `.btn-icon-sm` variant. */
+.btn-icon-sm {
+	background: none;
+	border: none;
+	color: var(--text-secondary);
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 4px;
+	font-size: 14px;
+	transition: all 0.2s;
+}
+.btn-icon-sm:hover {
+	background: var(--bg-tertiary);
+	color: var(--text-primary);
+}
+.btn-icon-sm.btn-del-sm:hover {
+	background: var(--danger-bg);
+	color: var(--danger-color);
+}
+
+.seg-empty {
+	padding: 16px;
+	text-align: center;
+	color: var(--text-secondary);
+	font-size: 12px;
+	border: 1px dashed var(--border-color);
+	border-radius: 6px;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+.seg-empty:hover {
+	border-color: var(--accent-color);
+	color: var(--accent-color);
+}
+.full-width {
+	width: 100%;
+}

@@ -196,8 +196,8 @@ test.describe('White Screen Integration Tests', () => {
     // Click on Scene type
     await page.locator('.type-btn:has-text("Scene")').click();
     
-    // Verify segment was added
-    await expect(page.locator('.tag-coordinate-row')).toBeVisible();
+    // Verify segment was added (scene tag lane appears)
+    await expect(page.locator('.tag-lane').first()).toBeVisible();
     
     // Verify no console errors
     expect(consoleErrors.length).toBe(0);
