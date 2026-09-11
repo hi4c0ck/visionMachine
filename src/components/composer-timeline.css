@@ -157,27 +157,27 @@
 
 /* Type badge: colored dot + name, floats over the track left edge.
    pointer-events:none so it never blocks pill or grip interactions. */
-.tag-lane-label {
-	position: absolute;
-	left: 6px;
-	top: 50%;
-	transform: translateY(-50%);
-	z-index: 1;
-	display: flex;
-	align-items: center;
-	gap: 5px;
-	padding: 1px 7px;
-	font-size: 10px;
-	font-weight: 600;
-	color: var(--text-secondary);
-	background: var(--bg-secondary);
-	border-radius: 8px;
-	box-shadow: 0 0 0 1px var(--border-color);
-	white-space: nowrap;
-	overflow: hidden;
-	pointer-events: none;
-	max-width: 110px;
-}
+	.tag-lane-label {
+		position: absolute;
+		left: 6px;
+		top: 50%;
+		transform: translateY(-50%);
+		z-index: 1;
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		padding: 1px 7px;
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--text-secondary);
+		background: var(--bg-secondary);
+		border-radius: 8px;
+		box-shadow: 0 0 0 1px var(--border-color);
+		white-space: nowrap;
+		ext-overflow: ellipsis;
+		pointer-events: none;
+		max-width: 110px;
+	}
 .tag-lane-label::before {
 	content: "";
 	width: 7px;
@@ -189,21 +189,22 @@
 
 /* Tag pill (colored per type via --tag-color). Body-drag only: pills in a
    lane keep their frame range; overlap is allowed and painted in DOM order. */
-.tag-body {
-	position: absolute;
-	top: 4px;
-	height: 16px;
-	background: var(--tag-color, var(--accent-color));
-	border: 1px solid rgba(0, 0, 0, 0.4);
-	border-radius: 8px;
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-	cursor: grab;
-	z-index: 2;
-	overflow: hidden;
-	box-sizing: border-box;
-	display: flex;
-	align-items: center;
-}
+	.tag-body {
+		position: absolute;
+		top: 4px;
+		height: 16px;
+		background: var(--tag-color, var(--accent-color));
+		border: 1px solid rgba(0, 0, 0, 0.4);
+		border-radius: 8px;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+		cursor: grab;
+		z-index: 2;
+		/* NO overflow:hidden: the label is clipped by its own ellipsis; the
+		   edge grips (±50% outside the pill) must stay hittable. */
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+	}
 	.tag-body:hover { filter: brightness(1.12); }
 	.tag-body:active { cursor: grabbing; }
 
@@ -231,6 +232,7 @@
 		transform: translateX(-50%);
 		cursor: ew-resize;
 		z-index: 6;
+		pointer-events: auto;
 		background: var(--tag-color, var(--accent-color));
 		border-radius: 4px;
 		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4), 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -247,7 +249,7 @@
 		border-radius: 1px;
 		background: rgba(255, 255, 255, 0.9);
 	}
-	.tag-body:hover .tag-handle, .tag-lane:hover .tag-handle { opacity: 0.9; }
+	.tag-body:hover .tag-handle, .tag-body:active .tag-handle { opacity: 0.9; }
 	.tag-handle:hover, .tag-handle:active { opacity: 1; }
 
 .btn-del-tag {

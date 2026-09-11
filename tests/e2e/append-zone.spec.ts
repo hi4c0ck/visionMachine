@@ -183,10 +183,12 @@ test.describe('Appending zones', () => {
 		expect(Math.abs(gripL.x + 4 - pillBox.x)).toBeLessThan(3); // 8px grip centered on left edge
 		expect(Math.abs(gripR.x + 4 - (pillBox.x + pillBox.width))).toBeLessThan(3);
 
-		// Drag the right grip left to ~50% of the pipe → tag end snaps to 64.
+		// Drag the right grip far left to ~30% of the pill → end frame
+		// recomputes below the parent range, so the committed pill shrinks
+		// noticeably (the 8-grid snap still applies).
 		await page.mouse.move(gripR.x + gripR.width / 2, gripR.y + gripR.height / 2);
 		await page.mouse.down();
-		await page.mouse.move(pillBox.x + pillBox.width * 0.5, gripR.y + gripR.height / 2, { steps: 10 });
+		await page.mouse.move(pillBox.x + pillBox.width * 0.3, gripR.y + gripR.height / 2, { steps: 12 });
 		await page.waitForTimeout(150);
 		await page.mouse.up();
 		await page.waitForTimeout(500);
