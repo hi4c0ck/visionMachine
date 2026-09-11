@@ -130,7 +130,7 @@ test.describe('Appending zones', () => {
 		await addZoneAt(page, '0', '120');
 
 		async function addTagOfType(typeText: string) {
-			await page.locator('.btn-add-tag').first().click();
+			await page.locator('.btn-add-tag-shared').click();
 			await page.locator('.dropdown-menu .tag-item', { hasText: typeText }).click();
 			await page.locator('.dropdown-menu .btn-confirm').click();
 			await page.waitForTimeout(300);
@@ -159,5 +159,45 @@ test.describe('Appending zones', () => {
 		expect(await emptyLanes.count()).toBe(2);
 		const persistedLabels = await page.locator('.tag-lane-label').allInnerTexts();
 		expect(persistedLabels).toEqual(['Scene', 'Camera']);
+	});
+
+	test('tag pills expose left/right resize grips that commit to the store', async ({ page }) => {
+		// Set up a zone (0–120) + a Camera tag that inherits the full range.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '120');
+
+		await page.locator('.btn-add-tag-shared').click();
+		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await page.waitForSelector('.tag-body', { timeout: 5000 });
+
+		// Both grips exist on the pill, aligned with its frame edges.
+		const pill = page.locator('.tag-body').first();
+		const pillBox = (await pill.boundingBox())!;
+		const gripL = (await page.locator('.tag-handle-left').first().boundingBox())!;
+		const gripR = (await page.locator('.tag-handle-right').first().boundingBox())!;
+		expect(Math.abs(gripL.x + 4 - pillBox.x)).toBeLessThan(3); // 8px grip centered on left edge
+		expect(Math.abs(gripR.x + 4 - (pillBox.x + pillBox.width))).toBeLessThan(3);
+
+		// Drag the right grip left to ~50% of the pipe → tag end snaps to 64.
+		await page.mouse.move(gripR.x + gripR.width / 2, gripR.y + gripR.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(pillBox.x + pillBox.width * 0.5, gripR.y + gripR.height / 2, { steps: 10 });
+		await page.waitForTimeout(150);
+		await page.mouse.up();
+		await page.waitForTimeout(500);
+
+		// The committed width: the drag preview follows the pointer, but the
+		// store clamps end ≥ start+8, so an 80px drag from a 120-frame range
+		// lands on span ~56–80 (snapped), never the full 120 again. The pill
+		// width therefore shrinks from the original.
+		const label = await page.locator('.tag-pill-label').first().innerText();
+		expect(label.trim()).toBe('Camera');
+		const newPill = (await pill.boundingBox())!;
+		expect(newPill.width).toBeLessThan(pillBox.width); // the resize committed
 	});
 });

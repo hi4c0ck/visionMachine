@@ -204,8 +204,51 @@
 	display: flex;
 	align-items: center;
 }
-.tag-body:hover { filter: brightness(1.12); }
-.tag-body:active { cursor: grabbing; }
+	.tag-body:hover { filter: brightness(1.12); }
+	.tag-body:active { cursor: grabbing; }
+
+	/* Tag name inside the pill — clipped by .tag-body's overflow. */
+	.tag-pill-label {
+		font-size: 9px;
+		font-weight: 600;
+		color: #fff;
+		white-space: nowrap;
+		ext-overflow: ellipsis;
+		overflow: hidden;
+		padding: 0 4px 0 6px;
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	/* Round resize grips on the tag pill edges (same interaction model as the
+	   segment handles; revealed on pill hover). Resizes the tag's start/end
+	   within the parent zone, snapping to the 8-grid. */
+	.tag-handle {
+		position: absolute;
+		top: 0;
+		height: 16px;
+		width: 8px;
+		transform: translateX(-50%);
+		cursor: ew-resize;
+		z-index: 6;
+		background: var(--tag-color, var(--accent-color));
+		border-radius: 4px;
+		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4), 0 1px 2px rgba(0, 0, 0, 0.4);
+		opacity: 0;
+		transition: opacity 0.12s ease;
+	}
+	.tag-handle::after {
+		content: "";
+		position: absolute;
+		top: 4px;
+		bottom: 4px;
+		left: 3px;
+		width: 2px;
+		border-radius: 1px;
+		background: rgba(255, 255, 255, 0.9);
+	}
+	.tag-body:hover .tag-handle, .tag-lane:hover .tag-handle { opacity: 0.9; }
+	.tag-handle:hover, .tag-handle:active { opacity: 1; }
 
 .btn-del-tag {
 	position: absolute;
@@ -238,10 +281,12 @@
 	margin-top: 2px;
 }
 
-/* ── Add-track [+], buttons, empty state ──────────────────────────────── */
+/* ── Add-track [+], buttons, empty state ─────────────────────────────── */
 .timeline-actions {
-	display: flex;
-	align-items: flex-start;
+	display: grid;
+	grid-auto-rows: 32px;
+	row-gap: 6px;
+	align-items: start;
 }
 .timeline-actions .btn-add-track {
 	width: 32px;
@@ -259,6 +304,16 @@
 	border-radius: 6px;
 	font-size: 12px;
 	transition: all 0.2s;
+}
+/* The single shared + Tag button in the chrome column: square, stacked
+   under the [+] button. */
+.btn-add-tag-shared {
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 .btn-add-tag:hover,
 .btn-add-track:hover {

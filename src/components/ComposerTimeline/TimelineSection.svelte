@@ -209,6 +209,10 @@
 		};
 	});
 
+	// Target zone for the shared "+ Tag" button: the first zone of this pipe.
+	// (All tag pills live on the shared tag lane, so one entry point suffices.)
+	let firstSegment = $derived.by(() => (getTimeline(pipe)?.segments ?? [])[0] ?? null);
+
 	// Get preview state for a segment during drag
 	function getPreviewSegment(seg: Segment) {
 		if (!previewDragState || previewDragState.type !== 'segment' || previewDragState.id !== seg.id) {
@@ -434,8 +438,9 @@
 					<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
 					     Each tag type gets its own horizontal lane; every pill of
 					     that type (from any zone) sits on the same line, placed
-					     left→right by frame range. Drag is body-only so pills never
-					     overlap their own lane. -->
+					     left→right by frame range. Body drags move the pill;
+					     the round grips on its edges resize start/end within
+					     the parent zone (8-grid snap). -->
 					{#each getTagLanes(pipe) as lane (lane.type)}
 						<div class="tag-lane" class:empty={lane.entries.length === 0} style="--lane-color: {lane.color};">
 							<div class="tag-lane-track">
@@ -449,12 +454,13 @@
 											style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
 											role="button"
 											tabindex="0"
-											title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {tl.segments.indexOf(seg) + 1} · Click to edit prompt"
+											title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {tl.segments.indexOf(seg) + 1} · Drag to move, grips to resize, click to edit prompt"
 											onclick={() => onEditTagPrompt(seg, tag)}
 											onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
 											onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
 											onpointermove={handlePointerMove}
 											onpointerup={handlePointerUp}>
+											<span class="tag-pill-label">{tag.spec?.name}</span>
 											<button
 												class="btn-del-tag"
 												// The parent .tag-body's onpointerdown calls preventDefault()
@@ -465,6 +471,26 @@
 												onpointerdown={(e) => e.stopPropagation()}
 												onclick={(e) => { e.stopPropagation(); onRemoveTag(seg.id, tag.id); }}
 												title="Remove tag">×</button>
+											<div
+												class="tag-handle tag-handle-left"
+												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px;"
+												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'left', tag.frameStart, tag.frameEnd)}
+												onpointermove={handlePointerMove}
+												onpointerup={handlePointerUp}
+												role="slider" aria-orientation="horizontal" tabindex="0"
+												aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
+												aria-valuenow={getPreviewTag(tag.id)?.startFrame ?? tag.frameStart}
+												title="Drag to resize tag start"></div>
+											<div
+												class="tag-handle tag-handle-right"
+												style="left: {frameToPx(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px;"
+												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'right', tag.frameStart, tag.frameEnd)}
+												onpointermove={handlePointerMove}
+												onpointerup={handlePointerUp}
+												role="slider" aria-orientation="horizontal" tabindex="0"
+												aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
+												aria-valuenow={getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd}
+												title="Drag to resize tag end"></div>
 										</div>
 									{/each}
 								{/if}
@@ -475,10 +501,6 @@
 					<!-- Zone chrome: NOT part of the frame coordinate space -->
 					{#each tl.segments as seg (seg.id)}
 						<div class="segment-chrome">
-							<button
-								class="btn-add-tag"
-								onclick={(e) => { e.stopPropagation(); onOpenTagMenu(seg.id, e); }}
-								title="Add tag to zone">+ Tag</button>
 							<button
 								class="btn-icon-sm btn-del-sm seg-del"
 								onclick={() => onDeleteSegment(seg.id)}
@@ -517,6 +539,12 @@
 				title="Add track">
 				+
 			</button>
+			{#if firstSegment}
+				<button
+					class="btn-add-tag btn-add-tag-shared"
+					onclick={(e) => { e.stopPropagation(); onOpenTagMenu(firstSegment.id, e); }}
+					title="Add tag (lands on the shared tag lane)">+ Tag</button>
+			{/if}
 		</div>
 	</div>
 </div>
