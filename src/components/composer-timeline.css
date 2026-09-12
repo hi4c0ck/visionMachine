@@ -88,77 +88,72 @@
 	gap: 4px;
 }
 
-/* ═══ KEYFRAME LANE: frame-positioned markers, drag to reposition ════ */
-/* Markers live in the shared coordinate space: each chip is centered on
-   frameToPx(kf.frame) with translateX(-50%), so it lands exactly on the
-   ruler tick it belongs to. The lane itself has ZERO left padding/border
-   (the coordinate invariant), and the track is drawn with inset shadows.
-   Chips are draggable points (no grips, no duration) — the 8-grid snap
-   and pipe [0, totalFrames-1] clamp are handled by calculateKeyframeDrag */
-.keyframe-lane {
+/* ═══ KEYFRAME CHIPS: wide chips, left edge anchored at the frame ════════ */
+/* Design rule R3: each chip is ~72px wide with its LEFT EDGE at the frame's
+   pixel position on the ruler. The chip extends rightward from that frame —
+   it is NOT centered on the frame. The container lives in the shared
+   coordinate space (zero left padding/border), so `left: frameToPx(frame)`
+   lands the chip's left edge exactly under the ruler tick for that frame.
+   A tick under the chip's left edge makes the anchor point explicit. */
+.keyframe-chips {
 	position: relative;
 	width: 100%;
-	height: 24px;
+	height: 34px;
 	margin-top: 4px;
-}
-.keyframe-lane-track {
-	position: absolute;
-	inset: 0;
 	background: var(--bg-tertiary);
-	border-radius: 5px;
+	border-radius: 6px;
 	box-shadow: inset 0 0 0 1px var(--border-color);
 }
 
-/* Wide chip: k{n} badge + live frame number. Centered on the frame
-   coordinate (left: Xpx; translateX(-50%)). */
-.kf-marker {
+/* The wide chip itself. Left edge pinned to the frame coordinate; no
+   translateX — the left edge is the anchor. */
+.kf-chip-frame {
 	position: absolute;
-	top: 2px;
-	transform: translateX(-50%);
-	height: 20px;
-	min-width: 52px;
+	top: 5px;
+	height: 24px;
+	width: 72px;
 	padding: 0 8px;
 	display: flex;
 	align-items: center;
 	gap: 4px;
 	background: var(--bg-secondary);
-	border-radius: 6px;
+	border-radius: 5px;
 	box-shadow: inset 0 0 0 1px var(--border-color);
 	cursor: grab;
 	user-select: none;
 	z-index: 2;
+	box-sizing: border-box;
 }
-.kf-marker:hover {
+.kf-chip-frame:hover {
 	box-shadow: inset 0 0 0 1px var(--accent-color);
 }
-.kf-marker.dragging {
+.kf-chip-frame.dragging {
 	cursor: grabbing;
 	box-shadow: inset 0 0 0 1px var(--accent-color);
 	background: var(--accent-bg);
 }
-.kf-marker-label {
-	font-size: 9px;
+.kf-chip-num {
+	font-size: 10px;
 	font-weight: 700;
 	color: var(--accent-color);
 	letter-spacing: 0.3px;
 }
-.kf-marker-frame {
-	font-size: 9px;
+.kf-chip-frame-num {
+	font-size: 10px;
 	font-weight: 600;
 	color: var(--text-secondary);
+	margin-left: auto;
 }
 
-/* Vertical tick line under the chip, pinned to the frame coordinate so
-   the marker reads as a point on the ruler. */
-.kf-marker::after {
-	content: "";
+/* The anchor tick: a 1px line under the chip's LEFT edge, so the exact
+   frame the chip sits on is visible against the ruler. */
+.kf-chip-anchor {
 	position: absolute;
-	left: 50%;
-	bottom: -4px;
-	width: 1px;
-	height: 4px;
+	left: 0;
+	bottom: -8px;
+	width: 2px;
+	height: 8px;
 	background: var(--accent-color);
-	transform: translateX(-50%);
 }
 
 /* ── Timeline lane card (inset shadow only — no padding, no border) ───── */
