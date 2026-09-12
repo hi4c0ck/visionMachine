@@ -166,3 +166,8 @@ verify_production.sh
 
 # Design sketches (temp)
 design-sketches-temp/
+
+# Editor local state (Zed / scratch captures)
+.zed/
+sc-out.txt
+
