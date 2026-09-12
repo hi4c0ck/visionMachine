@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PipeRow, PipeKeyframe, Segment, TagElement } from '$types';
+	import type { PipeRow, Segment, TagElement } from '$types';
 	import { TAG_SPECIFICATIONS, type TagType } from '$types';
 	import FrameRuler from '../FrameRuler.svelte';
 	import '../composer-timeline.css';
@@ -12,7 +12,6 @@
 	} from '$lib/frameGeometry';
 	import {
 		calculateElementDrag,
-		calculateKeyframeDrag,
 		getDragBounds,
 		type TemporalDragState,
 		type DragBounds,
@@ -40,23 +39,20 @@
 		onOpenTagMenu,
 		onRemoveTag,
 		onEditTagPrompt,
-		onMoveKeyframe,
-		} = $props<{
-			pipe: PipeRow;
-			sessionId?: string;
-			selectedFrame?: number;
-			onFrameChange: (f: number) => void;
-			onAddTrack: (e: MouseEvent) => void;
-			onToggleGlobal: (globalId: string) => void;
-			onRemoveGlobal: (globalId: string) => void;
-			onAddSegment: () => void;
-			onDeleteSegment: (segId: string) => void;
-			onOpenTagMenu: (segId: string, e: MouseEvent) => void;
-			onRemoveTag: (segId: string, tagId: string) => void;
-			onEditTagPrompt: (seg: Segment, tag: TagElement) => void;
-			/** Commit a keyframe reposition (frame, 8-grid) after a marker drag. */
-			onMoveKeyframe: (keyframeId: string, newFrame: number) => void;
-		}>();
+	} = $props<{
+		pipe: PipeRow;
+		sessionId?: string;
+		selectedFrame?: number;
+		onFrameChange: (f: number) => void;
+		onAddTrack: (e: MouseEvent) => void;
+		onToggleGlobal: (globalId: string) => void;
+		onRemoveGlobal: (globalId: string) => void;
+		onAddSegment: () => void;
+		onDeleteSegment: (segId: string) => void;
+		onOpenTagMenu: (segId: string, e: MouseEvent) => void;
+		onRemoveTag: (segId: string, tagId: string) => void;
+		onEditTagPrompt: (seg: Segment, tag: TagElement) => void;
+	}>();
 
 	// Every element inside a pipe lives in THAT pipe's frame-length space
 	// (8n+1 count → last usable frame = lengthFrames - 1). The section owns
@@ -99,8 +95,7 @@
 	});
 
 	// ── Drag engine ─────────────────────────────────────────────────────────
-	type DragState = Omit<TemporalDragState, 'type'> & {
-		type: TemporalDragState['type'] | 'keyframe';
+	type DragState = TemporalDragState & {
 		captureElement: HTMLElement;
 		pointerId: number;
 		startClientX: number;
@@ -108,16 +103,13 @@
 
 	// Transient preview state for visual feedback during drag
 	let previewDragState = $state<{
-		type: 'segment' | 'tag' | 'global' | 'keyframe';
+		type: 'segment' | 'tag' | 'global';
 		id: string;
 		segmentId?: string;
 		handle?: 'left' | 'right' | 'body';
 		startFrame: number;
 		endFrame: number;
 	} | null>(null);
-
-	// Keyframe marker reposition: one transient frame per keyframe being dragged.
-	let keyframePreview = $state<{ keyframeId: string; frame: number } | null>(null);
 
 	// Actual drag state for tracking interaction
 	let dragState = $state<DragState | null>(null);
@@ -325,118 +317,26 @@
 		};
 	}
 
-	// Keyframe markers are a separate, lighter drag: a single point that
-	// repositions on the 8-grid (no duration, no grips).
-	function handleKeyframePointerDown(
-		e: PointerEvent,
-		keyframeId: string,
-		currentFrame: number
-	) {
-		e.preventDefault();
-		e.stopPropagation();
-
-		if (!rulerElement || !rulerGeometry) return;
-
-		const element = e.currentTarget as HTMLElement;
-		const rect = rulerElement.getBoundingClientRect();
-		const pointerStartFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
-
-		element.setPointerCapture(e.pointerId);
-
-		dragState = {
-			type: 'keyframe',
-			id: keyframeId,
-			segmentId: keyframeId,
-			handle: 'body',
-			startFrame: currentFrame,
-			endFrame: currentFrame,
-			pointerStartFrame,
-			captureElement: element,
-			pointerId: e.pointerId,
-			startClientX: e.clientX
-		};
-
-		keyframePreview = { keyframeId, frame: currentFrame };
-	}
-
-	function handleKeyframePointerMove(e: PointerEvent) {
-		if (!dragState || dragState.type !== 'keyframe') return;
-		if (!rulerElement || !rulerGeometry) return;
-		if (e.pointerId !== dragState.pointerId) return;
-
-		const rect = rulerElement.getBoundingClientRect();
-		const pointerFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
-		const nextFrame = calculateKeyframeDrag(
-			dragState.startFrame,
-			pointerFrame,
-			dragState.pointerStartFrame,
-			{ min: 0, max: totalFrames - 1 }
-		);
-		keyframePreview = { keyframeId: dragState.id, frame: nextFrame };
-	}
-
-	function handleKeyframePointerUp(e: PointerEvent) {
-		if (!dragState || dragState.type !== 'keyframe') return;
-		if (e.pointerId !== dragState.pointerId) return;
-
-		const startClientX = dragState.startClientX;
-		const kfId = dragState.id;
-		const startFrame = dragState.startFrame;
-		const previewFrame = keyframePreview?.frame;
-
-		try {
-			dragState.captureElement.releasePointerCapture(dragState.pointerId);
-		} catch {
-			// Already released
-		}
-
-		dragState = null;
-		keyframePreview = null;
-
-		// Click-vs-drag guard: a zero-move release is a click, not a drag —
-		// skip the (no-op) commit so the interaction stays clean.
-		if (Math.abs(e.clientX - startClientX) < 3) return;
-
-		// Commit to THIS section's pipe (each pipe renders its own section).
-		if (previewFrame === undefined || previewFrame === null) return;
-		if (previewFrame === startFrame) return; // no-op — frame did not move
-		if (!sessionId || !pipe) return;
-
-		onMoveKeyframe(kfId, previewFrame);
-	}
-
 	function handlePointerMove(e: PointerEvent) {
 		if (!dragState || !rulerElement || !rulerGeometry) return;
 		if (e.pointerId !== dragState.pointerId) return;
-
-		// Keyframe markers have their own pointer handler — skip the range math.
-		if (dragState.type === 'keyframe') return;
 
 		const rect = rulerElement.getBoundingClientRect();
 		const pointerFrame = clientXToFrame(e.clientX, rect, rulerGeometry);
 
 		// Single math path for both element types — bounds resolved per type.
-		// Keyframe type is excluded at the top of this handler, so the local is
-		// narrowed to the temporal (range) drag shapes only.
-		const d: TemporalDragState = {
-			type: dragState.type as TemporalDragState['type'],
-			id: dragState.id,
-			segmentId: dragState.segmentId,
-			handle: dragState.handle,
-			startFrame: dragState.startFrame,
-			endFrame: dragState.endFrame,
-			pointerStartFrame: dragState.pointerStartFrame,
-		};
+		// Capture a non-null local so the closure below keeps the narrowing.
+		const d = dragState;
 		const seg = d.type === 'tag'
 			? getTimeline(pipe)?.segments.find((s: Segment) => s.id === d.segmentId)
 			: undefined;
 		const bounds: DragBounds = getDragBounds(d, totalFrames, seg);
-		const [startFrame, endFrame] = calculateElementDrag(d, pointerFrame, bounds);
+		const [startFrame, endFrame] = calculateElementDrag(dragState, pointerFrame, bounds);
 		previewDragState = {
-			type: d.type,
-			id: d.id,
-			segmentId: d.segmentId,
-			handle: d.handle,
+			type: dragState.type,
+			id: dragState.id,
+			segmentId: dragState.segmentId,
+			handle: dragState.handle,
 			startFrame,
 			endFrame
 		};
@@ -577,30 +477,6 @@
 				</div>
 			{/if}
 		{/each}
-
-		<!-- ═══ KEYFRAME MARKERS: frame-positioned, drag to reposition ═══ -->
-		{#if pipe.keyframes.length > 0 && rulerGeometry}
-			<div class="keyframe-lane">
-				{#each pipe.keyframes as kf (kf.id)}
-					{@const isKfDragging = keyframePreview?.keyframeId === kf.id}
-					{@const kfPreviewFrame = isKfDragging ? keyframePreview!.frame : kf.frame}
-					<div
-						class="kf-marker"
-						class:dragging={keyframePreview?.keyframeId === kf.id}
-						style="left: {frameToPx(kfPreviewFrame, rulerGeometry)}px;"
-						onpointerdown={(e) => handleKeyframePointerDown(e, kf.id, kf.frame)}
-						onpointermove={handleKeyframePointerMove}
-						onpointerup={handleKeyframePointerUp}
-						role="slider" aria-orientation="horizontal" tabindex="0"
-						aria-valuemin={0} aria-valuemax={totalFrames - 1}
-						aria-valuenow={kfPreviewFrame}
-						title="Keyframe k{kf.slotIndex} @ frame {kfPreviewFrame} — drag to move">
-						<span class="kf-marker-label">k{kf.slotIndex}</span>
-						<span class="kf-marker-frame">{kfPreviewFrame}</span>
-					</div>
-				{/each}
-			</div>
-		{/if}
 
 		<!-- ═══ TIMELINE LANE (in coordinate space) ═══ -->
 		<div class="timeline-lane">

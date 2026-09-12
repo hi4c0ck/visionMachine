@@ -16,7 +16,6 @@
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
 		removeKeyframe as removeKeyframeAction,
-		moveKeyframe as moveKeyframeAction,
 		addGlobalElement as addGlobalElementAction,
 		toggleGlobalElement as toggleGlobalElementAction,
 		removeGlobalElement as removeGlobalElementAction,
@@ -217,13 +216,6 @@ import { flashToast } from '$lib/flashToast';
 		if (!pipe || !session?.id) return;
 		const result = await removeKeyframeAction(session.id, pipe.id, kfId);
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeKeyframe:', result.errors);
-	}
-
-	async function handleMoveKeyframe(idx: number, kfId: string, newFrame: number) {
-		const pipe = pipes[idx];
-		if (!pipe || !session?.id) return;
-		const result = await moveKeyframeAction(session.id, pipe.id, kfId, newFrame);
-		if (result.errors.length > 0) console.error('[ComposerPanel] moveKeyframe:', result.errors);
 	}
 
 	// ── Subject Reference ───────────────────────────────────────────────────
@@ -475,7 +467,6 @@ import { flashToast } from '$lib/flashToast';
 				onOpenTagMenu={(segId, e) => handleOpenTagMenu(segId, e, pipeIdx)}
 				onRemoveTag={(segId, tagId) => handleRemoveTag(pipeIdx, segId, tagId)}
 				onEditTagPrompt={(seg, tag) => handleEditTagPrompt(pipeIdx, seg, tag)}
-				onMoveKeyframe={(kfId, newFrame) => handleMoveKeyframe(pipeIdx, kfId, newFrame)}
 			/>
 
 				</div>
