@@ -203,10 +203,12 @@ test.describe('Appending zones', () => {
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '120');
 
-		// Expanded: header open, zone row + zone chrome visible.
+		// Expanded: header open, zone row + its attached delete button visible.
 		expect(await page.locator('.timeline-header.open').count()).toBe(1);
 		expect(await page.locator('.segment-row').count()).toBe(1);
-		expect(await page.locator('.seg-chrome-label').first().innerText()).toBe('ZONE 1');
+		// The delete button now lives on the zone row itself, not a detached
+		// chrome row — so a .seg-del sits inside the .segment-row.
+		expect(await page.locator('.segment-row .seg-del').count()).toBe(1);
 
 		// Collapse: zones + lanes hide, summary shows the counts.
 		await page.locator('.timeline-header').click();
@@ -289,9 +291,10 @@ test('+ Tag button persists while any zone exists, and targets the last one', as
 	expect(await page.locator('.btn-add-tag-shared').count()).toBe(1);
 
 	// Delete BOTH zones → the timeline has no zones, so + Tag disappears.
-	await page.locator('.seg-del').first().click();
+	// The per-row delete button now shows the tag count next to ×.
+	await page.locator('.segment-row .seg-del').first().click();
 	await page.waitForTimeout(300);
-	await page.locator('.seg-del').first().click();
+	await page.locator('.segment-row .seg-del').first().click();
 	await page.waitForTimeout(300);
 	expect(await page.locator('.btn-add-tag-shared').count()).toBe(0);
 	// The zone-append affordance must still be reachable so a new zone can

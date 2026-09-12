@@ -492,7 +492,9 @@
 					</div>
 
 					{#if !timelineCollapsed}
-						<!-- ═══ ZONES: one slider row per segment ═══ -->
+						<!-- ═══ ZONES: one slider row per segment, each with its own
+							delete button attached to the row (not a detached chrome
+							row 300px below). -->
 						{#each tl.segments as seg, segIdx (seg.id)}
 							<div class="segment-row">
 								<span class="seg-row-label">Zone {segIdx + 1}</span>
@@ -529,6 +531,14 @@
 										aria-valuenow={getPreviewSegment(seg)?.endFrame ?? seg.frameEnd}
 										title="Drag to resize zone end"></div>
 								{/if}
+								<!-- Per-zone delete, attached to its row (hover reveal).
+							     The tag-count badge warns before the zone's work is lost. -->
+								<button
+									class="btn-icon-sm btn-del-sm seg-del"
+									onclick={() => onDeleteSegment(seg.id)}
+									title={seg.tags.length > 0 ? `Delete zone ${segIdx + 1} and its ${seg.tags.length} tag${seg.tags.length !== 1 ? 's' : ''}` : `Delete zone ${segIdx + 1}`}>
+									×{#if seg.tags.length > 0}<span class="seg-del-count">{seg.tags.length}</span>{/if}
+								</button>
 							</div>
 						{/each}
 
@@ -597,25 +607,14 @@
 							</div>
 						{/each}
 
-						<!-- Zone chrome: one row per zone (delete + zone badge), NOT
-							 part of the frame coordinate space. -->
-						{#each tl.segments as seg, segIdx (seg.id)}
-							<div class="segment-chrome">
-								<span class="seg-chrome-label">Zone {segIdx + 1}</span>
-								<button
-									class="btn-icon-sm btn-del-sm seg-del"
-									onclick={() => onDeleteSegment(seg.id)}
-									title="Delete zone">×</button>
-							</div>
-						{/each}
-
-						<!-- Append affordance: one shared action row, not one per zone -->
+							<!-- + Zone affordance: opens the modal with a picker of
+						     every free gap (before/between/after zones). -->
 						<div class="segment-chrome segment-chrome-append">
 							<button
-								class="btn-add-zone"
-								onclick={onAddSegment}
-								onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
-								title="Append a new zone after the last one">+ Zone</button>
+									class="btn-add-zone"
+									onclick={onAddSegment}
+									onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
+									title="Add a zone into any free space">+ Zone</button>
 						</div>
 
 						<!-- No zones yet (no timeline, or empty timeline) — one placeholder,

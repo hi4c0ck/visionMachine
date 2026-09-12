@@ -344,13 +344,21 @@ import { flashToast } from '$lib/flashToast';
 	function handleOpenTagMenu(segId: string, e: MouseEvent, idx: number) {
 		activePipeIdx = idx;
 		selectedSegmentId = segId;
-		// Clamp the tag menu into the viewport (menu is ~360px tall)
+		// Clamp the tag menu into the viewport. The menu is tall (zone picker +
+		// 7 tag types + actions) and the "+ Tag" button sits low on the page,
+		// so open it *upward* when there isn't room below. Cap the menu height
+		// (and make it scrollable) so the Add button is never below the fold.
 		const MENU_H = 360;
-		tagMenuX = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
-		let y = e.clientY;
-		if (y + MENU_H > window.innerHeight) {
-			y = Math.max(8, e.clientY - MENU_H);
+		const menuTop = e.clientY + 8;
+		const fitsBelow = menuTop + MENU_H <= window.innerHeight - 8;
+		const fitsAbove = e.clientY - MENU_H >= 8;
+		let y = menuTop;
+		if (!fitsBelow) {
+			// Prefer opening upward; if even that overflows the top, anchor to
+			// the top of the viewport so the menu (now scrollable) stays in view.
+			y = fitsAbove ? e.clientY - MENU_H : 8;
 		}
+		tagMenuX = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
 		tagMenuY = y;
 		showTagMenu = true;
 		showAddMenu = false;

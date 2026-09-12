@@ -144,6 +144,37 @@
 	box-shadow: inset 0 0 0 1px var(--border-color);
 }
 
+/* Per-zone delete button, attached to the right edge of its zone row so it's
+   always in reach of the zone it manages (was a detached chrome row ~300px
+   below, with 3 zones + 6 tag lanes it was off-screen from the zone). */
+.seg-del {
+	position: absolute;
+	right: 4px;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 5;
+	opacity: 0.55;
+	padding: 1px 5px;
+	font-size: 11px;
+	line-height: 1;
+}
+.segment-row:hover .seg-del {
+	opacity: 1;
+}
+/* Tag-count badge inside the delete button — a zone with work on it warns
+   before the tags are lost. */
+.seg-del .seg-del-count {
+	display: inline-block;
+	min-width: 12px;
+	padding: 0 3px;
+	margin-left: 3px;
+	font-size: 9px;
+	font-weight: 700;
+	color: var(--danger-color, #ef4444);
+	background: var(--danger-bg, rgba(239, 68, 68, 0.15));
+	border-radius: 6px;
+}
+
 /* Zone number badge, floats left over the track so the slider pill's
    frame coordinate origin is untouched (same rule as tag lane labels). */
 .seg-row-label {
@@ -397,7 +428,9 @@
 		color: var(--danger-color);
 	}
 
-/* ═══ Zone chrome (action rows, OUTSIDE the coordinate math) ═══════════ */
+/* ═══ Zone append affordance (single shared row, OUTSIDE coordinate math) */
+/* The per-zone delete buttons now live on their zone rows (.seg-del), so
+   only the "+ Zone" append row remains as a detached chrome row. */
 .segment-chrome {
 	position: relative;
 	height: 22px;
@@ -410,14 +443,6 @@
 /* "+ Zone" sits below the zone rows, separated from them. */
 .segment-chrome.segment-chrome-append {
 	border-top: 1px solid var(--border-color);
-}
-.seg-chrome-label {
-	font-size: 10px;
-	font-weight: 600;
-	color: var(--text-secondary);
-	text-transform: uppercase;
-	letter-spacing: 0.4px;
-	margin-right: auto;
 }
 
 /* ── Add-track [+], buttons, empty state ─────────────────────────────── */

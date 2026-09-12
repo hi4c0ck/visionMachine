@@ -42,37 +42,39 @@
 	});
 </script>
 
-{#if open}
-	<div class="dropdown-menu tag-menu" role="menu" tabindex="-1" style="left: {x}px; top: {y}px;"
-		onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-		<div class="dropdown-label">Add Tag</div>
-		{#if segments.length > 1}
-			<div class="dropdown-label zone-label">Attach to zone</div>
-			{#each segments as s (s.id)}
-				<button class="dropdown-item zone-item" class:active={selectedSegId === s.id}
-					onclick={() => selectedSegId = s.id}>
-					<span class="zone-num">Z{s.index}</span>
-					<span>Zone {s.index}</span>
-				</button>
-			{/each}
-			{/if}
-		{#if segments.length === 1}
-			<div class="dropdown-zone-fixed">Zone {segments[0].index}</div>
-		{/if}
-		{#each TAG_TYPES as tagType (tagType)}
-			<button class="dropdown-item tag-item"
-				class:active={selectedType === tagType}
-				onclick={() => selectedType = tagType}>
-				<span class="tag-dot" style="background: {TAG_SPECIFICATIONS[tagType].color}"></span>
-				<span>{TAG_SPECIFICATIONS[tagType].name}</span>
-			</button>
-		{/each}
-		<div class="dropdown-actions">
-			<button class="btn-confirm" onclick={() => selectedType && onConfirm(selectedType, selectedSegId)} disabled={!selectedType || !selectedSegId}>Add</button>
-			<button class="btn-cancel" onclick={onClose}>Cancel</button>
+	{#if open}
+		<div class="dropdown-menu tag-menu" role="menu" tabindex="-1" style="left: {x}px; top: {y}px;"
+			onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+			<div class="tag-menu-body">
+				<div class="dropdown-label">Add Tag</div>
+				{#if segments.length > 1}
+					<div class="dropdown-label zone-label">Attach to zone</div>
+					{#each segments as s (s.id)}
+						<button class="dropdown-item zone-item" class:active={selectedSegId === s.id}
+							onclick={() => selectedSegId = s.id}>
+							<span class="zone-num">Z{s.index}</span>
+							<span>Zone {s.index}</span>
+						</button>
+					{/each}
+					{/if}
+				{#if segments.length === 1}
+					<div class="dropdown-zone-fixed">Zone {segments[0].index}</div>
+				{/if}
+				{#each TAG_TYPES as tagType (tagType)}
+					<button class="dropdown-item tag-item"
+						class:active={selectedType === tagType}
+						onclick={() => selectedType = tagType}>
+						<span class="tag-dot" style="background: {TAG_SPECIFICATIONS[tagType].color}"></span>
+						<span>{TAG_SPECIFICATIONS[tagType].name}</span>
+					</button>
+				{/each}
+			</div>
+			<div class="dropdown-actions">
+				<button class="btn-confirm" onclick={() => selectedType && onConfirm(selectedType, selectedSegId)} disabled={!selectedType || !selectedSegId}>Add</button>
+				<button class="btn-cancel" onclick={onClose}>Cancel</button>
+			</div>
 		</div>
-	</div>
-{/if}
+	{/if}
 
 <style>
 	.dropdown-menu {
@@ -83,7 +85,18 @@
 		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 		min-width: 160px;
 		z-index: 1000;
-		overflow: hidden;
+		/* Cap the height so the menu always fits the viewport even when opened
+		   from the low "+ Tag" button; the body scrolls, the Add row stays put. */
+		max-height: calc(100vh - 16px);
+		display: flex;
+		flex-direction: column;
+	}
+	/* The scrollable middle (zone picker + tag types). The Add row stays
+	   pinned below it, so it is never pushed below the fold. */
+	.tag-menu .tag-menu-body {
+		overflow-y: auto;
+		flex: 1 1 auto;
+		min-height: 0;
 	}
 
 	.dropdown-item {
