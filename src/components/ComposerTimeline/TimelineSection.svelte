@@ -217,9 +217,16 @@
 		};
 	});
 
-	// Target zone for the shared "+ Tag" button: the first zone of this pipe.
-	// (All tag pills live on the shared tag lane, so one entry point suffices.)
-	let firstSegment = $derived.by(() => (getTimeline(pipe)?.segments ?? [])[0] ?? null);
+	// Shared "+ Tag" button: shown whenever at least one zone exists, and the
+	// menu it opens is preselecting the LAST zone (the most recently appended
+	// one, where new work usually happens) rather than always zone 1.
+	// The menu's own zone picker still lets the user target any zone — this
+	// just fixes the misleading "starts from zone 1" entry point.
+	let zoneCount = $derived.by(() => (getTimeline(pipe)?.segments ?? []).length);
+	let lastSegment = $derived.by(() => {
+		const segs = getTimeline(pipe)?.segments ?? [];
+		return segs[segs.length - 1] ?? null;
+	});
 
 	// ── Timeline collapse: per-pipe UI state. Collapsing hides the zone
 	//    slider rows + tag lanes, leaving a compact summary header. Per-pipe
@@ -632,10 +639,10 @@
 				title="Add track">
 				+
 			</button>
-			{#if firstSegment}
+			{#if zoneCount > 0}
 				<button
 					class="btn-add-tag btn-add-tag-shared"
-					onclick={(e) => { e.stopPropagation(); onOpenTagMenu(firstSegment.id, e); }}
+					onclick={(e) => { e.stopPropagation(); onOpenTagMenu(lastSegment!.id, e); }}
 					title="Add tag — pick type AND target zone in the menu">+ Tag</button>
 			{/if}
 		</div>

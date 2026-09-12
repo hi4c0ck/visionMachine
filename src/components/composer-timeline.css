@@ -307,7 +307,8 @@
 
 	/* Prompt text on the pill (ref parity: tags show their prompt inline).
 	   Shows the prompt when set, otherwise the tag type name as fallback.
-	   Clipped by its own ellipsis; right padding reserves room for the ×. */
+	   Clipped by its own ellipsis; right padding reserves room for the ×,
+	   left padding clears the left grip so the text never collides with it. */
 	.tag-pill-prompt {
 		font-size: 9px;
 		font-weight: 600;
@@ -315,7 +316,7 @@
 		white-space: nowrap;
 		text-overflow: ellipsis;
 		overflow: hidden;
-		padding: 0 18px 0 2px;
+		padding: 0 16px 0 12px;
 		flex: 1 1 0;
 		min-width: 0;
 	}
@@ -366,25 +367,35 @@
 	.tag-body:hover .tag-handle, .tag-body:active .tag-handle { opacity: 0.9; }
 	.tag-handle:hover, .tag-handle:active { opacity: 1; }
 
-.btn-del-tag {
-	position: absolute;
-	right: 2px;
-	top: 50%;
-	transform: translateY(-50%);
-	z-index: 5;
-	background: none;
-	border: none;
-	color: var(--text-secondary);
-	cursor: pointer;
-	padding: 1px 4px;
-	border-radius: 4px;
-	font-size: 12px;
-	line-height: 1;
-}
-.btn-del-tag:hover {
-	background: var(--danger-bg);
-	color: var(--danger-color);
-}
+	/* The × sits over the pill's right edge (where the right grip reserves
+	   space). Hidden until the pill is hovered so narrow pills stay readable;
+	   it always lands inside the pill because the prompt reserves 16px of
+	   right padding for it. */
+	.btn-del-tag {
+		position: absolute;
+		right: 2px;
+		top: 50%;
+		transform: translateY(-50%);
+		z-index: 5;
+		background: none;
+		border: none;
+		color: var(--text-secondary);
+		cursor: pointer;
+		padding: 0 3px;
+		border-radius: 4px;
+		font-size: 11px;
+		line-height: 1;
+		opacity: 0;
+		transition: opacity 0.12s ease;
+	}
+	.tag-body:hover .btn-del-tag,
+	.btn-del-tag:focus-visible {
+		opacity: 1;
+	}
+	.btn-del-tag:hover {
+		background: var(--danger-bg);
+		color: var(--danger-color);
+	}
 
 /* ═══ Zone chrome (action rows, OUTSIDE the coordinate math) ═══════════ */
 .segment-chrome {
