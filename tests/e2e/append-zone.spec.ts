@@ -247,6 +247,41 @@ test.describe('Appending zones', () => {
 		expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('Mountain approach');
 	});
 
+	test('numeric tag values show on the pill and edit via the modal', async ({ page }) => {
+		// Zone + a Camera tag (a numeric type: no prompt, just a value in
+		// [0, 360]). The pill must show the value, not a prompt placeholder.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '120');
+
+		await page.locator('.btn-add-tag-shared').click();
+		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await page.waitForSelector('.tag-body', { timeout: 5000 });
+
+		// Camera's default value is spec.min (0) → pill falls back to the name.
+		const pill = page.locator('.tag-body').first();
+		expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('Camera');
+
+		// Open the tag editor: a Camera tag must show a value slider + number
+		// input, not the prompt textarea.
+		await pill.click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		const numberInput = page.locator('.modal .tag-value-num');
+		expect(await numberInput.count()).toBe(1);
+		expect(await page.locator('.modal textarea').count()).toBe(0);
+
+		// Set the value via the number input → confirm → the pill shows it
+		// with its unit suffix (Camera is degrees).
+		await numberInput.fill('180');
+		await page.locator('.modal .btn-confirm').click();
+		await page.waitForTimeout(300);
+		expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('180°');
+	});
+
 	test('tag pills expose left/right resize grips that commit to the store', async ({ page }) => {
 		// Set up a zone (0–120) + a Camera tag that inherits the full range.
 		const plus = page.locator('.btn-add-track').first();
