@@ -1,0 +1,722 @@
+Loading svelte-check in workspace: d:\work\horizonsMachine\VisionMachine
+Getting Svelte diagnostics...
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\Frame.svelte[39m:65:4
+[33mWarn[39m: Visible, non-interactive element `<img>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m		{#if previewImage}
+			[35m<img src={previewImage} alt="Frame preview" class="preview-img" onclick={handlePreviewClick} />[36m
+		{:else}[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\Frame.svelte[39m:65:4
+[33mWarn[39m: Non-interactive element `<img>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions (svelte)
+[36m		{#if previewImage}
+			[35m<img src={previewImage} alt="Frame preview" class="preview-img" onclick={handlePreviewClick} />[36m
+		{:else}[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\Frame.svelte[39m:67:4
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m		{:else}
+			[35m<div class="preview-empty" onclick={handlePreviewClick}>
+				<span class="preview-icon">▶</span>
+				<span class="preview-label">Frame &lt;img-video-container&gt;</span>
+			</div>[36m
+		{/if}[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\Frame.svelte[39m:67:4
+[33mWarn[39m: `<div>` with a click handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions (svelte)
+[36m		{:else}
+			[35m<div class="preview-empty" onclick={handlePreviewClick}>
+				<span class="preview-icon">▶</span>
+				<span class="preview-label">Frame &lt;img-video-container&gt;</span>
+			</div>[36m
+		{/if}[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ProjectsPanel.svelte[39m:157:7
+[33mWarn[39m: Elements with the 'dialog' interactive role must have a tabindex value
+https://svelte.dev/e/a11y_interactive_supports_focus (svelte)
+[36m    <div class="modal-backdrop" onclick={closeCreateProjectModal} role="presentation">
+      [35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-project-title">
+        <div class="modal-header">
+          <span class="modal-title" id="create-project-title">{APP_CONSTANTS.strings.createProject}</span>
+          <button class="modal-close" onclick={closeCreateProjectModal} aria-label="Close">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <label class="form-label">{APP_CONSTANTS.strings.projectName}</label>
+          <input 
+            type="text" 
+            class="modal-input"
+            bind:value={newProjectName}
+            placeholder={APP_CONSTANTS.strings.projectNamePlaceholder}
+            onkeydown={handleKeyDown}
+          />
+          
+          <label class="checkbox-label">
+            <input type="checkbox" bind:checked={specifyPath} />
+            <span>{APP_CONSTANTS.strings.specifyPath}</span>
+          </label>
+          
+          {#if specifyPath}
+            <div class="path-section">
+              <label class="form-label">{APP_CONSTANTS.strings.customPath}</label>
+              <input 
+                type="text" 
+                class="modal-input path-input"
+                bind:value={customPath}
+                placeholder={APP_CONSTANTS.strings.customPathPlaceholder}
+              />
+            </div>
+          {/if}
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick={closeCreateProjectModal}>{APP_CONSTANTS.strings.cancel}</button>
+          <button 
+            class="btn-confirm" 
+            disabled={!newProjectName.trim()}
+            onclick={confirmCreateProject}
+          >
+            {APP_CONSTANTS.strings.create}
+          </button>
+        </div>
+      </div>[36m
+    </div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ProjectsPanel.svelte[39m:157:7
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m    <div class="modal-backdrop" onclick={closeCreateProjectModal} role="presentation">
+      [35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-project-title">
+        <div class="modal-header">
+          <span class="modal-title" id="create-project-title">{APP_CONSTANTS.strings.createProject}</span>
+          <button class="modal-close" onclick={closeCreateProjectModal} aria-label="Close">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <label class="form-label">{APP_CONSTANTS.strings.projectName}</label>
+          <input 
+            type="text" 
+            class="modal-input"
+            bind:value={newProjectName}
+            placeholder={APP_CONSTANTS.strings.projectNamePlaceholder}
+            onkeydown={handleKeyDown}
+          />
+          
+          <label class="checkbox-label">
+            <input type="checkbox" bind:checked={specifyPath} />
+            <span>{APP_CONSTANTS.strings.specifyPath}</span>
+          </label>
+          
+          {#if specifyPath}
+            <div class="path-section">
+              <label class="form-label">{APP_CONSTANTS.strings.customPath}</label>
+              <input 
+                type="text" 
+                class="modal-input path-input"
+                bind:value={customPath}
+                placeholder={APP_CONSTANTS.strings.customPathPlaceholder}
+              />
+            </div>
+          {/if}
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick={closeCreateProjectModal}>{APP_CONSTANTS.strings.cancel}</button>
+          <button 
+            class="btn-confirm" 
+            disabled={!newProjectName.trim()}
+            onclick={confirmCreateProject}
+          >
+            {APP_CONSTANTS.strings.create}
+          </button>
+        </div>
+      </div>[36m
+    </div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ProjectsPanel.svelte[39m:164:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="modal-body">
+          [35m<label class="form-label">{APP_CONSTANTS.strings.projectName}</label>[36m
+          <input[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ProjectsPanel.svelte[39m:180:15
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m            <div class="path-section">
+              [35m<label class="form-label">{APP_CONSTANTS.strings.customPath}</label>[36m
+              <input[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\KeyframeModal.svelte[39m:80:3
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m	<div class="modal-overlay" onclick={() => open = false} role="presentation">
+		[35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>{editingSlot ? 'Edit Keyframe' : 'Add Keyframe'} <span class="modal-sub">Slot {editingSlot ?? '?'}</span></h3>
+			</div>
+			<div class="modal-body">
+				<div class="mode-selector">
+					<button class="mode-btn {kfType === 'url' ? 'active' : ''}" onclick={() => kfType = 'url'}>URL</button>
+					<button class="mode-btn {kfType === 'txt2img' ? 'active' : ''}" onclick={() => kfType = 'txt2img'}>Txt2Img</button>
+					<button class="mode-btn {kfType === 'img2img' ? 'active' : ''}" onclick={() => kfType = 'img2img'}>Img2Img</button>
+				</div>
+				<div class="modal-field">
+					<label id="kf-frame-label">Frame</label>
+					<input type="number" bind:value={kfFrame} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="kf-frame-label" />
+				</div>
+				{#if kfType === 'url'}
+					<div class="modal-field">
+						<label id="kf-url-label">Image URL</label>
+						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />
+					</div>
+				{:else if kfType === 'txt2img'}
+					<div class="modal-field">
+						<label id="kf-prompt-label">Prompt</label>
+						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-prompt-label"></textarea>
+					</div>
+				{:else if kfType === 'img2img'}
+					<div class="modal-field">
+						<label id="kf-ref-label">Reference Image URL</label>
+						<input type="text" bind:value={kfReferenceUrl} placeholder="https://..." class="modal-input" aria-labelledby="kf-ref-label" />
+					</div>
+					<div class="modal-field">
+						<label id="kf-img2img-prompt-label">Prompt</label>
+						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-img2img-prompt-label"></textarea>
+					</div>
+				{/if}
+			</div>
+			<div class="modal-footer">
+				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirm} disabled={!kfValid}>Confirm</button>
+			</div>
+		</div>[36m
+	</div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\KeyframeModal.svelte[39m:91:6
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m				<div class="modal-field">
+					[35m<label id="kf-frame-label">Frame</label>[36m
+					<input type="number" bind:value={kfFrame} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="kf-frame-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\KeyframeModal.svelte[39m:96:7
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m					<div class="modal-field">
+						[35m<label id="kf-url-label">Image URL</label>[36m
+						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\KeyframeModal.svelte[39m:101:7
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m					<div class="modal-field">
+						[35m<label id="kf-prompt-label">Prompt</label>[36m
+						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-prompt-label"></textarea>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\KeyframeModal.svelte[39m:106:7
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m					<div class="modal-field">
+						[35m<label id="kf-ref-label">Reference Image URL</label>[36m
+						<input type="text" bind:value={kfReferenceUrl} placeholder="https://..." class="modal-input" aria-labelledby="kf-ref-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\KeyframeModal.svelte[39m:110:7
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m					<div class="modal-field">
+						[35m<label id="kf-img2img-prompt-label">Prompt</label>[36m
+						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-img2img-prompt-label"></textarea>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SubjectRefModal.svelte[39m:80:3
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m	<div class="modal-overlay" onclick={() => open = false} role="presentation">
+		[35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>{editingRefId ? 'Edit Subject Reference' : 'Add Subject Reference'}</h3>
+			</div>
+			<div class="modal-body">
+				<div class="modal-field">
+					<label id="sr-url-label">Image URL</label>
+					<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-url-label" />
+				</div>
+				<div class="modal-field">
+					<label>
+						<input type="checkbox" bind:checked={srUseFrames} />
+						Use frame range
+					</label>
+				</div>
+				{#if srUseFrames}
+					<div class="modal-field">
+						<label id="sr-start-label">Start Frame</label>
+						<input type="number" bind:value={srStart} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="sr-start-label" />
+					</div>
+					<div class="modal-field">
+						<label id="sr-end-label">End Frame</label>
+						<input type="number" bind:value={srEnd} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />
+					</div>
+				{/if}
+			</div>
+			<div class="modal-footer">
+				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirm} disabled={!srImageUrl.trim()}>Confirm</button>
+			</div>
+		</div>[36m
+	</div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SubjectRefModal.svelte[39m:86:6
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m				<div class="modal-field">
+					[35m<label id="sr-url-label">Image URL</label>[36m
+					<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-url-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SubjectRefModal.svelte[39m:97:7
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m					<div class="modal-field">
+						[35m<label id="sr-start-label">Start Frame</label>[36m
+						<input type="number" bind:value={srStart} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="sr-start-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SubjectRefModal.svelte[39m:101:7
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m					<div class="modal-field">
+						[35m<label id="sr-end-label">End Frame</label>[36m
+						<input type="number" bind:value={srEnd} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SegmentModal.svelte[39m:40:3
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m	<div class="modal-overlay" onclick={() => open = false} role="presentation">
+		[35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>Add Segment</h3>
+			</div>
+			<div class="modal-body">
+				<div class="modal-field">
+					<label id="seg-start-label">Start Frame</label>
+					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-start-label" />
+				</div>
+				<div class="modal-field">
+					<label id="seg-end-label">End Frame</label>
+					<input type="number" bind:value={segEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />
+				</div>
+			</div>
+			<div class="modal-footer">
+				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirm} disabled={Math.min(snapTo8(segEnd), totalFrames - 1) <= snapTo8(segStart)}>Confirm</button>
+			</div>
+		</div>[36m
+	</div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SegmentModal.svelte[39m:46:6
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m				<div class="modal-field">
+					[35m<label id="seg-start-label">Start Frame</label>[36m
+					<input type="number" bind:value={segStart} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-start-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\SegmentModal.svelte[39m:50:6
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m				<div class="modal-field">
+					[35m<label id="seg-end-label">End Frame</label>[36m
+					<input type="number" bind:value={segEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\TagPromptModal.svelte[39m:46:3
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m	<div class="modal-overlay" onclick={() => open = false} role="presentation">
+		[35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+			<div class="modal-header">
+				<h3>Edit Tag Prompt</h3>
+			</div>
+			<div class="modal-body">
+				<div class="modal-field">
+					<label id="tag-prompt-label">Prompt</label>
+					<textarea bind:value={tagPrompt} placeholder="Enter tag prompt..." class="modal-textarea" aria-labelledby="tag-prompt-label"></textarea>
+				</div>
+			</div>
+			<div class="modal-footer">
+				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
+				<button class="btn-confirm" onclick={confirm}>Confirm</button>
+			</div>
+		</div>[36m
+	</div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerModals\TagPromptModal.svelte[39m:52:6
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m				<div class="modal-field">
+					[35m<label id="tag-prompt-label">Prompt</label>[36m
+					<textarea bind:value={tagPrompt} placeholder="Enter tag prompt..." class="modal-textarea" aria-labelledby="tag-prompt-label"></textarea>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerMenus\TagSelectorMenu.svelte[39m:33:37
+[33mWarn[39m: This reference only captures the initial value of `defaultSegmentId`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	// selection disappears (zone deleted between opens).
+	let selectedSegId = $state<string>([35mdefaultSegmentId[36m ?? segments[0]?.id ?? '');
+	$effect(() => {[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerMenus\TagSelectorMenu.svelte[39m:33:57
+[33mWarn[39m: This reference only captures the initial value of `segments`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	// selection disappears (zone deleted between opens).
+	let selectedSegId = $state<string>(defaultSegmentId ?? [35msegments[36m[0]?.id ?? '');
+	$effect(() => {[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\FrameRuler.svelte[39m:66:2
+[33mWarn[39m: `<div>` with a pointerdown handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions (svelte)
+[36m	{/if}
+	[35m<div
+		class="coordinate-space"
+		onpointerdown={onPointerDown}
+	>
+		<div class="ruler-line"></div>
+
+		{#if geometry}
+			{#each markers as frame (frame)}
+				<button
+					class="marker"
+					class:major={frame % 100 === 0}
+					style={`left: ${frameToPx(frame, geometry)}px`}
+					onclick={() => selectFrame(frame)}
+					aria-label={`Frame ${frame}`}>
+					<span class="tick"></span>
+					{#if frame % 100 === 0 && frame !== 0}
+						<span class="label">{frame}</span>
+					{/if}
+				</button>
+			{/each}
+
+			<div
+				class="playhead"
+				style={`left: ${frameToPx(selectedFrame, geometry)}px`}>
+			</div>
+		{/if}
+	</div>[36m
+</div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:162:6
+[33mWarn[39m: This reference only captures the initial value of `pipe`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	let seenPipeId = $state<string>('');
+	if ([35mpipe[36m?.id !== seenPipeId) {
+		seenPipeId = pipe?.id ?? '';[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:162:19
+[33mWarn[39m: This reference only captures the initial value of `seenPipeId`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	let seenPipeId = $state<string>('');
+	if (pipe?.id !== [35mseenPipeId[36m) {
+		seenPipeId = pipe?.id ?? '';[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:163:16
+[33mWarn[39m: This reference only captures the initial value of `pipe`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	if (pipe?.id !== seenPipeId) {
+		seenPipeId = [35mpipe[36m?.id ?? '';
+		seenLanes = new Set();[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:237:6
+[33mWarn[39m: This reference only captures the initial value of `pipe`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	let collapsedPipeId = $state('');
+	if ([35mpipe[36m?.id !== collapsedPipeId) {
+		collapsedPipeId = pipe?.id ?? '';[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:237:19
+[33mWarn[39m: This reference only captures the initial value of `collapsedPipeId`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	let collapsedPipeId = $state('');
+	if (pipe?.id !== [35mcollapsedPipeId[36m) {
+		collapsedPipeId = pipe?.id ?? '';[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:238:21
+[33mWarn[39m: This reference only captures the initial value of `pipe`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+[36m	if (pipe?.id !== collapsedPipeId) {
+		collapsedPipeId = [35mpipe[36m?.id ?? '';
+		timelineCollapsed = false;[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:409:44
+[31mError[39m: Argument of type 'DragState' is not assignable to parameter of type 'Pick<TemporalDragState, "type" | "segmentId">'.
+  Types of property 'type' are incompatible.
+    Type '"segment" | "tag" | "global" | "keyframe"' is not assignable to type '"segment" | "tag" | "global"'.
+      Type '"keyframe"' is not assignable to type '"segment" | "tag" | "global"'. (ts)
+[36m			: undefined;
+		const bounds: DragBounds = getDragBounds([35md[36m, totalFrames, seg);
+		const [startFrame, endFrame] = calculateElementDrag(dragState, pointerFrame, bounds);[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ComposerTimeline\TimelineSection.svelte[39m:561:71
+[31mError[39m: 'keyframePreview' is possibly 'null'. (ts)
+[36m				{#each pipe.keyframes as kf (kf.id)}
+					{@const kfPreviewFrame = keyframePreview?.keyframeId === kf.id ? [35mkeyframePreview[36m.frame : kf.frame}
+					<div[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:181:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="setting-row">
+          [35m<label class="setting-label">FPS</label>[36m
+          <select[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:196:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="setting-row">
+          [35m<label class="setting-label">Resolution</label>[36m
+          <select[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:209:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="setting-row">
+          [35m<label class="setting-label">Orientation</label>[36m
+          <select[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:221:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="setting-row">
+          [35m<label class="setting-label">Quality</label>[36m
+          <input type="range" min="5" max="30" step="1" value={qValue ?? 18} class="setting-slider" onchange={(e) => onqvaluechange?.(Number(e.currentTarget.value))} />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:227:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="setting-row">
+          [35m<label class="setting-label">Creativity</label>[36m
+          <input type="range" min="0.5" max="15" step="0.5" value={cValue ?? 7} class="setting-slider" onchange={(e) => oncvaluechange?.(Number(e.currentTarget.value))} />[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:358:7
+[33mWarn[39m: Elements with the 'dialog' interactive role must have a tabindex value
+https://svelte.dev/e/a11y_interactive_supports_focus (svelte)
+[36m    <div class="modal-backdrop" onclick={closeNewSessionModal} role="presentation">
+      [35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+        <div class="modal-header">
+          <span class="modal-title" id="new-session-title">{APP_CONSTANTS.strings.createSessionModal}</span>
+          <button class="modal-close" onclick={closeNewSessionModal} aria-label="Close">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <label class="form-label">Session Name</label>
+          <input 
+            type="text" 
+            class="modal-input"
+            bind:value={newSessionName}
+            placeholder="Enter session name..."
+            onkeydown={handleKeyDown}
+          />
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick={closeNewSessionModal}>{APP_CONSTANTS.strings.cancel}</button>
+          <button 
+            class="btn-confirm" 
+            disabled={!newSessionName.trim()}
+            onclick={confirmNewSession}
+          >
+            {APP_CONSTANTS.strings.create}
+          </button>
+        </div>
+      </div>[36m
+    </div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:358:7
+[33mWarn[39m: Visible, non-interactive element `<div>` with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+[36m    <div class="modal-backdrop" onclick={closeNewSessionModal} role="presentation">
+      [35m<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+        <div class="modal-header">
+          <span class="modal-title" id="new-session-title">{APP_CONSTANTS.strings.createSessionModal}</span>
+          <button class="modal-close" onclick={closeNewSessionModal} aria-label="Close">×</button>
+        </div>
+        
+        <div class="modal-body">
+          <label class="form-label">Session Name</label>
+          <input 
+            type="text" 
+            class="modal-input"
+            bind:value={newSessionName}
+            placeholder="Enter session name..."
+            onkeydown={handleKeyDown}
+          />
+        </div>
+        
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick={closeNewSessionModal}>{APP_CONSTANTS.strings.cancel}</button>
+          <button 
+            class="btn-confirm" 
+            disabled={!newSessionName.trim()}
+            onclick={confirmNewSession}
+          >
+            {APP_CONSTANTS.strings.create}
+          </button>
+        </div>
+      </div>[36m
+    </div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:365:11
+[33mWarn[39m: A form label must be associated with a control
+https://svelte.dev/e/a11y_label_has_associated_control (svelte)
+[36m        <div class="modal-body">
+          [35m<label class="form-label">Session Name</label>[36m
+          <input[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\ToolsPanel.svelte[39m:676:5
+[33mWarn[39m: Also define the standard property 'appearance' for compatibility (css)
+[36m    outline: none;
+    [35m-webkit-appearance[36m: none;
+  }[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\Workspace.svelte[39m:808:2
+[33mWarn[39m: noninteractive element cannot have nonnegative tabIndex value
+https://svelte.dev/e/a11y_no_noninteractive_tabindex (svelte)
+[36m
+	[35m<div class="workspace-body" onkeydown={handleKeyDown} role="main" tabindex="0">
+		<div class="left-column">
+			{#if layoutMode !== 'single'}
+				<ProjectsPanel
+					{projects}
+					{selectedProjectId}
+					{selectedSessionId}
+					onselectproject={handleProjectSelect}
+					onselectsession={handleSessionSelect}
+					oncreateproject={handleCreateProject}
+					ondeleteproject={handleDeleteProject}
+					oncreatesession={handleCreateSession}
+					onrenamesession={handleRenameSession}
+					ondeletesession={handleDeleteSession}
+				/>
+			{/if}
+
+			<ProfilePanel
+				{userName}
+				{projects}
+				{selectedProjectId}
+				{selectedSessionId}
+			/>
+		</div>
+
+		<div class="composer-area">
+			<!-- SAFE: Check session exists AND has project -->
+			{#if selectedSession && selectedProject}
+				<ComposerPanel
+					session={selectedSession}
+					{totalFrames}
+					{selectedFrame}
+					bind:activePipeIdx
+					bind:focus
+					onframechange={(f) => selectedFrame = f}
+				/>
+			{:else}
+				<div class="composer-empty">
+					<div class="empty-icon">🎬</div>
+					<h2>Select a Session</h2>
+					<p>Create a project and add a session to start editing</p>
+				</div>
+			{/if}
+		</div>
+
+		{#if layoutMode === 'landscape'}
+			<ToolsPanel
+				session={selectedSession}
+				project={selectedProject}
+				{activeTool}
+				{focus}
+				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
+				qValue={activePipe?.qValue}
+				cValue={activePipe?.cValue}
+				onqvaluechange={handleQValueChange}
+				oncvaluechange={handleCValueChange}
+				onselect={handleToolSelect}
+				ongenerate={handleGenerate}
+				onfpschange={handleFpsChange}
+				onresolutionchange={handleResolutionChange}
+				onorientationchange={handleOrientationChange}
+				/>
+		{/if}
+	</div>[36m
+</div>[39m
+
+d:\work\horizonsMachine\VisionMachine\[32msrc\components\Workspace.svelte[39m:808:2
+[33mWarn[39m: Non-interactive element `<div>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions (svelte)
+[36m
+	[35m<div class="workspace-body" onkeydown={handleKeyDown} role="main" tabindex="0">
+		<div class="left-column">
+			{#if layoutMode !== 'single'}
+				<ProjectsPanel
+					{projects}
+					{selectedProjectId}
+					{selectedSessionId}
+					onselectproject={handleProjectSelect}
+					onselectsession={handleSessionSelect}
+					oncreateproject={handleCreateProject}
+					ondeleteproject={handleDeleteProject}
+					oncreatesession={handleCreateSession}
+					onrenamesession={handleRenameSession}
+					ondeletesession={handleDeleteSession}
+				/>
+			{/if}
+
+			<ProfilePanel
+				{userName}
+				{projects}
+				{selectedProjectId}
+				{selectedSessionId}
+			/>
+		</div>
+
+		<div class="composer-area">
+			<!-- SAFE: Check session exists AND has project -->
+			{#if selectedSession && selectedProject}
+				<ComposerPanel
+					session={selectedSession}
+					{totalFrames}
+					{selectedFrame}
+					bind:activePipeIdx
+					bind:focus
+					onframechange={(f) => selectedFrame = f}
+				/>
+			{:else}
+				<div class="composer-empty">
+					<div class="empty-icon">🎬</div>
+					<h2>Select a Session</h2>
+					<p>Create a project and add a session to start editing</p>
+				</div>
+			{/if}
+		</div>
+
+		{#if layoutMode === 'landscape'}
+			<ToolsPanel
+				session={selectedSession}
+				project={selectedProject}
+				{activeTool}
+				{focus}
+				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
+				qValue={activePipe?.qValue}
+				cValue={activePipe?.cValue}
+				onqvaluechange={handleQValueChange}
+				oncvaluechange={handleCValueChange}
+				onselect={handleToolSelect}
+				ongenerate={handleGenerate}
+				onfpschange={handleFpsChange}
+				onresolutionchange={handleResolutionChange}
+				onorientationchange={handleOrientationChange}
+				/>
+		{/if}
+	</div>[36m
+</div>[39m
+
+====================================
+[31msvelte-check found 2 errors and 43 warnings in 11 files
+[39m

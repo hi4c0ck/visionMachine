@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	calculateElementDrag,
+	calculateKeyframeDrag,
 	getDragBounds,
 	type TemporalDragState,
 } from '../../src/lib/dragMath';
@@ -108,5 +109,26 @@ describe('calculateElementDrag (tag, contained)', () => {
 	it('tag left thumb keeps MIN_SPAN inside parent', () => {
 		const d = drag({ type: 'tag', handle: 'left', startFrame: 56, endFrame: 64, pointerStartFrame: 0 });
 		expect(calculateElementDrag(d, -1000, g)).toEqual([32, 64]);
+	});
+});
+
+describe('calculateKeyframeDrag (point reposition)', () => {
+	const pipe = { min: 0, max: 240 };
+	it('moves by the snapped delta', () => {
+		// Start 40, pointer at 72 (started at 40) → delta +32 → 72
+		expect(calculateKeyframeDrag(40, 72, 40, pipe)).toBe(72);
+	});
+	it('snaps the result to the 8-grid', () => {
+		// Start 40, pointer at 75 → delta +35 → snaps to +32 → 72
+		expect(calculateKeyframeDrag(40, 75, 40, pipe)).toBe(72);
+	});
+	it('clamps at the pipe end', () => {
+		expect(calculateKeyframeDrag(200, 10000, 0, pipe)).toBe(240);
+	});
+	it('clamps at frame 0', () => {
+		expect(calculateKeyframeDrag(8, -10000, 0, pipe)).toBe(0);
+	});
+	it('no move keeps the frame', () => {
+		expect(calculateKeyframeDrag(88, 88, 88, pipe)).toBe(88);
 	});
 });

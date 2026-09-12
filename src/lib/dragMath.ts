@@ -19,11 +19,26 @@ export interface DragBounds {
 	max: number;
 }
 
+/**
+ * Point reposition (keyframe marker): move a single frame by the pointer
+ * delta, snap to FRAME_STEP, clamp into [min, max]. No duration, no span.
+ */
+export function calculateKeyframeDrag(
+	startFrame: number,
+	pointerFrame: number,
+	pointerStartFrame: number,
+	bounds: DragBounds
+): number {
+	const delta = snapFrame(pointerFrame - pointerStartFrame);
+	const next = snapFrame(startFrame + delta);
+	return Math.max(bounds.min, Math.min(next, bounds.max));
+}
+
 /** Segment & global: pipe [0, totalFrames-1]. Tag: parent segment [segStart, segEnd]. */
 export function getDragBounds(
 	drag: Pick<TemporalDragState, 'type' | 'segmentId'>,
 	totalFrames: number,
-	segment: { frameStart: number; frameEnd: number } | undefined
+	segment?: { frameStart: number; frameEnd: number }
 ): DragBounds {
 	if (drag.type === 'segment' || drag.type === 'global') {
 		return { min: 0, max: totalFrames - 1 };
@@ -36,7 +51,7 @@ export function getDragBounds(
  * thumb drags respect MIN_SPAN. All values snap to FRAME_STEP.
  */
 export function calculateElementDrag(
-	drag: TemporalDragState,
+	drag: Pick<TemporalDragState, 'startFrame' | 'endFrame' | 'pointerStartFrame' | 'handle'>,
 	pointerFrame: number,
 	bounds: DragBounds
 ): [number, number] {
