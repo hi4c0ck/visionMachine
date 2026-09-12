@@ -529,34 +529,6 @@
 			/>
 		</div>
 
-		<!-- ═══ KEYFRAME CHIPS: wide chips, left edge anchored at the frame's
-			     pixel position on the ruler (design rule R3). Sits directly
-			     under the frame ruler so each chip's position reads against
-			     the ticks; drag to reposition (snaps to the 8-grid). ═══ -->
-		{#if pipe.keyframes.length > 0 && rulerGeometry}
-			<div class="keyframe-chips" aria-label="Pipe keyframes">
-				{#each pipe.keyframes as kf (kf.id)}
-					{@const isKfDragging = keyframePreview?.keyframeId === kf.id}
-					{@const kfPreviewFrame = isKfDragging ? keyframePreview!.frame : kf.frame}
-					<div
-						class="kf-chip-frame"
-						class:dragging={isKfDragging}
-						style="left: {frameToPx(kfPreviewFrame, rulerGeometry)}px;"
-						onpointerdown={(e) => handleKeyframePointerDown(e, kf.id, kf.frame)}
-						onpointermove={handleKeyframePointerMove}
-						onpointerup={handleKeyframePointerUp}
-						role="slider" aria-orientation="horizontal" tabindex="0"
-						aria-valuemin={0} aria-valuemax={totalFrames - 1}
-						aria-valuenow={kfPreviewFrame}
-						title="Keyframe k{kf.slotIndex} @ frame {kfPreviewFrame} — drag to move">
-						<span class="kf-chip-num">k{kf.slotIndex}</span>
-						<span class="kf-chip-frame-num">{kfPreviewFrame}</span>
-						<span class="kf-chip-anchor" aria-hidden="true"></span>
-					</div>
-				{/each}
-			</div>
-		{/if}
-
 		<!-- ═══ GLOBAL LANES (in coordinate space) ═══ -->
 		{#each [getGlobal(pipe)] as global}
 			{#if global}
@@ -606,7 +578,31 @@
 			{/if}
 		{/each}
 
-			<!-- ═══ TIMELINE LANE (in coordinate space) ═══ -->
+		<!-- ═══ KEYFRAME MARKERS: frame-positioned, drag to reposition ═══ -->
+		{#if pipe.keyframes.length > 0 && rulerGeometry}
+			<div class="keyframe-lane">
+				{#each pipe.keyframes as kf (kf.id)}
+					{@const isKfDragging = keyframePreview?.keyframeId === kf.id}
+					{@const kfPreviewFrame = isKfDragging ? keyframePreview!.frame : kf.frame}
+					<div
+						class="kf-marker"
+						class:dragging={keyframePreview?.keyframeId === kf.id}
+						style="left: {frameToPx(kfPreviewFrame, rulerGeometry)}px;"
+						onpointerdown={(e) => handleKeyframePointerDown(e, kf.id, kf.frame)}
+						onpointermove={handleKeyframePointerMove}
+						onpointerup={handleKeyframePointerUp}
+						role="slider" aria-orientation="horizontal" tabindex="0"
+						aria-valuemin={0} aria-valuemax={totalFrames - 1}
+						aria-valuenow={kfPreviewFrame}
+						title="Keyframe k{kf.slotIndex} @ frame {kfPreviewFrame} — drag to move">
+						<span class="kf-marker-label">k{kf.slotIndex}</span>
+						<span class="kf-marker-frame">{kfPreviewFrame}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		<!-- ═══ TIMELINE LANE (in coordinate space) ═══ -->
 		<div class="timeline-lane">
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}

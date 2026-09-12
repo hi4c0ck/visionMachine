@@ -383,11 +383,10 @@ test.describe('Appending zones', () => {
 		expect(Math.abs(after.width - box.width)).toBeLessThan(2);
 	});
 
-	test('keyframe chips reposition by drag, left edge anchored to the frame', async ({ page }) => {
+	test('keyframe markers reposition by drag, snapping to the 8-grid', async ({ page }) => {
 		// A keyframe is created through the KEYFRAMES chip row (the positional
-		// chip on the timeline is the drag surface; the chips stay the
-		// add/edit surface). R3: the chip's LEFT EDGE sits at the frame's
-		// pixel position on the ruler.
+		// marker on the timeline is the drag surface; the chips stay the
+		// add/edit surface).
 		// Open the empty k1 chip → modal, set frame 40 + URL, confirm.
 		const kfEmpty = page.locator('.kf-chip.kf-empty', { hasText: '+ k1' });
 		await kfEmpty.click();
@@ -397,37 +396,30 @@ test.describe('Appending zones', () => {
 		// URL-type image field (url mode is the default).
 		await page.locator('.modal input[placeholder*="https"]').first().fill('https://example.com/kf1.jpg');
 		await page.locator('.modal .btn-confirm').click();
-		await page.waitForSelector('.kf-chip-frame', { timeout: 5000 });
+		await page.waitForSelector('.kf-marker', { timeout: 5000 });
 
-		// The chip shows its live frame number and its LEFT EDGE is anchored
-		// to the frame's pixel position on the ruler.
-		const chip = page.locator('.kf-chip-frame').first();
-		expect(await chip.locator('.kf-chip-frame-num').innerText()).toBe('40');
-		const chipBox = (await chip.boundingBox())!;
+		// The marker shows its live frame number and is centered on frame 40.
+		const marker = page.locator('.kf-marker').first();
+		expect(await marker.locator('.kf-marker-frame').innerText()).toBe('40');
+		const markerBox = (await marker.boundingBox())!;
 
-		// The anchor tick under the chip's left edge lines up with the chip
-		// left edge (the frame's x position), not its center.
-		const anchor = (await chip.locator('.kf-chip-anchor').boundingBox())!;
-		expect(Math.abs(anchor.x - chipBox.x)).toBeLessThan(3);
-
-		// Drag the chip left by ~25% of the pipe → frame recomputes on the
-		// 8-grid (e.g. 40 → ~32) and commits via moveKeyframe. The chip's
-		// left edge follows the new frame.
-		const cx = chipBox.x + chipBox.width / 2;
-		const cy = chipBox.y + chipBox.height / 2;
+		// Drag the marker left by ~25% of the pipe → frame recomputes on the
+		// 8-grid (e.g. 40 → ~32) and commits via moveKeyframe.
+		const cx = markerBox.x + markerBox.width / 2;
+		const cy = markerBox.y + markerBox.height / 2;
 		await page.mouse.move(cx, cy);
 		await page.mouse.down();
-		await page.mouse.move(chipBox.x - chipBox.width * 0.8, cy, { steps: 12 });
+		await page.mouse.move(markerBox.x - markerBox.width * 0.8, cy, { steps: 12 });
 		await page.waitForTimeout(150);
 		await page.mouse.up();
 		await page.waitForTimeout(500);
 
 		// The committed frame label moved left of 40 and stays on the 8-grid.
-		const newFrame = Number(await chip.locator('.kf-chip-frame-num').innerText());
+		const newFrame = Number(await marker.locator('.kf-marker-frame').innerText());
 		expect(newFrame).toBeLessThan(40);
 		expect(newFrame % 8).toBe(0);
 		// The chip row (key edit surface) picked up the new frame too.
-		const rowChip = page.locator('.kf-chip.kf-filled').first();
-		expect((await rowChip.getAttribute('title')) ?? '').toContain(`Frame ${newFrame}`);
+		const chip = page.locator('.kf-chip.kf-filled').first();
+		expect((await chip.getAttribute('title')) ?? '').toContain(`Frame ${newFrame}`);
 	});
 });
