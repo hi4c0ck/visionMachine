@@ -57,7 +57,7 @@ test.describe('Appending zones', () => {
 		await page.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '80');
-		expect(await page.locator('.segment-body').count()).toBe(1);
+		expect(await page.locator('.segment-row').count()).toBe(1);
 
 		// The empty placeholder is gone; the append button must now be visible.
 		await expect(page.locator('.seg-empty.full-width')).toHaveCount(0);
@@ -75,7 +75,7 @@ test.describe('Appending zones', () => {
 		expect(Number(prefill[0])).toBe(80);
 		expect(Number(prefill[1])).toBeGreaterThanOrEqual(88);
 		await addZoneAt(page, prefill[0], prefill[1]);
-		expect(await page.locator('.segment-body').count()).toBe(2);
+		expect(await page.locator('.segment-row').count()).toBe(2);
 
 		// Zone 3: append again → next gap after zone 2's end.
 		await appendBtn.click();
@@ -84,7 +84,7 @@ test.describe('Appending zones', () => {
 		const zone2End = Number(prefill[1]);
 		expect(Number(prefill3)).toBe(zone2End);
 		await addZoneAt(page, prefill3, await page.locator('.modal input[type="number"]').nth(1).inputValue());
-		expect(await page.locator('.segment-body').count()).toBe(3);
+		expect(await page.locator('.segment-row').count()).toBe(3);
 
 		// No overlaps: segment ranges stay strictly non-touching.
 		const labels = await page.locator('.seg-label').allInnerTexts();
@@ -193,6 +193,60 @@ test.describe('Appending zones', () => {
 		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z2');
 	});
 
+	test('timeline collapses to a summary header and re-expands', async ({ page }) => {
+		// Set up a zone + a tag so the collapsed summary has content to show.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '120');
+
+		// Expanded: header open, zone row + zone chrome visible.
+		expect(await page.locator('.timeline-header.open').count()).toBe(1);
+		expect(await page.locator('.segment-row').count()).toBe(1);
+		expect(await page.locator('.seg-chrome-label').first().innerText()).toBe('ZONE 1');
+
+		// Collapse: zones + lanes hide, summary shows the counts.
+		await page.locator('.timeline-header').click();
+		expect(await page.locator('.timeline-header.open').count()).toBe(0);
+		expect(await page.locator('.segment-row').count()).toBe(0);
+		const summary = page.locator('.timeline-header .tl-summary');
+		await expect(summary).toContainText('1 zone');
+
+		// Re-expand: everything back.
+		await page.locator('.timeline-header').click();
+		expect(await page.locator('.timeline-header.open').count()).toBe(1);
+		expect(await page.locator('.segment-row').count()).toBe(1);
+	});
+
+	test('tag pills show prompt text inline', async ({ page }) => {
+		// Zone + tag, then set a prompt via the prompt modal → pill shows it.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '120');
+
+		await page.locator('.btn-add-tag-shared').click();
+		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await page.waitForSelector('.tag-body', { timeout: 5000 });
+
+		// No prompt yet → pill falls back to the tag type name.
+		const pill = page.locator('.tag-body').first();
+		expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('Scene');
+
+		// Edit the prompt via the modal → the pill text updates live.
+		await pill.click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await page.locator('.modal textarea').fill('Mountain approach');
+		await page.locator('.modal .btn-confirm').click();
+		await page.waitForTimeout(300);
+		expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('Mountain approach');
+	});
+
 	test('tag pills expose left/right resize grips that commit to the store', async ({ page }) => {
 		// Set up a zone (0–120) + a Camera tag that inherits the full range.
 		const plus = page.locator('.btn-add-track').first();
@@ -229,8 +283,8 @@ test.describe('Appending zones', () => {
 		// store clamps end ≥ start+8, so an 80px drag from a 120-frame range
 		// lands on span ~56–80 (snapped), never the full 120 again. The pill
 		// width therefore shrinks from the original.
-		const label = await page.locator('.tag-pill-label').first().innerText();
-		expect(label.trim()).toBe('Camera');
+		const pillText = await pill.locator('.tag-pill-prompt').innerText();
+		expect(pillText.trim()).toBe('Camera');
 		const newPill = (await pill.boundingBox())!;
 		expect(newPill.width).toBeLessThan(pillBox.width); // the resize committed
 	});

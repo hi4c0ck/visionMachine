@@ -54,7 +54,7 @@
 	gap: 4px;
 }
 
-/* ── Timeline lane card (inset shadow only — no padding, no border) ────── */
+/* ── Timeline lane card (inset shadow only — no padding, no border) ───── */
 .timeline-lane {
 	display: flex;
 	flex-direction: column;
@@ -63,6 +63,40 @@
 	background: var(--surface-color);
 	border-radius: 8px;
 	box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+/* ═══ TIMELINE HEADER (collapse chevron + summary) ═══════════════════════ */
+/* Collapsing hides the zone rows + tag lanes; the header stays so the
+   track can be expanded again. Summary shows zone/tag counts. */
+.timeline-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 8px;
+	cursor: pointer;
+	user-select: none;
+	border-radius: 5px;
+}
+.timeline-header:hover {
+	background: var(--bg-tertiary);
+}
+.tl-chevron {
+	width: 14px;
+	font-size: 11px;
+	color: var(--text-secondary);
+	flex-shrink: 0;
+}
+.tl-title {
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: var(--text-primary);
+}
+.tl-summary {
+	margin-left: auto;
+	font-size: 10px;
+	color: var(--text-secondary);
 }
 
 /* ═══ ZONE ROWS: one slider row per segment ═══════════════════════════ */
@@ -74,6 +108,24 @@
 	background: var(--bg-tertiary);
 	border-radius: 5px;
 	box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+/* Zone number badge, floats left over the track so the slider pill's
+   frame coordinate origin is untouched (same rule as tag lane labels). */
+.seg-row-label {
+	position: absolute;
+	left: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 3;
+	padding: 1px 6px;
+	font-size: 9px;
+	font-weight: 700;
+	color: var(--text-secondary);
+	background: var(--bg-secondary);
+	border-radius: 6px;
+	box-shadow: 0 0 0 1px var(--border-color);
+	pointer-events: none;
 }
 
 /* The zone slider pill (accent). Left/width come from frameToPx. */
@@ -217,6 +269,21 @@
 		flex: 0 0 auto;
 		margin: 0 4px 0 0;
 		letter-spacing: 0.3px;
+	}
+
+	/* Prompt text on the pill (ref parity: tags show their prompt inline).
+	   Shows the prompt when set, otherwise the tag type name as fallback.
+	   Clipped by its own ellipsis; right padding reserves room for the ×. */
+	.tag-pill-prompt {
+		font-size: 9px;
+		font-weight: 600;
+		color: #fff;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+		overflow: hidden;
+		padding: 0 18px 0 2px;
+		flex: 1 1 0;
+		min-width: 0;
 	}
 
 	/* Tag name inside the pill — reserved space so the × never overlaps it,

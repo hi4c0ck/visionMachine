@@ -220,6 +220,22 @@
 	// (All tag pills live on the shared tag lane, so one entry point suffices.)
 	let firstSegment = $derived.by(() => (getTimeline(pipe)?.segments ?? [])[0] ?? null);
 
+	// ── Timeline collapse: per-pipe UI state. Collapsing hides the zone
+	//    slider rows + tag lanes, leaving a compact summary header. Per-pipe
+	//    (not session-wide) so each section owns its own disclosure state.
+	let timelineCollapsed = $state(false);
+	let collapsedPipeId = $state('');
+	if (pipe?.id !== collapsedPipeId) {
+		collapsedPipeId = pipe?.id ?? '';
+		timelineCollapsed = false;
+	}
+	// Total tag count on this pipe — shown on the collapsed summary line.
+	let totalTags = $derived.by(() => {
+		const tl = getTimeline(pipe);
+		if (!tl) return 0;
+		return (tl.segments ?? []).reduce((n: number, s: Segment) => n + s.tags.length, 0);
+	});
+
 	// Get preview state for a segment during drag
 	function getPreviewSegment(seg: Segment) {
 		if (!previewDragState || previewDragState.type !== 'segment' || previewDragState.id !== seg.id) {
@@ -403,138 +419,155 @@
 		<div class="timeline-lane">
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}
-					<!-- ═══ ZONES: one slider row per segment ═══ -->
-					{#each tl.segments as seg (seg.id)}
-						<div class="segment-row">
-							{#if rulerGeometry}
-								<div
-									class="segment-body"
-									style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
-									onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'body', seg.frameStart, seg.frameEnd)}
-									onpointermove={handlePointerMove}
-									onpointerup={handlePointerUp}
-									role="slider" aria-orientation="horizontal"
-									aria-valuemin={0} aria-valuemax={totalFrames - 1}
-									aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}>
-									<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
-								</div>
-								<div
-									class="segment-handle segment-handle-left"
-									style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px;"
-									onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'left', seg.frameStart, seg.frameEnd)}
-									onpointermove={handlePointerMove}
-									onpointerup={handlePointerUp}
-									role="slider" aria-orientation="horizontal"
-									aria-valuemin={0} aria-valuemax={totalFrames - 1}
-									aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}
-									title="Drag to resize zone start"></div>
-								<div
-									class="segment-handle segment-handle-right"
-									style="left: {frameToPx(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
-									onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'right', seg.frameStart, seg.frameEnd)}
-									onpointermove={handlePointerMove}
-									onpointerup={handlePointerUp}
-									role="slider" aria-orientation="horizontal"
-									aria-valuemin={0} aria-valuemax={totalFrames - 1}
-									aria-valuenow={getPreviewSegment(seg)?.endFrame ?? seg.frameEnd}
-									title="Drag to resize zone end"></div>
-							{/if}
-						</div>
-					{/each}
-
-					<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
-					     Each tag type gets its own horizontal lane; every pill of
-					     that type (from any zone) sits on the same line, placed
-					     left→right by frame range. Body drags move the pill;
-					     the round grips on its edges resize start/end within
-					     the parent zone (8-grid snap). -->
-					{#each getTagLanes(pipe) as lane (lane.type)}
-						<div class="tag-lane" class:empty={lane.entries.length === 0} style="--lane-color: {lane.color};">
-							<div class="tag-lane-track">
-								<span class="tag-lane-label" style="--lane-color: {lane.color};">{lane.name}</span>
-								{#if rulerGeometry}
-									{#each lane.entries as entry (entry.tag.id)}
-										{@const tag = entry.tag}
-										{@const seg = entry.seg}
-										{@const zoneIndex = tl.segments.indexOf(seg) + 1}
-										<div
-											class="tag-body"
-											style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
-											role="button"
-											tabindex="0"
-											title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex} · Drag to move, grips to resize, click to edit prompt"
-											onclick={() => onEditTagPrompt(seg, tag)}
-											onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
-											onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
-											onpointermove={handlePointerMove}
-											onpointerup={handlePointerUp}>
-											<span class="tag-pill-zone">Z{zoneIndex}</span>
-											<span class="tag-pill-label">{tag.spec?.name}</span>
-											<button
-												class="btn-del-tag"
-												// The parent .tag-body's onpointerdown calls preventDefault()
-												// (to prevent text selection during drag), which suppresses the
-												// native click event on children. Stopping propagation here
-												// keeps the drag handler from running on this button so its
-												// onclick still fires.
-												onpointerdown={(e) => e.stopPropagation()}
-												onclick={(e) => { e.stopPropagation(); onRemoveTag(seg.id, tag.id); }}
-												title="Remove tag">×</button>
-											<div
-												class="tag-handle tag-handle-left"
-												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px;"
-												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'left', tag.frameStart, tag.frameEnd)}
-												onpointermove={handlePointerMove}
-												onpointerup={handlePointerUp}
-												role="slider" aria-orientation="horizontal" tabindex="0"
-												aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
-												aria-valuenow={getPreviewTag(tag.id)?.startFrame ?? tag.frameStart}
-												title="Drag to resize tag start"></div>
-											<div
-												class="tag-handle tag-handle-right"
-												style="left: {frameToPx(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px;"
-												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'right', tag.frameStart, tag.frameEnd)}
-												onpointermove={handlePointerMove}
-												onpointerup={handlePointerUp}
-												role="slider" aria-orientation="horizontal" tabindex="0"
-												aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
-												aria-valuenow={getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd}
-												title="Drag to resize tag end"></div>
-										</div>
-									{/each}
-								{/if}
-							</div>
-						</div>
-					{/each}
-
-					<!-- Zone chrome: one row per zone (delete + zone badge), NOT
-						 part of the frame coordinate space. -->
-					{#each tl.segments as seg, segIdx (seg.id)}
-						<div class="segment-chrome">
-							<span class="seg-chrome-label">Zone {segIdx + 1}</span>
-							<button
-								class="btn-icon-sm btn-del-sm seg-del"
-								onclick={() => onDeleteSegment(seg.id)}
-								title="Delete zone">×</button>
-						</div>
-					{/each}
-
-					<!-- Append affordance: one shared action row, not one per zone -->
-					<div class="segment-chrome segment-chrome-append">
-						<button
-							class="btn-add-zone"
-							onclick={onAddSegment}
-							onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
-							title="Append a new zone after the last one">+ Zone</button>
+					<!-- ═══ TIMELINE HEADER: collapse chevron + zone/pill summary ═══
+						 Collapsed view: one compact line instead of all the
+						 zone rows + tag lanes. -->
+					<div class="timeline-header" role="button" tabindex="0"
+						class:open={!timelineCollapsed}
+						onclick={() => timelineCollapsed = !timelineCollapsed}
+						onkeydown={(e) => e.key === 'Enter' && (timelineCollapsed = !timelineCollapsed)}>
+						<span class="tl-chevron">{timelineCollapsed ? '▸' : '▾'}</span>
+						<span class="tl-title">Timeline</span>
+						<span class="tl-summary">
+							{tl.segments.length} zone{(tl.segments.length !== 1 ? 's' : '')} · {totalTags} tag{(totalTags !== 1 ? 's' : '')}
+						</span>
 					</div>
 
-					<!-- No zones yet (no timeline, or empty timeline) — one placeholder,
-						 zone add auto-creates the timeline when needed. -->
-					{#if (tl.segments.length ?? 0) === 0}
-						<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
-							onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
-							<span>+ Add first zone</span>
+					{#if !timelineCollapsed}
+						<!-- ═══ ZONES: one slider row per segment ═══ -->
+						{#each tl.segments as seg, segIdx (seg.id)}
+							<div class="segment-row">
+								<span class="seg-row-label">Zone {segIdx + 1}</span>
+								{#if rulerGeometry}
+									<div
+										class="segment-body"
+										style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
+										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'body', seg.frameStart, seg.frameEnd)}
+										onpointermove={handlePointerMove}
+										onpointerup={handlePointerUp}
+										role="slider" aria-orientation="horizontal" tabindex="0"
+										aria-valuemin={0} aria-valuemax={totalFrames - 1}
+										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}>
+										<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
+									</div>
+									<div
+										class="segment-handle segment-handle-left"
+										style="left: {frameToPx(getPreviewSegment(seg)?.startFrame ?? seg.frameStart, rulerGeometry)}px;"
+										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'left', seg.frameStart, seg.frameEnd)}
+										onpointermove={handlePointerMove}
+										onpointerup={handlePointerUp}
+										role="slider" aria-orientation="horizontal" tabindex="0"
+										aria-valuemin={0} aria-valuemax={totalFrames - 1}
+										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}
+										title="Drag to resize zone start"></div>
+									<div
+										class="segment-handle segment-handle-right"
+										style="left: {frameToPx(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
+										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'right', seg.frameStart, seg.frameEnd)}
+										onpointermove={handlePointerMove}
+										onpointerup={handlePointerUp}
+										role="slider" aria-orientation="horizontal" tabindex="0"
+										aria-valuemin={0} aria-valuemax={totalFrames - 1}
+										aria-valuenow={getPreviewSegment(seg)?.endFrame ?? seg.frameEnd}
+										title="Drag to resize zone end"></div>
+								{/if}
+							</div>
+						{/each}
+
+						<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
+							 Each tag type gets its own horizontal lane; every pill of
+							 that type (from any zone) sits on the same line, placed
+							 left→right by frame range. Body drags move the pill;
+							 the round grips on its edges resize start/end within
+							 the parent zone (8-grid snap). -->
+						{#each getTagLanes(pipe) as lane (lane.type)}
+							<div class="tag-lane" class:empty={lane.entries.length === 0} style="--lane-color: {lane.color};">
+								<div class="tag-lane-track">
+									<span class="tag-lane-label" style="--lane-color: {lane.color};">{lane.name}</span>
+									{#if rulerGeometry}
+										{#each lane.entries as entry (entry.tag.id)}
+											{@const tag = entry.tag}
+											{@const seg = entry.seg}
+											{@const zoneIndex = tl.segments.indexOf(seg) + 1}
+											<div
+												class="tag-body"
+												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
+												role="button"
+												tabindex="0"
+												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex}{tag.prompt ? ' · \u201c' + tag.prompt + '\u201d' : ''} · Drag to move, grips to resize, click to edit prompt"
+												onclick={() => onEditTagPrompt(seg, tag)}
+												onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
+												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
+												onpointermove={handlePointerMove}
+												onpointerup={handlePointerUp}>
+												<span class="tag-pill-zone">Z{zoneIndex}</span>
+												<span class="tag-pill-prompt">{tag.prompt ?? tag.spec?.name}</span>
+												<button
+													class="btn-del-tag"
+													// The parent .tag-body's onpointerdown calls preventDefault()
+													// (to prevent text selection during drag), which suppresses the
+													// native click event on children. Stopping propagation here
+													// keeps the drag handler from running on this button so its
+													// onclick still fires.
+													onpointerdown={(e) => e.stopPropagation()}
+													onclick={(e) => { e.stopPropagation(); onRemoveTag(seg.id, tag.id); }}
+													title="Remove tag">×</button>
+												<div
+													class="tag-handle tag-handle-left"
+													style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px;"
+													onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'left', tag.frameStart, tag.frameEnd)}
+													onpointermove={handlePointerMove}
+													onpointerup={handlePointerUp}
+													role="slider" aria-orientation="horizontal" tabindex="0"
+													aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
+													aria-valuenow={getPreviewTag(tag.id)?.startFrame ?? tag.frameStart}
+													title="Drag to resize tag start"></div>
+												<div
+													class="tag-handle tag-handle-right"
+													style="left: {frameToPx(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px;"
+													onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'right', tag.frameStart, tag.frameEnd)}
+													onpointermove={handlePointerMove}
+													onpointerup={handlePointerUp}
+													role="slider" aria-orientation="horizontal" tabindex="0"
+													aria-valuemin={seg.frameStart} aria-valuemax={seg.frameEnd}
+													aria-valuenow={getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd}
+													title="Drag to resize tag end"></div>
+											</div>
+										{/each}
+									{/if}
+								</div>
+							</div>
+						{/each}
+
+						<!-- Zone chrome: one row per zone (delete + zone badge), NOT
+							 part of the frame coordinate space. -->
+						{#each tl.segments as seg, segIdx (seg.id)}
+							<div class="segment-chrome">
+								<span class="seg-chrome-label">Zone {segIdx + 1}</span>
+								<button
+									class="btn-icon-sm btn-del-sm seg-del"
+									onclick={() => onDeleteSegment(seg.id)}
+									title="Delete zone">×</button>
+							</div>
+						{/each}
+
+						<!-- Append affordance: one shared action row, not one per zone -->
+						<div class="segment-chrome segment-chrome-append">
+							<button
+								class="btn-add-zone"
+								onclick={onAddSegment}
+								onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
+								title="Append a new zone after the last one">+ Zone</button>
 						</div>
+
+						<!-- No zones yet (no timeline, or empty timeline) — one placeholder,
+							 zone add auto-creates the timeline when needed. -->
+						{#if (tl.segments.length ?? 0) === 0}
+							<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
+								onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
+								<span>+ Add first zone</span>
+							</div>
+						{/if}
 					{/if}
 				{/if}
 			{/each}

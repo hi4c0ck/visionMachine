@@ -52,11 +52,11 @@ test.describe('Multi-Tag Creation', () => {
 
   test('should show tag add button when segment exists', async ({ page }) => {
     // Check if any segments exist
-    const segBars = page.locator('.segment-body');
-    const hasSegments = await segBars.count() > 0;
+    const segRows = page.locator('.segment-row');
+    const hasSegments = await segRows.count() > 0;
     
     if (hasSegments) {
-      const addTagBtn = page.locator('.btn-add-tag');
+      const addTagBtn = page.locator('.btn-add-tag-shared');
       await expect(addTagBtn).toBeVisible();
     } else {
       // If no segments, we should see the empty state
@@ -72,13 +72,13 @@ test.describe('Drag Interactions', () => {
   });
 
   test('should show segment structure with thumbs', async ({ page }) => {
-    // Check that segment bodies exist in the DOM structure
-    const segBar = page.locator('.segment-body');
+    // Check that segment rows exist in the DOM structure
+    const segBar = page.locator('.segment-row');
     const hasSegments = await segBar.count() > 0;
     
     if (hasSegments) {
-      // Segment bars should have proper positioning
-      const style = await segBar.first().getAttribute('style');
+      // The zone slider pill inside the row should have proper px positioning
+      const style = await page.locator('.segment-body').first().getAttribute('style');
       expect(style).toContain('px');
     }
   });
