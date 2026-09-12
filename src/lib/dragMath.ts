@@ -5,7 +5,7 @@
 import { snapFrame, MIN_SPAN } from './frameGeometry';
 
 export interface TemporalDragState {
-	type: 'segment' | 'tag';
+	type: 'segment' | 'tag' | 'global';
 	id: string;
 	segmentId: string;
 	handle: 'left' | 'right' | 'body';
@@ -19,13 +19,13 @@ export interface DragBounds {
 	max: number;
 }
 
-/** Segment: pipe [0, totalFrames-1]. Tag: parent segment [segStart, segEnd]. */
+/** Segment & global: pipe [0, totalFrames-1]. Tag: parent segment [segStart, segEnd]. */
 export function getDragBounds(
 	drag: Pick<TemporalDragState, 'type' | 'segmentId'>,
 	totalFrames: number,
 	segment: { frameStart: number; frameEnd: number } | undefined
 ): DragBounds {
-	if (drag.type === 'segment') {
+	if (drag.type === 'segment' || drag.type === 'global') {
 		return { min: 0, max: totalFrames - 1 };
 	}
 	return { min: segment?.frameStart ?? 0, max: segment?.frameEnd ?? totalFrames - 1 };

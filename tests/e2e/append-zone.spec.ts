@@ -288,4 +288,63 @@ test.describe('Appending zones', () => {
 		const newPill = (await pill.boundingBox())!;
 		expect(newPill.width).toBeLessThan(pillBox.width); // the resize committed
 	});
+
+	test('global range exposes grips that resize via the store', async ({ page }) => {
+		// Create the global lane, then drag its right grip in to ~30% of the
+		// pipe. The committed range width must shrink (updateGlobalRange fired).
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Global' }).click();
+		await page.waitForSelector('.global-range', { timeout: 5000 });
+
+		// The global bar spans the whole pipe on creation; grips sit at its edges.
+		const range = page.locator('.global-range').first();
+		const rangeBox = (await range.boundingBox())!;
+		const gripR = (await page.locator('.global-handle-right').first().boundingBox())!;
+		expect(Math.abs(gripR.x + 5 - (rangeBox.x + rangeBox.width))).toBeLessThan(3);
+
+		// Drag the right grip far left → range end recomputes, width shrinks.
+		await page.mouse.move(gripR.x + gripR.width / 2, gripR.y + gripR.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(rangeBox.x + rangeBox.width * 0.3, gripR.y + gripR.height / 2, { steps: 12 });
+		await page.waitForTimeout(150);
+		await page.mouse.up();
+		await page.waitForTimeout(500);
+
+		const newRange = (await range.boundingBox())!;
+		expect(newRange.width).toBeLessThan(rangeBox.width); // the resize committed
+	});
+	test('global range body-drag moves the whole range', async ({ page }) => {
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Global' }).click();
+		await page.waitForSelector('.global-range', { timeout: 5000 });
+
+		const range = page.locator('.global-range').first();
+		// The global bar is created full-pipe (0..N-1), so a body-drag right
+		// would be clamped in place (start pinned at 0). Shrink it first via
+		// the right grip so there is room to move.
+		const fullBox = (await range.boundingBox())!;
+		const gripR = (await page.locator('.global-handle-right').first().boundingBox())!;
+		await page.mouse.move(gripR.x + gripR.width / 2, gripR.y + gripR.height / 2);
+		await page.mouse.down();
+		await page.mouse.move(fullBox.x + fullBox.width * 0.5, gripR.y + gripR.height / 2, { steps: 12 });
+		await page.mouse.up();
+		await page.waitForTimeout(500);
+
+		// Now body-drag the (shorter) range right by ~half the pipe width.
+		const box = (await range.boundingBox())!;
+		const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+		await page.mouse.move(cx, cy);
+		await page.mouse.down();
+		await page.mouse.move(cx + fullBox.width * 0.5, cy, { steps: 12 });
+		await page.waitForTimeout(150);
+		await page.mouse.up();
+		await page.waitForTimeout(500);
+
+		const after = (await range.boundingBox())!;
+		expect(after.x).toBeGreaterThan(box.x); // the range moved right
+		// Duration preserved: only the start shifts, width stays the same.
+		expect(Math.abs(after.width - box.width)).toBeLessThan(2);
+	});
 });

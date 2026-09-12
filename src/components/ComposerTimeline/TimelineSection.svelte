@@ -19,6 +19,7 @@
 	import {
 		resizeSegment as resizeSegmentAction,
 		resizeTagElement as resizeTagElementAction,
+		updateGlobalRange as updateGlobalRangeAction,
 	} from '$lib/composerStore';
 
 	// Timeline area: one frame coordinate canvas (ruler + global lanes +
@@ -102,7 +103,7 @@
 
 	// Transient preview state for visual feedback during drag
 	let previewDragState = $state<{
-		type: 'segment' | 'tag';
+		type: 'segment' | 'tag' | 'global';
 		id: string;
 		segmentId?: string;
 		handle?: 'left' | 'right' | 'body';
@@ -252,10 +253,18 @@
 		return previewDragState;
 	}
 
-	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body).
+	// Get preview state for the global range during drag
+	function getPreviewGlobal(globalId: string) {
+		if (!previewDragState || previewDragState.type !== 'global' || previewDragState.id !== globalId) {
+			return null;
+		}
+		return previewDragState;
+	}
+
+	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body, global grips).
 	function handleElementPointerDown(
 		e: PointerEvent,
-		type: 'segment' | 'tag',
+		type: 'segment' | 'tag' | 'global',
 		id: string,
 		segmentId: string,
 		handle: 'left' | 'right' | 'body',
@@ -378,6 +387,19 @@
 			}
 		}
 
+		if (finalPreview.type === 'global') {
+			const result = await updateGlobalRangeAction(
+				sessionId,
+				pipe.id,
+				finalPreview.id,
+				finalPreview.startFrame,
+				finalPreview.endFrame
+			);
+			if (result.errors.length) {
+				console.error('[TimelineSection] updateGlobalRange:', result.errors);
+			}
+		}
+
 		previewDragState = null;
 	}
 </script>
@@ -400,10 +422,39 @@
 			{#if global}
 				<div class="global-lane">
 					{#if rulerGeometry}
+						{@const gPrev = getPreviewGlobal(global.id)}
+						{@const gStart = gPrev?.startFrame ?? global.frameStart ?? 0}
+						{@const gEnd = gPrev?.endFrame ?? global.frameEnd ?? totalFrames - 1}
 						<div
 							class="global-range"
-							style="left: {frameToPx(global.frameStart ?? 0, rulerGeometry)}px; width: {rangeWidthPx(global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1, rulerGeometry)}px;"
-						></div>
+							style="left: {frameToPx(gStart, rulerGeometry)}px; width: {rangeWidthPx(gStart, gEnd, rulerGeometry)}px;"
+							onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'body', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
+							onpointermove={handlePointerMove}
+							onpointerup={handlePointerUp}
+							role="slider" aria-orientation="horizontal" tabindex="0"
+							aria-valuemin={0} aria-valuemax={totalFrames - 1}
+							aria-valuenow={gStart}
+							title="Global style range — drag to move, grips to resize"></div>
+						<div
+							class="global-handle global-handle-left"
+							style="left: {frameToPx(gStart, rulerGeometry)}px;"
+							onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'left', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
+							onpointermove={handlePointerMove}
+							onpointerup={handlePointerUp}
+							role="slider" aria-orientation="horizontal" tabindex="0"
+							aria-valuemin={0} aria-valuemax={totalFrames - 1}
+							aria-valuenow={gStart}
+							title="Drag to resize global range start"></div>
+						<div
+							class="global-handle global-handle-right"
+							style="left: {frameToPx(gEnd, rulerGeometry)}px;"
+							onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'right', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
+							onpointermove={handlePointerMove}
+							onpointerup={handlePointerUp}
+							role="slider" aria-orientation="horizontal" tabindex="0"
+							aria-valuemin={0} aria-valuemax={totalFrames - 1}
+							aria-valuenow={gEnd}
+							title="Drag to resize global range end"></div>
 					{/if}
 					<div class="global-actions">
 						<button class="btn-icon-sm" onclick={() => onToggleGlobal(global.id)} title="Toggle global">

@@ -23,9 +23,13 @@ function segPipeBounds(type: 'segment' | 'tag') {
 	return type === 'segment' ? { min: 0, max: 240 } : { min: 32, max: 128 };
 }
 
-describe('getDragBounds', () => {
+	describe('getDragBounds', () => {
 	it('segments span the pipe', () => {
 		expect(getDragBounds(drag({}), 241, undefined)).toEqual({ min: 0, max: 240 });
+	});
+	it('global ranges span the pipe (same bounds as segments)', () => {
+		const d = drag({ type: 'global', id: 'g-1', segmentId: 'g-1' });
+		expect(getDragBounds(d, 241, undefined)).toEqual({ min: 0, max: 240 });
 	});
 	it('tags are contained in their parent segment', () => {
 		const d = drag({ type: 'tag', segmentId: 'seg-9' });
@@ -35,7 +39,23 @@ describe('getDragBounds', () => {
 		const d = drag({ type: 'tag', segmentId: 'seg-9' });
 		expect(getDragBounds(d, 241, undefined)).toEqual({ min: 0, max: 240 });
 	});
-});
+	});
+	describe('calculateElementDrag (global range)', () => {
+		const g = segPipeBounds('segment');
+		it('body drag preserves duration', () => {
+			const d = drag({ type: 'global', id: 'g-1', segmentId: 'g-1', handle: 'body', startFrame: 16, endFrame: 112, pointerStartFrame: 0 });
+			// +48 → [64, 160]
+			expect(calculateElementDrag(d, 48, g)).toEqual([64, 160]);
+		});
+		it('right grip extends to pipe end', () => {
+			const d = drag({ type: 'global', id: 'g-1', segmentId: 'g-1', handle: 'right', startFrame: 0, endFrame: 120, pointerStartFrame: 0 });
+			expect(calculateElementDrag(d, 1000, g)).toEqual([0, 240]);
+		});
+		it('left grip respects MIN_SPAN', () => {
+			const d = drag({ type: 'global', id: 'g-1', segmentId: 'g-1', handle: 'left', startFrame: 0, endFrame: 8, pointerStartFrame: 0 });
+			expect(calculateElementDrag(d, 1000, g)).toEqual([0, 8]); // can't shrink below min span
+		});
+	});
 
 describe('calculateElementDrag (segment)', () => {
 	const g = segPipeBounds('segment');
