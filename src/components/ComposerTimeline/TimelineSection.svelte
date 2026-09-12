@@ -204,18 +204,6 @@
 		return p.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
 
-	// Unit suffix for numeric tag values (camera/rotation in degrees, zoom ×).
-	// Mirrors the modal's specUnit so the pill and the editor agree.
-	function specUnitFor(spec: TagElement['spec'] | null | undefined): string {
-		if (!spec) return '';
-		switch (spec.name) {
-			case 'Camera': return '°';
-			case 'Rotation': return '°';
-			case 'Zoom': return '×';
-			default: return '';
-		}
-	}
-
 	// ── Ruler legend: color key for the lane system (zone/global + tag types
 	//    present in THIS pipe's timeline). Rendered inside the frame-ruler
 	//    space so it aligns with the shared coordinate canvas. ─────────────
@@ -557,16 +545,14 @@
 												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
 												role="button"
 												tabindex="0"
-												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex}{!tag.spec?.usePrompt && tag.value ? ' · ' + tag.value + specUnitFor(tag.spec) : ''}{tag.prompt ? ' · \u201c' + tag.prompt + '\u201d' : ''} · Drag to move, grips to resize, click to edit"
+												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex}{tag.prompt ? ' · \u201c' + tag.prompt + '\u201d' : ''} · Drag to move, grips to resize, click to edit prompt"
 												onclick={() => onEditTagPrompt(seg, tag)}
 												onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
 												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
 												onpointermove={handlePointerMove}
 												onpointerup={handlePointerUp}>
 												<span class="tag-pill-zone">Z{zoneIndex}</span>
-												<!-- Numeric tags (camera/rotation/zoom) show their value;
-												     prompt tags show the prompt (or the type name as fallback). -->
-												<span class="tag-pill-prompt">{#if !tag.spec?.usePrompt && tag.value !== undefined && tag.value !== null && tag.value !== 0}{tag.value}{specUnitFor(tag.spec)}{:else}{tag.prompt ?? tag.spec?.name}{/if}</span>
+												<span class="tag-pill-prompt">{tag.prompt ?? tag.spec?.name}</span>
 												<button
 													class="btn-del-tag"
 													// The parent .tag-body's onpointerdown calls preventDefault()

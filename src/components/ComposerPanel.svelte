@@ -26,6 +26,7 @@
 		addTagElement as addTagElementAction,
 		removeTagElement as removeTagElementAction,
 		resizeTagElement as resizeTagElementAction,
+		updateTagPrompt as updateTagPromptAction,
 		removeSubjectRef as removeSubjectRefAction,
 		toggleSubjectRef as toggleSubjectRefAction,
 		movePipe as movePipeAction,
@@ -117,7 +118,6 @@ import { flashToast } from '$lib/flashToast';
 	let showTagPromptModal = $state(false);
 	let editingTagId = $state<string>('');
 	let editingSegmentId = $state<string>('');
-	let editingTag = $state<TagElement | null>(null);
 	let tagPrompt = $state('');
 
 	// [+] menu
@@ -378,17 +378,18 @@ import { flashToast } from '$lib/flashToast';
 		editingTagId = tag.id;
 		editingSegmentId = seg.id;
 		tagPrompt = tag.prompt || '';
-		editingTag = tag;
 		showTagPromptModal = true;
 		closeMenus();
 	}
 
-	// TagPromptModal calls back with its edited prompt (or value, for numeric tags)
-	async function confirmTagPrompt(prompt: string, value: number | null) {
-		// The modal owns the store write (updateTagPrompt / updateTagValue);
-		// this is just the panel-side bookkeeping when the modal confirms.
-		if (value !== null) {
-			// Numeric tag — the modal already committed updateTagValue.
+	// TagPromptModal calls back with its edited prompt on confirm
+	async function confirmTagPrompt(prompt: string) {
+		const pipe = pipes[activePipeIdx!];
+		if (!pipe || !session?.id) return;
+		const result = await updateTagPromptAction(session.id, pipe.id, editingSegmentId, editingTagId, prompt);
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] updateTagPrompt:', result.errors);
+			return;
 		}
 		tagPrompt = prompt;
 		showTagPromptModal = false;
@@ -536,9 +537,8 @@ import { flashToast } from '$lib/flashToast';
 		segmentId={editingSegmentId}
 		tagId={editingTagId}
 		prompt={tagPrompt}
-		tag={editingTag}
 		bind:open={showTagPromptModal}
-		onConfirm={(p, v) => confirmTagPrompt(p, v)}
+		onConfirm={(p) => confirmTagPrompt(p)}
 	/>
 {/if}
 
