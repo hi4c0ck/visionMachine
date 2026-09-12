@@ -101,32 +101,62 @@ export function getNextAvailableRange(
   totalFrames: number,
   minSpan: number = 8
 ): { start: number; end: number } | null {
+  const gaps = getFreeGaps(existingSegments, totalFrames, minSpan);
+  return gaps.length > 0 ? gaps[0] : null;
+}
+
+export interface FreeGap {
+  /** First usable frame in the gap (multiple of 8, or 0). */
+  start: number;
+  /** Last usable frame in the gap (multiple of 8, ≤ totalFrames-1). */
+  end: number;
+  /** Where this gap is, for the UI to label it. */
+  label: string;
+}
+
+/**
+ * Enumerate EVERY free gap that can hold a zone of at least `minSpan` frames:
+ * before the first zone, between zones, and after the last zone. This is what
+ * the "+ Zone" picker offers — a user can insert a zone into any allowed free
+ * space, not just the first one `getNextAvailableRange` returns.
+ *
+ * A gap [gStart, gEnd] is usable when gEnd - gStart >= minSpan (it can host a
+ * min-span zone). End-to-end packed zones leave no usable gap → empty list.
+ */
+export function getFreeGaps(
+  existingSegments: Array<{ frameStart: number; frameEnd: number }>,
+  totalFrames: number,
+  minSpan: number = 8
+): FreeGap[] {
   const maxEnd = totalFrames - 1;
-  
-  // Sort by start frame
   const sorted = [...existingSegments].sort((a, b) => a.frameStart - b.frameStart);
-  
-  // Try to fit before first segment
-  if (sorted.length === 0 || sorted[0].frameStart >= minSpan) {
-    return { start: 0, end: Math.min(minSpan, maxEnd) };
-  }
-  
-  // Try gaps between segments
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const gapStart = sorted[i].frameEnd;
-    const gapEnd = sorted[i + 1].frameStart;
-    if (gapEnd - gapStart >= minSpan) {
-      return { start: gapStart, end: Math.min(gapStart + minSpan, gapEnd) };
+  const gaps: FreeGap[] = [];
+
+  // Space before the first zone (only when a zone actually exists).
+  if (sorted.length > 0) {
+    const beforeStart = 0;
+    const beforeEnd = sorted[0].frameStart;
+    if (beforeEnd - beforeStart >= minSpan) {
+      gaps.push({ start: beforeStart, end: beforeEnd, label: 'Before Zone 1' });
     }
   }
-  
-  // Try after last segment
-  const lastEnd = sorted[sorted.length - 1].frameEnd;
-  if (lastEnd < maxEnd) {
-    return { start: lastEnd, end: Math.min(lastEnd + minSpan, maxEnd) };
+
+  // Gaps between zones.
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const gStart = sorted[i].frameEnd;
+    const gEnd = sorted[i + 1].frameStart;
+    if (gEnd - gStart >= minSpan) {
+      gaps.push({ start: gStart, end: gEnd, label: `Between Zone ${i + 1} & ${i + 2}` });
+    }
   }
-  
-  return null;
+
+  // Space after the last zone.
+  const afterStart = sorted.length > 0 ? sorted[sorted.length - 1].frameEnd : 0;
+  if (maxEnd - afterStart >= minSpan) {
+    gaps.push({ start: afterStart, end: maxEnd, label: 'After last zone' });
+  }
+
+  return gaps;
 }
 
 /**

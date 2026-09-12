@@ -21,6 +21,7 @@ import {
   getMaxSegmentEnd,
   isValidSegmentBoundary,
   isValidFrameCount,
+  getFreeGaps,
 } from '../../src/lib/frameMath';
 
 // ── snapTo8 ──────────────────────────────────────────────────────────────────
@@ -263,5 +264,54 @@ describe('getMaxFrames', () => {
     expect(getMaxFrames('480p')).toBe(441);  // 8*55+1
     expect(getMaxFrames('720p')).toBe(241);  // 8*30+1
     expect(getMaxFrames('1080p')).toBe(121); // 8*15+1
+  });
+});
+
+// ── getFreeGaps ──────────────────────────────────────────────────────────────
+
+describe('getFreeGaps', () => {
+  const seg = (s: number, e: number) => ({ frameStart: s, frameEnd: e });
+
+  it('enumerates a single gap when the pipe is empty', () => {
+    const gaps = getFreeGaps([], 241, 8);
+    expect(gaps).toHaveLength(1);
+    // Empty pipe → the whole 0..maxEnd range is one gap, labeled as "after".
+    expect(gaps[0]).toMatchObject({ start: 0, end: 240 });
+    expect(gaps[0].label).toBe('After last zone');
+  });
+
+  it('finds gaps before, between, and after zones', () => {
+    // Zones 40–60 and 100–120 on a 241-frame pipe (maxEnd 240).
+    const gaps = getFreeGaps([seg(40, 60), seg(100, 120)], 241, 8);
+    const labels = gaps.map((g) => g.label);
+    expect(labels).toContain('Before Zone 1');
+    expect(labels).toContain('Between Zone 1 & 2');
+    expect(labels).toContain('After last zone');
+    // The between-zone gap spans 60..100 → start 60, end 100.
+    const between = gaps.find((g) => g.label === 'Between Zone 1 & 2')!;
+    expect(between.start).toBe(60);
+    expect(between.end).toBe(100);
+  });
+
+  it('skips a too-small between-zone gap', () => {
+    // Zones 0–40 and 40–80 are end-to-end → no usable gap between them.
+    const gaps = getFreeGaps([seg(0, 40), seg(40, 80)], 241, 8);
+    expect(gaps.map((g) => g.label)).not.toContain('Between Zone 1 & 2');
+    // The only free space is after zone 2 (80..240).
+    expect(gaps.map((g) => g.label)).toContain('After last zone');
+  });
+
+  it('returns no gaps when zones are packed end-to-end', () => {
+    // 0–80, 80–160, 160–240 fills the whole 241-frame pipe (maxEnd 240).
+    const gaps = getFreeGaps([seg(0, 80), seg(80, 160), seg(160, 240)], 241, 8);
+    expect(gaps).toHaveLength(0);
+  });
+
+  it('respects a custom min span', () => {
+    // A 16-frame between-zone gap only qualifies at minSpan 16, not 24.
+    const gapsAt16 = getFreeGaps([seg(0, 80), seg(96, 176)], 241, 16);
+    expect(gapsAt16.map((g) => g.label)).toContain('Between Zone 1 & 2');
+    const gapsAt24 = getFreeGaps([seg(0, 80), seg(96, 176)], 241, 24);
+    expect(gapsAt24.map((g) => g.label)).not.toContain('Between Zone 1 & 2');
   });
 });

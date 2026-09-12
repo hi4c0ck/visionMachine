@@ -10,7 +10,7 @@
 	import KeyframesRow from './ComposerRows/KeyframesRow.svelte';
 	import SubjectRefsRow from './ComposerRows/SubjectRefsRow.svelte';
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
-	import { getNextAvailableRange } from '$lib/frameMath';
+	import { getFreeGaps, type FreeGap } from '$lib/frameMath';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import {
 		addPipe as addPipeAction,
@@ -113,6 +113,9 @@ import { flashToast } from '$lib/flashToast';
 	let showSegmentModal = $state(false);
 	let segStart = $state(0);
 	let segEnd = $state(8);
+	// Free gaps the "+ Zone" modal can target — a zone may be placed in any of
+	// them (before/between/after existing zones), not just the first one.
+	let segGaps = $state<FreeGap[]>([]);
 
 	// Tag prompt modal
 	let showTagPromptModal = $state(false);
@@ -296,18 +299,23 @@ import { flashToast } from '$lib/flashToast';
 		const tl = getTimeline(pipe);
 		activePipeIdx = idx;
 
-		// Use getNextAvailableRange to find first free gap, not just append after last
-		const available = getNextAvailableRange(tl?.segments ?? [], pipe.lengthFrames, 8);
-		if (!available) {
-			// Pipe is full — no gap fits the minimum 8-frame span.
-			// Opening the modal here would pre-fill a zero-span range and
-			// leave Confirm permanently disabled, so surface the reason instead.
+		// Enumerate EVERY free gap (before/between/after zones) that can host a
+		// new zone. The modal lets the user pick one, so a zone can be inserted
+		// anywhere allowed — not just the first gap the old append found.
+		const gaps = getFreeGaps(tl?.segments ?? [], pipe.lengthFrames, 8);
+		if (gaps.length === 0) {
+			// Pipe fully packed: no free space fits the minimum 8-frame span.
+			// Opening the modal here would leave no place to put a zone, so
+			// surface the reason instead of a dead confirm.
 			flashToast('No free space for a new segment — shrink an existing segment first');
 			closeMenus();
 			return;
 		}
-		segStart = available.start;
-		segEnd = available.end;
+		segGaps = gaps;
+		// Default to the first gap (before Zone 1, or between zones if leading
+		// space is gone) so the modal opens with a confirmable prefill.
+		segStart = gaps[0].start;
+		segEnd = Math.min(gaps[0].start + 8, gaps[0].end);
 		showSegmentModal = true;
 		closeMenus();
 	}
@@ -525,6 +533,7 @@ import { flashToast } from '$lib/flashToast';
 	startFrame={segStart}
 	endFrame={segEnd}
 	totalFrames={totalFrames}
+	gaps={segGaps}
 	bind:open={showSegmentModal}
 	onConfirm={(s, e) => confirmSegment(s, e)}
 />
