@@ -130,7 +130,9 @@ test.describe('Appending zones', () => {
 		await addZoneAt(page, '0', '120');
 
 		async function addTagOfType(typeText: string) {
-			await page.locator('.btn-add-tag-shared').click();
+			// The per-zone + Tag button now lives on the zone row, not the shared
+			// chrome column. Click the first (only) zone's button.
+			await page.locator('.seg-add-tag').first().click();
 			await page.locator('.dropdown-menu .tag-item', { hasText: typeText }).click();
 			await page.locator('.dropdown-menu .btn-confirm').click();
 			await page.waitForTimeout(300);
@@ -173,25 +175,25 @@ test.describe('Appending zones', () => {
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '60', '120');
 
-		// Open the shared + Tag menu: two zones → picker rows Z1/Z2. The entry
-		// point preselects the LAST zone (where new work happens), not zone 1.
-		await page.locator('.btn-add-tag-shared').click();
+		// Open the per-zone + Tag menu on Zone 1: two zones → picker rows Z1/Z2.
+		// The entry point preselects the INVOKING zone (Z1 here).
+		await page.locator('.seg-add-tag').first().click();
 		await page.waitForSelector('.dropdown-menu .zone-item', { timeout: 5000 });
 		const zoneItems = page.locator('.dropdown-menu .zone-item');
 		expect(await zoneItems.count()).toBe(2);
-		// Default target is the most recently appended zone → Z2 pre-selected.
-		expect(await zoneItems.nth(1).evaluate((el) => el.className)).toContain('active');
-		expect(await zoneItems.first().evaluate((el) => el.className)).not.toContain('active');
+		// Default target is the INVOKING zone → Z1 pre-selected.
+		expect(await zoneItems.first().evaluate((el) => el.className)).toContain('active');
+		expect(await zoneItems.nth(1).evaluate((el) => el.className)).not.toContain('active');
 
-		// Pick ZONE 1 explicitly, then add a Scene tag → pill lands in zone 1.
-		await zoneItems.first().click();
+		// Pick ZONE 2 explicitly, then add a Scene tag → pill lands in zone 2.
+		await zoneItems.nth(1).click();
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
 		await page.locator('.dropdown-menu .btn-confirm').click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });
 
 		const pill = page.locator('.tag-body').first();
-		// The pill carries its zone badge (Z1) so the shared lane stays unambiguous.
-		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z1');
+		// The pill carries its zone badge (Z2) so the shared lane stays unambiguous.
+		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z2');
 	});
 
 	test('timeline collapses to a summary header and re-expands', async ({ page }) => {
@@ -232,14 +234,14 @@ test.describe('Appending zones', () => {
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '120');
 
-		await page.locator('.btn-add-tag-shared').click();
+		await page.locator('.seg-add-tag').first().click();
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
-	await page.locator('.dropdown-menu .btn-confirm').click();
-	await page.waitForSelector('.tag-body', { timeout: 5000 });
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await page.waitForSelector('.tag-body', { timeout: 5000 });
 
 		// No prompt yet → pill falls back to the tag type name.
-	const pill = page.locator('.tag-body').first();
-	expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('Scene');
+		const pill = page.locator('.tag-body').first();
+		expect((await pill.locator('.tag-pill-prompt').innerText()).trim()).toBe('Scene');
 
 	// Edit the prompt via the modal → the pill text updates live.
 	await pill.click();
@@ -259,7 +261,7 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 	await page.waitForSelector('.modal', { timeout: 5000 });
 	await addZoneAt(page, '0', '120');
 
-	await page.locator('.btn-add-tag-shared').click();
+	await page.locator('.seg-add-tag').first().click();
 	await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
 	await page.locator('.dropdown-menu .btn-confirm').click();
 	await page.waitForSelector('.tag-body', { timeout: 5000 });
@@ -274,34 +276,122 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 	expect(await delBtn.evaluate((el) => getComputedStyle(el).opacity)).not.toBe('0');
 });
 
-test('+ Tag button persists while any zone exists, and targets the last one', async ({ page }) => {
-	// One zone → + Tag visible.
+test('per-zone + Tag button appears on each zone row', async ({ page }) => {
+	// One zone → one per-zone + Tag button, on the zone row.
 	const plus = page.locator('.btn-add-track').first();
 	await plus.click();
 	await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
 	await page.locator('.seg-empty.full-width').first().click();
 	await page.waitForSelector('.modal', { timeout: 5000 });
 	await addZoneAt(page, '0', '60');
-	expect(await page.locator('.btn-add-tag-shared').count()).toBe(1);
+	expect(await page.locator('.seg-add-tag').count()).toBe(1);
+	// It sits on the zone row, not the chrome column.
+	expect(await page.locator('.segment-row .seg-add-tag').count()).toBe(1);
 
-	// Append a second zone → + Tag still visible (not gated to zone 1).
+	// Append a second zone → now there are two + Tag buttons, one per zone.
 	await page.locator('.btn-add-zone').click();
 	await page.waitForSelector('.modal', { timeout: 5000 });
 	await addZoneAt(page, '60', '120');
-	expect(await page.locator('.btn-add-tag-shared').count()).toBe(1);
+	expect(await page.locator('.seg-add-tag').count()).toBe(2);
 
-	// Delete BOTH zones → the timeline has no zones, so + Tag disappears.
-	// The per-row delete button now shows the tag count next to ×.
+	// Delete BOTH zones → no zone rows, so no + Tag buttons.
 	await page.locator('.segment-row .seg-del').first().click();
 	await page.waitForTimeout(300);
 	await page.locator('.segment-row .seg-del').first().click();
 	await page.waitForTimeout(300);
-	expect(await page.locator('.btn-add-tag-shared').count()).toBe(0);
+	expect(await page.locator('.seg-add-tag').count()).toBe(0);
 	// The zone-append affordance must still be reachable so a new zone can
-	// be added back (the button targets the last zone; with none, the
-	// placeholder is the entry).
-	expect(await page.locator('.seg-empty.full-width').count()).toBe(1);
-});
+		// be added back (the placeholder is the entry).
+		expect(await page.locator('.seg-empty.full-width').count()).toBe(1);
+	});
+
+	test('per-zone + Tag menu shows declared types greyed and "New segment" item', async ({ page }) => {
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '120');
+
+		async function openMenu() {
+			await page.locator('.seg-add-tag').first().click();
+			await page.waitForSelector('.dropdown-menu .tag-item', { timeout: 5000 });
+		}
+
+		// "New segment" item is present and opens the zone/gap modal (choice ii).
+		await openMenu();
+		await page.locator('.new-segment-item').click();
+		const gapChips = page.locator('.gap-chip');
+		expect(await gapChips.count()).toBe(1);
+		expect(await gapChips.first().getAttribute('title')).toContain('120–240');
+		await page.locator('.modal .btn-cancel').click();
+
+		// Add a Camera tag, then reopen: Camera is greyed-but-clickable (choice A).
+		await openMenu();
+		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await page.waitForTimeout(300);
+		expect(await page.locator('.tag-body').count()).toBe(1);
+
+		await openMenu();
+		const camItem = page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' });
+		expect(await camItem.evaluate((el) => el.className)).toContain('declared');
+		expect(await camItem.locator('.tag-item-badge').count()).toBe(1);
+		const sceneItem = page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' });
+		expect(await sceneItem.evaluate((el) => el.className)).not.toContain('declared');
+		await page.locator('.dropdown-menu .btn-cancel').click();
+	});
+
+	test('a packed zone rejects a duplicate same-type tag; other types still fit', async ({ page }) => {
+		// Two adjacent zones with NO free gap between them (0–16 | 16–32): a
+		// first same-type tag in each spans its whole zone, which packs that
+		// zone for further same-type additions — deterministically, without
+		// ruler-pixel drag geometry.
+		const plus = page.locator('.btn-add-track').first();
+		await plus.click();
+		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		await page.locator('.seg-empty.full-width').first().click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '0', '16');
+		await page.locator('.btn-add-zone').click();
+		await page.waitForSelector('.modal', { timeout: 5000 });
+		await addZoneAt(page, '16', '32');
+
+		async function addTagOfType(zoneIdx: number, typeText: string) {
+			await page
+				.locator('.segment-row')
+				.nth(zoneIdx)
+				.locator('.seg-add-tag')
+				.click();
+			await page.waitForSelector('.dropdown-menu .tag-item', { timeout: 5000 });
+			await page.locator('.dropdown-menu .tag-item', { hasText: typeText }).click();
+			await page.locator('.dropdown-menu .btn-confirm').click();
+			await page.waitForTimeout(300);
+		}
+
+		// 1. First Camera tag per zone → each spans its whole zone.
+		await addTagOfType(0, 'Camera');
+		expect(await page.locator('.tag-body').count()).toBe(1);
+		await addTagOfType(1, 'Camera');
+		expect(await page.locator('.tag-body').count()).toBe(2);
+
+		// 2. Z1 is now packed for Camera: a second same-type tag has no free
+		//    slot ≥ 8 frames, so the store rejects it and a toast surfaces.
+		//    (The toast auto-dismisses in ~3.5s; wait out its full lifetime
+		//    before reopening the menu so the old alert can't shadow the new one.)
+		await page.locator('.segment-row').nth(0).locator('.seg-add-tag').click();
+		await page.waitForSelector('.dropdown-menu .tag-item', { timeout: 5000 });
+		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
+		await page.locator('.dropdown-menu .btn-confirm').click();
+		await expect(page.locator('div[role="alert"]', { hasText: /No free slot/i })).toBeVisible({ timeout: 5000 });
+		expect(await page.locator('.tag-body').count()).toBe(2);
+		await page.waitForTimeout(4000);
+
+		// 3. A different type is NOT blocked by the packed Camera lane: Scene
+		//    spans Z1 freely and lands on the shared Scene lane with a Z1 badge.
+		await addTagOfType(0, 'Scene');
+		expect(await page.locator('.tag-body').count()).toBe(3);
+	});
 
 	test('tag pills expose left/right resize grips that commit to the store', async ({ page }) => {
 		// Set up a zone (0–120) + a Camera tag that inherits the full range.
@@ -312,7 +402,7 @@ test('+ Tag button persists while any zone exists, and targets the last one', as
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '120');
 
-		await page.locator('.btn-add-tag-shared').click();
+		await page.locator('.seg-add-tag').first().click();
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
 		await page.locator('.dropdown-menu .btn-confirm').click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });

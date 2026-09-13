@@ -54,8 +54,8 @@ test.describe('Composer Panel', () => {
     const hasSegments = await segBar.count() > 0;
     
     if (hasSegments) {
-      const addTagBtn = page.locator('.btn-add-tag-shared');
-      await expect(addTagBtn).toBeVisible();
+      const addTagBtn = page.locator('.seg-add-tag');
+      await expect(addTagBtn.first()).toBeVisible();
     }
   });
 });

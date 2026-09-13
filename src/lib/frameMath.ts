@@ -160,6 +160,40 @@ export function getFreeGaps(
 }
 
 /**
+ * Pick the frame span for a new tag of a given type within its parent zone,
+ * so that tags of the same type NEVER overlap.
+ *
+ * Option (c): if the zone is empty of this type, the tag spans the whole
+ * zone (the common case). Otherwise the tag is placed in the first free slot
+ * (≥ minSpan) left inside the zone by the existing tags of this type. If no
+ * slot is free, returns null → the caller surfaces "no free slot" instead of
+ * silently stacking a duplicate.
+ */
+export function placeTagInZone(
+  zone: { frameStart: number; frameEnd: number },
+  existingSameType: Array<{ frameStart: number; frameEnd: number }>,
+  minSpan: number = 8
+): { start: number; end: number } | null {
+  if (existingSameType.length === 0) {
+    return { start: zone.frameStart, end: zone.frameEnd };
+  }
+  const sorted = [...existingSameType].sort((a, b) => a.frameStart - b.frameStart);
+  // Walk left→right: leading gap, then between each pair.
+  let cursor = zone.frameStart;
+  for (const tag of sorted) {
+    if (tag.frameStart - cursor >= minSpan) {
+      return { start: cursor, end: tag.frameStart };
+    }
+    cursor = Math.max(cursor, tag.frameEnd);
+  }
+  // Trailing gap after the last tag.
+  if (zone.frameEnd - cursor >= minSpan) {
+    return { start: cursor, end: zone.frameEnd };
+  }
+  return null;
+}
+
+/**
  * Validate segments for overlaps, bounds, and min-span rules.
  */
 export function validateSegments(

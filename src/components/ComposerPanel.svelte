@@ -133,6 +133,9 @@ import { flashToast } from '$lib/flashToast';
 	let selectedSegmentId = $state<string>('');
 	let tagMenuX = $state(0);
 	let tagMenuY = $state(0);
+	// Bumped on every menu open so the menu re-seeds to the INVOKING zone each
+	// time (a fresh menu, not a sticky zone choice from the previous open).
+	let tagMenuVersion = $state(0);
 
 	// Close menus on outside click (drag engine state now lives in TimelineSection)
 	$effect(() => {
@@ -360,9 +363,27 @@ import { flashToast } from '$lib/flashToast';
 		}
 		tagMenuX = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
 		tagMenuY = y;
+		// Clamp the menu BOTTOM into the viewport: the real menu is ~468px tall
+		// (zone picker + 7 tag types + New segment + Add/Cancel), not the 360px
+		// constant above. Without this the Add row lands below the fold when the
+		// menu is anchored low (e.g. from a high zone row with 2+ zones).
+		tagMenuY = Math.min(tagMenuY, Math.max(8, window.innerHeight - 480));
+		tagMenuVersion++;
 		showTagMenu = true;
 		showAddMenu = false;
 	}
+
+	// Tag types already declared on the menu's target zone — passed to the
+	// menu so it can grey them out (choice A). Derived per target zone, not
+	// global, so each zone's own state drives its menu.
+	let tagMenuDeclaredTypes = $derived.by(() => {
+		const pipe = activePipeIdx !== null ? pipes[activePipeIdx] : undefined;
+		if (!pipe) return [];
+		const tl = getTimeline(pipe);
+		const seg = (tl?.segments ?? []).find((s: Segment) => s.id === selectedSegmentId);
+		if (!seg) return [];
+		return seg.tags.map((t: TagElement) => t.tag);
+	});
 
 	// Zones the tag menu can attach to (one entry per existing zone).
 	// Derived, so it stays current when zones are added/removed.
@@ -383,10 +404,20 @@ import { flashToast } from '$lib/flashToast';
 		if (!seg) return;
 		const result = await addTagElementAction(session.id, pipe.id, segId, tagType);
 		if (result.errors.length > 0) {
+			// "No free slot…" from the store: surface it instead of failing
+			// silently, so the user knows to shrink an existing tag first.
+			flashToast(result.errors[0] || 'Failed to add tag');
 			console.error('[ComposerPanel] addTag:', result.errors);
 			return;
 		}
 		showTagMenu = false;
+	}
+
+	// "+ New segment" in the tag menu — choice (ii): just opens the existing
+	// zone (gap-pick) modal; the user adds the tag to the new zone afterward.
+	function handleTagMenuNewSegment() {
+		closeMenus();
+		handleAddSegment(activePipeIdx!);
 	}
 
 	function handleEditTagPrompt(idx: number, seg: Segment, tag: TagElement) {
@@ -508,7 +539,10 @@ import { flashToast } from '$lib/flashToast';
 		y={tagMenuY}
 		segments={tagMenuSegments}
 		defaultSegmentId={selectedSegmentId}
+		declaredTypes={tagMenuDeclaredTypes}
+		menuVersion={tagMenuVersion}
 		onConfirm={(t, segId) => confirmTagSelector(t, segId)}
+		onNewSegment={handleTagMenuNewSegment}
 		onClose={() => closeMenus()}
 	/>
 </div>

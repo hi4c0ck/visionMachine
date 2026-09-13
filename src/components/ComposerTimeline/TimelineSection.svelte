@@ -217,16 +217,7 @@
 		};
 	});
 
-	// Shared "+ Tag" button: shown whenever at least one zone exists, and the
-	// menu it opens is preselecting the LAST zone (the most recently appended
-	// one, where new work usually happens) rather than always zone 1.
-	// The menu's own zone picker still lets the user target any zone — this
-	// just fixes the misleading "starts from zone 1" entry point.
-	let zoneCount = $derived.by(() => (getTimeline(pipe)?.segments ?? []).length);
-	let lastSegment = $derived.by(() => {
-		const segs = getTimeline(pipe)?.segments ?? [];
-		return segs[segs.length - 1] ?? null;
-	});
+
 
 	// ── Timeline collapse: per-pipe UI state. Collapsing hides the zone
 	//    slider rows + tag lanes, leaving a compact summary header. Per-pipe
@@ -532,13 +523,19 @@
 										title="Drag to resize zone end"></div>
 								{/if}
 								<!-- Per-zone delete, attached to its row (hover reveal).
-							     The tag-count badge warns before the zone's work is lost. -->
+								     The tag-count badge warns before the zone's work is lost. -->
 								<button
 									class="btn-icon-sm btn-del-sm seg-del"
 									onclick={() => onDeleteSegment(seg.id)}
 									title={seg.tags.length > 0 ? `Delete zone ${segIdx + 1} and its ${seg.tags.length} tag${seg.tags.length !== 1 ? 's' : ''}` : `Delete zone ${segIdx + 1}`}>
 									×{#if seg.tags.length > 0}<span class="seg-del-count">{seg.tags.length}</span>{/if}
 								</button>
+								<!-- Per-zone + Tag button: scoped to this zone, opens the
+								     undeclared-first menu (declared types greyed, choice A). -->
+								<button
+									class="seg-add-tag"
+									onclick={(e) => { e.stopPropagation(); onOpenTagMenu(seg.id, e); }}
+									title={`Add a tag to Zone ${segIdx + 1}`}>+ Tag</button>
 							</div>
 						{/each}
 
@@ -638,12 +635,6 @@
 				title="Add track">
 				+
 			</button>
-			{#if zoneCount > 0}
-				<button
-					class="btn-add-tag btn-add-tag-shared"
-					onclick={(e) => { e.stopPropagation(); onOpenTagMenu(lastSegment!.id, e); }}
-					title="Add tag — pick type AND target zone in the menu">+ Tag</button>
-			{/if}
 		</div>
 	</div>
 </div>

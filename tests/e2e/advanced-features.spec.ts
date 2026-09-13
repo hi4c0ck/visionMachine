@@ -56,8 +56,8 @@ test.describe('Multi-Tag Creation', () => {
     const hasSegments = await segRows.count() > 0;
     
     if (hasSegments) {
-      const addTagBtn = page.locator('.btn-add-tag-shared');
-      await expect(addTagBtn).toBeVisible();
+      const addTagBtn = page.locator('.seg-add-tag');
+      await expect(addTagBtn.first()).toBeVisible();
     } else {
       // If no segments, we should see the empty state
       const emptyState = page.locator('.seg-empty.full-width');

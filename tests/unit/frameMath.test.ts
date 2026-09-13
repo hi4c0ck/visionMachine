@@ -22,6 +22,7 @@ import {
   isValidSegmentBoundary,
   isValidFrameCount,
   getFreeGaps,
+  placeTagInZone,
 } from '../../src/lib/frameMath';
 
 // ── snapTo8 ──────────────────────────────────────────────────────────────────
@@ -313,5 +314,44 @@ describe('getFreeGaps', () => {
     expect(gapsAt16.map((g) => g.label)).toContain('Between Zone 1 & 2');
     const gapsAt24 = getFreeGaps([seg(0, 80), seg(96, 176)], 241, 24);
     expect(gapsAt24.map((g) => g.label)).not.toContain('Between Zone 1 & 2');
+  });
+});
+
+// ── placeTagInZone ───────────────────────────────────────────────────────────
+
+describe('placeTagInZone', () => {
+  const zone = (s: number, e: number) => ({ frameStart: s, frameEnd: e });
+  const range = (s: number, e: number) => ({ frameStart: s, frameEnd: e });
+
+  it('spans the whole zone when no same-type tags exist', () => {
+    // The common case: first tag of a type in a zone owns the full span.
+    expect(placeTagInZone(zone(0, 120), [], 8)).toEqual({ start: 0, end: 120 });
+  });
+
+  it('drops into the leading gap when one exists', () => {
+    // Zone 0–120 with a same-type tag at 40–80 → the leading gap 0–40 fits.
+    expect(placeTagInZone(zone(0, 120), [range(40, 80)], 8)).toEqual({ start: 0, end: 40 });
+  });
+
+  it('drops into the middle gap between two tags', () => {
+    // Tags at 0–40 and 80–120 → middle gap 40–80 is the first usable slot.
+    const slot = placeTagInZone(zone(0, 120), [range(0, 40), range(80, 120)], 8);
+    expect(slot).toEqual({ start: 40, end: 80 });
+  });
+
+  it('drops into the trailing gap when only that fits', () => {
+    // Tag at 0–40 → leading gap is 0 (size 0), middle none, trailing 40–120 fits.
+    const slot = placeTagInZone(zone(0, 120), [range(0, 40)], 8);
+    expect(slot).toEqual({ start: 40, end: 120 });
+  });
+
+  it('returns null when the zone is packed with same-type tags', () => {
+    // 0–40, 40–80, 80–120 → no gap ≥ 8 frames anywhere → reject.
+    expect(placeTagInZone(zone(0, 120), [range(0, 40), range(40, 80), range(80, 120)], 8)).toBeNull();
+  });
+
+  it('rejects a packed zone even when the tags are out of order', () => {
+    // Same as above but the list is not pre-sorted — the function must sort.
+    expect(placeTagInZone(zone(0, 120), [range(80, 120), range(0, 40), range(40, 80)], 8)).toBeNull();
   });
 });

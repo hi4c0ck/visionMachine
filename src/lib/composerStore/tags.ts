@@ -4,7 +4,7 @@
 import type { TagService, ServiceResult } from './interfaces';
 import type { SessionData, PipeRow, TagElement, TimelineElement, Segment, TagType } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
-import { snapTo8, isRangeContained, rangesOverlapStrict } from '$lib/frameMath';
+import { snapTo8, isRangeContained, rangesOverlapStrict, placeTagInZone } from '$lib/frameMath';
 import { validateTagFrames } from './validators';
 
 export class TagServiceImpl implements TagService {
@@ -27,11 +27,31 @@ export class TagServiceImpl implements TagService {
     if (!segment) return { errors: ['Segment not found'] };
 
     const spec = TAG_SPECIFICATIONS[tagType];
+    // Option (c): a new tag spans the whole zone unless tags of this SAME
+    // type already occupy part of it — then it falls into the first free
+    // slot so same-type tags never overlap. No free slot → reject, don't
+    // stack a duplicate.
+    const sameTypeRanges = segment.tags
+      .filter((t) => t.tag === tagType)
+      .map((t) => ({ frameStart: t.frameStart, frameEnd: t.frameEnd }));
+    const slot = placeTagInZone(
+      { frameStart: segment.frameStart, frameEnd: segment.frameEnd },
+      sameTypeRanges,
+      8,
+    );
+    if (!slot) {
+      return {
+        errors: [
+          `No free slot for another ${spec.name} tag in this zone — shrink an existing one first`,
+        ],
+      };
+    }
+
     const tag: TagElement = {
       id: crypto.randomUUID(),
       tag: tagType,
-      frameStart: segment.frameStart,
-      frameEnd: segment.frameEnd,
+      frameStart: slot.start,
+      frameEnd: slot.end,
       value: spec.min || 0,
       spec,
     };

@@ -175,6 +175,35 @@
 	border-radius: 6px;
 }
 
+/* Per-zone "+ Tag" button, attached to the right edge of its zone row next
+   to the delete button. Replaces the old shared chrome-column + Tag button —
+   each zone now has its own entry point, scoped to that zone. */
+.seg-add-tag {
+	position: absolute;
+	right: 34px;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 5;
+	opacity: 0.55;
+	padding: 0 8px;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 1;
+	background: var(--bg-tertiary);
+	border: 1px dashed var(--border-color);
+	border-radius: 6px;
+	color: var(--text-secondary);
+	cursor: pointer;
+	transition: all 0.15s;
+}
+.segment-row:hover .seg-add-tag {
+	opacity: 1;
+}
+.seg-add-tag:hover {
+	border-color: var(--accent-color);
+	color: var(--accent-color);
+}
+
 /* Zone number badge, floats left over the track so the slider pill's
    frame coordinate origin is untouched (same rule as tag lane labels). */
 .seg-row-label {
@@ -458,51 +487,7 @@
 	padding: 0;
 }
 
-.btn-add-tag,
-.btn-add-track {
-	background: var(--bg-tertiary);
-	border: 1px dashed var(--border-color);
-	color: var(--text-secondary);
-	cursor: pointer;
-	padding: 6px 12px;
-	border-radius: 6px;
-	font-size: 12px;
-	transition: all 0.2s;
-}
-	/* The single shared + Tag button in the chrome column: square, stacked
-	   under the [+] button. */
-	.btn-add-tag-shared {
-		width: 32px;
-		height: 32px;
-		padding: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-	/* "+ Zone" button reads as a zone action, not a tag button. */
-	.btn-add-zone {
-		width: auto;
-		height: 22px;
-		padding: 0 8px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: none;
-		border: 1px dashed var(--border-color);
-		border-radius: 6px;
-		color: var(--text-secondary);
-		font-size: 12px;
-		transition: all 0.2s;
-	}
-	.btn-add-zone:hover {
-		border-color: var(--accent-color);
-		color: var(--accent-color);
-	}
-.btn-add-tag:hover,
-.btn-add-track:hover {
-	border-color: var(--accent-color);
-	color: var(--accent-color);
-}
+
 
 /* NOTE: `.btn-icon` is owned by PipeHeader.svelte (scoped). This global
    file only styles the composer-specific `.btn-icon-sm` variant. */
