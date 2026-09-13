@@ -42,20 +42,17 @@ async function addZoneAt(page: any, start: string, end: string) {
 	await page.waitForTimeout(300);
 }
 
-// Add-tag is a zero-move press on the ZONE ROW (its free space is the
-// target; there is no dedicated + Tag button). Press ~80px in from the
-// row's right edge: that clears the delete button (which stops its own
-// presses and grows a tag-count badge on the far right) and lands on the
-// row's free track background, so the press reads as a click, not a drag.
-// Down→up without movement.
+// All zones now share ONE lane (.segment-lane), so there is no dedicated
+// + Tag button. Add-tag is a click on the ZONE PILL itself (.segment-body
+// nth(zoneIdx)); its body swallows the click's propagation, so the panel's
+// document-level "close menus on outside click" handler doesn't fire.
 async function pressZoneRow(page: any, zoneIdx: number) {
-	const row = page.locator('.segment-row').nth(zoneIdx);
-	const box = (await row.boundingBox())!;
-	const x = box.x + box.width - 80;
-	const y = box.y + box.height / 2;
-	await page.mouse.move(x, y);
-	await page.mouse.down();
-	await page.mouse.up();
+	const pill = page.locator('.segment-body').nth(zoneIdx);
+	// Click just past the pill's left edge (x+8): clears the resize grip that
+	// sits centered on the frame-start, clears the right-edge delete button,
+	// and lands on the pill body itself — a plain click, not a drag.
+	const box = await pill.boundingBox();
+	await page.mouse.click(box.x + 8, box.y + box.height / 2);
 	await page.waitForSelector('.dropdown-menu .tag-item', { timeout: 5000 });
 }
 
@@ -82,7 +79,7 @@ test.describe('Appending zones', () => {
 		await page.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '80');
-		expect(await page.locator('.segment-row').count()).toBe(1);
+		expect(await page.locator('.segment-body').count()).toBe(1);
 
 		// The empty placeholder is gone; the append button must now be visible.
 		await expect(page.locator('.seg-empty.full-width')).toHaveCount(0);
@@ -100,7 +97,7 @@ test.describe('Appending zones', () => {
 		expect(Number(prefill[0])).toBe(80);
 		expect(Number(prefill[1])).toBeGreaterThanOrEqual(88);
 		await addZoneAt(page, prefill[0], prefill[1]);
-		expect(await page.locator('.segment-row').count()).toBe(2);
+		expect(await page.locator('.segment-body').count()).toBe(2);
 
 		// Zone 3: append again → next gap after zone 2's end.
 		await appendBtn.click();
@@ -109,7 +106,7 @@ test.describe('Appending zones', () => {
 		const zone2End = Number(prefill[1]);
 		expect(Number(prefill3)).toBe(zone2End);
 		await addZoneAt(page, prefill3, await page.locator('.modal input[type="number"]').nth(1).inputValue());
-		expect(await page.locator('.segment-row').count()).toBe(3);
+		expect(await page.locator('.segment-body').count()).toBe(3);
 
 		// No overlaps: segment ranges stay strictly non-touching.
 		const labels = await page.locator('.seg-label').allInnerTexts();
@@ -228,24 +225,25 @@ test.describe('Appending zones', () => {
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '120');
 
-		// Expanded: header open, zone row + its attached delete button visible.
+		// Expanded: header open, the single shared zone lane + one pill visible.
 		expect(await page.locator('.timeline-header.open').count()).toBe(1);
-		expect(await page.locator('.segment-row').count()).toBe(1);
-		// The delete button now lives on the zone row itself, not a detached
-		// chrome row — so a .seg-del sits inside the .segment-row.
-		expect(await page.locator('.segment-row .seg-del').count()).toBe(1);
+		expect(await page.locator('.segment-lane').count()).toBe(1);
+		expect(await page.locator('.segment-body').count()).toBe(1);
+		// The delete button now lives inside the zone pill, not a detached
+		// chrome row — so a .seg-del sits inside the .segment-body.
+		expect(await page.locator('.segment-body .seg-del').count()).toBe(1);
 
 		// Collapse: zones + lanes hide, summary shows the counts.
 		await page.locator('.timeline-header').click();
 		expect(await page.locator('.timeline-header.open').count()).toBe(0);
-		expect(await page.locator('.segment-row').count()).toBe(0);
+		expect(await page.locator('.segment-lane').count()).toBe(0);
 		const summary = page.locator('.timeline-header .tl-summary');
 		await expect(summary).toContainText('1 zone');
 
 		// Re-expand: everything back.
 		await page.locator('.timeline-header').click();
 		expect(await page.locator('.timeline-header.open').count()).toBe(1);
-		expect(await page.locator('.segment-row').count()).toBe(1);
+		expect(await page.locator('.segment-lane').count()).toBe(1);
 	});
 
 	test('tag pills show prompt text inline', async ({ page }) => {
@@ -295,18 +293,18 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 	expect(await delBtn.evaluate((el) => getComputedStyle(el).opacity)).not.toBe('0');
 });
 
-	test('clicking a zone row opens the tag menu scoped to that zone', async ({ page }) => {
-		// One zone → the row is the add-tag affordance (no + Tag button).
+	test('clicking a zone pill opens the tag menu scoped to that zone', async ({ page }) => {
+		// One zone → the pill is the add-tag affordance (no + Tag button).
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
 		await page.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '60');
-		// No dedicated + Tag button anymore — the row itself is the target.
+		// No dedicated + Tag button anymore — the zone pill itself is the target.
 		expect(await page.locator('.seg-add-tag').count()).toBe(0);
 
-		// Pressing the row's free space opens the tag menu with the zone
+		// Pressing the zone pill opens the tag menu with the zone
 		// preselected, and adding a tag lands on that zone.
 		await pressZoneRow(page, 0);
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();

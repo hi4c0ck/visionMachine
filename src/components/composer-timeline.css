@@ -133,43 +133,104 @@
 	color: var(--text-secondary);
 }
 
-/* ═══ ZONE ROWS: one slider row per segment ═══════════════════════════ */
-/* Full-width track; the colored slider pill + round grips live inside.
-   The ROW is the add-tag affordance: a zero-move press anywhere on it
-   (free track space or the pill) opens the tag menu scoped to this zone.
-   The pill / grips keep their drag behaviour; the delete button swallows
-   its own presses so a delete never reads as a zone click. */
-.segment-row {
+/* ═══ ZONE LANE: one shared horizontal line for every zone ════════════ */
+/* All zone pills sit on the same lane, placed left→right by frame range
+   (mirrors the tag lanes below — the lane carries a Z1..Zn pill, never
+   one row per zone). Body drags move a zone; the round grips resize it.
+   Clicking a pill's body opens the tag menu scoped to that zone; its ×
+   button deletes it. */
+.segment-lane {
 	position: relative;
 	width: 100%;
 	height: 28px;
 	background: var(--bg-tertiary);
 	border-radius: 5px;
 	box-shadow: inset 0 0 0 1px var(--border-color);
-	cursor: pointer;
-	user-select: none;
-	transition: box-shadow 0.15s;
-}
-.segment-row:hover,
-.segment-row:focus-visible {
-	box-shadow: inset 0 0 0 1px var(--accent-color);
 }
 
-/* Per-zone delete button, attached to the right edge of its zone row so it's
-   always in reach of the zone it manages (was a detached chrome row ~300px
-   below, with 3 zones + 6 tag lanes it was off-screen from the zone). */
+/* Lane label, floats left over the track so the pill's frame coordinate
+   origin is untouched (same rule as tag lane labels). */
+.segment-lane-label {
+	position: absolute;
+	left: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	z-index: 3;
+	padding: 1px 6px;
+	font-size: 9px;
+	font-weight: 700;
+	color: var(--text-secondary);
+	background: var(--bg-secondary);
+	border-radius: 6px;
+	box-shadow: 0 0 0 1px var(--border-color);
+	pointer-events: none;
+}
+
+/* The zone pill (accent). Left/width come from frameToPx. The delete
+   button lives inside it (pill-hover reveal); × swallows its own press
+   so a delete never reads as a zone click (add-tag). */
+.segment-body {
+	position: absolute;
+	top: 3px;
+	height: 22px;
+	background: var(--accent-color);
+	opacity: 0.9;
+	border: 1px solid rgba(255, 255, 255, 0.25);
+	border-radius: 11px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+	cursor: grab;
+	display: flex;
+	align-items: center;
+	padding: 0 4px;
+	box-sizing: border-box;
+	overflow: hidden;
+	z-index: 2;
+}
+.segment-body:hover { opacity: 1; }
+.segment-body:active { cursor: grabbing; }
+
+/* Zone badge (Z1, Z2…) inside the pill, so a shared lane stays unambiguous. */
+.seg-zone-badge {
+	font-size: 9px;
+	font-weight: 700;
+	color: #fff;
+	margin-right: 4px;
+	letter-spacing: 0.3px;
+	flex: 0 0 auto;
+}
+
+/* Frame-range label inside the pill — clipped, never overflows the pipe. */
+.seg-label {
+	font-size: 10px;
+	font-weight: 600;
+	color: #fff;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+
+/* Per-zone delete button, inside its pill's right edge so it's always in
+   reach of the zone it manages. Constrained to the right ~40% of the pill
+   so it never blocks the add-tag click on the pill body (small pills are
+   only ~47px wide — an unconstrained button would cover the whole pill).
+   Hover-only reveal keeps it out of the way when not in use. */
 .seg-del {
 	position: absolute;
 	right: 4px;
 	top: 50%;
 	transform: translateY(-50%);
 	z-index: 5;
-	opacity: 0.55;
+	opacity: 0;
 	padding: 1px 5px;
 	font-size: 11px;
 	line-height: 1;
+	max-width: 40%;
+	overflow: hidden;
+	white-space: nowrap;
+	border-radius: 4px;
 }
-.segment-row:hover .seg-del {
+.segment-body:hover .seg-del {
 	opacity: 1;
 }
 /* Tag-count badge inside the delete button — a zone with work on it warns
@@ -186,59 +247,8 @@
 	border-radius: 6px;
 }
 
-/* The old per-zone "+ Tag" button was replaced by clicking the zone row
-   itself (the row's free space is the add-tag target). */
-
-/* Zone number badge, floats left over the track so the slider pill's
-   frame coordinate origin is untouched (same rule as tag lane labels). */
-.seg-row-label {
-	position: absolute;
-	left: 6px;
-	top: 50%;
-	transform: translateY(-50%);
-	z-index: 3;
-	padding: 1px 6px;
-	font-size: 9px;
-	font-weight: 700;
-	color: var(--text-secondary);
-	background: var(--bg-secondary);
-	border-radius: 6px;
-	box-shadow: 0 0 0 1px var(--border-color);
-	pointer-events: none;
-}
-
-/* The zone slider pill (accent). Left/width come from frameToPx. */
-.segment-body {
-	position: absolute;
-	top: 3px;
-	height: 22px;
-	background: var(--accent-color);
-	opacity: 0.9;
-	border: 1px solid rgba(255, 255, 255, 0.25);
-	border-radius: 11px;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-	cursor: grab;
-	display: flex;
-	align-items: center;
-	padding: 0 10px;
-	box-sizing: border-box;
-	overflow: hidden;
-	z-index: 2;
-}
-.segment-body:hover { opacity: 1; }
-.segment-body:active { cursor: grabbing; }
-
-/* Frame-range label inside the pill — clipped, never overflows the pipe. */
-.seg-label {
-	font-size: 10px;
-	font-weight: 600;
-	color: #fff;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-/* Round resize grips, revealed on row hover (E2E expects ±5px centers). */
+/* Round resize grips, revealed on lane hover (E2E expects ±5px centers).
+   Positioned in the shared lane's coordinate space, not inside the pill. */
 .segment-handle {
 	position: absolute;
 	top: 0;
@@ -263,7 +273,7 @@
 	border-radius: 1px;
 	background: rgba(255, 255, 255, 0.9);
 }
-.segment-row:hover .segment-handle { opacity: 0.9; }
+.segment-lane:hover .segment-handle { opacity: 0.9; }
 .segment-handle:hover,
 .segment-handle:active { opacity: 1; }
 

@@ -50,13 +50,13 @@ test.describe('Composer Panel', () => {
 
   test('should show tag add affordance when segment exists', async ({ page }) => {
     // Wait for any existing segments
-    const segBar = page.locator('.segment-row').first();
-    const hasSegments = await segBar.count() > 0;
+    const segPill = page.locator('.segment-body').first();
+    const hasSegments = await segPill.count() > 0;
     
     if (hasSegments) {
-      // The zone ROW is now the add-tag affordance (click it, no button).
-      await expect(segBar).toBeVisible();
-      const title = await segBar.evaluate((el) => el.getAttribute('title'));
+      // The zone PILL is now the add-tag affordance (click it, no button).
+      await expect(segPill).toBeVisible();
+      const title = await segPill.evaluate((el) => el.getAttribute('title'));
       expect(title).toContain('add a tag');
     }
   });

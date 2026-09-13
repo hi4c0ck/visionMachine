@@ -86,7 +86,7 @@ test.describe('Insert zone into any free gap', () => {
 		// Confirm → a third zone lands inside the middle gap.
 		await page.locator('.modal .btn-confirm').click();
 		await page.waitForTimeout(300);
-		expect(await page.locator('.segment-row').count()).toBe(3);
+		expect(await page.locator('.segment-body').count()).toBe(3);
 	});
 
 	test('packed pipe still shows the no-space guard, not a dead modal', async ({ page }) => {

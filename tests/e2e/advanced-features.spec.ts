@@ -52,14 +52,14 @@ test.describe('Multi-Tag Creation', () => {
 
   test('should show tag add affordance when segment exists', async ({ page }) => {
     // Check if any segments exist
-    const segRows = page.locator('.segment-row');
-    const hasSegments = await segRows.count() > 0;
+    const segPills = page.locator('.segment-body');
+    const hasSegments = await segPills.count() > 0;
     
     if (hasSegments) {
-      // The zone ROW is now the add-tag affordance (click it, no button).
-      const row = page.locator('.segment-row').first();
-      await expect(row).toBeVisible();
-      const attrs = await row.evaluate((el) => el.getAttribute('title'));
+      // The zone PILL is now the add-tag affordance (click it, no button).
+      const pill = page.locator('.segment-body').first();
+      await expect(pill).toBeVisible();
+      const attrs = await pill.evaluate((el) => el.getAttribute('title'));
       expect(attrs).toContain('add a tag');
     } else {
       // If no segments, we should see the empty state
@@ -75,8 +75,8 @@ test.describe('Drag Interactions', () => {
   });
 
   test('should show segment structure with thumbs', async ({ page }) => {
-    // Check that segment rows exist in the DOM structure
-    const segBar = page.locator('.segment-row');
+    // Check that segment pills exist in the shared zone lane
+    const segBar = page.locator('.segment-body');
     const hasSegments = await segBar.count() > 0;
     
     if (hasSegments) {
