@@ -43,7 +43,9 @@
 		const g = gaps[i];
 		if (g) {
 			segStart = g.start;
-			segEnd = Math.min(g.start + 8, g.end);
+			// Default end to the maximum available in the gap (fills the free
+			// space); the user can shrink it via the start/end fields.
+			segEnd = g.end;
 		}
 	}
 

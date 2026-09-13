@@ -286,8 +286,8 @@
 	box-shadow: inset 0 0 0 1px var(--border-color);
 }
 
-/* Type badge: colored dot + name, floats over the track left edge.
-   pointer-events:none so it never blocks pill or grip interactions. */
+	/* Type badge: colored dot + name, floats over the track left edge.
+	   pointer-events:none so it never blocks pill or grip interactions. */
 	.tag-lane-label {
 		position: absolute;
 		left: 6px;
@@ -309,14 +309,6 @@
 		pointer-events: none;
 		max-width: 110px;
 	}
-.tag-lane-label::before {
-	content: "";
-	width: 7px;
-	height: 7px;
-	border-radius: 50%;
-	background: var(--lane-color, var(--accent-color));
-	flex-shrink: 0;
-}
 
 /* Tag pill (colored per type via --tag-color). Body-drag only: pills in a
    lane keep their frame range; overlap is allowed and painted in DOM order. */
@@ -339,21 +331,7 @@
 	.tag-body:hover { filter: brightness(1.12); }
 	.tag-body:active { cursor: grabbing; }
 
-	/* Zone origin badge — which zone a pill belongs to, visible on the
-	   shared lane. Sits after the left grip. */
-	.tag-pill-zone {
-		font-size: 8px;
-		font-weight: 700;
-		color: rgba(255, 255, 255, 0.85);
-		flex: 0 0 auto;
-		margin: 0 4px 0 0;
-		letter-spacing: 0.3px;
-	}
-
-	/* Prompt text on the pill (ref parity: tags show their prompt inline).
-	   Shows the prompt when set, otherwise the tag type name as fallback.
-	   Clipped by its own ellipsis; right padding reserves room for the ×,
-	   left padding clears the left grip so the text never collides with it. */
+	/* Prompt text on the pill (zone-based lane: shows the tag type + prompt). */
 	.tag-pill-prompt {
 		font-size: 9px;
 		font-weight: 600;

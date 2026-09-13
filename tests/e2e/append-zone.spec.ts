@@ -185,8 +185,10 @@ test.describe('Appending zones', () => {
 		expect(persistedLabels).toEqual(['Scene', 'Camera']);
 	});
 
-	test('shared + Tag menu picks a zone, then adds the tag to it', async ({ page }) => {
-		// Two zones so the zone picker appears.
+	test('shared + Tag menu attaches to the invoking zone', async ({ page }) => {
+		// Two zones; the tag menu opens on the invoking zone row and attaches the
+		// tag to that zone only (zone-switcher rows were removed from the popup
+		// — only functional rows: tag types + New segment + Add/Cancel).
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
@@ -201,22 +203,17 @@ test.describe('Appending zones', () => {
 		// space is the add-tag target; no + Tag button anymore). The entry
 		// point preselects the INVOKING zone (Z1 here).
 		await pressZoneRow(page, 0);
-		await page.waitForSelector('.dropdown-menu .zone-item', { timeout: 5000 });
-		const zoneItems = page.locator('.dropdown-menu .zone-item');
-		expect(await zoneItems.count()).toBe(2);
-		// Default target is the INVOKING zone → Z1 pre-selected.
-		expect(await zoneItems.first().evaluate((el) => el.className)).toContain('active');
-		expect(await zoneItems.nth(1).evaluate((el) => el.className)).not.toContain('active');
+		await page.waitForSelector('.dropdown-menu .tag-item', { timeout: 5000 });
+		// No zone-switcher rows in the popup: only tag types + New segment.
+		expect(await page.locator('.dropdown-menu .zone-item').count()).toBe(0);
 
-		// Pick ZONE 2 explicitly, then add a Scene tag → pill lands in zone 2.
-		await zoneItems.nth(1).click();
+		// Add a Scene tag → it lands in the INVOKING zone (Z1).
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
 		await page.locator('.dropdown-menu .btn-confirm').click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });
 
 		const pill = page.locator('.tag-body').first();
-		// The pill carries its zone badge (Z2) so the shared lane stays unambiguous.
-		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z2');
+		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z1');
 	});
 
 	test('timeline collapses to a summary header and re-expands', async ({ page }) => {
