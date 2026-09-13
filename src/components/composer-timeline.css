@@ -134,7 +134,11 @@
 }
 
 /* ═══ ZONE ROWS: one slider row per segment ═══════════════════════════ */
-/* Full-width track; the colored slider pill + round grips live inside. */
+/* Full-width track; the colored slider pill + round grips live inside.
+   The ROW is the add-tag affordance: a zero-move press anywhere on it
+   (free track space or the pill) opens the tag menu scoped to this zone.
+   The pill / grips keep their drag behaviour; the delete button swallows
+   its own presses so a delete never reads as a zone click. */
 .segment-row {
 	position: relative;
 	width: 100%;
@@ -142,6 +146,13 @@
 	background: var(--bg-tertiary);
 	border-radius: 5px;
 	box-shadow: inset 0 0 0 1px var(--border-color);
+	cursor: pointer;
+	user-select: none;
+	transition: box-shadow 0.15s;
+}
+.segment-row:hover,
+.segment-row:focus-visible {
+	box-shadow: inset 0 0 0 1px var(--accent-color);
 }
 
 /* Per-zone delete button, attached to the right edge of its zone row so it's
@@ -175,34 +186,8 @@
 	border-radius: 6px;
 }
 
-/* Per-zone "+ Tag" button, attached to the right edge of its zone row next
-   to the delete button. Replaces the old shared chrome-column + Tag button —
-   each zone now has its own entry point, scoped to that zone. */
-.seg-add-tag {
-	position: absolute;
-	right: 34px;
-	top: 50%;
-	transform: translateY(-50%);
-	z-index: 5;
-	opacity: 0.55;
-	padding: 0 8px;
-	font-size: 11px;
-	font-weight: 600;
-	line-height: 1;
-	background: var(--bg-tertiary);
-	border: 1px dashed var(--border-color);
-	border-radius: 6px;
-	color: var(--text-secondary);
-	cursor: pointer;
-	transition: all 0.15s;
-}
-.segment-row:hover .seg-add-tag {
-	opacity: 1;
-}
-.seg-add-tag:hover {
-	border-color: var(--accent-color);
-	color: var(--accent-color);
-}
+/* The old per-zone "+ Tag" button was replaced by clicking the zone row
+   itself (the row's free space is the add-tag target). */
 
 /* Zone number badge, floats left over the track so the slider pill's
    frame coordinate origin is untouched (same rule as tag lane labels). */

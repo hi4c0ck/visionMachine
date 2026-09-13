@@ -123,6 +123,17 @@
 		return () => document.removeEventListener('click', handler);
 	});
 
+	// Click on a zone ROW (free track space, the pill, or a grip) opens the
+	// tag menu scoped to THAT zone — the row is the add-tag target. The click
+	// stops propagation so the panel's document-level "close menus on outside
+	// click" handler doesn't immediately close the menu we just opened. A
+	// real pill/grip drag does NOT emit a click on the row (the press lands on
+	// the pill, which stops propagation), so dragging never opens the menu.
+	function onZoneRowClick(e: MouseEvent, segId: string) {
+		e.stopPropagation();
+		onOpenTagMenu(segId, e);
+	}
+
 	function getTimeline(p: PipeRow): any {
 		return p.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
@@ -487,7 +498,12 @@
 							delete button attached to the row (not a detached chrome
 							row 300px below). -->
 						{#each tl.segments as seg, segIdx (seg.id)}
-							<div class="segment-row">
+							<div
+								class="segment-row"
+								role="button" tabindex="0"
+								title="Click to add a tag to this zone"
+								onclick={(e) => onZoneRowClick(e, seg.id)}
+								onkeydown={(e) => e.key === 'Enter' && onOpenTagMenu(seg.id, e as unknown as MouseEvent)}>
 								<span class="seg-row-label">Zone {segIdx + 1}</span>
 								{#if rulerGeometry}
 									<div
@@ -498,7 +514,8 @@
 										onpointerup={handlePointerUp}
 										role="slider" aria-orientation="horizontal" tabindex="0"
 										aria-valuemin={0} aria-valuemax={totalFrames - 1}
-										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}>
+										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}
+										onclick={(e) => e.stopPropagation()}>
 										<span class="seg-label">{getPreviewSegment(seg) ? `${getPreviewSegment(seg)!.startFrame}–${getPreviewSegment(seg)!.endFrame}` : `${seg.frameStart}–${seg.frameEnd}`}</span>
 									</div>
 									<div
@@ -510,7 +527,8 @@
 										role="slider" aria-orientation="horizontal" tabindex="0"
 										aria-valuemin={0} aria-valuemax={totalFrames - 1}
 										aria-valuenow={getPreviewSegment(seg)?.startFrame ?? seg.frameStart}
-										title="Drag to resize zone start"></div>
+										title="Drag to resize zone start"
+										onclick={(e) => e.stopPropagation()}></div>
 									<div
 										class="segment-handle segment-handle-right"
 										style="left: {frameToPx(getPreviewSegment(seg)?.endFrame ?? seg.frameEnd, rulerGeometry)}px;"
@@ -520,24 +538,21 @@
 										role="slider" aria-orientation="horizontal" tabindex="0"
 										aria-valuemin={0} aria-valuemax={totalFrames - 1}
 										aria-valuenow={getPreviewSegment(seg)?.endFrame ?? seg.frameEnd}
-										title="Drag to resize zone end"></div>
+										title="Drag to resize zone end"
+										onclick={(e) => e.stopPropagation()}></div>
 								{/if}
 								<!-- Per-zone delete, attached to its row (hover reveal).
-								     The tag-count badge warns before the zone's work is lost. -->
+								     The tag-count badge warns before the zone's work is lost.
+								     Stops click propagation so a delete press doesn't
+								     also register as a zone click (add-tag). -->
 								<button
 									class="btn-icon-sm btn-del-sm seg-del"
-									onclick={() => onDeleteSegment(seg.id)}
+									onclick={(e) => { e.stopPropagation(); onDeleteSegment(seg.id); }}
 									title={seg.tags.length > 0 ? `Delete zone ${segIdx + 1} and its ${seg.tags.length} tag${seg.tags.length !== 1 ? 's' : ''}` : `Delete zone ${segIdx + 1}`}>
 									×{#if seg.tags.length > 0}<span class="seg-del-count">{seg.tags.length}</span>{/if}
 								</button>
-								<!-- Per-zone + Tag button: scoped to this zone, opens the
-								     undeclared-first menu (declared types greyed, choice A). -->
-								<button
-									class="seg-add-tag"
-									onclick={(e) => { e.stopPropagation(); onOpenTagMenu(seg.id, e); }}
-									title={`Add a tag to Zone ${segIdx + 1}`}>+ Tag</button>
-							</div>
-						{/each}
+								</div>
+							{/each}
 
 						<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
 							 Each tag type gets its own horizontal lane; every pill of
@@ -579,7 +594,7 @@
 													title="Remove tag">×</button>
 												<div
 													class="tag-handle tag-handle-left"
-													style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px;"
+													style="left: 0;"
 													onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'left', tag.frameStart, tag.frameEnd)}
 													onpointermove={handlePointerMove}
 													onpointerup={handlePointerUp}
@@ -589,7 +604,7 @@
 													title="Drag to resize tag start"></div>
 												<div
 													class="tag-handle tag-handle-right"
-													style="left: {frameToPx(getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px;"
+													style="left: 100%;"
 													onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'right', tag.frameStart, tag.frameEnd)}
 													onpointermove={handlePointerMove}
 													onpointerup={handlePointerUp}

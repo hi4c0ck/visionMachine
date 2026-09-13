@@ -50,14 +50,17 @@ test.describe('Multi-Tag Creation', () => {
     await setupComposer(page);
   });
 
-  test('should show tag add button when segment exists', async ({ page }) => {
+  test('should show tag add affordance when segment exists', async ({ page }) => {
     // Check if any segments exist
     const segRows = page.locator('.segment-row');
     const hasSegments = await segRows.count() > 0;
     
     if (hasSegments) {
-      const addTagBtn = page.locator('.seg-add-tag');
-      await expect(addTagBtn.first()).toBeVisible();
+      // The zone ROW is now the add-tag affordance (click it, no button).
+      const row = page.locator('.segment-row').first();
+      await expect(row).toBeVisible();
+      const attrs = await row.evaluate((el) => el.getAttribute('title'));
+      expect(attrs).toContain('add a tag');
     } else {
       // If no segments, we should see the empty state
       const emptyState = page.locator('.seg-empty.full-width');

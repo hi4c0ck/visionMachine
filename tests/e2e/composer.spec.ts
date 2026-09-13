@@ -48,14 +48,16 @@ test.describe('Composer Panel', () => {
     await expect(addSegmentBtn).toContainText(/Add first zone/i);
   });
 
-  test('should show tag add button when segment exists', async ({ page }) => {
+  test('should show tag add affordance when segment exists', async ({ page }) => {
     // Wait for any existing segments
     const segBar = page.locator('.segment-row').first();
     const hasSegments = await segBar.count() > 0;
     
     if (hasSegments) {
-      const addTagBtn = page.locator('.seg-add-tag');
-      await expect(addTagBtn.first()).toBeVisible();
+      // The zone ROW is now the add-tag affordance (click it, no button).
+      await expect(segBar).toBeVisible();
+      const title = await segBar.evaluate((el) => el.getAttribute('title'));
+      expect(title).toContain('add a tag');
     }
   });
 });
