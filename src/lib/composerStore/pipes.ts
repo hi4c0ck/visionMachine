@@ -91,10 +91,61 @@ export class PipeServiceImpl implements PipeService {
 
   async setLength(_sessionId: string, pipeId: string, frames: number): Promise<ServiceResult> {
     const pipe = this.getPipe(this.session, pipeId);
-    if (pipe) {
-      pipe.lengthFrames = validatePipeLength(frames, this.session.resolution);
-    }
+    if (!pipe) return { errors: ['Pipe not found'] };
+
+    const newLength = validatePipeLength(frames, this.session.resolution);
+    pipe.lengthFrames = newLength;
+    this.rescaleElements(pipe);
     return { errors: [] };
+  }
+
+  /**
+   * Recalculate every element's frame range to fit the pipe's new length.
+   * Growing is a no-op; shrinking trims/adjusts: global ranges, segments
+   * (zones) and their tags, keyframe positions and subject-ref ranges are
+   * clamped into [0, newLength - 1] so the ruler/segments/tags stay valid
+   * and the timeline re-renders against the new frame space. Items that
+   * fall completely outside the new range (or would collapse to below the
+   * minimum span) are removed, matching the trim warning the UI previewed.
+   * Runs on every length commit (store's setPipeLength → notifyUpdate →
+   * UI re-sync).
+   */
+  rescaleElements(pipe: PipeRow): void {
+    const maxEnd = pipe.lengthFrames - 1;
+    const MIN_SPAN = 8;
+
+    for (const el of pipe.elements as any[]) {
+      if (el.tag === 'global_style') {
+        if (Number.isFinite(el.frameStart)) el.frameStart = Math.min(el.frameStart, maxEnd);
+        if (Number.isFinite(el.frameEnd)) el.frameEnd = Math.min(el.frameEnd, maxEnd);
+        if (el.frameEnd <= el.frameStart) el.frameEnd = Math.min(el.frameStart + MIN_SPAN, maxEnd);
+      } else if (el.tag === 'timeline') {
+        // Drop segments that start past the new end (fully out of range).
+        el.segments = (el.segments ?? []).filter((seg: any) => seg.frameStart <= maxEnd);
+        for (const seg of el.segments as any[]) {
+          if (Number.isFinite(seg.frameEnd)) seg.frameEnd = Math.min(seg.frameEnd, maxEnd);
+          if (seg.frameEnd <= seg.frameStart) seg.frameEnd = Math.min(seg.frameStart + MIN_SPAN, maxEnd);
+          // Drop tags that start past the (possibly clamped) segment end.
+          seg.tags = (seg.tags ?? []).filter((tag: any) => tag.frameStart <= seg.frameEnd);
+          for (const tag of seg.tags as any[]) {
+            if (Number.isFinite(tag.frameEnd)) tag.frameEnd = Math.min(tag.frameEnd, seg.frameEnd);
+            if (tag.frameEnd <= tag.frameStart) tag.frameEnd = Math.min(tag.frameStart + MIN_SPAN, seg.frameEnd);
+          }
+        }
+      }
+    }
+
+    for (const kf of pipe.keyframes) {
+      if (Number.isFinite(kf.frame)) kf.frame = Math.min(kf.frame, maxEnd);
+    }
+
+    for (const ref of pipe.subjectReferences) {
+      if (ref.useFrames && Number.isFinite(ref.frameEnd ?? Number.NaN)) {
+        const clampedEnd = Math.min(ref.frameEnd!, maxEnd);
+        ref.frameEnd = clampedEnd;
+        if (clampedEnd < (ref.frameStart ?? 0)) ref.frameEnd = ref.frameStart ?? 0;
+      }
+    }
   }
 
   getPipe(session: SessionData, pipeId: string): PipeRow | undefined {

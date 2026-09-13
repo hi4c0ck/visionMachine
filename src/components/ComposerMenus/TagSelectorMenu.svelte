@@ -40,25 +40,29 @@
 	}>();
 
 	const TAG_TYPES: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
-	let selectedType = $state<TagType | null>(null);
 	function isDeclared(t: TagType) {
 		return declaredTypes.includes(t);
 	}
-	// Target zone. Re-seeded to the invoking zone on every menu open via
-	// menuVersion (bumped by the panel on each onOpenTagMenu call); the
-	// fallback guards against the current selection disappearing (zone
-	// deleted between opens).
+	// Target zone. The menu attaches to the INVOKING zone only (the zone
+	// pill that opened it). Picking a tag type adds it immediately — the
+	// intermediate "Add" button was removed as a redundant step.
 	let selectedSegId = $state<string>(defaultSegmentId ?? segments[0]?.id ?? '');
 	$effect(() => {
 		// Touch menuVersion so re-opens re-run the seeding.
 		menuVersion;
 		const ids: string[] = segments.map((s: { id: string }) => s.id);
 		if (!open) return;
-		selectedType = null;
 		selectedSegId = ids.includes(defaultSegmentId ?? '')
 			? (defaultSegmentId as string)
 			: (ids[0] ?? '');
 	});
+
+	// Add the tag of this type to the target zone and close the menu.
+	async function addTag(type: TagType) {
+		if (!selectedSegId) return;
+		await onConfirm(type, selectedSegId);
+		onClose();
+	}
 </script>
 
 	{#if open}
@@ -66,24 +70,9 @@
 			onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<div class="tag-menu-body">
 				<div class="dropdown-label">Add Tag</div>
-				{#if segments.length > 1}
-					<div class="dropdown-label zone-label">Attach to zone</div>
-					{#each segments as s (s.id)}
-						<button class="dropdown-item zone-item" class:active={selectedSegId === s.id}
-							onclick={() => selectedSegId = s.id}>
-							<span class="zone-num">Z{s.index}</span>
-							<span>Zone {s.index}</span>
-						</button>
-					{/each}
-					{/if}
-				{#if segments.length === 1}
-					<div class="dropdown-zone-fixed">Zone {segments[0].index}</div>
-				{/if}
 				{#each TAG_TYPES as tagType (tagType)}
-					<button class="dropdown-item tag-item"
-						class:active={selectedType === tagType}
-						class:declared={isDeclared(tagType)}
-						onclick={() => selectedType = tagType}
+					<button class="dropdown-item tag-item" class:declared={isDeclared(tagType)}
+						onclick={() => addTag(tagType)}
 						title={isDeclared(tagType) ? 'Already in this zone — adding another needs free space' : undefined}>
 						<span class="tag-dot" style="background: {TAG_SPECIFICATIONS[tagType].color}"></span>
 						<span>{TAG_SPECIFICATIONS[tagType].name}</span>
@@ -96,10 +85,6 @@
 						<span>＋ New segment</span>
 					</button>
 				{/if}
-			</div>
-			<div class="dropdown-actions">
-				<button class="btn-confirm" onclick={() => selectedType && onConfirm(selectedType, selectedSegId)} disabled={!selectedType || !selectedSegId}>Add</button>
-				<button class="btn-cancel" onclick={onClose}>Cancel</button>
 			</div>
 		</div>
 	{/if}
@@ -194,23 +179,6 @@
 		color: var(--text-secondary);
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
-	}
-
-	.zone-label {
-		padding-top: 8px;
-	}
-	.zone-item .zone-num {
-		width: 12px;
-		flex-shrink: 0;
-		font-weight: 700;
-		font-size: 11px;
-		color: var(--accent-color);
-	}
-	/* Single-zone case: no picker, just show which zone the tag lands on. */
-	.dropdown-zone-fixed {
-		padding: 4px 16px 8px;
-		font-size: 11px;
-		color: var(--text-secondary);
 	}
 
 	.dropdown-actions {

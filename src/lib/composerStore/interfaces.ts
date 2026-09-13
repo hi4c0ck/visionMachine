@@ -18,6 +18,9 @@ import type {
 
 export interface ServiceResult {
   errors: string[];
+  /** Non-fatal notices (e.g. "trimmed N out-of-bounds tags"). Surfaced to
+   *  the UI as warnings without blocking the operation. */
+  warnings?: string[];
 }
 
 export type Result<T> = T extends void ? ServiceResult : T & ServiceResult;

@@ -1,4 +1,6 @@
-<!-- Global Error Boundary - catches all unhandled render/runtime errors -->
+<!-- Global error popup — catches all unhandled render/runtime errors as a
+	non-blocking, dismissible overlay so the app stays explorable (the user
+	can confirm a recurring error is reproducible before dismissing it). -->
 <script lang="ts">
 	import { onMount } from 'svelte';
 
@@ -10,8 +12,13 @@
 
 	let displayedError = $state<Error | null>(null);
 	let retryCount = $state(0);
+	let showDetails = $state(false);
 
-	// Global uncaught error handler
+	// Global uncaught error handler. Non-blocking: an error surfaces as a
+	// dismissible popup on top of the live app (displayedError) instead of
+	// replacing the whole UI, so the user can keep exploring and confirm the
+	// error's reproducibility. A persistent, repeated error is still
+	// recoverable: retry() dismisses the popup and re-attaches the listeners.
 	onMount(() => {
 		const handleError = (event: WindowEventMap['error']) => {
 			const error = event?.error || new Error('Unknown runtime error');
@@ -36,6 +43,7 @@
 
 	function retry() {
 		displayedError = null;
+		showDetails = false;
 		retryCount++;
 	}
 
@@ -46,7 +54,7 @@
 </script>
 
 {#if displayedError || error}
-	<div class="error-boundary">
+	<div class="error-popup" role="presentation">
 		{#if fallback}
 			{@render fallback(displayedError ?? error ?? null)}
 		{:else}
@@ -54,46 +62,52 @@
 				<div class="error-icon">⚠️</div>
 				<h2>Something went wrong</h2>
 				<p class="error-message">{getErrorMessage(displayedError ?? error ?? null)}</p>
-				<p class="error-hint">This might be a temporary issue. Try refreshing the app.</p>
+				<p class="error-hint">The app stays usable — keep exploring; this error will pop up again if it's reproducible.</p>
 				<div class="error-actions">
-					<button class="btn-retry" onclick={retry}>
-						Try Again
+					<button class="btn-details" onclick={() => showDetails = !showDetails}>
+						{showDetails ? 'Hide details' : 'More info'}
 					</button>
-					<button 
-						class="btn-details" 
-						onclick={() => console.error('[ErrorHandler] Full error details:', displayedError || error)}
-					>
-						View Details
+					<button class="btn-retry" onclick={retry}>
+						Continue
 					</button>
 				</div>
-				{#if import.meta.env.DEV}
+				{#if showDetails}
 					<div class="error-stack">
-						<pre>{(displayedError || error)?.stack}</pre>
+						<pre>{(displayedError || error)?.stack ?? getErrorMessage(displayedError ?? error ?? null)}</pre>
 					</div>
 				{/if}
 			</div>
 		{/if}
 	</div>
-{:else}
+	{/if}
+
 	{@render children?.()}
-{/if}
 
 <style>
-	.error-boundary {
+	.error-popup {
 		position: fixed;
 		inset: 0;
-		z-index: 9999;
+		z-index: 9990;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: var(--bg-primary, #1A1A1D);
+		padding: 24px;
+		/* Subtle dim — non-blocking on purpose: the app underneath stays
+		   fully interactive so the user can keep exploring. No click handler
+		   on the backdrop; dismiss is via the Continue button only. */
+		background: rgba(0, 0, 0, 0.35);
 	}
 
 	.error-container {
 		text-align: center;
-		padding: 40px;
-		max-width: 500px;
-		width: 90%;
+		padding: 32px 40px;
+		max-width: 520px;
+		width: 100%;
+		background: var(--bg-secondary, #2A2A2E);
+		border: 1px solid var(--border-color, #4E525A);
+		border-radius: 12px;
+		box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+		color: var(--text-primary, #EEEEEE);
 	}
 
 	.error-icon {
@@ -125,6 +139,26 @@
 		gap: 12px;
 		justify-content: center;
 		flex-wrap: wrap;
+		margin-top: 16px;
+	}
+
+	.error-stack {
+		margin-top: 16px;
+		text-align: left;
+		background: var(--bg-tertiary, #3A3A3F);
+		padding: 12px;
+		border-radius: 6px;
+		max-height: 200px;
+		overflow: auto;
+	}
+
+	.error-stack pre {
+		margin: 0;
+		font-size: 11px;
+		color: var(--text-muted, #808080);
+		font-family: monospace;
+		white-space: pre-wrap;
+		word-break: break-all;
 	}
 
 	.btn-retry, .btn-details {
@@ -154,23 +188,5 @@
 
 	.btn-details:hover {
 		background: var(--bg-hover, #4A4A4F);
-	}
-
-	.error-stack {
-		margin-top: 24px;
-		text-align: left;
-		background: var(--bg-secondary, #2A2A2E);
-		padding: 16px;
-		border-radius: 6px;
-		max-height: 200px;
-		overflow: auto;
-	}
-
-	.error-stack pre {
-		font-size: 11px;
-		color: var(--text-muted, #808080);
-		font-family: monospace;
-		white-space: pre-wrap;
-		word-break: break-all;
 	}
 </style>

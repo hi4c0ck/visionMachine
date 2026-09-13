@@ -5,8 +5,11 @@
 	import { APP_CONSTANTS } from '$constants';
 	
 	// State declarations - explicit reactive state
+	// Show the name card only when no name is persisted; otherwise the
+	// "cookie-like" restoration (vm-username) lands the user straight in
+	// the workspace so re-entering the app never asks for the name again.
 	let userName = $state('');
-	let showWelcome = $state(true);
+	let showWelcome = $state(false);
 	let selectedTheme = $state('jetbrains-dark');
 	let layoutMode = $state('landscape');
 	let error = $state<string | null>(null);
@@ -58,6 +61,12 @@
 	}
 	
 	function handleLogout() {
+		// Forget the persisted name so the next launch asks for it again.
+		try {
+			localStorage.removeItem('vm-username');
+		} catch (e) {
+			console.error('[App] Failed to clear username:', e);
+		}
 		userName = '';
 		showWelcome = true;
 	}
@@ -92,7 +101,10 @@
 			const savedName = localStorage.getItem('vm-username');
 			if (savedName) {
 				userName = savedName;
-				showWelcome = false;
+				// A persisted name means the user already went through
+				// onboarding — skip the welcome screen entirely.
+			} else {
+				showWelcome = true;
 			}
 			
 			const savedTheme = localStorage.getItem('vm-theme');

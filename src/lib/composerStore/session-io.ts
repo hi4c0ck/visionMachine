@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { SessionService, ServiceResult } from './interfaces';
 import type { SessionData, PipeRow, ResolutionPreset } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
+import { normalizePipe } from './validators';
 
 export class SessionServiceImpl implements SessionService {
   async load(sessionId: string): Promise<ServiceResult & { session?: SessionData }> {
@@ -13,7 +14,11 @@ export class SessionServiceImpl implements SessionService {
       const result = await invoke('get_composer', { sessionId });
       const backendData = result as any;
 
-      const pipes: PipeRow[] = this.mapBackendPipes(backendData.pipes || []);
+      const rawPipes: PipeRow[] = this.mapBackendPipes(backendData.pipes || []);
+      // Normalize every loaded pipe so legacy / stale on-disk shapes
+      // (missing arrays, out-of-bounds frames, null ids) become valid
+      // PipeRows instead of crash sources later in the UI layer.
+      const pipes = rawPipes.map((p) => normalizePipe(p));
 
       const session: SessionData = {
         id: backendData.id || sessionId,
@@ -134,7 +139,7 @@ export class SessionServiceImpl implements SessionService {
   }
 
   private mapBackendTag(t: any) {
-    return {
+    const row = {
       id: t.id,
       tag: t.tag,
       frameStart: t.frame_start ?? t.frameStart,
@@ -143,5 +148,16 @@ export class SessionServiceImpl implements SessionService {
       prompt: t.prompt,
       spec: t.spec,
     };
+    // A tag row whose type is unknown to this version of the app (old/newer
+    // session data) has no spec — fill in a fallback so render code can
+    // safely read tag.spec.name / .color without crashing.
+    if (row.spec === null || row.spec === undefined) {
+      row.spec = {
+        color: '#888888',
+        name: row.tag ? String(row.tag) : 'Unknown',
+        constructRule: 'plain',
+      };
+    }
+    return row;
   }
 }

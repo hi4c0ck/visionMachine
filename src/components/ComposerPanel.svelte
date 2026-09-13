@@ -3,6 +3,7 @@
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
+	import PipeLengthModal from './ComposerModals/PipeLengthModal.svelte';
 	import TagPromptModal from './ComposerModals/TagPromptModal.svelte';
 	import AddTrackMenu from './ComposerMenus/AddTrackMenu.svelte';
 	import TagSelectorMenu from './ComposerMenus/TagSelectorMenu.svelte';
@@ -10,7 +11,7 @@
 	import KeyframesRow from './ComposerRows/KeyframesRow.svelte';
 	import SubjectRefsRow from './ComposerRows/SubjectRefsRow.svelte';
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
-	import { getFreeGaps, type FreeGap } from '$lib/frameMath';
+	import { getFreeGaps, getMaxFrames, type FreeGap } from '$lib/frameMath';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import {
 		addPipe as addPipeAction,
@@ -58,8 +59,10 @@ import { flashToast } from '$lib/flashToast';
 	const MAX_SUBJECT_REFS = 5;
 	const DEFAULT_FRAME_COUNT = 241;
 
-	// ── Derived state ────────────────────────────────────────────────────────
+	// ── Derived state ──────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
+	// Resolution cap (8n+1) the pipe length can grow to.
+	let maxPipeFrames = $derived(getMaxFrames(session?.resolution ?? '720p'));
 	let totalFrames = $derived(
 		pipes.length > 0
 			? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? DEFAULT_FRAME_COUNT)
@@ -116,6 +119,52 @@ import { flashToast } from '$lib/flashToast';
 	// Free gaps the "+ Zone" modal can target — a zone may be placed in any of
 	// them (before/between/after existing zones), not just the first one.
 	let segGaps = $state<FreeGap[]>([]);
+
+	// Pipe length editor modal (frames ↔ seconds, with trim preview).
+	let showPipeLengthModal = $state(false);
+	// Live preview of what would be trimmed when the pipe shrinks to
+	// `pendingPipeLength` (recomputed as the user types in the modal).
+	let pendingPipeLength = $state(0);
+	let pendingPipeIdx = $state(0);
+
+	// Derived: zones/tags that would be trimmed (fully or partially
+	// clipped) when committing the pending length. Empty when growing.
+	let trimPreview = $derived.by(() => {
+		const pipe = pipes[pendingPipeIdx];
+		const empty = { trimmedZones: 0, trimmedTags: 0, lostZoneLabels: [] as string[], lostTagLabels: [] as string[] };
+		if (!pipe || pendingPipeLength >= pipe.lengthFrames) return empty;
+		const newMaxEnd = pendingPipeLength - 1;
+		const tl = getTimeline(pipe);
+		let trimmedZones = 0;
+		let trimmedTags = 0;
+		const lostZoneLabels: string[] = [];
+		const lostTagLabels: string[] = [];
+		const segs = (tl?.segments ?? []) as Segment[];
+		for (let i = 0; i < segs.length; i++) {
+			const seg = segs[i];
+			// Zone fully past the new end → removed with all its tags.
+			if (seg.frameStart > newMaxEnd) {
+				lostZoneLabels.push(`Zone ${i + 1} (${seg.frameStart}–${seg.frameEnd})`);
+				trimmedZones++;
+				trimmedTags += seg.tags.length;
+				lostTagLabels.push(...seg.tags.map((t) => t.tag));
+				continue;
+			}
+			// Zone extending past the new end → trimmed down (partially trimmed).
+			if (seg.frameEnd > newMaxEnd) {
+				trimmedZones++;
+			}
+			for (const tag of seg.tags) {
+				if (tag.frameStart > newMaxEnd) {
+					trimmedTags++;
+					lostTagLabels.push(`${tag.tag} (${tag.frameStart}–${tag.frameEnd})`);
+				} else if (tag.frameEnd > newMaxEnd) {
+					trimmedTags++;
+				}
+			}
+		}
+		return { trimmedZones, trimmedTags, lostZoneLabels, lostTagLabels };
+	});
 
 	// Tag prompt modal
 	let showTagPromptModal = $state(false);
@@ -203,6 +252,37 @@ import { flashToast } from '$lib/flashToast';
 		const result = await setPipeLengthAction(session.id, pipe.id, clamped);
 		if (result.errors.length > 0) {
 			flashToast(`Failed to set pipe length: ${result.errors.join(', ')}`);
+		}
+	}
+
+	// Pipe length editor modal — the modal is the primary precise path
+	// (frames ↔ seconds + trim warnings); the quick input in the header
+	// (handlePipeLengthChange) stays as a fast, no-questions set.
+	function openPipeLengthModal(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe) return;
+		pendingPipeIdx = idx;
+		pendingPipeLength = pipe.lengthFrames;
+		showPipeLengthModal = true;
+		closeMenus();
+	}
+
+	// The modal fires this on every pending-frames change so the panel can
+	// recompute the live trim preview (zones/tags that would be clipped).
+	function handlePipeLengthPreview(frames: number) {
+		pendingPipeLength = frames;
+	}
+
+	async function confirmPipeLength(frames: number) {
+		const pipe = pipes[pendingPipeIdx];
+		if (!pipe || !session?.id) return;
+		const result = await setPipeLengthAction(session.id, pipe.id, frames);
+		if (result.errors.length > 0) {
+			flashToast(`Failed to set pipe length: ${result.errors.join(', ')}`);
+			return;
+		}
+		if (result.warnings && result.warnings.length > 0) {
+			flashToast(result.warnings.join(' '), 'info');
 		}
 	}
 
@@ -316,9 +396,11 @@ import { flashToast } from '$lib/flashToast';
 		}
 		segGaps = gaps;
 		// Default to the first gap (before Zone 1, or between zones if leading
-		// space is gone) so the modal opens with a confirmable prefill.
+		// space is gone) so the modal opens with a confirmable prefill. The
+		// end frame defaults to the maximum available in the chosen gap —
+		// filling it is the common intent — rather than a bare min span.
 		segStart = gaps[0].start;
-		segEnd = Math.min(gaps[0].start + 8, gaps[0].end);
+		segEnd = gaps[0].end;
 		showSegmentModal = true;
 		closeMenus();
 	}
@@ -482,6 +564,8 @@ import { flashToast } from '$lib/flashToast';
 				onDuplicate={() => handleDuplicatePipe(pipeIdx)}
 				onRemove={() => handleRemovePipe(pipeIdx)}
 				onLengthChange={(raw) => handlePipeLengthChange(pipeIdx, raw)}
+				onLengthEdit={() => openPipeLengthModal(pipeIdx)}
+				fps={session?.fps}
 			/>
 
 			<!-- ═══ KEYFRAME ROW ═══ -->
@@ -570,17 +654,30 @@ import { flashToast } from '$lib/flashToast';
 	/>
 {/if}
 
-<!-- ═══ SEGMENT MODAL ═══ -->
-<SegmentModal
-	startFrame={segStart}
-	endFrame={segEnd}
-	totalFrames={totalFrames}
-	gaps={segGaps}
-	bind:open={showSegmentModal}
-	onConfirm={(s, e) => confirmSegment(s, e)}
-/>
+		<!-- ═══ SEGMENT MODAL ═══ -->
+	<SegmentModal
+		startFrame={segStart}
+		endFrame={segEnd}
+		totalFrames={totalFrames}
+		gaps={segGaps}
+		bind:open={showSegmentModal}
+		onConfirm={(s, e) => confirmSegment(s, e)}
+	/>
 
-<!-- ═══ TAG PROMPT MODAL ═══ -->
+	<!-- ═══ PIPE LENGTH MODAL ═══ -->
+	{#if pipes[pendingPipeIdx]}
+		<PipeLengthModal
+			pipe={pipes[pendingPipeIdx]}
+			fps={session?.fps ?? 24}
+			maxFrames={maxPipeFrames}
+			trimPreview={trimPreview}
+			bind:open={showPipeLengthModal}
+			onConfirm={confirmPipeLength}
+			onPreview={handlePipeLengthPreview}
+		/>
+	{/if}
+
+	<!-- ═══ TAG PROMPT MODAL ═══ -->
 {#if activePipeIdx !== null}
 	<TagPromptModal
 		sessionId={session?.id}
