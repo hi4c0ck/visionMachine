@@ -307,13 +307,22 @@ impl AccountService {
 mod tests {
     use super::*;
     use crate::storage::db::Database;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Shared per-process temp DB (same pattern as the db.rs tests);
-    /// each test uses a unique profile id so parallel tests don't clash.
+    /// Each fixture() call gets its own DB file: the harness runs tests in
+    /// parallel on shared worker threads, and a shared file races on the
+    /// `default` profile seed even when profile ids are unique per test.
+    static FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
     async fn fixture() -> (Database, AccountService) {
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("vm_accts_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("accts_test.db").to_string_lossy().to_string();
+        let path = dir
+            .join(format!("accts_test_{}.db", n))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
         let db = Database::new(&path).await.unwrap();
         db.migrate().await.unwrap();
         db.seed_default_profile().await.unwrap();

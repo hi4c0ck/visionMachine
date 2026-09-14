@@ -2,6 +2,7 @@
 	import type { SessionData, ProjectData, ComposerFocus, PipeRow, Segment, TagElement, TimelineElement } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { compilePrompt } from '$lib/compiler';
+	import { toMediaUrl } from '$lib/mediaUrl';
 
 	let {
 		session,
@@ -10,6 +11,9 @@
 		focus = { level: 'project' } as ComposerFocus,
 		onselect,
 		ongenerate,
+		ongeneratepipe,
+		onopenpreview,
+		pipegenerating = false,
 		onfpschange,
 		onresolutionchange,
 		onorientationchange,
@@ -25,7 +29,14 @@
 		/** Context-sensitive focus driving which inspector the panel shows. */
 		focus?: ComposerFocus;
 		onselect: (toolId: string) => void;
+		/** Session-level generate (future "generate all" — D3). */
 		ongenerate: () => void;
+		/** Pipe-level generate (opens the confirm modal, decision D3). */
+		ongeneratepipe?: (pipeId: string) => void;
+		/** Hand the pipe's last generated video to the top-panel preview (D9). */
+		onopenpreview?: (pipe: PipeRow) => void;
+		/** A generation task is active — the pipe generate button is disabled. */
+		pipegenerating?: boolean;
 		onfpschange?: (fps: number) => void;
 		onresolutionchange?: (resolution: string) => void;
 		onorientationchange?: (orientation: string) => void;
@@ -282,9 +293,34 @@
           {:else}
             <p class="focus-hint">No keyframes yet.</p>
           {/if}
-          <!-- Last-gen preview placeholder (artifact not yet modeled) -->
-          <div class="focus-preview" aria-hidden="true">
-            <span class="focus-preview-empty">No last-gen preview</span>
+          <button
+            class="focus-generate"
+            onclick={() => ongeneratepipe?.(focusedPipe.id)}
+            disabled={pipegenerating}
+            title={pipegenerating ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}
+          >
+            {APP_CONSTANTS.strings.generate}
+          </button>
+          <!-- Last-gen preview (D9): casual muted-looping <video> thumb; with no
+               engine there is no video file yet, so this is the empty state (D1). -->
+          {@const lastVideoUrl = toMediaUrl(focusedPipe.lastGeneration?.videoPath ?? null)}
+          <div class="focus-preview">
+            {#if lastVideoUrl}
+              <video
+                class="focus-video"
+                src={lastVideoUrl}
+                muted
+                loop
+                autoplay
+                playsinline
+                aria-label="Last generation preview"
+              ></video>
+              <button class="focus-preview-open" onclick={() => onopenpreview?.(focusedPipe)}>
+                {APP_CONSTANTS.strings.openInPreview}
+              </button>
+            {:else}
+              <span class="focus-preview-empty">{APP_CONSTANTS.strings.noPreview}</span>
+            {/if}
           </div>
         {:else}
           <p class="focus-hint">No pipe selected.</p>
@@ -482,6 +518,28 @@
     font-size: 10px;
     color: var(--text-secondary);
     opacity: 0.7;
+  }
+  .focus-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000;
+  }
+  .focus-preview-open {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    padding: 2px 8px;
+    font-size: 10px;
+    background: rgba(0, 0, 0, 0.7);
+    color: var(--text-primary);
+    border: 1px solid var(--panel-right-border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .focus-preview:has(.focus-video) {
+    position: relative;
+    border-style: solid;
   }
   .focus-prompt {
     font-size: 11px;

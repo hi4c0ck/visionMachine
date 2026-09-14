@@ -70,6 +70,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
+		min-height: 28px;
 	}
 
 	.pipe-label {

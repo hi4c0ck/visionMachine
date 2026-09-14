@@ -46,8 +46,14 @@ impl Database {
         self.execute_migration_sql(include_str!("../../migrations/0002_composer_schema.sql"))
             .await?;
         self.run_additive_columns().await?;
-        self.execute_migration_sql(include_str!("../../migrations/0004_clean_composer_schema.sql"))
-            .await?;
+        self.execute_migration_sql(include_str!(
+            "../../migrations/0004_clean_composer_schema.sql"
+        ))
+        .await?;
+        self.execute_migration_sql(include_str!(
+            "../../migrations/0005_video_generation_tasks.sql"
+        ))
+        .await?;
 
         log::info!("[DB] All migrations completed");
         Ok(())
@@ -386,6 +392,15 @@ impl Database {
         .await
         .map_err(|e| e.to_string())?;
 
+        // Generation tasks are keyed to session_id.
+        sqlx::query(
+            "DELETE FROM video_generation_tasks WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
         // Project files are keyed to project_id.
         sqlx::query("DELETE FROM project_files WHERE project_id = ?")
             .bind(project_id)
@@ -569,6 +584,11 @@ impl Database {
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM video_generation_tasks WHERE session_id = ?")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM sessions WHERE id = ?")
             .bind(session_id)
             .execute(&mut *tx)
@@ -645,31 +665,38 @@ impl Database {
 #[cfg(test)]
 mod update_session_tests {
     use super::Database;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Each setup() gets its own DB file: the harness runs tests in parallel
+    // on shared worker threads, and a shared file races on the seed profile.
+    static SETUP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     async fn setup() -> (Database, String, String) {
-        let dir = std::env::temp_dir().join(format!(
-            "vm_updsess_{}",
-            std::process::id()
-        ));
+        let n = SETUP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("vm_updsess_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("update_session_test.db").to_string_lossy().to_string();
+        let path = dir
+            .join(format!("update_session_test_{}.db", n))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
         let db = Database::new(&path).await.unwrap();
         db.migrate().await.unwrap();
         db.seed_default_profile().await.unwrap();
         let project_id = db.create_project("default", "T", None).await.unwrap();
-        let session_id = db.create_session(&project_id, "S", None, None).await.unwrap();
+        let session_id = db
+            .create_session(&project_id, "S", None, None)
+            .await
+            .unwrap();
         (db, project_id, session_id)
     }
 
     #[tokio::test]
     async fn test_name_only_update() {
         let (db, project_id, session_id) = setup().await;
-        db.update_session(
-            &session_id,
-            &serde_json::json!({ "name": "Renamed" }),
-        )
-        .await
-        .unwrap();
+        db.update_session(&session_id, &serde_json::json!({ "name": "Renamed" }))
+            .await
+            .unwrap();
         let sessions = db.list_sessions(&project_id).await.unwrap();
         assert_eq!(sessions[0]["name"], "Renamed");
         // Untouched fields keep their defaults.
@@ -680,12 +707,9 @@ mod update_session_tests {
     #[tokio::test]
     async fn test_fps_only_update() {
         let (db, project_id, session_id) = setup().await;
-        db.update_session(
-            &session_id,
-            &serde_json::json!({ "fps": 60 }),
-        )
-        .await
-        .unwrap();
+        db.update_session(&session_id, &serde_json::json!({ "fps": 60 }))
+            .await
+            .unwrap();
         let sessions = db.list_sessions(&project_id).await.unwrap();
         assert_eq!(sessions[0]["fps"], 60);
         // name untouched
@@ -695,12 +719,9 @@ mod update_session_tests {
     #[tokio::test]
     async fn test_resolution_only_update() {
         let (db, project_id, session_id) = setup().await;
-        db.update_session(
-            &session_id,
-            &serde_json::json!({ "resolution": "1080p" }),
-        )
-        .await
-        .unwrap();
+        db.update_session(&session_id, &serde_json::json!({ "resolution": "1080p" }))
+            .await
+            .unwrap();
         let sessions = db.list_sessions(&project_id).await.unwrap();
         assert_eq!(sessions[0]["resolution"], "1080p");
     }
@@ -745,11 +766,9 @@ mod update_session_tests {
     async fn test_nonexistent_session_errors() {
         let (db, _project_id, _session_id) = setup().await;
         let missing = "no-such-session-id";
-        let res = db.update_session(
-            missing,
-            &serde_json::json!({ "name": "X" }),
-        )
-        .await;
+        let res = db
+            .update_session(missing, &serde_json::json!({ "name": "X" }))
+            .await;
         assert!(res.is_err(), "expected error for missing session, got Ok");
         assert!(res.unwrap_err().contains("no-such-session-id"));
     }

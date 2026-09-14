@@ -7,11 +7,14 @@ mod models;
 mod storage;
 pub use storage::db::Database;
 
+pub mod generation;
+
 #[derive(Clone)]
 pub struct AppState {
     pub username: Arc<tokio::sync::Mutex<Option<String>>>,
     pub preflight_report: Arc<tokio::sync::Mutex<PreflightReport>>,
     pub db: Arc<tokio::sync::Mutex<Database>>,
+    pub generation: Arc<generation::GenerationService>,
 }
 
 impl AppState {
@@ -19,7 +22,8 @@ impl AppState {
         Self {
             username: Arc::new(tokio::sync::Mutex::new(None)),
             preflight_report: Arc::new(tokio::sync::Mutex::new(PreflightReport::new())),
-            db: Arc::new(tokio::sync::Mutex::new(db)),
+            db: Arc::new(tokio::sync::Mutex::new(db.clone())),
+            generation: Arc::new(generation::GenerationService::new(db)),
         }
     }
 }
@@ -120,6 +124,9 @@ pub fn run() {
             commands::sessions::delete_session,
             commands::composer::get_composer,
             commands::composer::save_composer,
+            commands::generation::start_generation,
+            commands::generation::get_generation_task,
+            commands::generation::cancel_generation,
             // File management commands
             commands::artifacts::add_project_file,
             commands::artifacts::list_project_files,

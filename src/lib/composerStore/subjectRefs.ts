@@ -2,8 +2,28 @@
 // Handles subject reference CRUD within pipes
 
 import type { SubjectReferenceService, ServiceResult } from './interfaces';
-import type { SessionData, PipeRow, SubjectReference } from '$types';
+import type { SessionData, PipeRow, SubjectReference, KeyframeType } from '$types';
 import { snapTo8 } from '$lib/frameMath';
+
+/** Per-type preset rules — subjects follow the same rules as keyframes:
+ *  url → imageUrl, txt2img → prompt, img2img → imageUrl (reference) + prompt. */
+export function validateSubjectPreset(
+  type: KeyframeType,
+  imageUrl: string,
+  prompt: string,
+): string[] {
+  const url = imageUrl.trim();
+  const p = prompt.trim();
+  switch (type) {
+    case 'txt2img':
+      return p ? [] : ['txt2img subject requires a prompt'];
+    case 'img2img':
+      if (!url) return ['img2img subject requires a reference image URL'];
+      return p ? [] : ['img2img subject requires a prompt'];
+    default: // url
+      return url ? [] : ['Image URL must not be empty'];
+  }
+}
 
 export class SubjectReferenceServiceImpl implements SubjectReferenceService {
   private session: SessionData;
@@ -12,14 +32,30 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     this.session = session;
   }
 
-  async add(_sessionId: string, pipeId: string, imageUrl: string, useFrames: boolean, frameStart?: number, frameEnd?: number): Promise<ServiceResult> {
+  async add(
+    _sessionId: string,
+    pipeId: string,
+    imageUrl: string,
+    useFrames: boolean,
+    frameStart?: number,
+    frameEnd?: number,
+    type?: KeyframeType,
+    prompt?: string,
+  ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
     if (pipe.subjectReferences.length >= 5) return { errors: ['Maximum 5 subject references per pipe'] };
 
+    const presetType = type ?? 'url';
+    const errors = validateSubjectPreset(presetType, imageUrl, prompt ?? '');
+    if (errors.length > 0) return { errors };
+
     const ref: SubjectReference = {
       id: crypto.randomUUID(),
-      imageUrl,
+      imageUrl: presetType === 'url' ? imageUrl.trim() : imageUrl.trim(),
+      type: presetType,
+      ...(prompt !== undefined ? { prompt } : {}),
+      status: 'pending',
       useFrames,
       visible: true,
       ...(useFrames && frameStart !== undefined && frameEnd !== undefined ? {
@@ -96,6 +132,8 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
       useFrames: boolean;
       frameStart?: number;
       frameEnd?: number;
+      type?: KeyframeType;
+      prompt?: string;
     },
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
@@ -103,11 +141,8 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     const ref = pipe.subjectReferences.find(r => r.id === refId);
     if (!ref) return { errors: ['Subject reference not found'] };
 
-    const errors: string[] = [];
-    const trimmedUrl = (update.imageUrl ?? '').trim();
-    if (!trimmedUrl) {
-      errors.push('Image URL must not be empty');
-    }
+    const presetType: KeyframeType = update.type ?? ref.type ?? 'url';
+    const errors = validateSubjectPreset(presetType, update.imageUrl ?? '', update.prompt ?? ref.prompt ?? '');
 
     let start: number | undefined;
     let end: number | undefined;
@@ -127,7 +162,12 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     // Apply as one logical mutation only when everything validates, so a
     // failure never leaves a partial update behind.
     if (errors.length === 0) {
-      ref.imageUrl = trimmedUrl;
+      ref.type = presetType;
+      ref.imageUrl = (update.imageUrl ?? '').trim();
+      ref.prompt = update.prompt !== undefined ? update.prompt : ref.prompt;
+      if (presetType === 'url') delete ref.prompt;
+      // edited input ⇒ image not generated yet
+      ref.status = 'pending';
       ref.useFrames = update.useFrames;
       if (update.useFrames) {
         ref.frameStart = start;

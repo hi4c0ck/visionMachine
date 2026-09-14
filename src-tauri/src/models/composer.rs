@@ -101,6 +101,16 @@ impl GlobalElement {
 pub struct SubjectReference {
     pub id: String,
     pub image_url: String,
+    /// Generation preset type — subjects follow keyframe rules: url / txt2img / img2img.
+    /// Legacy refs (field absent) default to "url".
+    #[serde(rename = "type", default = "default_ref_type")]
+    pub kind: String,
+    /// Prompt for txt2img / img2img subjects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Generation status of this reference's image (pending/generating/done/error).
+    #[serde(default = "default_ref_status")]
+    pub status: String,
     #[serde(default)]
     pub use_frames: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,6 +119,13 @@ pub struct SubjectReference {
     pub frame_end: Option<u32>,
     #[serde(default = "default_true")]
     pub visible: bool,
+}
+
+fn default_ref_type() -> String {
+    "url".to_string()
+}
+fn default_ref_status() -> String {
+    "pending".to_string()
 }
 
 fn default_true() -> bool {
@@ -120,6 +137,9 @@ impl SubjectReference {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             image_url,
+            kind: "url".to_string(),
+            prompt: None,
+            status: "pending".to_string(),
             use_frames,
             frame_start: None,
             frame_end: None,
@@ -190,6 +210,17 @@ impl Keyframe {
     }
 }
 
+/// The generated-video artifact attached to a pipe after a generation task
+/// completes. Absent while no engine has produced a real file (empty state).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LastGeneration {
+    pub task_id: String,
+    pub video_path: String,
+    pub generated_at: u64,
+    pub status: String,
+}
+
 /// A single pipe row - the main unit of composition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +241,9 @@ pub struct Pipe {
     pub elements: Vec<PipeElement>,
     #[serde(default)]
     pub order_index: usize,
+    /// Last generation artifact (null/absent = proper empty state).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_generation: Option<LastGeneration>,
 }
 
 fn default_length_frames() -> u32 {
@@ -235,6 +269,7 @@ impl Pipe {
             // Start empty - user chooses Global OR Timeline via [+]
             elements: Vec::new(),
             order_index: 0,
+            last_generation: None,
         }
     }
 }

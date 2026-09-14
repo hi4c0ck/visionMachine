@@ -12,6 +12,9 @@ import type {
   TagElement,
   ResolutionPreset,
   SubjectReference,
+  KeyframeType,
+  GenerationStatus,
+  PipeLastGeneration,
 } from '$types';
 
 // ── Result Type ───────────────────────────────────────────────────────────────
@@ -84,10 +87,21 @@ export interface KeyframeService {
   move(sessionId: string, pipeId: string, keyframeId: string, newFrame: number): Promise<ServiceResult>;
 }
 
-// ── Subject Reference Service Interface ──────────────────────────────────────
+// ── Subject Reference Service Interface ─────────────────────────────────────
 
 export interface SubjectReferenceService {
-  add(sessionId: string, pipeId: string, imageUrl: string, useFrames: boolean, frameStart?: number, frameEnd?: number): Promise<ServiceResult>;
+  add(
+    sessionId: string,
+    pipeId: string,
+    imageUrl: string,
+    useFrames: boolean,
+    frameStart?: number,
+    frameEnd?: number,
+    /** Generation preset type (subjects follow keyframe rules; legacy = 'url') */
+    type?: KeyframeType,
+    /** Prompt for txt2img / img2img */
+    prompt?: string,
+  ): Promise<ServiceResult>;
   remove(sessionId: string, pipeId: string, refId: string): Promise<ServiceResult>;
   toggle(sessionId: string, pipeId: string, refId: string): Promise<ServiceResult>;
   updateRange(sessionId: string, pipeId: string, refId: string, frameStart: number, frameEnd: number): Promise<ServiceResult>;
@@ -108,7 +122,24 @@ export interface SubjectReferenceService {
       useFrames: boolean;
       frameStart?: number;
       frameEnd?: number;
+      type?: KeyframeType;
+      prompt?: string;
     },
+  ): Promise<ServiceResult>;
+}
+
+// ── Generation Result Service Interface ─────────────────────────────────────
+
+export interface GenerationService {
+  /** Attach (or replace) the last-generation artifact on a pipe. */
+  attachLastGeneration(sessionId: string, pipeId: string, gen: PipeLastGeneration): Promise<ServiceResult>;
+  /** Flip a keyframe or subject reference's generation status after a task terminal. */
+  markRefStatus(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+    status: GenerationStatus,
   ): Promise<ServiceResult>;
 }
 

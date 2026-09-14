@@ -47,6 +47,19 @@ const APP_CONSTANTS = {
     sessionsCount: 'Sessions',
     framesCount: 'Frames',
     generationsCount: 'Generations',
+
+    // Generation flow
+    taskNotFinished: 'Task not finished',
+    generationComplete: 'Generation complete',
+    generationCancelled: 'Generation cancelled',
+    generationFailed: 'Generation failed',
+    engineNotConfigured: 'No generation engine configured',
+    refNotAccessible: 'Reference not accessible',
+    generationInProgress: 'Generation already in progress',
+    sessionGenRoadmap: 'Session generation (all pipes) is on the roadmap',
+    promptCopied: 'Prompt copied',
+    lastGenPreview: 'Last generation',
+    openInPreview: 'Open in preview',
     
     // Modals
     addKeyframe: 'Add Keyframe Image',
