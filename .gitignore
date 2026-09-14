@@ -102,7 +102,13 @@ dmypy.json
 .pyre/
 
 # Scripts directory (local utilities only)
-scripts/
+scripts/*
+# ...except tracked build-pipeline scripts
+!scripts/build/
+!scripts/sync-meta.mjs
+
+# Build-orchestrator runtime state (logs + heartbeat), regenerated locally
+build-state/
 
 # Tauri build artifacts
 src-tauri/target/
