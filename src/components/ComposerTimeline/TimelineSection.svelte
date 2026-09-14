@@ -123,10 +123,11 @@
 		return () => document.removeEventListener('click', handler);
 	});
 
-	// Click on the zone pill (segment body) opens the add-tag menu scoped to
-	// THAT zone — only when the press was a true click (no drag). A zone drag
-	// still emits a `click` on release; zoneDragHappened suppresses it so
-	// dragging a zone never accidentally opens the add-tag popup.
+	// Click on the zone pill opens the add-tag menu scoped to THAT zone.
+	// The click stops propagation so the panel's document-level "close menus
+	// on outside click" handler doesn't immediately close the menu we just
+	// opened. A real pill/grip drag still emits a `click` on release;
+	// zoneDragHappened suppresses it so dragging never opens the menu.
 	function onZonePillClick(e: MouseEvent, segId: string) {
 		e.stopPropagation();
 		if (zoneDragHappened) return;
@@ -137,52 +138,95 @@
 		return p.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
-	// ── Tag lanes (one horizontal line per ZONE) ────────────────────────────
-	// Tags of a single zone share one horizontal lane; each zone gets its
-	// own line (like the zone slider rows above) so a zone's tags stay
-	// grouped with it instead of being split across type-based lanes that
-	// made zones appear on separate, scattered lanes.
-	type ZoneLaneEntry = { tag: TagElement; seg: Segment };
-	type ZoneLane = { key: string; zoneIndex: number; segId: string; entries: ZoneLaneEntry[] };
+	// ── Tag lanes (design: one horizontal line per tag TYPE) ───────────────
+	// The reference layout groups tags by type across zones: all "Camera"
+	// tags (from any zone) share one horizontal lane, placed left→right by
+	// their frame ranges. Zones are the single slider rows; lanes are the
+	// thin tracks under them. Pure render grouping — the data model is
+	// unchanged (tags still live in segment.tags[], ranges stay parented
+	// to their zone for drag bounds).
+	//
+	// LANES PERSIST ON THE SAME LINE: the lane list is anchored to the fixed
+	// tag-type order (TagSelectorMenu TAG_TYPES), not to Map insertion order.
+	// Every type that has ever been used in THIS pipe keeps its row forever
+	// (even with zero pills right now); types not yet used stay hidden and
+	// appear in canonical order when first added — so lanes never reorder
+	// or jump when tags come and go.
+	const LANE_TYPE_ORDER: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
 
-	// Zones present in this pipe (in their timeline order); zone add/remove
-	// naturally changes the lane list — no per-zone "ever-seen" persistence,
-	// lanes follow the current zones.
-	function getZoneLanes(p: PipeRow): ZoneLane[] {
-		const tl = getTimeline(p);
-		if (!tl) return [];
-		const segs = (tl.segments ?? []) as Segment[];
-		return segs.map((seg, i) => ({
-			key: seg.id,
-			zoneIndex: i + 1,
-			segId: seg.id,
-			entries: seg.tags.map((tag) => ({ tag, seg })) as ZoneLaneEntry[],
-		}));
+	type TagLaneEntry = { tag: TagElement; seg: Segment };
+	type TagLane = { type: string; color: string; name: string; entries: TagLaneEntry[] };
+
+	// Types whose lane has ever been shown on THIS pipe stay on their line
+	// (rendered faded when empty) — rows only grow, never shrink or shift.
+	// Reset when the pipe changes so lanes are per-pipe, not session-wide.
+	let seenLanes = $state<Set<string>>(new Set());
+	let seenPipeId = $state<string>('');
+	if (pipe?.id !== seenPipeId) {
+		seenPipeId = pipe?.id ?? '';
+		seenLanes = new Set();
 	}
 
-	// Ruler legend: one color key entry per zone + its tag types.
-	let legend = $derived.by(() => {
-		const zones = getZoneLanes(pipe);
-		if (zones.length === 0 && !getTimeline(pipe)) return null;
-		const types: { name: string; color: string }[] = [];
-		for (const lane of zones) {
-			for (const e of lane.entries) {
-				const spec = TAG_SPECIFICATIONS[e.tag.tag as TagType];
-				const name = spec?.name ?? e.tag.spec?.name ?? e.tag.tag;
-				const color = spec?.color ?? e.tag.spec?.color ?? 'var(--accent-color)';
-				if (!types.some((t) => t.name === name)) types.push({ name, color });
+	function getTagLanes(p: PipeRow): TagLane[] {
+		const tl = getTimeline(p);
+		if (!tl) return [];
+		const lanes = new Map<string, TagLane>();
+		for (const seg of (tl.segments ?? []) as Segment[]) {
+			for (const tag of seg.tags) {
+				let lane = lanes.get(tag.tag);
+				if (!lane) {
+					const spec = TAG_SPECIFICATIONS[tag.tag as TagType];
+					lane = {
+						type: tag.tag,
+						color: spec?.color ?? tag.spec?.color ?? 'var(--accent-color)',
+						name: spec?.name ?? tag.spec?.name ?? tag.tag,
+						entries: [],
+					};
+					lanes.set(tag.tag, lane);
+				}
+				lane.entries.push({ tag, seg });
 			}
 		}
-		return {
-			zone: 'var(--accent-color)',
-			global: '#59B5FF',
-			tags: types,
-		};
-	});
+		// Persist ever-seen lanes on the same line (faded when empty).
+		for (const type of lanes.keys()) seenLanes.add(type);
+		// Lane order = canonical tag-type order (issue 8): never first-seen
+		// order, so lanes stay in a stable, predictable sequence.
+		const types: string[] = LANE_TYPE_ORDER.filter((t) => lanes.has(t) || seenLanes.has(t));
+		// Unknown types (e.g. legacy/custom) sort to the end, stable.
+		for (const t of lanes.keys()) {
+			if (!LANE_TYPE_ORDER.includes(t as TagType)) {
+				types.push(t);
+			}
+		}
+		return types.map((t) => {
+			const active = lanes.get(t);
+			if (active) return active;
+			const spec = TAG_SPECIFICATIONS[t as TagType];
+			return {
+				type: t,
+				color: spec?.color ?? 'var(--accent-color)',
+				name: spec?.name ?? t,
+				entries: [] as TagLaneEntry[],
+			};
+		});
+	}
 
 	function getGlobal(p: PipeRow): any {
 		return p.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
+
+	// ── Ruler legend: color key for the lane system (zone/global + tag types
+	//    present in THIS pipe's timeline). Rendered inside the frame-ruler
+	//    space so it aligns with the shared coordinate canvas. ─────────────
+	let legend = $derived.by(() => {
+		const lanes = getTagLanes(pipe);
+		if (lanes.length === 0 && !getTimeline(pipe)) return null;
+		return {
+			zone: 'var(--accent-color)',
+			global: '#59B5FF',
+			tags: lanes.map((l) => ({ name: l.name, color: l.color })),
+		};
+	});
 
 
 
@@ -226,13 +270,13 @@
 		return previewDragState;
 	}
 
+	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body, global grips).
 	
-	// Track whether the last zone-pill press turned into a drag. The browser
-	// still emits a `click` after a drag release; without this flag that
-	// click would wrongly open the add-tag menu after dragging a zone.
+	// Track whether the last zone-pill press turned into a real drag (>3px).
+	// The browser still emits a `click` after a drag release; without this
+	// flag that click would wrongly open the add-tag menu after dragging.
 	let zoneDragHappened = $state(false);
 
-	// One pointerdown for every temporal element (segment/thumb/body, tag/grips, global).
 	function handleElementPointerDown(
 		e: PointerEvent,
 		type: 'segment' | 'tag' | 'global',
@@ -324,8 +368,8 @@
 			previewDragState = null;
 			return;
 		}
-		// A real drag happened (>3px). Flag it so the subsequent `click` on the
-		// zone pill is not read as an add-tag press.
+		// A real drag happened (>3px). Flag it so the subsequent `click` on
+		// the zone pill is not read as an add-tag press.
 		zoneDragHappened = true;
 
 		// Commit to THIS section's pipe, never another pipe: each pipe renders
@@ -464,8 +508,7 @@
 						     horizontal line, placed left→right by frame range (like the
 						     tag lanes below). Body drags move a zone; the round grips
 						     resize it. Clicking a pill opens the tag menu scoped to
-						     THAT zone (suppressed if the press was a drag); its ×
-						     button (pill hover) deletes it. -->
+						     THAT zone; its × button (pill hover) deletes it. -->
 						<div class="segment-lane">
 							<span class="segment-lane-label">Zones</span>
 							{#if rulerGeometry}
@@ -479,20 +522,20 @@
 										onpointerdown={(e) => handleElementPointerDown(e, 'segment', seg.id, seg.id, 'body', seg.frameStart, seg.frameEnd)}
 										onpointermove={handlePointerMove}
 										onpointerup={handlePointerUp}
-								role="button" tabindex="0"
-								aria-label="Zone {segIdx + 1}, frames {sStart}–{sEnd}. Click to add a tag."
-								title="Click to add a tag to Zone {segIdx + 1}"
-								onclick={(e) => { e.stopPropagation(); onZonePillClick(e, seg.id); }}
-								onkeydown={(e) => e.key === 'Enter' && onOpenTagMenu(seg.id, e as unknown as MouseEvent)}>
-								<span class="seg-zone-badge">Z{segIdx + 1}</span>
-								<span class="seg-label">{sStart}–{sEnd}</span>
-								<button
-									class="btn-icon-sm btn-del-sm seg-del"
-									onpointerdown={(e) => e.stopPropagation()}
-									onclick={(e) => { e.stopPropagation(); onDeleteSegment(seg.id); }}
-									title={seg.tags.length > 0 ? `Delete zone ${segIdx + 1} and its ${seg.tags.length} tag${seg.tags.length !== 1 ? 's' : ''}` : `Delete zone ${segIdx + 1}`}>
-									×{#if seg.tags.length > 0}<span class="seg-del-count">{seg.tags.length}</span>{/if}
-								</button>
+										role="button" tabindex="0"
+										aria-label="Zone {segIdx + 1}, frames {sStart}–{sEnd}. Click to add a tag."
+										title="Click to add a tag to Zone {segIdx + 1}"
+										onclick={(e) => { e.stopPropagation(); onZonePillClick(e, seg.id); }}
+										onkeydown={(e) => e.key === 'Enter' && onOpenTagMenu(seg.id, e as unknown as MouseEvent)}>
+										<span class="seg-zone-badge">Z{segIdx + 1}</span>
+										<span class="seg-label">{sStart}–{sEnd}</span>
+										<button
+											class="btn-icon-sm btn-del-sm seg-del"
+											onpointerdown={(e) => e.stopPropagation()}
+											onclick={(e) => { e.stopPropagation(); onDeleteSegment(seg.id); }}
+											title={seg.tags.length > 0 ? `Delete zone ${segIdx + 1} and its ${seg.tags.length} tag${seg.tags.length !== 1 ? 's' : ''}` : `Delete zone ${segIdx + 1}`}>
+											×{#if seg.tags.length > 0}<span class="seg-del-count">{seg.tags.length}</span>{/if}
+										</button>
 									</div>
 									<div
 										class="segment-handle segment-handle-left"
@@ -520,33 +563,41 @@
 							{/if}
 						</div>
 
-						<!-- ═══ ZONE TAG LANES: one line per ZONE (a zone's tags stay grouped on
-							 their own lane, labeled by zone). Each lane holds that zone's
-							 pills, placed left→right by frame range. Body drags move the
-							 pill; the round grips on its edges resize start/end within the
-							 zone (8-grid snap). Clicking the pill edits its prompt. -->
-						{#each getZoneLanes(pipe) as lane (lane.key)}
-							<div class="tag-lane" class:empty={lane.entries.length === 0}>
+						<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
+							 Each tag type gets its own horizontal lane; every pill of
+							 that type (from any zone) sits on the same line, placed
+							 left→right by frame range. Body drags move the pill;
+							 the round grips on its edges resize start/end within
+							 the parent zone (8-grid snap). -->
+						{#each getTagLanes(pipe) as lane (lane.type)}
+							<div class="tag-lane" class:empty={lane.entries.length === 0} style="--lane-color: {lane.color};">
 								<div class="tag-lane-track">
-									<span class="tag-lane-label">Zone {lane.zoneIndex}</span>
+									<span class="tag-lane-label" style="--lane-color: {lane.color};">{lane.name}</span>
 									{#if rulerGeometry}
 										{#each lane.entries as entry (entry.tag.id)}
 											{@const tag = entry.tag}
 											{@const seg = entry.seg}
+											{@const zoneIndex = tl.segments.indexOf(seg) + 1}
 											<div
 												class="tag-body"
 												style="left: {frameToPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, rulerGeometry)}px; width: {rangeWidthPx(getPreviewTag(tag.id)?.startFrame ?? tag.frameStart, getPreviewTag(tag.id)?.endFrame ?? tag.frameEnd, rulerGeometry)}px; --tag-color: {tag.spec?.color};"
 												role="button"
 												tabindex="0"
-												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {lane.zoneIndex}{tag.prompt ? ' · \u201c' + tag.prompt + '\u201d' : ''} · Drag to move, grips to resize, click to edit prompt"
+												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex}{tag.prompt ? ' · \u201c' + tag.prompt + '\u201d' : ''} · Drag to move, grips to resize, click to edit prompt"
 												onclick={() => onEditTagPrompt(seg, tag)}
 												onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
 												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
 												onpointermove={handlePointerMove}
 												onpointerup={handlePointerUp}>
+												<span class="tag-pill-zone">Z{zoneIndex}</span>
 												<span class="tag-pill-prompt">{tag.prompt ?? tag.spec?.name}</span>
 												<button
 													class="btn-del-tag"
+													// The parent .tag-body's onpointerdown calls preventDefault()
+													// (to prevent text selection during drag), which suppresses the
+													// native click event on children. Stopping propagation here
+													// keeps the drag handler from running on this button so its
+													// onclick still fires.
 													onpointerdown={(e) => e.stopPropagation()}
 													onclick={(e) => { e.stopPropagation(); onRemoveTag(seg.id, tag.id); }}
 													title="Remove tag">×</button>
@@ -572,7 +623,7 @@
 													title="Drag to resize tag end"></div>
 											</div>
 										{/each}
-								{/if}
+									{/if}
 								</div>
 							</div>
 						{/each}

@@ -319,6 +319,14 @@
 		pointer-events: none;
 		max-width: 110px;
 	}
+	.tag-lane-label::before {
+		content: "";
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: var(--lane-color, var(--accent-color));
+		flex-shrink: 0;
+	}
 
 /* Tag pill (colored per type via --tag-color). Body-drag only: pills in a
    lane keep their frame range; overlap is allowed and painted in DOM order. */
@@ -341,7 +349,19 @@
 	.tag-body:hover { filter: brightness(1.12); }
 	.tag-body:active { cursor: grabbing; }
 
-	/* Prompt text on the pill (zone-based lane: shows the tag type + prompt). */
+	/* Zone origin badge — which zone a pill belongs to, visible on the
+	   shared type lane. Sits before the prompt text. */
+	.tag-pill-zone {
+		font-size: 8px;
+		font-weight: 700;
+		color: rgba(255, 255, 255, 0.85);
+		flex: 0 0 auto;
+		margin: 0 4px 0 0;
+		letter-spacing: 0.3px;
+	}
+
+	/* Prompt text on the pill (ref parity: tags show their prompt inline).
+	   Shows the prompt when set, otherwise the tag type name as fallback. */
 	.tag-pill-prompt {
 		font-size: 9px;
 		font-weight: 600;
