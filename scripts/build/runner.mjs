@@ -43,11 +43,15 @@ Runs the Tauri desktop build with progress tracking, health checks and
 resource guards. State lives in build-state/ (heartbeat + logs).
 
 Flags:
+  --light            lightweight preset for memory-tight machines: jobs=2,
+                     no LTO, Low priority, 128 MB RAM guard, codegen-units=8
+  --codegen-units <n> split release codegen into N units (lighter peaks,
+                     longer link; default: profile value, 8 with --light)
   --jobs <n>         cap cargo parallelism (default: auto 2-4, based on free RAM)
   --no-lto           build without release LTO (much lighter link step)
   --priority <p>     below | low | normal — Windows process priority (default: below)
   --ram-guard <mb>   abort the build when free system RAM drops below this
-                     (default: 1024; use 0 to disable)
+                     (default: 1024, 128 with --light; use 0 to disable)
   --stall-warn <ms>  warn after this much output silence (default: 600000)
   --detach           start in the background, print tracking commands, exit
   --help             this text
@@ -61,11 +65,20 @@ Stop it:                 npm run build:stop`);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const isWin = process.platform === 'win32';
 
+const light = argv.includes('--light');
 const jobsArg = opt('--jobs');
-const noLto = argv.includes('--no-lto');
-const priority = isWin ? (opt('--priority') ?? 'below') : 'normal';
-const guardMB = opt('--ram-guard') !== undefined ? Number(opt('--ram-guard')) : 1024;
+const noLto = argv.includes('--no-lto') || light;
+const priority = isWin ? (opt('--priority') ?? (light ? 'low' : 'below')) : 'normal';
+// Light mode tolerates a much lower free-RAM floor: the build itself peaks
+// low (few jobs, no LTO, split codegen), and low-memory machines already
+// oscillate around 0.5-1 GB of *baseline* free RAM — the guard must only
+// catch real crash territory, not the system's normal breathing room.
+const guardMB = opt('--ram-guard') !== undefined ? Number(opt('--ram-guard')) : (light ? 128 : 1024);
 const stallMs = opt('--stall-warn') !== undefined ? Number(opt('--stall-warn')) : 600_000;
+// Light mode splits the app crate's single giant codegen unit into 8 —
+// the main memory spike on low-RAM machines. Regular builds keep the
+// profile default (1) to stay warm-cache-friendly.
+const codegenUnits = opt('--codegen-units') !== undefined ? Number(opt('--codegen-units')) : (light ? 8 : undefined);
 const detach = argv.includes('--detach');
 
 // ── Pre-flight (fail fast, before any process is spawned) ───────────────────
@@ -86,7 +99,8 @@ if (!pf.ok) {
   process.exit(1);
 }
 
-const jobs = jobsArg !== undefined ? Number(jobsArg) : pf.jobs;
+const jobs = jobsArg !== undefined ? Number(jobsArg) : (light ? 2 : pf.jobs);
+if (light) console.log(`[BUILD] light mode: jobs=${jobsArg ?? 2}, no LTO, Low priority, ${guardMB} MB RAM guard, codegen-units=${codegenUnits}`);
 for (const w of pf.warnings) console.log(`⚠ ${w}`);
 
 // ── Log + state slot ─────────────────────────────────────────────────────────
@@ -120,9 +134,10 @@ let doc = state.write({
 
 if (detach) {
   const logFd = openSync(path.join(root, logFile), 'a');
-  const forwarded = [];
-  if (jobsArg !== undefined) forwarded.push('--jobs', String(jobsArg));
+  // Forward the fully-resolved values so the background runner is identical.
+  const forwarded = ['--jobs', String(jobs)];
   if (noLto) forwarded.push('--no-lto');
+  if (codegenUnits) forwarded.push('--codegen-units', String(codegenUnits));
   forwarded.push('--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs));
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...forwarded], {
     cwd: root,
@@ -148,6 +163,7 @@ const spec = buildCommand({
   noLto,
   priority,
   stateDir: path.join(root, 'build-state'),
+  codegenUnits,
 });
 const logStream = createWriteStream(path.join(root, logFile), { flags: 'a' });
 const parser = new ProgressParser();

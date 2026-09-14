@@ -71,6 +71,13 @@ describe('buildCommand', () => {
     expect(spec.env.CARGO_PROFILE_RELEASE_LTO).toBe('false');
   });
 
+  it('codegenUnits splits the release codegen via env', () => {
+    const spec = buildCommand({ codegenUnits: 8, platform: 'linux', stateDir: dir });
+    expect(spec.env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS).toBe('8');
+    const off = buildCommand({ platform: 'linux', stateDir: dir });
+    expect(off.env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS).toBeUndefined();
+  });
+
   it('win32 normal priority: npx.cmd through a shell, no wrapper', () => {
     const spec = buildCommand({ jobs: 4, priority: 'normal', platform: 'win32', stateDir: dir });
     expect(spec.cmd).toBe('npx');

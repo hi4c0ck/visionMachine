@@ -12,10 +12,13 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 /** Pure command spec — testable without touching a process. */
-export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDir = 'build-state', platform = process.platform }) {
+export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDir = 'build-state', platform = process.platform, codegenUnits } = {}) {
   const env = { ...process.env, NO_COLOR: '1' };
   if (jobs) env.CARGO_BUILD_JOBS = String(jobs);
   if (noLto) env.CARGO_PROFILE_RELEASE_LTO = 'false';
+  // Split one giant codegen unit into N smaller ones: big memory-spike saver
+  // on the app crate (release profile ships with codegen-units = 1).
+  if (codegenUnits) env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS = String(codegenUnits);
 
   if (platform === 'win32' && priority !== 'normal') {
     const ps1 = path.join(stateDir, 'build-runner.ps1');
