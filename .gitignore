@@ -102,7 +102,9 @@ dmypy.json
 .pyre/
 
 # Scripts directory (local utilities only)
-scripts/
+scripts/*
+# ...except the meta sync script (build pipeline: run via npm run sync:meta)
+!scripts/sync-meta.mjs
 
 # Tauri build artifacts
 src-tauri/target/
