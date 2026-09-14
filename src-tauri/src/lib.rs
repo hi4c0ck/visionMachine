@@ -106,6 +106,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::auth::login_user,
             commands::auth::logout_user,
+            commands::accounts::list_accounts,
+            commands::accounts::delete_account,
             commands::profiles::create_profile,
             commands::profiles::list_profiles,
             commands::profiles::get_user_profile,

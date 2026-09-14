@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import Workspace from './components/Workspace.svelte';
 	import ErrorHandler from './components/ErrorHandler.svelte';
+	import WelcomeAccounts from './components/WelcomeAccounts.svelte';
+	import WelcomeDeleteModal from './components/WelcomeDeleteModal.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
 	// State declarations - explicit reactive state
@@ -14,6 +17,12 @@
 	let layoutMode = $state('landscape');
 	let error = $state<string | null>(null);
 	let runtimeError = $state<Error | null>(null);
+
+	// Welcome-page account list (desktop only; empty in the browser).
+	let accounts = $state<any[]>([]);
+	let deleteTarget = $state<any | null>(null);
+	let deleting = $state(false);
+	let notice = $state('');
 	
 	// Derived state - properly reactive
 	let isNameEmpty = $derived(!userName.trim().length);
@@ -68,6 +77,8 @@
 			console.error('[App] Failed to clear username:', e);
 		}
 		userName = '';
+		deleteTarget = null;
+		notice = '';
 		showWelcome = true;
 	}
 	
@@ -91,6 +102,62 @@
 		} catch (e) {
 			console.error('[App] Failed to save projects:', e);
 			runtimeError = e instanceof Error ? e : new Error('Failed to save projects');
+		}
+	}
+
+	// ── Welcome-page accounts ────────────────────────────────────────────
+	async function loadAccounts() {
+		if (!isTauri()) {
+			accounts = [];
+			return;
+		}
+		try {
+			accounts = (await invoke('list_accounts')) as any[];
+		} catch (e) {
+			console.error('[App] Failed to load accounts:', e);
+			accounts = [];
+		}
+	}
+
+	// Row click = auto-login as that account.
+	function handleAccountClick(account: any) {
+		notice = '';
+		userName = account.name;
+		handleLogin();
+	}
+
+	// × click: confirm via modal when the account owns data,
+	// otherwise delete directly (nothing to lose).
+	function handleDeleteAccountClick(account: any) {
+		notice = '';
+		if (account.has_data) {
+			deleteTarget = account;
+		} else {
+			performAccountDelete(account, false);
+		}
+	}
+
+	async function performAccountDelete(account: any, deleteAllData: boolean) {
+		if (!isTauri()) return;
+		deleting = true;
+		try {
+			const result = (await invoke('delete_account', {
+				input: { profile_id: account.id, delete_all_data: deleteAllData },
+			})) as any;
+			deleteTarget = null;
+			notice = result?.cache_folder
+				? `Data saved to ${result.cache_folder}`
+				: `Account “${account.name}” deleted`;
+			// Don't auto-login into a name whose account no longer exists.
+			if (localStorage.getItem('vm-username') === account.name) {
+				localStorage.removeItem('vm-username');
+			}
+			await loadAccounts();
+		} catch (e) {
+			console.error('[App] Failed to delete account:', e);
+			error = `Failed to delete account: ${e}`;
+		} finally {
+			deleting = false;
 		}
 	}
 	
@@ -118,6 +185,7 @@
 			}
 			
 			applyTheme(selectedTheme);
+			loadAccounts();
 		} catch (e) {
 			console.error('[App] Failed to restore state:', e);
 			runtimeError = e instanceof Error ? e : new Error('Failed to restore application state');
@@ -150,6 +218,13 @@
 			{/if}
 
 			<main class="main">
+				{#if accounts.length > 0}
+					<WelcomeAccounts
+						{accounts}
+						onAccountClick={handleAccountClick}
+						onDeleteClick={handleDeleteAccountClick}
+					/>
+				{/if}
 				<div class="welcome-card">
 					<h1 class="welcome-title">{APP_CONSTANTS.strings.welcomeTitle}</h1>
 					<p class="hint">{APP_CONSTANTS.strings.enterName}</p>
@@ -172,8 +247,24 @@
 					</button>
 				</div>
 			</main>
+
+			{#if notice}
+				<div class="notice-banner" role="status">
+					<span>{notice}</span>
+					<button class="notice-dismiss" title="Dismiss" onclick={() => (notice = '')}>×</button>
+				</div>
+			{/if}
+
+			<WelcomeDeleteModal
+				account={deleteTarget}
+				busy={deleting}
+				onConfirm={(deleteAll: boolean) => deleteTarget && performAccountDelete(deleteTarget, deleteAll)}
+				onCancel={() => {
+					if (!deleting) deleteTarget = null;
+				}}
+			/>
 		</div>
-	{:else}
+		{:else}
 		<div id="workspace-container">
 			<Workspace
 				{userName}
@@ -263,6 +354,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		gap: 32px;
 		padding: 32px;
 		overflow: auto;
 		background: var(--bg-primary);
@@ -352,5 +444,36 @@
 		text-align: center;
 		border-bottom: 1px solid rgba(220, 38, 38, 0.3);
 		font-size: 13px;
+	}
+
+	.notice-banner {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 12px 16px;
+		background: rgba(34, 197, 94, 0.1);
+		color: #4ade80;
+		border-top: 1px solid rgba(34, 197, 94, 0.3);
+		font-size: 13px;
+		flex-shrink: 0;
+	}
+
+	.notice-banner span {
+		flex: 1;
+		word-break: break-word;
+		text-align: center;
+	}
+
+	.notice-dismiss {
+		border: none;
+		background: transparent;
+		color: #4ade80;
+		font-size: 1rem;
+		line-height: 1;
+		cursor: pointer;
+	}
+
+	.notice-dismiss:hover {
+		color: #22c55e;
 	}
 </style>
