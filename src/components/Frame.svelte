@@ -6,7 +6,8 @@
 		showWelcome,
 		onlogout,
 		onthemeChange,
-		onlayoutChange
+		onlayoutChange,
+		video = null,
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -15,6 +16,9 @@
 		onlogout?: () => void;
 		onthemeChange?: (theme: string) => void;
 		onlayoutChange?: (mode: string) => void;
+		/** The video to show in the top-panel preview (D9: native <video> +
+		 *  play button, no ffmpeg). null = the empty placeholder state. */
+		video?: { url: string; label: string } | null;
 	}>();
 
 	const layouts = [
@@ -24,6 +28,34 @@
 	];
 
 	let previewImage = $state<string | null>(null);
+
+	// Top-panel video (D9): native <video> + a play/pause toggle. ffmpeg
+	// (poster extraction etc.) is explicitly deferred.
+	let videoEl = $state<HTMLVideoElement | null>(null);
+	let videoPlaying = $state(false);
+
+	function toggleVideoPlay() {
+		const el = videoEl;
+		if (!el) return;
+		if (videoPlaying) {
+			el.pause();
+			videoPlaying = false;
+		} else {
+			el.play().then(() => {
+				videoPlaying = true;
+			}).catch(() => {});
+		}
+	}
+
+	function resetVideoState() {
+		videoPlaying = false;
+	}
+
+	$effect(() => {
+		// reset the toggle when the video source changes
+		void video?.url;
+		resetVideoState();
+	});
 
 	function setLayout(mode: string) {
 		console.log('[Frame] Layout:', mode);
@@ -61,7 +93,28 @@
 
 	<!-- Middle section: frame/video preview container -->
 	<div class="frame-preview">
-		{#if previewImage}
+		{#if video}
+			<div class="frame-video-wrap">
+				<video
+					bind:this={videoEl}
+					class="frame-video"
+					src={video.url}
+					controls
+					onpause={() => (videoPlaying = false)}
+					onplay={() => (videoPlaying = true)}
+					onended={() => (videoPlaying = false)}
+				></video>
+				<button
+					class="frame-video-play"
+					onclick={toggleVideoPlay}
+					title={videoPlaying ? 'Pause' : 'Play'}
+					aria-label={videoPlaying ? 'Pause video' : 'Play video'}
+				>
+					{videoPlaying ? '❚❚' : '▶'}
+				</button>
+				<span class="frame-video-label">{video.label}</span>
+			</div>
+		{:else if previewImage}
 			<img src={previewImage} alt="Frame preview" class="preview-img" onclick={handlePreviewClick} />
 		{:else}
 			<div class="preview-empty" onclick={handlePreviewClick}>
@@ -195,6 +248,55 @@
 		background: radial-gradient(ellipse at center, var(--accent-glow) 0%, transparent 70%);
 		opacity: 0.3;
 		pointer-events: none;
+	}
+
+	.frame-video-wrap {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1;
+	}
+
+	.frame-video {
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
+		background: #000;
+	}
+
+	.frame-video-play {
+		position: absolute;
+		bottom: 8px;
+		right: 8px;
+		width: 30px;
+		height: 30px;
+		border-radius: 50%;
+		border: 1px solid var(--border);
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+		cursor: pointer;
+		font-size: 0.7rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.frame-video-play:hover {
+		background: var(--bg-hover);
+	}
+
+	.frame-video-label {
+		position: absolute;
+		top: 6px;
+		left: 8px;
+		font-size: 0.65rem;
+		font-family: 'JetBrains Mono', monospace;
+		color: var(--text-secondary);
+		background: rgba(0, 0, 0, 0.55);
+		padding: 2px 6px;
+		border-radius: 4px;
 	}
 
 	.preview-empty {

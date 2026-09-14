@@ -45,6 +45,8 @@ import { flashToast } from '$lib/flashToast';
 			focus = $bindable({ level: 'project' } as ComposerFocus),
 			onframechange,
 			uiVariant = 'fixed',
+			brokenRefs,
+			onRefSaved,
 		} = $props<{
 			session?: SessionData;
 			totalFrames?: number;
@@ -59,6 +61,10 @@ import { flashToast } from '$lib/flashToast';
 			 *  layouts. 'fixed' = tabbed Keyframes⇄SubjectRefs aux panel +
 			 *  live drag-following frame pin. 'current' = the existing rows. */
 			uiVariant?: ComposerUiVariant;
+			/** Broken reference ids (D5), keyed `${pipeId}:${refId}` — chips are red-out. */
+			brokenRefs?: Set<string>;
+			/** A keyframe/subject reference was just saved → re-validate its URL. */
+			onRefSaved?: (pipeId: string, refId: string) => void;
 		}>();
 
 	const MAX_KEYFRAMES = 3;
@@ -652,6 +658,7 @@ import { flashToast } from '$lib/flashToast';
 										onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
 										onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
 										headerless={true}
+										containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 									/>
 								</div>
 							{/if}
@@ -672,7 +679,9 @@ import { flashToast } from '$lib/flashToast';
 										onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
 										onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
 										onAdd={() => openSubjectRefModal(pipeIdx)}
+										onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
 										headerless={true}
+										containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 									/>
 								</div>
 							{/if}
@@ -688,6 +697,7 @@ import { flashToast } from '$lib/flashToast';
 					maxKeyframes={MAX_KEYFRAMES}
 					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
 					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
+					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 
 				<!-- ═══ SUBJECT REFERENCES ROW ═══ -->
@@ -697,6 +707,8 @@ import { flashToast } from '$lib/flashToast';
 					onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
 					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
 					onAdd={() => openSubjectRefModal(pipeIdx)}
+					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
+					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}
 
@@ -756,6 +768,7 @@ import { flashToast } from '$lib/flashToast';
 		maxFrames={totalFrames}
 		editingSlot={editingKeyframeSlot}
 		bind:open={showKeyframeModal}
+		onSaved={(refId) => onRefSaved?.(pipes[activePipeIdx]?.id ?? '', refId)}
 	/>
 {/if}
 
@@ -768,6 +781,7 @@ import { flashToast } from '$lib/flashToast';
 		editingRefId={editingSubjectRefId}
 		maxSubjectRefs={MAX_SUBJECT_REFS}
 		bind:open={showSubjectRefModal}
+		onSaved={(refId) => onRefSaved?.(pipes[activePipeIdx]?.id ?? '', refId)}
 	/>
 {/if}
 

@@ -14,12 +14,15 @@
 		onEditSlot,
 		onRemoveKeyframe,
 		headerless = false,
+		containsBroken,
 	} = $props<{
 		pipe: PipeRow;
 		maxKeyframes: number;
 		onEditSlot: (slotIndex: number) => void;
 		onRemoveKeyframe: (kfId: string) => void;
 		headerless?: boolean;
+		/** Red-out state for refs whose URL failed the accessibility check (D5). */
+		containsBroken?: (id: string) => boolean;
 	}>();
 
 	const visibleSlots = () => getVisibleKeyframeSlots(pipe, maxKeyframes);
@@ -36,13 +39,22 @@
 		{#each visibleSlots() as kfNum}
 			{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
 				{#if kf}
+					{@const broken = containsBroken?.(kf.id) ?? false}
 					<div 
 						class="kf-chip kf-filled"
+						class:kf-broken={broken}
 						onclick={() => onEditSlot(kfNum)}
 						onkeydown={(e) => e.key === 'Enter' && onEditSlot(kfNum)}
 						role="button"
 						tabindex="0"
-						title="Frame {kf.frame} · {kf.type} · Click to edit">
+						title={broken
+							? `Frame ${kf.frame} · ${kf.type} · URL not accessible · Click to fix`
+							: `Frame ${kf.frame} · ${kf.type} · Click to edit`}
+						aria-invalid={broken || undefined}
+						>
+						{#if broken}
+							<span class="kf-broken-mark" aria-hidden="true">⚠</span>
+						{/if}
 						{#if kf.imageSrc}
 							<img src={kf.imageSrc} class="kf-img" alt="keyframe" />
 						{:else}
@@ -139,5 +151,18 @@
 	.kf-del:hover {
 		background: var(--bg-tertiary);
 		color: var(--text-primary);
+	}
+
+	/* Broken URL state (D5): red-out the chip whose reference failed the
+	   accessibility check. Persists until the ref is re-validated. */
+	.kf-broken {
+		border-color: #ef4444;
+		background: rgba(239, 68, 68, 0.14);
+	}
+
+	.kf-broken-mark {
+		color: #ef4444;
+		font-size: 11px;
+		font-weight: 700;
 	}
 </style>

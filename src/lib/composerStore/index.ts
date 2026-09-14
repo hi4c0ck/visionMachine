@@ -14,7 +14,7 @@ import type {
   MigrationService,
   SubjectReferenceService,
 } from './interfaces';
-import type { SessionData, PipeRow } from '$types';
+import type { SessionData, PipeRow, PipeLastGeneration, GenerationStatus, KeyframeType } from '$types';
 
 // ── Service Implementations ──────────────────────────────────────────────────
 
@@ -26,6 +26,7 @@ import { KeyframeServiceImpl } from './keyframes';
 import { SessionServiceImpl } from './session-io';
 import { MigrationServiceImpl } from './migrations';
 import { SubjectReferenceServiceImpl } from './subjectRefs';
+import { GenerationServiceImpl } from './generation';
 import { normalizePipe } from './validators';
 
 // ── Shared State ──────────────────────────────────────────────────────────────
@@ -120,6 +121,7 @@ class ComposerStoreImpl implements ComposerStore {
       session: this.services.session,
       migration: this.services.migration,
       subjectRefs: new SubjectReferenceServiceImpl(session),
+      generation: new GenerationServiceImpl(session, (pid: string) => session.pipes.find(p => p.id === pid)),
     };
   }
 
@@ -297,9 +299,18 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   // Subject reference operations
-  async addSubjectRef(sessionId: string, pipeId: string, imageUrl: string, useFrames: boolean, frameStart?: number, frameEnd?: number): Promise<ServiceResult> {
+  async addSubjectRef(
+    sessionId: string,
+    pipeId: string,
+    imageUrl: string,
+    useFrames: boolean,
+    frameStart?: number,
+    frameEnd?: number,
+    type?: KeyframeType,
+    prompt?: string,
+  ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
-    const result = await s.subjectRefs.add(sessionId, pipeId, imageUrl, useFrames, frameStart, frameEnd);
+    const result = await s.subjectRefs.add(sessionId, pipeId, imageUrl, useFrames, frameStart, frameEnd, type, prompt);
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }
@@ -352,10 +363,33 @@ class ComposerStoreImpl implements ComposerStore {
       useFrames: boolean;
       frameStart?: number;
       frameEnd?: number;
+      type?: KeyframeType;
+      prompt?: string;
     },
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
     const result = await s.subjectRefs.update(sessionId, pipeId, refId, update);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  // Generation result operations (task terminal → pipe artifact + ref statuses)
+  async attachLastGeneration(sessionId: string, pipeId: string, gen: PipeLastGeneration): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.generation.attachLastGeneration(sessionId, pipeId, gen);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  async markRefStatus(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+    status: GenerationStatus,
+  ): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.generation.markRefStatus(sessionId, pipeId, kind, refId, status);
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }
@@ -433,6 +467,9 @@ class ComposerStoreImpl implements ComposerStore {
               frameStart: ref.frameStart,
               frameEnd: ref.frameEnd,
               visible: ref.visible !== false,
+              type: ref.type ?? 'url',
+              prompt: ref.prompt,
+              status: ref.status ?? 'pending',
             })),
             elements: pipe.elements.map((el: any) => {
               if ('segments' in el) {
@@ -464,6 +501,7 @@ class ComposerStoreImpl implements ComposerStore {
                 enabled: el.enabled,
               };
             }),
+            lastGeneration: pipe.lastGeneration ?? null,
           })),
           fps: session.fps,
           resolution: session.resolution,
@@ -533,6 +571,8 @@ export const toggleSubjectRef = composerStore.toggleSubjectRef.bind(composerStor
 export const updateSubjectRefUrl = composerStore.updateSubjectRefUrl.bind(composerStore);
 export const updateSubjectRefUseFrames = composerStore.updateSubjectRefUseFrames.bind(composerStore);
 export const updateSubjectRef = composerStore.updateSubjectRef.bind(composerStore);
+export const attachLastGeneration = composerStore.attachLastGeneration.bind(composerStore);
+export const markRefStatus = composerStore.markRefStatus.bind(composerStore);
 export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
 export const updateOrientation = composerStore.updateOrientation.bind(composerStore);

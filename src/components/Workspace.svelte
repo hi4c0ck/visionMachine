@@ -1,13 +1,22 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import Frame from './Frame.svelte';
 	import ProjectsPanel from './ProjectsPanel.svelte';
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile } from '$types';
+	import GenerateModal from './ComposerModals/GenerateModal.svelte';
+	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView } from '$types';
 	import { getMaxFramesForResolution } from '$types';
-	import { migratePipe } from '$lib/composerStore';
+	import { APP_CONSTANTS } from '$constants';
+	import { flashToast } from '$lib/flashToast';
+	import { summarizePipe } from '$lib/promptEngine';
+	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
+	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
+	import { refOutcomes } from '$lib/generationOutcome';
+	import { toMediaUrl } from '$lib/mediaUrl';
+	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
 	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -95,6 +104,22 @@
 	);
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
 
+	// ── Generation flow state (pipe-level, decisions D1–D9) ─────────────────
+	// brokenRefs: `${pipeId}:${refId}` of references whose URL failed the
+	// accessibility check (D5) — chips are red-out until re-validated.
+	let brokenRefs = $state<Set<string>>(new Set());
+	let generateModalPipeId = $state<string | null>(null);
+	let showGenerateModal = $state(false);
+	let showProgressModal = $state(false);
+	let activeTask = $state<GenerationTaskView | null>(null);
+	let poller: PollHandle | null = null;
+	let previewVideo = $state<{ url: string; label: string } | null>(null);
+
+	const anyTaskActive = $derived(activeTask !== null && !isTerminalTaskStatus(activeTask.status));
+	const generatePipe = $derived.by(() => {
+		if (!generateModalPipeId || !selectedSession) return null;
+		return selectedSession.pipes.find((p) => p.id === generateModalPipeId) ?? null;
+	});
 	// Session-ruler tick strip, generated to the (placeholder) session length
 	// instead of a hardcoded [0..240] array that assumes 720p.
 	let previewTicks = $derived.by(() => {
@@ -742,8 +767,133 @@
 
 	function handleGenerate() {
 		if (!selectedSession || !selectedSession.pipes?.length) return;
-		console.log('[Workspace] Generating video for session:', selectedSession.id);
-		// TODO: Implement actual generation logic
+		// Session-level "generate all pipes" is a future task (D3): make the
+		// button honest instead of a silent no-op.
+		flashToast(APP_CONSTANTS.strings.sessionGenRoadmap, 'info');
+	}
+
+	// ── Pipe-level generation flow (D1–D9) ──────────────────────────────────
+
+	function openGenerateModal(pipeId: string) {
+		if (!isTauri() || !selectedSession) return;
+		generateModalPipeId = pipeId;
+		showGenerateModal = true;
+	}
+
+	function markBrokenRefs(pipeId: string, broken: RefUrlTarget[]) {
+		const prefix = `${pipeId}:`;
+		brokenRefs = new Set(
+			[...brokenRefs].filter((k) => !k.startsWith(prefix)).concat(broken.map((t) => `${pipeId}:${t.refId}`)),
+		);
+	}
+
+	/** D5 gate: unreachable reference → no task, red-out chips, keep the modal open. */
+	async function confirmGenerate() {
+		if (!generatePipe || !selectedSession) return;
+		const pipe = generatePipe;
+		const broken = await checkRemoteUrls(collectRemoteUrls(pipe));
+		if (broken.length > 0) {
+			markBrokenRefs(pipe.id, broken);
+			flashToast(`${APP_CONSTANTS.strings.refNotAccessible}: ${broken[0].url}`, 'error');
+			return;
+		}
+		try {
+			const res = await invoke<{ task_id: string }>('start_generation', {
+				input: { session_id: selectedSession.id, pipe_id: pipe.id, prompt: summarizePipe(pipe) },
+			});
+			showGenerateModal = false;
+			startWatchingTask(res.task_id);
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+			showGenerateModal = false;
+		}
+	}
+
+	/** Re-validate one reference after its modal save; clears the red-out on success. */
+	async function recheckRef(pipeId: string, refId: string) {
+		const pipe = pipes.find((p) => p.id === pipeId);
+		if (!pipe) return;
+		const targets = collectRemoteUrls(pipe).filter((t) => t.refId === refId);
+		const broken = await checkRemoteUrls(targets);
+		if (broken.length === 0) {
+			const key = `${pipeId}:${refId}`;
+			brokenRefs = new Set([...brokenRefs].filter((k) => k !== key));
+		} else {
+			markBrokenRefs(pipeId, broken);
+		}
+	}
+
+	async function fetchGenerationTask(taskId: string): Promise<GenerationTaskView> {
+		return (await invoke('get_generation_task', { task_id: taskId })) as GenerationTaskView;
+	}
+
+	function startWatchingTask(taskId: string) {
+		stopPoller();
+		activeTask = null;
+		showProgressModal = true;
+		poller = pollTask({
+			taskId,
+			fetchTask: fetchGenerationTask,
+			onTick: onTaskTick,
+		});
+	}
+
+	function stopPoller() {
+		poller?.stop();
+		poller = null;
+	}
+
+	function onTaskTick(view: GenerationTaskView) {
+		activeTask = view;
+		if (isTerminalTaskStatus(view.status)) {
+			stopPoller();
+			handleTaskTerminal(view);
+		}
+	}
+
+	/** Terminal state: flip reference statuses + attach the artifact (D1/D4). */
+	function handleTaskTerminal(view: GenerationTaskView) {
+		for (const o of refOutcomes(view)) {
+			void markRefStatus(view.sessionId, view.pipeId, o.kind, o.refId, o.status);
+		}
+		if (view.status === 'done' && view.outputPath) {
+			void attachLastGeneration(view.sessionId, view.pipeId, {
+				taskId: view.taskId,
+				videoPath: view.outputPath,
+				generatedAt: Date.now(),
+				status: 'done',
+			});
+			flashToast(APP_CONSTANTS.strings.generationComplete, 'success');
+		} else if (view.status === 'cancelled') {
+			flashToast(APP_CONSTANTS.strings.generationCancelled, 'info');
+		} else {
+			flashToast(view.error ?? APP_CONSTANTS.strings.generationFailed, 'error');
+		}
+		showProgressModal = false;
+		activeTask = null;
+	}
+
+	async function cancelActiveTask() {
+		if (!activeTask) return;
+		try {
+			await invoke('cancel_generation', { task_id: activeTask.taskId });
+			// the poller's next tick sees the terminal cancelled state
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
+	}
+
+	function closeProgressModal() {
+		stopPoller();
+		showProgressModal = false;
+		activeTask = null;
+	}
+
+	/** ToolsPanel last-gen thumb → top-panel preview (D9). */
+	function openPreview(pipe: PipeRow) {
+		const url = toMediaUrl(pipe.lastGeneration?.videoPath ?? null);
+		if (!url) return;
+		previewVideo = { url, label: pipe.name };
 	}
 
 	function handleFpsChange(fps: number) {
@@ -780,6 +930,8 @@
 		await new Promise(resolve => setTimeout(resolve, 100));
 		await loadProjects();
 	});
+
+	onDestroy(() => stopPoller());
 </script>
 
 <div class={`workspace ${layoutMode}`}>
@@ -788,6 +940,7 @@
 		{selectedTheme}
 		{layoutMode}
 		{showWelcome}
+		video={previewVideo}
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
@@ -866,6 +1019,8 @@
 					bind:focus
 					onframechange={(f) => selectedFrame = f}
 					uiVariant={composerUiVariant}
+					brokenRefs={brokenRefs}
+					onRefSaved={recheckRef}
 				/>
 			{:else}
 				<div class="composer-empty">
@@ -889,11 +1044,31 @@
 				oncvaluechange={handleCValueChange}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
+				ongeneratepipe={openGenerateModal}
+				onopenpreview={openPreview}
+				pipegenerating={anyTaskActive}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}
 				onorientationchange={handleOrientationChange}
 				/>
-		{/if}
+			{/if}
+
+			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
+			{#if showGenerateModal && generatePipe && selectedSession}
+				<GenerateModal
+					pipe={generatePipe}
+					session={selectedSession}
+					bind:open={showGenerateModal}
+					onConfirm={confirmGenerate}
+				/>
+			{/if}
+			<GenerationProgressModal
+				task={activeTask}
+				busy={anyTaskActive}
+				bind:open={showProgressModal}
+				onCancel={cancelActiveTask}
+				onClose={closeProgressModal}
+			/>
 	</div>
 </div>
 

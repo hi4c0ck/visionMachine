@@ -45,8 +45,13 @@ test.describe('Coordinate Canvas Consistency', () => {
 		// the accessible name) — match by CSS + visible text instead of exact role name.
 		// The menu closes after each selection, so re-open it for the second item.
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Global' }).click();
-		await plus.click();
-		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		// Zone-defaults: new session pipes already own a timeline element, and
+		// the [+] button hides once a pipe has BOTH track types — so only re-add
+		// the Timeline through the menu when the pipe is still missing it.
+		if (await plus.isVisible()) {
+			await plus.click();
+			await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
+		}
 
 		// Segment: click the empty-slot placeholder, fill 0/240, confirm
 		await page.locator('.seg-empty.full-width').first().click();

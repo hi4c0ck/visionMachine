@@ -183,6 +183,16 @@ export interface SubjectReference {
   id: string;
   /** Image URL for the reference */
   imageUrl: string;
+  /**
+   * Generation preset type — subjects follow the same rules as keyframes:
+   * `url` → imageUrl is the image, `txt2img` → prompt generates it,
+   * `img2img` → imageUrl is the reference + prompt. Legacy refs default 'url'.
+   */
+  type?: KeyframeType;
+  /** Prompt for txt2img / img2img subjects */
+  prompt?: string;
+  /** Generation status of this reference's image */
+  status?: GenerationStatus;
   /** Whether to use frame range for this reference */
   useFrames: boolean;
   /** Start frame (multiple of 8) — only used when useFrames=true */
@@ -208,6 +218,55 @@ export interface PipeRow {
   subjectReferences: SubjectReference[];
   elements: PipeElement[];
   orderIndex: number;
+  /** Last completed generation artifact attached to this pipe (null = empty state) */
+  lastGeneration?: PipeLastGeneration | null;
+}
+
+/**
+ * The generated-video artifact attached to a pipe after a generation task
+ * completes (absent while no engine has produced a real file yet).
+ */
+export interface PipeLastGeneration {
+  taskId: string;
+  /** Absolute path of the generated video on disk */
+  videoPath: string;
+  /** Unix ms timestamp of completion */
+  generatedAt: number;
+  status: 'done' | 'error' | 'cancelled';
+}
+
+// ============================================================================
+// GENERATION TASK VIEWS (mirror src-tauri/src/generation/types.rs)
+// ============================================================================
+
+export type GenerationStageStatus = 'ready' | 'pending' | 'generating' | 'done' | 'error' | 'cancelled';
+export type GenerationTaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
+
+export interface GenerationStageView {
+  id: string;
+  label: string;
+  kind: 'image' | 'video';
+  /** Where the stage's input comes from */
+  sourceKind: 'keyframe' | 'subject' | 'video';
+  /** keyframe id / subject ref id / pipe id for the video stage */
+  sourceId: string;
+  status: GenerationStageStatus;
+  /** 0..=1 — reflects real stage state only, never simulated */
+  progress: number;
+  error?: string | null;
+  imageOutput?: string | null;
+}
+
+export interface GenerationTaskView {
+  taskId: string;
+  sessionId: string;
+  pipeId: string;
+  status: GenerationTaskStatus;
+  /** 0..=1, average of stage progress */
+  progress: number;
+  stages: GenerationStageView[];
+  error?: string | null;
+  outputPath?: string | null;
 }
 
 /**

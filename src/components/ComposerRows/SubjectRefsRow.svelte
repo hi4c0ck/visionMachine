@@ -13,14 +13,20 @@
 		onToggle,
 		onRemove,
 		onAdd,
+		onEdit,
 		headerless = false,
+		containsBroken,
 	} = $props<{
 		pipe: PipeRow;
 		maxSubjectRefs: number;
 		onToggle: (refId: string) => void;
 		onRemove: (refId: string) => void;
 		onAdd: () => void;
+		/** Open the subject-ref modal in EDIT mode for an existing ref. */
+		onEdit?: (refId: string) => void;
 		headerless?: boolean;
+		/** Red-out state for refs whose URL failed the accessibility check (D5). */
+		containsBroken?: (id: string) => boolean;
 	}>();
 
 	// Store mutations replace pipe arrays, so the counts must stay derived.
@@ -38,8 +44,22 @@
 	{/if}
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
+			{@const broken = containsBroken?.(sr.id) ?? false}
 			{#if sr.visible !== false}
-				<div class="sr-chip" title="Frames {sr.frameStart ?? '—'}–{sr.frameEnd ?? '—'} · Click to edit">
+				<div 
+					class="sr-chip"
+					class:sr-broken={broken}
+					onclick={() => onEdit?.(sr.id)}
+					onkeydown={(e) => e.key === 'Enter' && onEdit?.(sr.id)}
+					role="button"
+					tabindex={onEdit ? 0 : undefined}
+					title={broken
+						? `URL not accessible · Click to fix`
+						: `Frames ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · Click to edit`}
+					>
+					{#if broken}
+						<span class="sr-broken-mark" aria-hidden="true">⚠</span>
+					{/if}
 					<button 
 						class="sr-eye"
 						onclick={(e) => { e.stopPropagation(); onToggle(sr.id); }}
@@ -165,5 +185,18 @@
 	.sr-add:hover {
 		border-color: var(--accent-color);
 		color: var(--accent-color);
+	}
+
+	/* Broken URL state (D5): red-out the chip whose reference failed the
+	   accessibility check. Persists until the ref is re-validated. */
+	.sr-broken {
+		border-color: #ef4444;
+		background: rgba(239, 68, 68, 0.14);
+	}
+
+	.sr-broken-mark {
+		color: #ef4444;
+		font-size: 11px;
+		font-weight: 700;
 	}
 </style>

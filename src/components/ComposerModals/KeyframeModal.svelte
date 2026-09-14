@@ -10,12 +10,16 @@
 		maxFrames,
 		editingSlot,
 		open = $bindable(false),
+		onSaved,
 	} = $props<{
 		pipe: PipeRow;
 		sessionId: string | undefined;
 		maxFrames: number;
 		editingSlot: number | null;
 		open: boolean;
+		/** Fires after a successful save so the caller can re-validate the
+		 * reference's URL accessibility (D5 red-out clears on success). */
+		onSaved?: (refId: string) => void;
 	}>();
 
 	import '../composer-modal.css';
@@ -72,6 +76,9 @@
 		open = false;
 		kfValue = '';
 		kfReferenceUrl = '';
+		// upsert keeps the id stable — resolve it and let the caller re-check
+		const savedKf = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === editingSlot);
+		if (savedKf) onSaved?.(savedKf.id);
 	}
 </script>
 
