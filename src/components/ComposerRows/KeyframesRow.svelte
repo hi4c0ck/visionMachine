@@ -6,26 +6,32 @@
 	// Keyframes row — display slots come from the shared keyframeSlots lib
 	// (single source of truth, also used by the panel's next-slot default).
 	// The panel owns the keyframe store actions; this component fires callbacks.
+	// `headerless` hides the row's own label/count (used inside the FIXED
+	// variant's tabbed aux panel, where the tab owns the title + count).
 	let {
 		pipe,
 		maxKeyframes,
 		onEditSlot,
 		onRemoveKeyframe,
+		headerless = false,
 	} = $props<{
 		pipe: PipeRow;
 		maxKeyframes: number;
 		onEditSlot: (slotIndex: number) => void;
 		onRemoveKeyframe: (kfId: string) => void;
+		headerless?: boolean;
 	}>();
 
 	const visibleSlots = () => getVisibleKeyframeSlots(pipe, maxKeyframes);
 </script>
 
-<div class="row-group">
+	<div class="row-group" class:headerless>
+	{#if !headerless}
 	<div class="row-header">
 		<span class="row-label">KEYFRAMES</span>
 		<span class="row-count">{pipe.keyframes.length}/{maxKeyframes}</span>
 	</div>
+	{/if}
 	<div class="kf-row">
 		{#each visibleSlots() as kfNum}
 			{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
@@ -64,6 +70,12 @@
 </div>
 
 <style>
+	/* The row-header is a sibling of the chip rows; headerless (inside the
+	   FIXED aux panel) drops the whole row-group gap so the body sits tight. */
+	.row-group.headerless {
+		gap: 0;
+	}
+
 	.kf-row {
 		display: flex;
 		gap: 8px;

@@ -39,6 +39,11 @@
 		onOpenTagMenu,
 		onRemoveTag,
 		onEditTagPrompt,
+		// FIXED variant: the playhead pin follows the drag (live, during
+		// pointermove); CURRENT variant leaves it at the last selectedFrame.
+		livePin = false,
+		// Per-pipe [+] visibility (hide when both tracks already exist).
+		showAddTrack = true,
 	} = $props<{
 		pipe: PipeRow;
 		sessionId?: string;
@@ -52,6 +57,11 @@
 		onOpenTagMenu: (segId: string, e: MouseEvent) => void;
 		onRemoveTag: (segId: string, tagId: string) => void;
 		onEditTagPrompt: (seg: Segment, tag: TagElement) => void;
+		/** FIXED variant: playhead follows the drag thumb live. */
+		livePin?: boolean;
+		/** Panel hides the [+] button when the pipe already owns both
+		    addable track types (Timeline + Global). */
+		showAddTrack?: boolean;
 	}>();
 
 	// Every element inside a pipe lives in THAT pipe's frame-length space
@@ -344,6 +354,20 @@
 			startFrame,
 			endFrame
 		};
+
+		// FIXED variant: the playhead pin follows the drag LIVE — left thumb
+		// tracks the moving start edge, right thumb the end edge, body the
+		// frame under the cursor. CURRENT variant (livePin=false) keeps the
+		// pin at the last ruler select; only the preview changes.
+		if (livePin) {
+			const pinFrame =
+				dragState.handle === 'left'
+					? startFrame
+					: dragState.handle === 'right'
+						? endFrame
+						: pointerFrame;
+			onFrameChange(pinFrame);
+		}
 	}
 
 	async function handlePointerUp(e: PointerEvent) {
@@ -651,14 +675,18 @@
 			{/each}
 		</div>
 
-		<!-- ═══ [+] BUTTON (chrome column, outside coordinate space) ═══ -->
+		<!-- ═══ [+] BUTTON (chrome column, outside coordinate space) ═══
+		     Per-pipe visibility: hidden when the pipe already owns BOTH
+		     addable track types (Timeline + Global) — the menu would be empty. -->
 		<div class="timeline-actions">
-			<button
-				class="btn-add-track"
-				onclick={(e) => { e.stopPropagation(); onAddTrack(e); }}
-				title="Add track">
-				+
-			</button>
+			{#if showAddTrack}
+				<button
+					class="btn-add-track"
+					onclick={(e) => { e.stopPropagation(); onAddTrack(e); }}
+					title="Add track">
+					+
+				</button>
+			{/if}
 		</div>
 	</div>
 </div>

@@ -7,8 +7,9 @@
 	import ToolsPanel from './ToolsPanel.svelte';
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile } from '$types';
 	import { getMaxFramesForResolution } from '$types';
-import { migratePipe } from '$lib/composerStore';
-import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
+	import { migratePipe } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
+	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -59,6 +60,15 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 	let selectedFrame = $state<number>(0);
 	let activePipeIdx = $state<number | null>(null);
 	let pipes = $derived(selectedSession?.pipes ?? []);
+
+	// A/B composer presentation variant (Current / Fixed). Same store,
+	// services, data model, and frame geometry power both — only the
+	// ComposerPanel presentation differs. Persisted per browser.
+	let composerUiVariant = $state<ComposerUiVariant>(getComposerUiVariant());
+	function toggleComposerUiVariant(next: ComposerUiVariant) {
+		composerUiVariant = next;
+		setComposerUiVariant(next);
+	}
 	// Context-sensitive tool-panel focus. The ComposerPanel is the source of
 	// truth (it refines focus as the user works: session → pipe → tag).
 	// Project level = summary only; session = video settings + generation.
@@ -831,6 +841,21 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 		</div>
 
 		<div class="composer-area">
+			<!-- ═══ DEV: A/B composer presentation variant ═══
+			     Same store/services/data model/geometry; only the
+			     ComposerPanel layout differs. Persisted per browser. -->
+			<div class="composer-ui-variant" role="radiogroup" aria-label="Composer UI variant">
+				<span class="variant-label">Composer UI</span>
+				<button
+					class="variant-opt" class:active={composerUiVariant === 'current'}
+					role="radio" aria-checked={composerUiVariant === 'current'}
+					onclick={() => toggleComposerUiVariant('current')}>○ Current</button>
+				<button
+					class="variant-opt" class:active={composerUiVariant === 'fixed'}
+					role="radio" aria-checked={composerUiVariant === 'fixed'}
+					onclick={() => toggleComposerUiVariant('fixed')}>● Fixed</button>
+			</div>
+
 			<!-- SAFE: Check session exists AND has project -->
 			{#if selectedSession && selectedProject}
 				<ComposerPanel
@@ -840,6 +865,7 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 					bind:activePipeIdx
 					bind:focus
 					onframechange={(f) => selectedFrame = f}
+					uiVariant={composerUiVariant}
 				/>
 			{:else}
 				<div class="composer-empty">
@@ -1008,6 +1034,57 @@ import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, compo
 		height: 100%;
 		color: var(--text-muted, #6b6b80);
 		gap: 16px;
+	}
+
+	/* DEV: A/B composer variant switch (Current / Fixed). Floats over the
+	   top of the composer column; purely presentation, no layout impact. */
+	.composer-ui-variant {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 12px;
+		margin: 8px 8px 0;
+		background: rgba(20, 20, 31, 0.85);
+		backdrop-filter: blur(4px);
+		border: 1px solid var(--border, #2a2a3a);
+		border-radius: 8px;
+		align-self: flex-start;
+	}
+
+	.composer-area .composer-ui-variant {
+		margin: 8px;
+	}
+
+	.composer-ui-variant .variant-label {
+		font-size: 10px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: var(--text-muted, #6b6b80);
+	}
+
+	.composer-ui-variant .variant-opt {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: none;
+		border: none;
+		color: var(--text-secondary, #a0a0b0);
+		font-size: 12px;
+		cursor: pointer;
+		padding: 2px 8px;
+		border-radius: 4px;
+	}
+
+	.composer-ui-variant .variant-opt.active {
+		color: var(--accent, #59B5FF);
+	}
+
+	.composer-ui-variant .variant-opt:hover {
+		background: var(--bg-tertiary, #1e1e2e);
 	}
 
 	.empty-icon {

@@ -5,18 +5,22 @@
 	// Subject references row — pure chrome. The panel owns the subject-ref
 	// store actions; this component fires callbacks. Collapses the empty and
 	// non-empty branches into one row (chips render conditionally).
+	// `headerless` hides the row's own label/count (used inside the FIXED
+	// variant's tabbed aux panel, where the tab owns the title + count).
 	let {
 		pipe,
 		maxSubjectRefs,
 		onToggle,
 		onRemove,
 		onAdd,
+		headerless = false,
 	} = $props<{
 		pipe: PipeRow;
 		maxSubjectRefs: number;
 		onToggle: (refId: string) => void;
 		onRemove: (refId: string) => void;
 		onAdd: () => void;
+		headerless?: boolean;
 	}>();
 
 	// Store mutations replace pipe arrays, so the counts must stay derived.
@@ -25,11 +29,13 @@
 	const refNumber = $derived(refs.length);
 </script>
 
-<div class="row-group">
+	<div class="row-group" class:headerless>
+	{#if !headerless}
 	<div class="row-header">
 		<span class="row-label">SUBJECT REFS</span>
 		<span class="row-count">{visibleCount}/{maxSubjectRefs}</span>
 	</div>
+	{/if}
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
 			{#if sr.visible !== false}
@@ -73,6 +79,12 @@
 </div>
 
 <style>
+	/* headerless (inside the FIXED aux panel) drops the whole row-group gap
+	   so the body sits tight. */
+	.row-group.headerless {
+		gap: 0;
+	}
+
 	.sr-row {
 		display: flex;
 		gap: 8px;
