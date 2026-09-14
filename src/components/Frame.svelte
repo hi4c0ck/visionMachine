@@ -8,6 +8,8 @@
 		onthemeChange,
 		onlayoutChange,
 		video = null,
+		ruler = null,
+		showRuler = false,
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -19,6 +21,12 @@
 		/** The video to show in the top-panel preview (D9: native <video> +
 		 *  play button, no ffmpeg). null = the empty placeholder state. */
 		video?: { url: string; label: string } | null;
+		/** Tiny global frame ruler overlaid at the bottom edge of the
+		 *  preview strip (frame ticks + playhead). null = nothing to show. */
+		ruler?: { ticks: number[]; total: number; frame: number } | null;
+		/** Render the global ruler strip. Off by default — it opts into a
+		 *  special mode in future development. */
+		showRuler?: boolean;
 	}>();
 
 	const layouts = [
@@ -120,6 +128,26 @@
 			<div class="preview-empty" onclick={handlePreviewClick}>
 				<span class="preview-icon">▶</span>
 				<span class="preview-label">Frame &lt;img-video-container&gt;</span>
+			</div>
+		{/if}
+
+		<!-- Tiny global frame ruler: overlaid at the bottom of the preview,
+			 disabled by default (showRuler). Purely decorative — no events. -->
+		{#if showRuler && ruler}
+			<div class="global-ruler" aria-hidden="true">
+				{#each ruler.ticks as tick}
+					<div
+						class="g-tick"
+						class:g-major={tick % 32 === 0}
+						style={`left: ${(tick / Math.max(1, ruler.total - 1)) * 100}%`}
+					>
+						{#if tick % 32 === 0}<span class="g-label">{tick}</span>{/if}
+					</div>
+				{/each}
+				<div
+					class="g-playhead"
+					style={`left: ${(ruler.frame / Math.max(1, ruler.total - 1)) * 100}%`}
+				></div>
 			</div>
 		{/if}
 	</div>
@@ -330,6 +358,53 @@
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+	}
+
+	/* ── Tiny global frame ruler (overlay strip at the preview bottom) ── */
+	.global-ruler {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 14px;
+		z-index: 3;
+		pointer-events: none;
+		background: var(--bg-primary);
+		opacity: 0.55;
+	}
+
+	.g-tick {
+		position: absolute;
+		bottom: 0;
+		width: 1px;
+		height: 4px;
+		background: var(--text-secondary);
+		transform: translateX(-50%);
+	}
+
+	.g-tick.g-major {
+		height: 7px;
+	}
+
+	.g-label {
+		position: absolute;
+		bottom: 8px;
+		left: 50%;
+		transform: translateX(-50%);
+		font-size: 8px;
+		line-height: 1;
+		font-family: 'JetBrains Mono', monospace;
+		color: var(--text-secondary);
+		white-space: nowrap;
+	}
+
+	.g-playhead {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 2px;
+		background: var(--accent-color);
+		transform: translateX(-50%);
 	}
 
 	/* ── Bottom section ── */

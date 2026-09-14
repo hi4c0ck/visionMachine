@@ -1,3 +1,32 @@
+# VisionMachine v0.6.0
+
+### Generation flow (pipe-level, engine-ready)
+- Generate button in the pipe inspector: modal shows presets + the final
+  prompt (read-only scrollable view + copy), produced by the domain prompt
+  engine that summarizes the pipe's zones and tag prompts into sections
+- Progress modal: real task stages (keyframe/subject images → final video)
+  with per-stage progress from the backend task poll; cancel-all aborts
+  the whole task; finished video attaches to the pipe and plays in the
+  top-panel preview (native <video>); proper empty state until a real
+  engine produces files (no mock)
+- Reference accessibility check before generation: unreachable URLs are
+  red-out and named in the modal; generation never starts broken
+
+### Rulers
+- Global frame ruler moved to a tiny overlay strip at the bottom of the
+  top-panel Frame preview; disabled by default (opts into a special mode
+  in future development)
+- Pipe rulers gained a small themed pin notice: frame number + seconds
+  (1 decimal) at the playhead position
+
+### Tests & hygiene
+- New unit suites: task poller, generation outcomes, generation store
+  (artifact attach / ref status / save payload), subject-ref type/prompt
+  round-trips, Rust serde legacy defaults (type/prompt/status, last_generation)
+- Removed dead constants (engineNotConfigured, lastGenPreview)
+- Version aligned to 0.6.0 across Cargo.toml / Cargo.lock / tauri.conf.json /
+  package.json / APP_VERSION
+
 # VisionMachine v0.5.0
 
 ### Stability

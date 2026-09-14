@@ -44,6 +44,7 @@
 		livePin = false,
 		// Per-pipe [+] visibility (hide when both tracks already exist).
 		showAddTrack = true,
+		fps
 	} = $props<{
 		pipe: PipeRow;
 		sessionId?: string;
@@ -62,6 +63,8 @@
 		/** Panel hides the [+] button when the pipe already owns both
 		    addable track types (Timeline + Global). */
 		showAddTrack?: boolean;
+		/** Session fps — drives the ruler pin notice seconds readout. */
+		fps?: number;
 	}>();
 
 	// Every element inside a pipe lives in THAT pipe's frame-length space
@@ -456,6 +459,7 @@
 				{selectedFrame}
 				geometry={rulerGeometry}
 				legend={legend}
+				fps={fps}
 				onframeSelect={(f) => onFrameChange(f)}
 			/>
 		</div>

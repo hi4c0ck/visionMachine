@@ -718,6 +718,7 @@ import { flashToast } from '$lib/flashToast';
 				sessionId={session?.id}
 				{selectedFrame}
 				livePin={uiVariant === 'fixed'}
+				fps={session?.fps}
 				onFrameChange={(f) => onframechange?.(f)}
 				onAddTrack={(e) => handleToggleAddMenu(pipeIdx, e)}
 				onToggleGlobal={(globalId) => handleToggleGlobal(pipeIdx, globalId)}

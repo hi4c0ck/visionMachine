@@ -321,3 +321,106 @@ impl ComposerConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Legacy on-disk refs have no type/prompt/status — they must deserialize
+    /// with the url/pending defaults instead of failing the whole load.
+    #[test]
+    fn legacy_subject_reference_defaults() {
+        let raw = json!({
+            "id": "r1",
+            "imageUrl": "https://example.com/ref.jpg",
+            "useFrames": false,
+            "visible": true
+        });
+        let ref_: SubjectReference = serde_json::from_value(raw).expect("legacy ref deserializes");
+        assert_eq!(ref_.kind, "url");
+        assert_eq!(ref_.status, "pending");
+        assert!(ref_.prompt.is_none());
+    }
+
+    /// The new camelCase shape (with type/prompt/status) round-trips.
+    #[test]
+    fn subject_reference_camel_case_round_trip() {
+        let ref_ = SubjectReference {
+            id: "r1".into(),
+            image_url: "https://example.com/ref.jpg".into(),
+            kind: "txt2img".into(),
+            prompt: Some("a mountain".into()),
+            status: "done".into(),
+            use_frames: true,
+            frame_start: Some(0),
+            frame_end: Some(120),
+            visible: true,
+        };
+        let value = serde_json::to_value(&ref_).expect("serialize");
+        // The wire field is named `type`, not the Rust field `kind`.
+        assert_eq!(value["type"], "txt2img");
+        assert_eq!(value["imageUrl"], "https://example.com/ref.jpg");
+        assert_eq!(value["frameStart"], 0);
+        assert!(value.get("prompt").is_some());
+
+        let back: SubjectReference = serde_json::from_value(value).expect("round trip");
+        assert_eq!(back.id, ref_.id);
+        assert_eq!(back.kind, "txt2img");
+        assert_eq!(back.prompt.as_deref(), Some("a mountain"));
+        assert_eq!(back.status, "done");
+    }
+
+    /// A legacy pipe without last_generation loads as None, and re-serialization
+    /// must not emit a spurious lastGeneration key.
+    #[test]
+    fn legacy_pipe_defaults_last_generation_to_none() {
+        let raw = json!({
+            "id": "p1",
+            "name": "Pipe 1",
+            "lengthFrames": 121
+        });
+        let pipe: Pipe = serde_json::from_value(raw).expect("legacy pipe deserializes");
+        assert!(pipe.last_generation.is_none());
+        assert!(pipe.keyframes.is_empty());
+        assert!(pipe.subject_references.is_empty());
+
+        let value = serde_json::to_value(&pipe).expect("serialize");
+        assert!(value.get("lastGeneration").is_none());
+    }
+
+    #[test]
+    fn pipe_last_generation_round_trip() {
+        let pipe = Pipe {
+            id: "p1".into(),
+            name: "Pipe 1".into(),
+            length_frames: 121,
+            q_value: 18,
+            c_value: 7.0,
+            keyframes: vec![],
+            subject_references: vec![],
+            elements: vec![],
+            order_index: 0,
+            last_generation: Some(LastGeneration {
+                task_id: "t1".into(),
+                video_path: "C:/out/video.mp4".into(),
+                generated_at: 1_234_567_890,
+                status: "done".into(),
+            }),
+        };
+        let value = serde_json::to_value(&pipe).expect("serialize");
+        assert_eq!(value["lastGeneration"]["taskId"], "t1");
+        assert_eq!(value["lastGeneration"]["videoPath"], "C:/out/video.mp4");
+
+        let back: Pipe = serde_json::from_value(value).expect("round trip");
+        assert_eq!(
+            back.last_generation,
+            Some(LastGeneration {
+                task_id: "t1".into(),
+                video_path: "C:/out/video.mp4".into(),
+                generated_at: 1_234_567_890,
+                status: "done".into(),
+            })
+        );
+    }
+}
