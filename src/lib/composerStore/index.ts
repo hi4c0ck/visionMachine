@@ -26,6 +26,7 @@ import { KeyframeServiceImpl } from './keyframes';
 import { SessionServiceImpl } from './session-io';
 import { MigrationServiceImpl } from './migrations';
 import { SubjectReferenceServiceImpl } from './subjectRefs';
+import { normalizePipe } from './validators';
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -395,6 +396,9 @@ class ComposerStoreImpl implements ComposerStore {
       // session-io maps the backend payload into frontend PipeRow shape.
       const result = await this.services.session.load(sessionId);
       if (result.session) {
+        for (const pipe of result.session.pipes) {
+          normalizePipe(pipe);
+        }
         sessions.set(sessionId, result.session);
         unsynced.delete(sessionId);
       }
@@ -477,6 +481,12 @@ class ComposerStoreImpl implements ComposerStore {
 
   async hydrateSessions(sessionList: any[]): Promise<void> {
     for (const session of sessionList) {
+      // Normalize pipes so legacy/localStorage session shapes are always
+      // valid before they enter the store (prevents undefined-field crashes
+      // on the render path when the user re-enters the app).
+      for (const pipe of (session.pipes ?? []) as PipeRow[]) {
+        normalizePipe(pipe);
+      }
       sessions.set(session.id, session);
     }
   }

@@ -123,14 +123,14 @@
 		return () => document.removeEventListener('click', handler);
 	});
 
-	// Click on a zone ROW (free track space, the pill, or a grip) opens the
-	// tag menu scoped to THAT zone — the row is the add-tag target. The click
-	// stops propagation so the panel's document-level "close menus on outside
-	// click" handler doesn't immediately close the menu we just opened. A
-	// real pill/grip drag does NOT emit a click on the row (the press lands on
-	// the pill, which stops propagation), so dragging never opens the menu.
-	function onZoneRowClick(e: MouseEvent, segId: string) {
+	// Click on the zone pill opens the add-tag menu scoped to THAT zone.
+	// The click stops propagation so the panel's document-level "close menus
+	// on outside click" handler doesn't immediately close the menu we just
+	// opened. A real pill/grip drag still emits a `click` on release;
+	// zoneDragHappened suppresses it so dragging never opens the menu.
+	function onZonePillClick(e: MouseEvent, segId: string) {
 		e.stopPropagation();
+		if (zoneDragHappened) return;
 		onOpenTagMenu(segId, e);
 	}
 
@@ -271,6 +271,12 @@
 	}
 
 	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body, global grips).
+	
+	// Track whether the last zone-pill press turned into a real drag (>3px).
+	// The browser still emits a `click` after a drag release; without this
+	// flag that click would wrongly open the add-tag menu after dragging.
+	let zoneDragHappened = $state(false);
+
 	function handleElementPointerDown(
 		e: PointerEvent,
 		type: 'segment' | 'tag' | 'global',
@@ -282,6 +288,7 @@
 	) {
 		e.preventDefault();
 		e.stopPropagation();
+		zoneDragHappened = false;
 
 		if (!rulerElement || !rulerGeometry) return;
 
@@ -361,6 +368,9 @@
 			previewDragState = null;
 			return;
 		}
+		// A real drag happened (>3px). Flag it so the subsequent `click` on
+		// the zone pill is not read as an add-tag press.
+		zoneDragHappened = true;
 
 		// Commit to THIS section's pipe, never another pipe: each pipe renders
 		// its own section, so the drag that started on pipe N must resize pipe N.
@@ -515,7 +525,7 @@
 										role="button" tabindex="0"
 										aria-label="Zone {segIdx + 1}, frames {sStart}–{sEnd}. Click to add a tag."
 										title="Click to add a tag to Zone {segIdx + 1}"
-										onclick={(e) => { e.stopPropagation(); onZoneRowClick(e, seg.id); }}
+										onclick={(e) => { e.stopPropagation(); onZonePillClick(e, seg.id); }}
 										onkeydown={(e) => e.key === 'Enter' && onOpenTagMenu(seg.id, e as unknown as MouseEvent)}>
 										<span class="seg-zone-badge">Z{segIdx + 1}</span>
 										<span class="seg-label">{sStart}–{sEnd}</span>

@@ -57,10 +57,10 @@ async function pressZoneRow(page: any, zoneIdx: number) {
 }
 
 // Convenience: open the tag menu on a zone and add a tag of the given type.
+// Picking a type adds it immediately — the intermediate Add button is gone.
 async function addTagToZone(page: any, zoneIdx: number, typeText: string) {
 	await pressZoneRow(page, zoneIdx);
 	await page.locator('.dropdown-menu .tag-item', { hasText: typeText }).click();
-	await page.locator('.dropdown-menu .btn-confirm').click();
 	await page.waitForTimeout(300);
 }
 
@@ -86,8 +86,9 @@ test.describe('Appending zones', () => {
 		const appendBtn = page.locator('.btn-add-zone');
 		await expect(appendBtn).toBeVisible();
 
-		// Zone 2: append → getNextAvailableRange picks 80–88 (first gap after
-		// the last segment). Confirm it.
+		// Zone 2: append → the modal prefills the WHOLE remaining gap (80–240;
+		// filling it is the default intent). Use only part of it so a third
+		// zone can still be appended without overlap.
 		await appendBtn.click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		const prefill = [
@@ -95,16 +96,15 @@ test.describe('Appending zones', () => {
 			await page.locator('.modal input[type="number"]').nth(1).inputValue(),
 		];
 		expect(Number(prefill[0])).toBe(80);
-		expect(Number(prefill[1])).toBeGreaterThanOrEqual(88);
-		await addZoneAt(page, prefill[0], prefill[1]);
+		expect(Number(prefill[1])).toBe(240);
+		await addZoneAt(page, prefill[0], '88');
 		expect(await page.locator('.segment-body').count()).toBe(2);
 
-		// Zone 3: append again → next gap after zone 2's end.
+		// Zone 3: append again → next gap after zone 2's end (88).
 		await appendBtn.click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		const prefill3 = await page.locator('.modal input[type="number"]').nth(0).inputValue();
-		const zone2End = Number(prefill[1]);
-		expect(Number(prefill3)).toBe(zone2End);
+		expect(Number(prefill3)).toBe(88);
 		await addZoneAt(page, prefill3, await page.locator('.modal input[type="number"]').nth(1).inputValue());
 		expect(await page.locator('.segment-body').count()).toBe(3);
 
@@ -151,21 +151,18 @@ test.describe('Appending zones', () => {
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '120');
 
-		async function addTagOfType(typeText: string) {
-			// Add-tag is now a zero-move press on the ZONE ROW (the row's free
-			// space is the target) — no dedicated + Tag button anymore.
-			await addTagToZone(page, 0, typeText);
-		}
+		// No tags yet → no type lanes rendered.
+		expect(await page.locator('.tag-lane').count()).toBe(0);
 
-		// Add a Camera tag, then a Scene tag → both lanes appear in canonical
-		// order (Scene before Camera).
-		await addTagOfType('Camera');
-		let laneLabels = await page.locator('.tag-lane-label').allInnerTexts();
-		expect(laneLabels).toEqual(['Camera']);
+		// Add a Camera tag, then a Scene tag → one lane per TYPE (shared across
+		// all zones), appearing in canonical order (Scene before Camera).
+		await addTagToZone(page, 0, 'Camera');
+		expect(await page.locator('.tag-lane-label').allInnerTexts()).toEqual(['Camera']);
+		expect(await page.locator('.tag-body').count()).toBe(1);
 
-		await addTagOfType('Scene');
-		laneLabels = await page.locator('.tag-lane-label').allInnerTexts();
-		expect(laneLabels).toEqual(['Scene', 'Camera']);
+		await addTagToZone(page, 0, 'Scene');
+		expect(await page.locator('.tag-lane-label').allInnerTexts()).toEqual(['Scene', 'Camera']);
+		expect(await page.locator('.tag-body').count()).toBe(2);
 
 		// Now remove BOTH tags. The lanes must stay on their lines (faded,
 		// empty) — not disappear and shift the other lane up.
@@ -182,8 +179,10 @@ test.describe('Appending zones', () => {
 		expect(persistedLabels).toEqual(['Scene', 'Camera']);
 	});
 
-	test('shared + Tag menu picks a zone, then adds the tag to it', async ({ page }) => {
-		// Two zones so the zone picker appears.
+	test('shared + Tag menu attaches to the invoking zone', async ({ page }) => {
+		// Two zones; the tag menu opens on the invoking zone and attaches the
+		// tag to that zone only (zone-switcher rows were removed from the popup
+		// — only functional rows: tag types + New segment).
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
@@ -198,22 +197,18 @@ test.describe('Appending zones', () => {
 		// space is the add-tag target; no + Tag button anymore). The entry
 		// point preselects the INVOKING zone (Z1 here).
 		await pressZoneRow(page, 0);
-		await page.waitForSelector('.dropdown-menu .zone-item', { timeout: 5000 });
-		const zoneItems = page.locator('.dropdown-menu .zone-item');
-		expect(await zoneItems.count()).toBe(2);
-		// Default target is the INVOKING zone → Z1 pre-selected.
-		expect(await zoneItems.first().evaluate((el) => el.className)).toContain('active');
-		expect(await zoneItems.nth(1).evaluate((el) => el.className)).not.toContain('active');
+		await page.waitForSelector('.dropdown-menu .tag-item', { timeout: 5000 });
+		// No zone-switcher rows in the popup: only tag types + New segment.
+		expect(await page.locator('.dropdown-menu .zone-item').count()).toBe(0);
 
-		// Pick ZONE 2 explicitly, then add a Scene tag → pill lands in zone 2.
-		await zoneItems.nth(1).click();
+		// Add a Scene tag → it lands in the INVOKING zone (Z1).
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
-		await page.locator('.dropdown-menu .btn-confirm').click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });
 
+		// The pill carries its zone badge (Z1) so the shared type lane stays
+		// unambiguous.
 		const pill = page.locator('.tag-body').first();
-		// The pill carries its zone badge (Z2) so the shared lane stays unambiguous.
-		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z2');
+		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z1');
 	});
 
 	test('timeline collapses to a summary header and re-expands', async ({ page }) => {
@@ -308,10 +303,10 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		// preselected, and adding a tag lands on that zone.
 		await pressZoneRow(page, 0);
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
-		await page.locator('.dropdown-menu .btn-confirm').click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });
 		expect(await page.locator('.tag-body').count()).toBe(1);
-		// The pill carries its zone badge (Z1) so the shared lane stays unambiguous.
+		// The pill carries its zone badge (Z1) so the shared lane stays
+		// unambiguous.
 		expect(await page.locator('.tag-pill-zone').first().innerText()).toBe('Z1');
 	});
 
@@ -338,7 +333,6 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		// Add a Camera tag, then reopen: Camera is greyed-but-clickable (choice A).
 		await openMenu();
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
-		await page.locator('.dropdown-menu .btn-confirm').click();
 		await page.waitForTimeout(300);
 		expect(await page.locator('.tag-body').count()).toBe(1);
 
@@ -348,7 +342,10 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		expect(await camItem.locator('.tag-item-badge').count()).toBe(1);
 		const sceneItem = page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' });
 		expect(await sceneItem.evaluate((el) => el.className)).not.toContain('declared');
-		await page.locator('.dropdown-menu .btn-cancel').click();
+		// The menu has no Cancel row anymore — an outside click closes it. The
+		// zone pill covers the lane label, so use the timeline header, which
+		// sits above the lane and outside the menu's footprint.
+		await page.locator('.timeline-header').click();
 	});
 
 	test('a packed zone rejects a duplicate same-type tag; other types still fit', async ({ page }) => {
@@ -382,7 +379,6 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		//    before reopening the menu so the old alert can't shadow the new one.)
 		await pressZoneRow(page, 0);
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
-		await page.locator('.dropdown-menu .btn-confirm').click();
 		await expect(page.locator('div[role="alert"]', { hasText: /No free slot/i })).toBeVisible({ timeout: 5000 });
 		expect(await page.locator('.tag-body').count()).toBe(2);
 		await page.waitForTimeout(4000);

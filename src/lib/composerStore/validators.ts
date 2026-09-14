@@ -2,6 +2,8 @@
 // Encapsulates 8n+1 rule logic
 
 import { snapTo8, snapTo8nPlus1, getMaxFrames } from '$lib/frameMath';
+import type { PipeRow, TagType } from '$types';
+import { TAG_SPECIFICATIONS } from '$types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -115,4 +117,82 @@ export function reindexPipes(pipes: any[]): void {
   pipes.forEach((p: any, i: number) => {
     p.orderIndex = i;
   });
+}
+
+/**
+ * Normalize a raw (legacy or freshly-mapped) pipe into a valid PipeRow:
+ * guarantees required arrays exist, required scalar fields have defaults,
+ * and frame ranges are clamped into the pipe's own frame space. Prevents
+ * "cannot read properties of undefined" crashes when the user re-enters an
+ * app whose on-disk session data predates a data-shape change.
+ */
+export function normalizePipe(pipe: PipeRow): PipeRow {
+  // Ensure structural arrays exist (legacy sessions may lack them).
+  if (!Array.isArray(pipe.keyframes)) pipe.keyframes = [];
+  if (!Array.isArray(pipe.subjectReferences)) pipe.subjectReferences = [];
+  if (!Array.isArray(pipe.elements)) pipe.elements = [];
+
+  // Required scalars with sane defaults.
+  if (!Number.isFinite(pipe.lengthFrames) || pipe.lengthFrames < 41) {
+    pipe.lengthFrames = pipe.lengthFrames && pipe.lengthFrames > 1 ? Math.round(pipe.lengthFrames) : 241;
+  }
+  if (!Number.isFinite(pipe.qValue)) pipe.qValue = 18;
+  if (!Number.isFinite(pipe.cValue)) pipe.cValue = 7;
+  if (pipe.orderIndex === undefined || pipe.orderIndex === null) pipe.orderIndex = 0;
+  if (pipe.id === undefined || pipe.id === null || pipe.id === '') {
+    pipe.id = crypto.randomUUID();
+  }
+  if (!pipe.name) pipe.name = 'Pipe';
+
+  // Ensure each element has a valid id so keys/stores don't get 'undefined'.
+  for (const el of pipe.elements as any[]) {
+    if (!el.id) el.id = crypto.randomUUID();
+    if (el.tag === 'timeline') {
+      if (!Array.isArray(el.segments)) el.segments = [];
+      for (const seg of el.segments) {
+        if (!seg.id) seg.id = crypto.randomUUID();
+        if (!Number.isFinite(seg.frameStart)) seg.frameStart = 0;
+        if (!Number.isFinite(seg.frameEnd)) seg.frameEnd = pipe.lengthFrames - 1;
+        if (seg.frameStart < 0) seg.frameStart = 0;
+        if (seg.frameEnd > pipe.lengthFrames - 1) seg.frameEnd = pipe.lengthFrames - 1;
+        if (!Array.isArray(seg.tags)) seg.tags = [];
+        for (const tag of seg.tags) {
+          if (!tag.id) tag.id = crypto.randomUUID();
+          // Tag ranges must stay within the parent segment and the pipe.
+          if (!Number.isFinite(tag.frameStart) || tag.frameStart < seg.frameStart) tag.frameStart = seg.frameStart;
+          if (!Number.isFinite(tag.frameEnd) || tag.frameEnd > Math.min(seg.frameEnd, pipe.lengthFrames - 1)) tag.frameEnd = seg.frameEnd;
+          if (tag.frameEnd <= tag.frameStart) tag.frameEnd = Math.min(tag.frameStart + 8, seg.frameEnd);
+          if (tag.spec === undefined || tag.spec === null) tag.spec = TAG_SPECIFICATIONS[tag.tag as TagType];
+        }
+      }
+    } else if (el.tag === 'global_style') {
+      if (!Number.isFinite(el.frameStart) || el.frameStart < 0) el.frameStart = 0;
+      if (!Number.isFinite(el.frameEnd) || el.frameEnd > pipe.lengthFrames - 1) el.frameEnd = pipe.lengthFrames - 1;
+      if (el.enabled === undefined || el.enabled === null) el.enabled = true;
+    }
+  }
+
+  // Keyframe frames within pipe bounds.
+  for (const kf of pipe.keyframes) {
+    if (!Number.isFinite(kf.frame) || kf.frame < 0) kf.frame = 0;
+    if (kf.frame > pipe.lengthFrames - 1) kf.frame = pipe.lengthFrames - 1;
+    if (!kf.id) kf.id = crypto.randomUUID();
+    if (!Number.isFinite(kf.slotIndex)) kf.slotIndex = 1;
+    if (!kf.status) kf.status = 'pending';
+  }
+
+  // Subject-ref frame ranges within pipe bounds.
+  for (const ref of pipe.subjectReferences) {
+    if (!ref.id) ref.id = crypto.randomUUID();
+    if (!ref.imageUrl) ref.imageUrl = '';
+    if (ref.visible === undefined) ref.visible = true;
+    if (ref.useFrames && (ref.frameStart !== undefined || ref.frameEnd !== undefined)) {
+      if (!Number.isFinite(ref.frameStart) || ref.frameStart === undefined || ref.frameStart < 0) ref.frameStart = 0;
+      if (!Number.isFinite(ref.frameEnd) || ref.frameEnd === undefined) ref.frameEnd = pipe.lengthFrames - 1;
+      if (ref.frameEnd! > pipe.lengthFrames - 1) ref.frameEnd = pipe.lengthFrames - 1;
+      if (ref.frameEnd! <= ref.frameStart!) ref.frameEnd = ref.frameStart! + 8;
+    }
+  }
+
+  return pipe;
 }
