@@ -45,6 +45,20 @@ describe('promptEngine.sectionName', () => {
   });
 });
 
+describe('promptEngine guards (broken pipe data)', () => {
+  it('returns [] for a missing pipe in getSortedZones', () => {
+    expect(getSortedZones(undefined as unknown as PipeRow)).toEqual([]);
+  });
+
+  it('returns empty heuristics for a missing pipe', () => {
+    expect(buildHeuristics(undefined as unknown as PipeRow)).toBe('');
+  });
+
+  it('summarizes a missing pipe as the empty heuristics marker', () => {
+    expect(summarizePipe(undefined as unknown as PipeRow)).toBe('<heuristics>empty</heuristics>');
+  });
+});
+
 describe('promptEngine.getSortedZones', () => {
   it('returns zones sorted by frameStart with 1-based zone index', () => {
     const z1: Segment = { id: 'z1', frameStart: 72, frameEnd: 121, tags: [] };

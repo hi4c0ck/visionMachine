@@ -18,6 +18,8 @@ export function sectionName(tag: TagType): string {
 
 /** Collect every zone (segment) of the pipe's timeline element, frame-sorted. */
 export function getSortedZones(pipe: PipeRow): Array<{ zoneIndex: number; frameStart: number; frameEnd: number; tags: Array<any> }> {
+  // Defensive: partial/legacy pipe data must never crash prompt building.
+  if (!pipe || !Array.isArray(pipe.elements)) return [];
   const timeline = pipe.elements.find((e) => 'tag' in e && e.tag === 'timeline');
   if (!timeline || !('segments' in timeline)) return [];
   const zones = [...(timeline as { segments: any[] }).segments].sort((a, b) => a.frameStart - b.frameStart);
@@ -31,6 +33,7 @@ export function getSortedZones(pipe: PipeRow): Array<{ zoneIndex: number; frameS
 
 /** The simple summarize flow for the pre-heuristics block. */
 export function buildHeuristics(pipe: PipeRow): string {
+  if (!pipe || !Array.isArray(pipe.elements)) return '';
   const lines: string[] = [];
 
   const global = pipe.elements.find((e) => 'tag' in e && e.tag === 'global_style') as any;
@@ -52,8 +55,8 @@ export function buildHeuristics(pipe: PipeRow): string {
     lines.push(`zones: ${zones.length} (${ranges})`);
   }
 
-  if (pipe.keyframes.length > 0) {
-    const kfs = [...pipe.keyframes]
+  if ((pipe.keyframes ?? []).length > 0) {
+    const kfs = [...(pipe.keyframes ?? [])]
       .sort((a, b) => a.frame - b.frame)
       .map((k) => `k${k.slotIndex}@f${k.frame}(${k.type})`)
       .join(' · ');
@@ -73,6 +76,8 @@ export function buildHeuristics(pipe: PipeRow): string {
  * `<heuristics>` block + one `<..>` section per tag.
  */
 export function summarizePipe(pipe: PipeRow): string {
+  // Defensive: a missing/partial pipe yields the same marker as a bare pipe.
+  if (!pipe || !Array.isArray(pipe.elements)) return '<heuristics>empty</heuristics>';
   const parts: string[] = [];
 
   const heuristics = buildHeuristics(pipe);

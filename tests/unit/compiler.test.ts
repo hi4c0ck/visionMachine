@@ -36,6 +36,11 @@ describe('constructRule', () => {
 });
 
 describe('compilePrompt', () => {
+  it('compiles nothing when the pipe or its elements are missing', () => {
+    expect(compilePrompt(undefined as unknown as PipeRow)).toBe('');
+    expect(compilePrompt({} as unknown as PipeRow)).toBe('');
+  });
+
   it('should compile an empty pipe', () => {
     const pipe: PipeRow = {
       id: '1',

@@ -27,7 +27,7 @@ import { SessionServiceImpl } from './session-io';
 import { MigrationServiceImpl } from './migrations';
 import { SubjectReferenceServiceImpl } from './subjectRefs';
 import { GenerationServiceImpl } from './generation';
-import { normalizePipe } from './validators';
+import { normalizeSession } from './validators';
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -430,9 +430,9 @@ class ComposerStoreImpl implements ComposerStore {
       // session-io maps the backend payload into frontend PipeRow shape.
       const result = await this.services.session.load(sessionId);
       if (result.session) {
-        for (const pipe of result.session.pipes) {
-          normalizePipe(pipe);
-        }
+        // Session-level fields + every pipe, so the store copy is always
+        // render-safe regardless of the on-disk shape.
+        normalizeSession(result.session);
         sessions.set(sessionId, result.session);
         unsynced.delete(sessionId);
       }
@@ -519,12 +519,11 @@ class ComposerStoreImpl implements ComposerStore {
 
   async hydrateSessions(sessionList: any[]): Promise<void> {
     for (const session of sessionList) {
-      // Normalize pipes so legacy/localStorage session shapes are always
-      // valid before they enter the store (prevents undefined-field crashes
+      // Normalize session-level fields (fps/resolution/orientation) AND pipes
+      // so legacy/localStorage session shapes are always valid before they
+      // enter the store (prevents empty selects and undefined-field crashes
       // on the render path when the user re-enters the app).
-      for (const pipe of (session.pipes ?? []) as PipeRow[]) {
-        normalizePipe(pipe);
-      }
+      normalizeSession(session as SessionData);
       sessions.set(session.id, session);
     }
   }

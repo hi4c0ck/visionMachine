@@ -255,6 +255,16 @@ import { flashToast } from '$lib/flashToast';
 
 	// ── Actions ─────────────────────────────────────────────────────────────
 
+	// Clicking a pipe (its chrome / empty space) selects it — the pipe you
+	// point at is the pipe you edit. Interactive children keep working: their
+	// clicks bubble here and select the owning pipe (the correct context).
+	// Zone-pill menu clicks stopPropagation but set activePipeIdx themselves
+	// (handleOpenTagMenu). The focus $effect follows the new activePipeIdx,
+	// so the tools-panel inspector lands on pipe level.
+	function handlePipeSelect(idx: number) {
+		activePipeIdx = idx;
+	}
+
 	async function handleAddPipe() {
 		if (!session?.id) return;
 		const result = await addPipeAction(session.id);
@@ -627,7 +637,7 @@ import { flashToast } from '$lib/flashToast';
 
 <div class="composer-panel">
 	{#each pipes as pipe, pipeIdx (pipe.id)}
-		<div class="pipe" class:active={activePipeIdx === pipeIdx}>
+		<div class="pipe" class:active={activePipeIdx === pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>>
 			
 		<!-- ═══ PIPE HEADER ═══ -->
 			<PipeHeader
