@@ -9,8 +9,10 @@
 
 import type {
   GenerationLogEntry,
+  Orientation,
   ProviderKind,
   ProviderSlot,
+  ResolutionPreset,
   Settings,
 } from '$types';
 import { AGNES_PRESET, CUSTOM_PRESET, defaultPresetFor, modelsFor } from './catalog';
@@ -111,6 +113,20 @@ export function maskKey(key: string): string {
 export function isConfigured(slot: ProviderSlot | null | undefined): boolean {
   if (!slot) return false;
   return Boolean(validateHttpUrl(slot.baseUrl) && slot.apiKey && slot.model);
+}
+
+// Settings values are free strings; coerce into the app's closed unions so
+// callers (session creation, frame math) never see out-of-domain data.
+const KNOWN_RESOLUTIONS: readonly string[] = ['480p', '720p', '1080p'];
+
+/** Coerce a settings resolution string into a known ResolutionPreset. */
+export function knownResolution(resolution: string): ResolutionPreset {
+  return KNOWN_RESOLUTIONS.includes(resolution) ? (resolution as ResolutionPreset) : '720p';
+}
+
+/** Coerce a settings orientation string into a known Orientation. */
+export function knownOrientation(orientation: string): Orientation {
+  return orientation === 'vertical' ? 'vertical' : 'horizontal';
 }
 
 /**

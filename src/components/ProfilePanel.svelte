@@ -5,12 +5,15 @@
 		userName,
 		projects,
 		selectedProjectId,
-		selectedSessionId
+		selectedSessionId,
+		onopensettings,
 	} = $props<{
 		userName: string;
 		projects: ProjectData[];
 		selectedProjectId: string | null;
 		selectedSessionId: string | null;
+		/** Opens the settings modal (defaults tab). */
+		onopensettings?: () => void;
 	}>();
 
 	// Calculate real stats from projects
@@ -55,6 +58,12 @@
 			<span class="section-value">{totalGenerations}</span>
 		</div>
 	</div>
+
+	<!-- Settings entry point (Phase 3): per-profile settings + providers -->
+	<button class="settings-entry" onclick={onopensettings}>
+		<span>Settings</span>
+		<span class="settings-entry-chev">›</span>
+	</button>
 </div>
 
 <style>
@@ -123,6 +132,30 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+	}
+
+	.settings-entry {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		padding: 7px 10px;
+		font-size: 0.78rem;
+		font-weight: 500;
+		color: var(--text-secondary, #BFBFBF);
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+
+	.settings-entry:hover {
+		background: var(--bg-tertiary, #4E525A);
+		color: var(--text-primary, #EEEEEE);
+	}
+
+	.settings-entry-chev {
+		color: var(--text-muted, #808080);
 	}
 
 	.section-item {

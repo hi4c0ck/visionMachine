@@ -7,7 +7,8 @@
 	import ToolsPanel from './ToolsPanel.svelte';
 	import GenerateModal from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView } from '$types';
+	import SettingsModal from './Settings/SettingsModal.svelte';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
@@ -19,6 +20,7 @@
 	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
 	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
+	import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation } from '$lib/settings';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -104,6 +106,13 @@
 	);
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
 
+	// Settings (Phase 2): live object + re-sync on store change. The store
+	// replaces its object on every commit, so a plain reassignment re-renders.
+	let settings = $state<Settings>(getSettings());
+	setOnSettingsChange(() => {
+		settings = getSettings();
+	});
+
 	// ── Generation flow state (pipe-level, decisions D1–D9) ─────────────────
 	// brokenRefs: `${pipeId}:${refId}` of references whose URL failed the
 	// accessibility check (D5) — chips are red-out until re-validated.
@@ -114,6 +123,11 @@
 	let activeTask = $state<GenerationTaskView | null>(null);
 	let poller: PollHandle | null = null;
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
+
+	// Settings modal (Phase 3): opened from the profile panel (Defaults tab)
+	// or, in Phase 4, the provider status chip (Providers tab).
+	let showSettings = $state(false);
+	let settingsTab = $state<'defaults' | 'providers'>('defaults');
 
 	const anyTaskActive = $derived(activeTask !== null && !isTerminalTaskStatus(activeTask.status));
 	const generatePipe = $derived.by(() => {
@@ -559,14 +573,19 @@
 			const project = projects.find(p => p.id === projectId);
 			if (!project) return;
 
-			const maxFrames = getMaxFramesForResolution('720p');
+			// New sessions inherit the user's generation defaults (Phase 2);
+			// free-form settings strings are coerced into known values.
+			const d = getSettings().generationDefaults;
+			const defaultResolution = knownResolution(d.resolution);
+			const defaultOrientation = knownOrientation(d.orientation);
+			const maxFrames = getMaxFramesForResolution(defaultResolution);
 			const defaultPipe: PipeRow = {
 				id: crypto.randomUUID(),
 				name: 'Pipe 1',
 				lengthFrames: maxFrames,
 				keyframes: [],
-				qValue: 18,
-				cValue: 7,
+				qValue: d.qValue,
+				cValue: d.cValue,
 				subjectReferences: [],
 				elements: [{
 					id: crypto.randomUUID(),
@@ -607,9 +626,9 @@
 				updatedAt: Date.now(),
 				directoryPath: `${project.directoryPath}\\session_${Date.now()}`,
 				pipes: [defaultPipe],
-				fps: 24,
-				resolution: '720p',
-				orientation: 'horizontal',
+				fps: d.fps,
+				resolution: defaultResolution,
+				orientation: defaultOrientation,
 				totalGeneratedFrames: 0,
 			};
 			
@@ -639,14 +658,17 @@
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
-		const maxFrames = getMaxFramesForResolution('720p');
+		const d = getSettings().generationDefaults;
+		const defaultResolution = knownResolution(d.resolution);
+		const defaultOrientation = knownOrientation(d.orientation);
+		const maxFrames = getMaxFramesForResolution(defaultResolution);
 		const defaultPipe: PipeRow = {
 			id: crypto.randomUUID(),
 			name: 'Pipe 1',
 			lengthFrames: maxFrames,
 			keyframes: [],
-			qValue: 18,
-			cValue: 7,
+			qValue: d.qValue,
+			cValue: d.cValue,
 			subjectReferences: [],
 			elements: [{
 				id: crypto.randomUUID(),
@@ -663,9 +685,9 @@
 			updatedAt: Date.now(),
 			directoryPath: `${project.directoryPath}\\session_${Date.now()}`,
 			pipes: [defaultPipe],
-			fps: 24,
-			resolution: '720p',
-			orientation: 'horizontal',
+			fps: d.fps,
+			resolution: defaultResolution,
+			orientation: defaultOrientation,
 			totalGeneratedFrames: 0,
 		};
 		
@@ -937,9 +959,15 @@
 		// Wait for Tauri to be ready before loading projects
 		await new Promise(resolve => setTimeout(resolve, 100));
 		await loadProjects();
+		// Settings follow the active profile (Tauri) or the username
+		// (browser dev fallback); a failed load falls back to defaults.
+		void loadSettings(userProfileId || userName);
 	});
 
-	onDestroy(() => stopPoller());
+	onDestroy(() => {
+		stopPoller();
+		setOnSettingsChange(null);
+	});
 </script>
 
 <div class={`workspace ${layoutMode}`}>
@@ -987,6 +1015,10 @@
 				{projects}
 				{selectedProjectId}
 				{selectedSessionId}
+				onopensettings={() => {
+					settingsTab = 'defaults';
+					showSettings = true;
+				}}
 			/>
 		</div>
 
@@ -1066,6 +1098,7 @@
 				onCancel={cancelActiveTask}
 				onClose={closeProgressModal}
 			/>
+			<SettingsModal bind:open={showSettings} initialTab={settingsTab} />
 	</div>
 </div>
 
