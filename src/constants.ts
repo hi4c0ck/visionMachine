@@ -1,4 +1,4 @@
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 
 const APP_CONSTANTS = {
   strings: {
@@ -53,12 +53,10 @@ const APP_CONSTANTS = {
     generationComplete: 'Generation complete',
     generationCancelled: 'Generation cancelled',
     generationFailed: 'Generation failed',
-    engineNotConfigured: 'No generation engine configured',
     refNotAccessible: 'Reference not accessible',
     generationInProgress: 'Generation already in progress',
     sessionGenRoadmap: 'Session generation (all pipes) is on the roadmap',
     promptCopied: 'Prompt copied',
-    lastGenPreview: 'Last generation',
     openInPreview: 'Open in preview',
     
     // Modals
