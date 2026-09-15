@@ -144,7 +144,8 @@ Agnes placeholder specs: `agnes-text` / `agnes-image` / `agnes-video`,
       (fallback = current presets until Agnes specs land) — BLOCKED on
       Agnes specs (`pending: true`); fallback in place
 - [x] Progress modal shows model + taskId per stage (from log entry)
-- [ ] Regression: gates green (svelte-check / vitest / playwright)
+- [x] Regression: gates green (svelte-check / vitest / playwright)
+      — 0 errors / 398 vitest / 34 cargo / 64 playwright (f09f1b9)
 
 ### Phase 6 — Real engine slot (data-only handoff)
 - [ ] Request builder consumes `ModelSpec.requestFormat` → payload; stages
