@@ -432,7 +432,8 @@
     max-width: 300px;
     border-left: 1px solid var(--panel-right-border);
     background: var(--panel-right-bg);
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   /* Sections */

@@ -63,11 +63,14 @@
 		background: var(--bg-secondary, #3C3F46);
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-		padding: 12px;
+		gap: 8px;
+		padding: 10px 12px;
 		border-top: 1px solid var(--border-color, #4E525A);
-		flex: 1;
-		overflow: hidden;
+		flex-shrink: 0;
+		/* Sit compact at the bottom of the left column; the projects list
+			   above absorbs the free space. Also pins correctly in 'single'
+			   layout mode where the profile is the only child. */
+		margin-top: auto;
 	}
 
 	/* ── Header ── */
@@ -120,7 +123,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		overflow-y: auto;
 	}
 
 	.section-item {
