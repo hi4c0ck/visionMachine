@@ -11,7 +11,7 @@
 	import KeyframesRow from './ComposerRows/KeyframesRow.svelte';
 	import SubjectRefsRow from './ComposerRows/SubjectRefsRow.svelte';
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
-	import { getFreeGaps, getMaxFrames, type FreeGap, placeTagInZone, evenSplitZone } from '$lib/frameMath';
+	import { getFreeGaps, getMaxFrames, minZoneSpan, type FreeGap, placeTagInZone, evenSplitZone } from '$lib/frameMath';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import type { ComposerUiVariant } from '$lib/composerUiVariant';
 	import {
@@ -431,11 +431,12 @@ import { flashToast } from '$lib/flashToast';
 		activePipeIdx = idx;
 
 		// Enumerate EVERY free gap (before/between/after zones) that can host a
-		// new zone. The modal lets the user pick one, so a zone can be inserted
-		// anywhere allowed — not just the first gap the old append found.
-		const gaps = getFreeGaps(tl?.segments ?? [], pipe.lengthFrames, 8);
+		// new zone of the creation floor (≈1s at session fps, 8-grid). The
+		// modal lets the user pick one, so a zone can be inserted anywhere
+		// allowed — not just the first gap the old append found.
+		const gaps = getFreeGaps(tl?.segments ?? [], pipe.lengthFrames, minZoneSpan(session.fps));
 		if (gaps.length === 0) {
-			// Pipe fully packed: no free space fits the minimum 8-frame span.
+			// Pipe fully packed: no free space fits the 1s creation floor.
 			// Opening the modal here would leave no place to put a zone, so
 			// surface the reason instead of a dead confirm.
 			flashToast('No free space for a new segment — shrink an existing segment first');
@@ -459,6 +460,9 @@ import { flashToast } from '$lib/flashToast';
 		if (!pipe || !session?.id) return;
 		const result = await addSegmentAction(session.id, pipe.id, start, end);
 		if (result.errors.length > 0) {
+			// Surface the reason (e.g. tight-pipe floor rejection) instead of
+			// a silent no-op; the modal stays open so the user can adjust.
+			flashToast(result.errors[0]);
 			console.error('[ComposerPanel] addSegment:', result.errors);
 			return;
 		}
@@ -815,6 +819,7 @@ import { flashToast } from '$lib/flashToast';
 		endFrame={segEnd}
 		totalFrames={totalFrames}
 		gaps={segGaps}
+		minSpan={session ? minZoneSpan(session.fps) : 8}
 		bind:open={showSegmentModal}
 		onConfirm={(s, e) => confirmSegment(s, e)}
 	/>

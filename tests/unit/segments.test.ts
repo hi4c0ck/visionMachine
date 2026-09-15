@@ -149,6 +149,20 @@ describe('Segment Service', () => {
       expect(pipe.elements[0].segments[0].frameEnd - pipe.elements[0].segments[0].frameStart).toBeGreaterThanOrEqual(8);
     });
 
+    it('extends sub-1s zones up to the 1s creation floor (fps-aware)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      // 24 fps mock → 1s floor = 24 frames; a 16-frame request is extended.
+      const result = await addSegment(session.id, pipe.id, 0, 16);
+
+      expect(result.errors).toHaveLength(0);
+      expect(pipe.elements[0].segments[0].frameStart).toBe(0);
+      expect(pipe.elements[0].segments[0].frameEnd).toBe(24);
+    });
+
     it('should auto-create timeline if missing', async () => {
       const session = createMockSession();
       sessions.set(session.id, session);

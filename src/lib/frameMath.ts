@@ -17,6 +17,17 @@ import { snapFrameDown, FRAME_STEP } from './frameGeometry';
 export const snapTo8 = snapFrameDown;
 
 /**
+ * Minimum zone span at CREATION: ≈1s of footage at the session fps,
+ * snapped up to the 8-frame grid (24fps→24, 18fps→24, 30fps→32, 60fps→64).
+ * Sub-1s zones stay reachable via drag-resize (8-frame engine floor),
+ * not via zone creation.
+ */
+export function minZoneSpan(fps: number): number {
+  const effective = fps > 0 ? fps : 8;
+  return Math.ceil(effective / 8) * 8;
+}
+
+/**
  * Snap a total frame count to the nearest valid 8n+1 value.
  */
 export function snapTo8nPlus1(frame: number): number {

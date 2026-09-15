@@ -24,7 +24,26 @@ import {
   getFreeGaps,
   placeTagInZone,
   evenSplitZone,
+  minZoneSpan,
 } from '../../src/lib/frameMath';
+
+// ── minZoneSpan ──────────────────────────────────────────────────────────────
+
+describe('minZoneSpan', () => {
+  it('snaps the 1s floor up to the 8-grid for each fps', () => {
+    expect(minZoneSpan(18)).toBe(24); // ceil(18/8)*8 = 3*8
+    expect(minZoneSpan(24)).toBe(24); // exactly 3*8
+    expect(minZoneSpan(30)).toBe(32); // ceil(30/8)*8 = 4*8
+    expect(minZoneSpan(48)).toBe(48); // exactly 6*8
+    expect(minZoneSpan(60)).toBe(64); // ceil(60/8)*8 = 8*8
+  });
+
+  it('never drops below the 8-frame engine floor', () => {
+    expect(minZoneSpan(1)).toBe(8);
+    expect(minZoneSpan(0)).toBe(8);
+    expect(minZoneSpan(8)).toBe(8);
+  });
+});
 
 // ── snapTo8 ──────────────────────────────────────────────────────────────────
 

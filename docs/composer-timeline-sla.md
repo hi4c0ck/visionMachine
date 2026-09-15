@@ -7,23 +7,30 @@ guidelines the UI follows by default, but users may override.
 ## Hard engine floor
 
 - **Minimum span: 8 frames.** Zones and tags snap to an 8-frame grid and
-  can never be smaller than one grid cell. This is the only enforced
-  floor (enforced in the store: `addSegment`, `resizeTagElement`,
-  `placeTagInZone`, `evenSplitZone`).
-- **No overlap.** Same-type tags in a zone never overlap. A new same-type
-  tag takes the first free slot; when the zone is full it is resplit
-  evenly across all tags of that type (silent warning, no error).
+  can never be smaller than one grid cell. Enforced on every drag-resize
+  (`calculateElementDrag`, `resizeSegment`, `resizeTagElement`) and in
+  `placeTagInZone` / `evenSplitZone`.
+- **No overlap.** Same-type tags in a zone never overlap — on add (first
+  free slot; a full zone resplits evenly, silent warning, no error) AND
+  on drag: the live preview is constrained off the same-type siblings
+  (`resolveTagDragConflict`) and the store backstop rejects a commit that
+  somehow overlaps (`resizeTagElement`).
 - **Containment.** Tags stay inside their parent zone.
 
-## Soft quality rule: zones ≈ 1s
+## Zone creation floor: ≥1s (enforced)
 
 - A "complete" section (one morph) is 4–5 keyframe steps, which is ≈1s of
   footage at the session fps — ≈2s at 18 fps, ≈0.6s at 60 fps (the same
   ~36–40 frame constant).
-- **Zone suggestions default to ≥1s** (snapped up to the 8-frame grid)
-  when the free space allows it. This is a quality rule, not a validator:
-  users may create sub-1s zones for micromanagement edge cases, at their
-  own risk — the 8-frame floor is the only hard limit.
+- **Creating a zone enforces ≥1s at the session fps** (`minZoneSpan(fps)`
+  = fps snapped up to the 8-grid: 24→24, 18→24, 30→32, 60→64 frames):
+  the add-zone modal disables Confirm below the floor, and `addSegment`
+  extends sub-floor ranges up to it. The "+ Zone" gap picker only offers
+  gaps that host the floor.
+- A pipe too tight to host the floor still accepts the 8-frame engine
+  floor (a deliberate "hack" path, not one-click creation).
+- **Drag-resize keeps only the 8-frame floor**: a zone may be gripped
+  below 1s, at the user's own risk — the 1s rule is a creation-time rule.
 - **fps is flexible** (18/24/30/48/60): "1s" means `fps` frames. Anything
   expressed in seconds must be computed from the session's current fps.
 

@@ -88,7 +88,9 @@ test.describe('Appending zones', () => {
 
 		// Zone 2: append → the modal prefills the WHOLE remaining gap (80–240;
 		// filling it is the default intent). Use only part of it so a third
-		// zone can still be appended without overlap.
+		// zone can still be appended without overlap. (Zone 2 is exactly the
+		// 24-frame creation floor at the default 24 fps — smaller is rejected
+		// by the modal.)
 		await appendBtn.click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		const prefill = [
@@ -97,14 +99,14 @@ test.describe('Appending zones', () => {
 		];
 		expect(Number(prefill[0])).toBe(80);
 		expect(Number(prefill[1])).toBe(240);
-		await addZoneAt(page, prefill[0], '88');
+		await addZoneAt(page, prefill[0], '104');
 		expect(await page.locator('.segment-body').count()).toBe(2);
 
-		// Zone 3: append again → next gap after zone 2's end (88).
+		// Zone 3: append again → next gap after zone 2's end (104).
 		await appendBtn.click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		const prefill3 = await page.locator('.modal input[type="number"]').nth(0).inputValue();
-		expect(Number(prefill3)).toBe(88);
+		expect(Number(prefill3)).toBe(104);
 		await addZoneAt(page, prefill3, await page.locator('.modal input[type="number"]').nth(1).inputValue());
 		expect(await page.locator('.segment-body').count()).toBe(3);
 

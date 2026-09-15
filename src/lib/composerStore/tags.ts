@@ -122,6 +122,19 @@ export class TagServiceImpl implements TagService {
     if (valid) {
       const tag = segment.tags.find(t => t.id === tagId);
       if (tag) {
+        // Backstop invariant: same-type tags in a zone never overlap. The
+        // timeline drag already resolves conflicts live; this guards every
+        // other commit path (touching boundaries stay allowed).
+        const tagType = tag.tag;
+        const conflicts = segment.tags.some(
+          (t) => t.id !== tagId && t.tag === tagType &&
+            rangesOverlapStrict(snappedStart, snappedEnd, t.frameStart, t.frameEnd)
+        );
+        if (conflicts) {
+          return {
+            errors: [`Tag overlaps another ${tagType} tag in this zone — same-type tags can't overlap`],
+          };
+        }
         tag.frameStart = snappedStart;
         tag.frameEnd = snappedEnd;
       }
