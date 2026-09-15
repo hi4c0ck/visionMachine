@@ -82,7 +82,10 @@ export interface Settings {
 // ── Generation log (portable: NO keys, NO raw local paths — P5) ────────────
 
 export type LogPieceKind = 'keyframe' | 'subject' | 'video';
-export type LogStatus = 'done' | 'error' | 'cancelled';
+// 'pending' = piece not started yet; 'running' = task in flight. Entries are
+// written at task start (status 'running', pieces 'pending') and upserted at
+// terminal (done / error / cancelled).
+export type LogStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled';
 
 export interface GenerationLogPiece {
   kind: LogPieceKind;

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { APP_CONSTANTS } from '$constants';
+	import type { Settings } from '$types';
+	import ProviderStatus from './Settings/ProviderStatus.svelte';
 
 	let {
 		userName,
@@ -12,6 +14,8 @@
 		video = null,
 		ruler = null,
 		showRuler = false,
+		providers = null,
+		onopenprovidersettings,
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -29,6 +33,10 @@
 		/** Render the global ruler strip. Off by default — it opts into a
 		 *  special mode in future development. */
 		showRuler?: boolean;
+		/** Provider settings for the status chip (Phase 4). null = chip hidden. */
+		providers?: Settings['providers'] | null;
+		/** Open the settings modal at the Providers tab. */
+		onopenprovidersettings?: () => void;
 	}>();
 
 	const layouts = [
@@ -156,13 +164,19 @@
 
 	<!-- Bottom section: theme selector + user info -->
 	<div class="frame-bottom">
-		<div class="theme-selector">
-			<label for="theme-select">Theme:</label>
-			<select id="theme-select" onchange={(e) => onthemeChange?.(e.currentTarget.value)}>
-				<option value="jetbrains-dark">JetBrains Dark</option>
-				<option value="steel-dark">Steel Machinery Dark</option>
-				<option value="light">Light</option>
-			</select>
+		<div class="frame-bottom-left">
+			<div class="theme-selector">
+				<label for="theme-select">Theme:</label>
+				<select id="theme-select" onchange={(e) => onthemeChange?.(e.currentTarget.value)}>
+					<option value="jetbrains-dark">JetBrains Dark</option>
+					<option value="steel-dark">Steel Machinery Dark</option>
+					<option value="light">Light</option>
+				</select>
+			</div>
+
+			{#if providers && onopenprovidersettings}
+				<ProviderStatus {providers} onopen={onopenprovidersettings} />
+			{/if}
 		</div>
 
 		{#if userName}
@@ -415,6 +429,12 @@
 		align-items: center;
 		justify-content: space-between;
 		padding: 10px 16px;
+	}
+
+	.frame-bottom-left {
+		display: flex;
+		align-items: center;
+		gap: 14px;
 	}
 
 	.theme-selector {

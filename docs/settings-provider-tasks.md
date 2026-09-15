@@ -130,19 +130,20 @@ Agnes placeholder specs: `agnes-text` / `agnes-image` / `agnes-video`,
 - [ ] svelte-check + vitest + playwright gates green
 
 ### Phase 4 — Global UI duplication (exactly three)
-- [ ] Provider status chip (top bar): `Agnes · model ✓` / `Not configured`,
+- [x] Provider status chip (top bar): `Agnes · model ✓` / `Not configured`,
       click → modal at Providers tab
-- [ ] GenerateModal: per-piece model override selects (image stage + video
+- [x] GenerateModal: per-piece model override selects (image stage + video
       stage), constrained to preset catalog; default = global setting;
       override recorded into the log entry
-- [ ] New sessions inherit `generationDefaults` (replace hardcoded
+- [x] New sessions inherit `generationDefaults` (replace hardcoded
       24/720p/horizontal/18/7 in createSession paths)
 
 ### Phase 5 — Wire-through
 - [ ] `resolutionPresets.ts` placeholder retired: model-spec `limits` drive
       fps/res options in GenerateModal when a provider is configured
-      (fallback = current presets until Agnes specs land)
-- [ ] Progress modal shows model + taskId per stage (from log entry)
+      (fallback = current presets until Agnes specs land) — BLOCKED on
+      Agnes specs (`pending: true`); fallback in place
+- [x] Progress modal shows model + taskId per stage (from log entry)
 - [ ] Regression: gates green (svelte-check / vitest / playwright)
 
 ### Phase 6 — Real engine slot (data-only handoff)

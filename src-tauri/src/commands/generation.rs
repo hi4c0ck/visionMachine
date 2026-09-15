@@ -14,6 +14,13 @@ pub struct StartGenerationInput {
     pub pipe_id: String,
     /// Final prompt string built by the frontend prompt engine.
     pub prompt: String,
+    /// Per-piece model override from the generate modal (Phase 4). None = use
+    /// the global provider setting. Recorded in the generation log now; the
+    /// provider engine consumes these when it lands.
+    #[serde(default)]
+    pub image_model: Option<String>,
+    #[serde(default)]
+    pub video_model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +64,8 @@ pub async fn start_generation(
         orientation: composer.orientation.clone(),
         q_value: pipe.q_value,
         c_value: pipe.c_value,
+        image_model: input.image_model,
+        video_model: input.video_model,
     };
 
     state.generation.registry.start(view, engine_input).await?;
