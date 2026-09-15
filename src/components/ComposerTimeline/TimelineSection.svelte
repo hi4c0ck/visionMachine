@@ -148,7 +148,8 @@
 		onOpenTagMenu(segId, e);
 	}
 
-	function getTimeline(p: PipeRow): any {
+	function getTimeline(p: PipeRow | null | undefined): any {
+		if (!p || !Array.isArray(p.elements)) return null;
 		return p.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
@@ -225,7 +226,8 @@
 		});
 	}
 
-	function getGlobal(p: PipeRow): any {
+	function getGlobal(p: PipeRow | null | undefined): any {
+		if (!p || !Array.isArray(p.elements)) return null;
 		return p.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
 

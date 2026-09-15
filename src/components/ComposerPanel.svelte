@@ -75,9 +75,19 @@ import { flashToast } from '$lib/flashToast';
 	let pipes = $derived(session?.pipes ?? []);
 	// Resolution cap (8n+1) the pipe length can grow to.
 	let maxPipeFrames = $derived(getMaxFrames(session?.resolution ?? '720p'));
+	// Read-time clamped pipe lookup. Deriveds evaluate DURING the render
+	// pass, before any clamping $effect runs, so a stale/out-of-range
+	// activePipeIdx (session switch, pipe removal) must never become
+	// pipes[staleIdx] → getTimeline(undefined) → "Cannot read properties
+	// of undefined (reading 'elements')". All render-path reads use this.
+	const activePipe = $derived(
+		activePipeIdx !== null && activePipeIdx >= 0 && activePipeIdx < pipes.length
+			? pipes[activePipeIdx]
+			: null
+	);
 	let totalFrames = $derived(
 		pipes.length > 0
-			? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? DEFAULT_FRAME_COUNT)
+			? ((activePipe ?? pipes[0])?.lengthFrames ?? DEFAULT_FRAME_COUNT)
 			: (propTotalFrames ?? DEFAULT_FRAME_COUNT)
 	);
 
@@ -99,7 +109,7 @@ import { flashToast } from '$lib/flashToast';
 			focus = { level: 'session', id: session?.id ?? '' };
 			return;
 		}
-		const pipe = pipes[activePipeIdx];
+		const pipe = activePipe;
 		if (!pipe) {
 			focus = { level: 'session', id: session?.id ?? '' };
 			return;
@@ -217,10 +227,10 @@ import { flashToast } from '$lib/flashToast';
 
 	// Per-pipe [+] visibility: hide the button when the pipe already owns BOTH
 	// addable track types (Timeline + Global) — the menu would be empty.
-	const hasTimeline = (p: PipeRow): boolean =>
-		p.elements.some((e: any) => e.tag === 'timeline');
-	const hasGlobal = (p: PipeRow): boolean =>
-		p.elements.some((e: any) => e.tag === 'global_style');
+	const hasTimeline = (p: PipeRow | null | undefined): boolean =>
+		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'timeline');
+	const hasGlobal = (p: PipeRow | null | undefined): boolean =>
+		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'global_style');
 	function showAddTrackButton(p: PipeRow): boolean {
 		return !hasTimeline(p) || !hasGlobal(p);
 	}
@@ -249,7 +259,8 @@ import { flashToast } from '$lib/flashToast';
 	// of truth, shared with KeyframesRow). openKeyframeModal uses it to
 	// compute the default next slot.
 
-	function getTimeline(pipe: PipeRow): any {
+	function getTimeline(pipe: PipeRow | null | undefined): any {
+		if (!pipe || !Array.isArray(pipe.elements)) return null;
 		return pipe.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
@@ -466,7 +477,7 @@ import { flashToast } from '$lib/flashToast';
 
 	// SegmentModal calls back with the snapped start/end it computed
 	async function confirmSegment(start: number, end: number) {
-		const pipe = pipes[activePipeIdx!];
+		const pipe = activePipe;
 		if (!pipe || !session?.id) return;
 		const result = await addSegmentAction(session.id, pipe.id, start, end);
 		if (result.errors.length > 0) {
@@ -521,9 +532,8 @@ import { flashToast } from '$lib/flashToast';
 	// menu so it can grey them out (choice A). Derived per target zone, not
 	// global, so each zone's own state drives its menu.
 	let tagMenuDeclaredTypes = $derived.by(() => {
-		const pipe = activePipeIdx !== null ? pipes[activePipeIdx] : undefined;
-		if (!pipe) return [];
-		const tl = getTimeline(pipe);
+		if (!activePipe) return [];
+		const tl = getTimeline(activePipe);
 		const seg = (tl?.segments ?? []).find((s: Segment) => s.id === selectedSegmentId);
 		if (!seg) return [];
 		return seg.tags.map((t: TagElement) => t.tag);
@@ -533,9 +543,8 @@ import { flashToast } from '$lib/flashToast';
 	// AND the zone is too small to resplit for (n+1) same-type tags. The menu
 	// disables those instead of promising a click that only errors.
 	let tagMenuUnavailableTypes = $derived.by(() => {
-		const pipe = activePipeIdx !== null ? pipes[activePipeIdx] : undefined;
-		if (!pipe) return [] as TagType[];
-		const tl = getTimeline(pipe);
+		if (!activePipe) return [] as TagType[];
+		const tl = getTimeline(activePipe);
 		const seg = ((tl?.segments ?? []) as Segment[]).find((s: Segment) => s.id === selectedSegmentId);
 		if (!seg) return [] as TagType[];
 		const zone = { frameStart: seg.frameStart, frameEnd: seg.frameEnd };
@@ -554,15 +563,15 @@ import { flashToast } from '$lib/flashToast';
 	// Zones the tag menu can attach to (one entry per existing zone).
 	// Derived, so it stays current when zones are added/removed.
 	let tagMenuSegments = $derived.by(() => {
-		if (activePipeIdx === null) return [];
-		const tl = getTimeline(pipes[activePipeIdx]);
+		if (!activePipe) return [];
+		const tl = getTimeline(activePipe);
 		return (tl?.segments ?? []).map((s: Segment, i: number) => ({ id: s.id, index: i + 1 }));
 	});
 
 	// TagSelectorMenu calls back with the chosen tag type + target zone
 	async function confirmTagSelector(tagType: TagType, segId: string) {
 		if (!session?.id) return;
-		const pipe = pipes[activePipeIdx!];
+		const pipe = activePipe;
 		if (!pipe) return;
 		const tl = getTimeline(pipe);
 		if (!tl) return;
@@ -597,7 +606,7 @@ import { flashToast } from '$lib/flashToast';
 
 	// TagPromptModal calls back with its edited prompt on confirm
 	async function confirmTagPrompt(prompt: string) {
-		const pipe = pipes[activePipeIdx!];
+		const pipe = activePipe;
 		if (!pipe || !session?.id) return;
 		const result = await updateTagPromptAction(session.id, pipe.id, editingSegmentId, editingTagId, prompt);
 		if (result.errors.length > 0) {
@@ -799,27 +808,27 @@ import { flashToast } from '$lib/flashToast';
 </div>
 
 <!-- ═══ KEYFRAME MODAL ═══ -->
-{#if activePipeIdx !== null}
+{#if activePipe}
 	<KeyframeModal
-		pipe={pipes[activePipeIdx]}
+		pipe={activePipe}
 		sessionId={session?.id}
 		maxFrames={totalFrames}
 		editingSlot={editingKeyframeSlot}
 		bind:open={showKeyframeModal}
-		onSaved={(refId) => onRefSaved?.(pipes[activePipeIdx]?.id ?? '', refId)}
+		onSaved={(refId) => onRefSaved?.(activePipe?.id ?? '', refId)}
 	/>
 {/if}
 
 <!-- ═══ SUBJECT REFERENCE MODAL ═══ -->
-{#if activePipeIdx !== null}
+{#if activePipe}
 	<SubjectRefModal
-		pipe={pipes[activePipeIdx]}
+		pipe={activePipe}
 		sessionId={session?.id}
 		maxFrames={totalFrames}
 		editingRefId={editingSubjectRefId}
 		maxSubjectRefs={MAX_SUBJECT_REFS}
 		bind:open={showSubjectRefModal}
-		onSaved={(refId) => onRefSaved?.(pipes[activePipeIdx]?.id ?? '', refId)}
+		onSaved={(refId) => onRefSaved?.(activePipe?.id ?? '', refId)}
 	/>
 {/if}
 
@@ -848,10 +857,10 @@ import { flashToast } from '$lib/flashToast';
 	{/if}
 
 	<!-- ═══ TAG PROMPT MODAL ═══ -->
-{#if activePipeIdx !== null}
-	<TagPromptModal
-		sessionId={session?.id}
-		pipeId={pipes[activePipeIdx].id}
+	{#if activePipe}
+		<TagPromptModal
+			sessionId={session?.id}
+			pipeId={activePipe.id}
 		segmentId={editingSegmentId}
 		tagId={editingTagId}
 		prompt={tagPrompt}

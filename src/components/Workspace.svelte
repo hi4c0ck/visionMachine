@@ -19,7 +19,6 @@
 	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
 	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
-	import { defaultResolutionFor } from '$lib/resolutionPresets';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -919,14 +918,9 @@
 
 	function handleOrientationChange(orientation: string) {
 		if (!selectedSession) return;
+		// Size (resolution) is an INDEPENDENT session-level setting — the user
+		// owns the size selector; changing orientation never rewrites it.
 		updateOrientation(selectedSession.id, orientation);
-		// Placeholder generation preset: switching orientation re-applies that
-		// orientation's default size (provider-driven values come later —
-		// src/lib/resolutionPresets.ts). Skipped when already at the preset.
-		const preset = defaultResolutionFor(orientation);
-		if (preset && preset !== selectedSession.resolution) {
-			updateResolution(selectedSession.id, preset);
-		}
 	}
 
 	function handleToolSelect(id: string) {

@@ -52,6 +52,24 @@
 	let showModal = $state(false);
 	let newSessionName = $state('');
 
+	// Svelte's select matcher compares the option value (a string) against the
+	// passed value STRICTLY — a numeric fps (24) never matches option "24" and
+	// the select renders blank (still selectable, but showing nothing).
+	// Coerce both sides to strings, and mirror a non-standard session fps into
+	// the option list so any flexible fps value the session carries is visible.
+	const BASE_FPS_OPTIONS = [18, 24, 30, 48, 60];
+	let fpsOptions = $derived.by(() => {
+		const cur = Number(session?.fps);
+		const list = Number.isFinite(cur) && cur > 0 && !BASE_FPS_OPTIONS.includes(cur)
+			? [...BASE_FPS_OPTIONS, cur]
+			: [...BASE_FPS_OPTIONS];
+		return list.sort((a, b) => a - b);
+	});
+	let fpsValue = $derived.by(() => {
+		const cur = Number(session?.fps);
+		return Number.isFinite(cur) && cur > 0 ? String(cur) : '24';
+	});
+
 	function openNewSessionModal() {
 		if (!project) return;
 		newSessionName = '';
@@ -192,14 +210,12 @@
           <label class="setting-label">FPS</label>
           <select 
             class="setting-select"
-            value={session.fps}
+            value={fpsValue}
             onchange={(e) => onfpschange?.(Number(e.currentTarget.value))}
           >
-            <option value="18">18 fps</option>
-            <option value="24">24 fps</option>
-            <option value="30">30 fps</option>
-            <option value="48">48 fps</option>
-            <option value="60">60 fps</option>
+            {#each fpsOptions as opt (opt)}
+              <option value={String(opt)}>{opt} fps</option>
+            {/each}
           </select>
         </div>
 
