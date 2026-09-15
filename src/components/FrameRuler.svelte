@@ -11,7 +11,8 @@
 		selectedFrame = 0,
 		onframeSelect,
 		geometry,
-		legend = null
+		legend = null,
+		fps
 	} = $props<{
 		totalFrames: number;
 		selectedFrame?: number;
@@ -19,6 +20,8 @@
 		geometry: FrameGeometry | null;
 		/** Optional legend strip (zone + global + tag color key). */
 		legend?: { zone: string; global: string; tags: Array<{ name: string; color: string }> } | null;
+		/** Session fps — enables the pin notice seconds readout (frame / fps). */
+		fps?: number;
 	}>();
 
 	const TAG_TYPES: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
@@ -86,8 +89,21 @@
 
 			<div
 				class="playhead"
-				style={`left: ${frameToPx(selectedFrame, geometry)}px`}>
-			</div>
+				style={`left: ${frameToPx(selectedFrame, geometry)}px`}></div>
+
+			<!-- Tiny, slightly-visible notice of the pin frame + time (1 decimal).
+				 Themed: follows the active theme via CSS variables. Sibling of the
+				 playhead so it resolves left against the coordinate space. -->
+			{#if fps && fps > 0}
+				<div
+					class="pin-note"
+					class:align-left={selectedFrame <= 8}
+					class:align-right={selectedFrame >= totalFrames - 9}
+					style={`left: ${frameToPx(selectedFrame, geometry)}px`}
+					aria-hidden="true">
+					{selectedFrame} · {(selectedFrame / fps).toFixed(1)}s
+				</div>
+			{/if}
 		{/if}
 	</div>
 </div>
@@ -189,8 +205,30 @@
 		bottom: 0;
 		width: 2px;
 		transform: translateX(-1px);
-		background: #6366f1;
+		background: var(--accent-color, #6366f1);
 		pointer-events: none;
 		z-index: 20;
 	}
+
+	/* Pin notice: tiny frame + seconds readout at the playhead position.
+	   Muted themed colors so it stays visible without disrupting the ruler. */
+	.pin-note {
+		position: absolute;
+		top: 1px;
+		transform: translateX(-50%);
+		font-size: 9px;
+		line-height: 1.5;
+		padding: 0 4px;
+		border-radius: 3px;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
+		color: var(--text-muted, #888);
+		border: 1px solid var(--border-color, #3f3f46);
+		white-space: nowrap;
+		pointer-events: none;
+		z-index: 21;
+		opacity: 0.85;
+	}
+
+	.pin-note.align-left { transform: translateX(0); }
+	.pin-note.align-right { transform: translateX(-100%); }
 </style>

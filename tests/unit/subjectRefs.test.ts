@@ -515,4 +515,137 @@ describe('Subject Reference Service', () => {
       expect(result.errors.length).toBeGreaterThan(0);
     });
   });
+
+  // ── Preset type + prompt persistence (subjects follow keyframe rules) ─────
+
+  describe('preset type + prompt round-trip', () => {
+    it('addSubjectRef defaults to type url with a pending status', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const result = await addSubjectRef(session.id, pipe.id, 'https://example.com/r.jpg', false);
+
+      expect(result.errors).toEqual([]);
+      expect(pipe.subjectReferences[0].type).toBe('url');
+      expect(pipe.subjectReferences[0].status).toBe('pending');
+      expect(pipe.subjectReferences[0].prompt).toBeUndefined();
+    });
+
+    it('addSubjectRef persists a txt2img preset with its prompt', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const result = await addSubjectRef(
+        session.id,
+        pipe.id,
+        '',
+        false,
+        undefined,
+        undefined,
+        'txt2img',
+        'a mountain approach',
+      );
+
+      expect(result.errors).toEqual([]);
+      expect(pipe.subjectReferences[0].type).toBe('txt2img');
+      expect(pipe.subjectReferences[0].prompt).toBe('a mountain approach');
+      expect(pipe.subjectReferences[0].status).toBe('pending');
+    });
+
+    it('addSubjectRef rejects a txt2img subject without a prompt', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const result = await addSubjectRef(
+        session.id,
+        pipe.id,
+        '',
+        false,
+        undefined,
+        undefined,
+        'txt2img',
+        '',
+      );
+
+      expect(result.errors).toHaveLength(1);
+      expect(pipe.subjectReferences).toHaveLength(0);
+    });
+
+    it('addSubjectRef requires a reference image and a prompt for img2img', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      const noRef = await addSubjectRef(
+        session.id, pipe.id, '', false, undefined, undefined, 'img2img', 'a mountain',
+      );
+      expect(noRef.errors).toHaveLength(1);
+
+      const noPrompt = await addSubjectRef(
+        session.id, pipe.id, 'https://example.com/ref.jpg', false, undefined, undefined, 'img2img', '   ',
+      );
+      expect(noPrompt.errors).toHaveLength(1);
+
+      const ok = await addSubjectRef(
+        session.id, pipe.id, 'https://example.com/ref.jpg', false, undefined, undefined, 'img2img', 'a mountain',
+      );
+      expect(ok.errors).toEqual([]);
+      expect(pipe.subjectReferences[0].type).toBe('img2img');
+      expect(pipe.subjectReferences[0].imageUrl).toBe('https://example.com/ref.jpg');
+    });
+
+    it('type/prompt survive a save/reload clone round-trip', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, '', false, undefined, undefined, 'txt2img', 'first');
+      await addSubjectRef(
+        session.id, pipe.id, 'https://example.com/ref.jpg', false, undefined, undefined, 'img2img', 'second',
+      );
+
+      const savedPipes = JSON.parse(JSON.stringify(session.pipes));
+      sessions.clear();
+
+      const restored = createMockSession(savedPipes);
+      sessions.set(session.id, restored);
+      const restoredPipe = restored.pipes[0];
+      expect(restoredPipe.subjectReferences[0].type).toBe('txt2img');
+      expect(restoredPipe.subjectReferences[0].prompt).toBe('first');
+      expect(restoredPipe.subjectReferences[1].type).toBe('img2img');
+      expect(restoredPipe.subjectReferences[1].prompt).toBe('second');
+    });
+
+    it('updateSubjectRef round-trips type/prompt as one atomic edit', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(session.id, pipe.id, '', false, undefined, undefined, 'txt2img', 'first');
+      const refId = pipe.subjectReferences[0].id;
+
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/ref.jpg',
+        useFrames: false,
+        type: 'img2img',
+        prompt: 'second',
+      });
+
+      expect(result.errors).toEqual([]);
+      const ref = pipe.subjectReferences[0];
+      expect(ref.type).toBe('img2img');
+      expect(ref.prompt).toBe('second');
+      // edited input ⇒ the image is not generated yet
+      expect(ref.status).toBe('pending');
+    });
+  });
 });

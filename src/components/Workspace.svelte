@@ -122,12 +122,18 @@
 	});
 	// Session-ruler tick strip, generated to the (placeholder) session length
 	// instead of a hardcoded [0..240] array that assumes 720p.
+	// Ruler tick strip, generated to the (placeholder) session length.
+	// Fed to the tiny global ruler overlay in the top-panel Frame strip.
 	let previewTicks = $derived.by(() => {
 		const ticks: number[] = [];
 		const last = totalFrames - 1;
 		for (let f = 0; f <= last; f += 8) ticks.push(f);
 		return ticks;
 	});
+
+	// The global frame ruler overlay is disabled by default — it opts into a
+	// special mode in future development. No UI toggle ships today.
+	let showGlobalRuler = $state(false);
 
 	// Reset composer-local UI state whenever the active session changes so a
 	// stale activePipeIdx / selectedFrame from the previous session never
@@ -941,6 +947,8 @@
 		{layoutMode}
 		{showWelcome}
 		video={previewVideo}
+		showRuler={showGlobalRuler}
+		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
@@ -948,19 +956,6 @@
 
 	{#if selectedSession && selectedProject}
 	<div class="preview-area">
-		<div class="preview-canvas">
-			<div class="preview-playhead" style={`left: ${((selectedFrame || 0) / Math.max(1, totalFrames - 1)) * 100}%`}>
-				<div class="playhead-tip"></div>
-				<div class="playhead-line"></div>
-			</div>
-			<div class="preview-frames">
-				{#each previewTicks as frame}
-					<div class="preview-tick" style={`left: ${(frame / Math.max(1, totalFrames - 1)) * 100}%`}>
-						{#if frame % 32 === 0}<span class="tick-label">{frame}</span>{/if}
-					</div>
-				{/each}
-			</div>
-		</div>
 		<div class="preview-meta">
 			<span class="frame-indicator">Frame: <strong>{selectedFrame ?? 0}</strong> / {totalFrames}</span>
 			<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
@@ -1082,9 +1077,10 @@
 		background: var(--bg-primary);
 	}
 
-	/* ── Full-Width Preview ── */
+	/* ── Session meta row (the global frame ruler now overlays the
+	   top-panel Frame strip instead of a full-width canvas here) ── */
 	.preview-area {
-		height: 120px;
+		height: 24px;
 		background: var(--bg-secondary, #14141f);
 		border-bottom: 1px solid var(--border, #2a2a3a);
 		display: flex;
@@ -1092,66 +1088,9 @@
 		flex-shrink: 0;
 	}
 
-	.preview-canvas {
-		flex: 1;
-		position: relative;
-		overflow: hidden;
-		background: linear-gradient(180deg, var(--bg-tertiary, #1e1e2e) 0%, var(--bg-secondary, #14141f) 100%);
-	}
-
-	.preview-playhead {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		width: 2px;
-		background: var(--accent, #59B5FF);
-		box-shadow: 0 0 8px var(--accent-glow, rgba(89, 181, 255, 0.5));
-		z-index: 10;
-		pointer-events: none;
-	}
-
-	.preview-playhead .playhead-tip {
-		position: absolute;
-		top: 0;
-		left: 50%;
-		transform: translateX(-50%);
-		width: 0;
-		height: 0;
-		border-left: 5px solid transparent;
-		border-right: 5px solid transparent;
-		border-top: 6px solid var(--accent, #59B5FF);
-		filter: drop-shadow(0 0 4px var(--accent, #59B5FF));
-	}
-
-	.preview-frames {
-		position: absolute;
-		inset: 0;
-		pointer-events: none;
-	}
-
-	.preview-tick {
-		position: absolute;
-		top: 0;
-		bottom: 0;
-		width: 1px;
-		background: var(--border-light, #3a3a4a);
-		transform: translateX(-50%);
-	}
-
-	.tick-label {
-		position: absolute;
-		bottom: 4px;
-		left: 50%;
-		transform: translateX(-50%);
-		font-size: 9px;
-		color: var(--text-muted, #6b6b80);
-		white-space: nowrap;
-	}
-
 	.preview-meta {
 		height: 24px;
 		background: var(--bg-primary, #0a0a0f);
-		border-top: 1px solid var(--border, #2a2a3a);
 		display: flex;
 		align-items: center;
 		padding: 0 12px;
