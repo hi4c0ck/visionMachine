@@ -82,6 +82,11 @@ src/
 - Projects/sessions also cached to `localStorage` in browser/E2E mode (no Tauri backend)
 - Logs at `%LOCALAPPDATA%\com.visionmachine.desktop\logs\`
 
+## Documentation
+
+- [Composer timeline rules (SLA)](docs/composer-timeline-sla.md) — the 8-frame
+  engine floor, the ≈1s zone guideline, and the tag composition model
+
 ## Branch Strategy
 
 - `develop` - Active development branch

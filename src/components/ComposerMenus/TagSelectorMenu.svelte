@@ -13,6 +13,7 @@
 		defaultSegmentId,
 		/** Tag types already declared on the target zone — listed greyed (choice A). */
 		declaredTypes = [],
+		unavailableTypes = [],
 		onConfirm,
 		onNewSegment,
 		menuVersion,
@@ -29,6 +30,9 @@
 		 *  clickable so a zone can hold more than one of the same type when it
 		 *  has room. Undeclared types are the normal, primary options. */
 		declaredTypes?: TagType[];
+		/** Tag types the target zone physically cannot host one more of (no
+		 *  free slot and too small to resplit) — disabled with a hint. */
+		unavailableTypes?: TagType[];
 		onConfirm: (type: TagType, segmentId: string) => void;
 		/** "+ New segment" item — opens the zone (gap-pick) modal, choice (ii). */
 		onNewSegment?: () => void;
@@ -42,6 +46,9 @@
 	const TAG_TYPES: TagType[] = ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'];
 	function isDeclared(t: TagType) {
 		return declaredTypes.includes(t);
+	}
+	function isUnavailable(t: TagType) {
+		return unavailableTypes.includes(t);
 	}
 	// Target zone. The menu attaches to the INVOKING zone only (the zone
 	// pill that opened it). Picking a tag type adds it immediately — the
@@ -71,9 +78,16 @@
 			<div class="tag-menu-body">
 				<div class="dropdown-label">Add Tag</div>
 				{#each TAG_TYPES as tagType (tagType)}
-					<button class="dropdown-item tag-item" class:declared={isDeclared(tagType)}
+					<button class="dropdown-item tag-item" class:declared={isDeclared(tagType)} class:unavailable={isUnavailable(tagType)}
+						disabled={isUnavailable(tagType)}
 						onclick={() => addTag(tagType)}
-						title={isDeclared(tagType) ? 'Already in this zone — adding another needs free space' : undefined}>
+						title={
+							isUnavailable(tagType)
+								? `Zone too small for another ${TAG_SPECIFICATIONS[tagType].name} tag — extend the zone first`
+							: isDeclared(tagType)
+							? 'Already in this zone — a new one shares the space evenly'
+							: undefined
+						}>
 						<span class="tag-dot" style="background: {TAG_SPECIFICATIONS[tagType].color}"></span>
 						<span>{TAG_SPECIFICATIONS[tagType].name}</span>
 						{#if isDeclared(tagType)}<span class="tag-item-badge">+</span>{/if}
@@ -150,11 +164,19 @@
 	.dropdown-item.tag-item.declared {
 		opacity: 0.45;
 	}
+
 	.dropdown-item.tag-item.declared:hover {
 		opacity: 0.7;
 	}
+
 	.dropdown-item.tag-item.declared.active {
 		opacity: 1;
+	}
+
+	/* Physically unavailable types: disabled, with the hint in the title. */
+	.dropdown-item.tag-item.unavailable {
+		opacity: 0.3;
+		cursor: not-allowed;
 	}
 	.tag-item-badge {
 		margin-left: auto;

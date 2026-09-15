@@ -11,7 +11,7 @@
 	import KeyframesRow from './ComposerRows/KeyframesRow.svelte';
 	import SubjectRefsRow from './ComposerRows/SubjectRefsRow.svelte';
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
-	import { getFreeGaps, getMaxFrames, type FreeGap } from '$lib/frameMath';
+	import { getFreeGaps, getMaxFrames, type FreeGap, placeTagInZone, evenSplitZone } from '$lib/frameMath';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import type { ComposerUiVariant } from '$lib/composerUiVariant';
 	import {
@@ -515,6 +515,28 @@ import { flashToast } from '$lib/flashToast';
 		return seg.tags.map((t: TagElement) => t.tag);
 	});
 
+	// Types the target zone physically cannot host one more of: no free slot
+	// AND the zone is too small to resplit for (n+1) same-type tags. The menu
+	// disables those instead of promising a click that only errors.
+	let tagMenuUnavailableTypes = $derived.by(() => {
+		const pipe = activePipeIdx !== null ? pipes[activePipeIdx] : undefined;
+		if (!pipe) return [] as TagType[];
+		const tl = getTimeline(pipe);
+		const seg = ((tl?.segments ?? []) as Segment[]).find((s: Segment) => s.id === selectedSegmentId);
+		if (!seg) return [] as TagType[];
+		const zone = { frameStart: seg.frameStart, frameEnd: seg.frameEnd };
+		const out: TagType[] = [];
+		for (const type of [...new Set(seg.tags.map((t: TagElement) => t.tag))]) {
+			const ranges = seg.tags
+				.filter((t: TagElement) => t.tag === type)
+				.map((t: TagElement) => ({ frameStart: t.frameStart, frameEnd: t.frameEnd }));
+			const hasSlot = placeTagInZone(zone, ranges, 8) !== null;
+			const canResplit = evenSplitZone(zone, ranges.length + 1, 8) !== null;
+			if (!hasSlot && !canResplit) out.push(type);
+		}
+		return out;
+	});
+
 	// Zones the tag menu can attach to (one entry per existing zone).
 	// Derived, so it stays current when zones are added/removed.
 	let tagMenuSegments = $derived.by(() => {
@@ -754,6 +776,7 @@ import { flashToast } from '$lib/flashToast';
 		segments={tagMenuSegments}
 		defaultSegmentId={selectedSegmentId}
 		declaredTypes={tagMenuDeclaredTypes}
+		unavailableTypes={tagMenuUnavailableTypes}
 		menuVersion={tagMenuVersion}
 		onConfirm={(t, segId) => confirmTagSelector(t, segId)}
 		onNewSegment={handleTagMenuNewSegment}
