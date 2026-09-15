@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { APP_CONSTANTS } from '$constants';
+
 	let {
 		userName,
 		selectedTheme,
@@ -80,7 +82,7 @@
 	<div class="frame-top">
 		<div class="logo">
 			<span class="logo-icon">◆</span>
-			<span class="logo-text">VisionMachine</span>
+			<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
 			{#if showWelcome}
 				<span class="welcome-badge">✨ New</span>
 			{/if}

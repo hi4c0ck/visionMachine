@@ -103,7 +103,7 @@ dmypy.json
 
 # Scripts directory (local utilities only)
 scripts/*
-# ...except tracked build-pipeline scripts
+# ...except tracked build-pipeline scripts (build runner + meta sync)
 !scripts/build/
 !scripts/sync-meta.mjs
 
