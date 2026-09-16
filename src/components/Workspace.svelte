@@ -19,9 +19,9 @@
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
-	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
 	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
-	import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog } from '$lib/settings';
+	import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel } from '$lib/settings';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -112,6 +112,13 @@
 	let settings = $state<Settings>(getSettings());
 	setOnSettingsChange(() => {
 		settings = getSettings();
+	});
+
+	// Media-mode UI driver (docs/agnes-model-catalog.md, Q7): the configured
+	// video model spec carries the row-visibility rules for the pipe UI.
+	const videoModelSpec = $derived.by(() => {
+		const p = getPreset(settings.providers.video.preset);
+		return p ? (getModel(p, settings.providers.video.model) ?? null) : null;
 	});
 
 	// ── Generation flow state (pipe-level, decisions D1–D9) ─────────────────
@@ -821,13 +828,20 @@
 	}
 
 	/** D5 gate: unreachable reference → no task, red-out chips, keep the modal open. */
-	async function confirmGenerate(models: ModelSelection) {
+	async function confirmGenerate(models: ModelSelection, seed: number | null = null) {
 		if (!generatePipe || !selectedSession) return;
 		const pipe = generatePipe;
 		const broken = await checkRemoteUrls(collectRemoteUrls(pipe));
 		if (broken.length > 0) {
 			markBrokenRefs(pipe.id, broken);
 			flashToast(`${APP_CONSTANTS.strings.refNotAccessible}: ${broken[0].url}`, 'error');
+			return;
+		}
+		// Read-only (paid) model gate (Q3): visible in Settings, never generable.
+		const vp = getPreset(settings.providers.video.preset);
+		const vidSpec = vp ? getModel(vp, models.videoModel) : undefined;
+		if (vidSpec?.readOnly) {
+			flashToast('Video model is read-only (paid) — pick a generable model in Settings', 'error');
 			return;
 		}
 		try {
@@ -841,12 +855,13 @@
 					// consumed by the provider engine when it lands.
 					image_model: models.imageModel,
 					video_model: models.videoModel,
+					seed: seed ?? undefined,
 				},
 			});
 			showGenerateModal = false;
 			startWatchingTask(res.task_id);
 			// Portable generation log: which model made which piece (P4/P5).
-			const entry = buildGenerationLogEntry(res.task_id, selectedSession.id, pipe, models, startedAt);
+			const entry = buildGenerationLogEntry(res.task_id, selectedSession.id, pipe, models, startedAt, seed);
 			activeLogEntry = entry;
 			void writeGenerationLogStart(entry);
 		} catch (e) {
@@ -863,6 +878,7 @@
 		pipe: PipeRow,
 		models: ModelSelection,
 		startedAt: number,
+		seed: number | null = null,
 	): GenerationLogEntry {
 		const s = getSettings();
 		const sess = selectedSession;
@@ -871,6 +887,7 @@
 			resolution: sess?.resolution ?? s.generationDefaults.resolution,
 			q: pipe.qValue,
 			c: pipe.cValue,
+			seed: seed ?? undefined,
 		};
 		const pieces: GenerationLogPiece[] = [
 			...pipe.keyframes.map((k): GenerationLogPiece => ({
@@ -1167,6 +1184,10 @@
 					uiVariant={composerUiVariant}
 					brokenRefs={brokenRefs}
 					onRefSaved={recheckRef}
+					videoModel={videoModelSpec}
+					onmediamodechange={(pipeId, mode) => {
+						if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
+					}}
 				/>
 			{:else}
 				<div class="composer-empty">

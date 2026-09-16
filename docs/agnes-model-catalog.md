@@ -318,37 +318,41 @@ placeholders are replaced by the above.
 
 ## Implementation checklist (no code until GO)
 
-**A. Containers + data**
-- [ ] `types/settings.ts`: `ModelSpec.readOnly`, `ModelSpec.supportsSeed`,
+**A. Containers + data — DONE**
+- [x] `types/settings.ts`: `ModelSpec.readOnly`, `ModelSpec.supportsSeed`,
       `ModelSpec.media`, `limits.seconds`, `limits.ratios`;
       `RequestFormat` += `'video-job-frames' | 'video-job-seconds'`;
       `GenerationDefaults` += `alwaysNewSeed: boolean`; `PipeRow` +=
       `mediaMode: 'keyframes' | 'reference'` (default `'keyframes'`,
       composer-JSON mirror in Rust)
-- [ ] `catalog.ts`: paste the data above (Agnes fills, `pending` gone)
-- [ ] `guards.ts`: `DEFAULT_SETTINGS` += `alwaysNewSeed: true`;
+- [x] `catalog.ts`: paste the data above (Agnes fills, `pending` gone)
+- [x] `guards.ts`: `DEFAULT_SETTINGS` += `alwaysNewSeed: true`;
       normalize new fields; agnes baseUrl normalization (strip trailing
       `/v1`) — CUSTOM preset keeps its `/v1` base untouched
-- [ ] Rust: `StartGenerationInput.seed: Option<i64>`,
+- [x] Rust: `StartGenerationInput.seed: Option<i64>`,
       `EngineInput.seed: Option<i64>`, settings serde mirror of
       `always_new_seed`, log piece `params.seed`
 
-**B. Settings UI**
-- [ ] `SettingsDefaults.svelte`: "Always use a new seed" checkbox
-- [ ] `ProviderCard.svelte`: readOnly model → "paid · read-only" badge,
-      browsable limits panel, still savable (it's data), but…
-- [ ] `GenerateModal.svelte`: per-run model selects EXCLUDE readOnly
+**B. Settings UI — DONE**
+- [x] `SettingsDefaults.svelte`: "Always use a new seed" checkbox
+- [x] `ProviderCard.svelte`: readOnly model → "paid · read-only" badge,
+      browsable limits panel, still savable (it's data)
+- [x] `GenerateModal.svelte`: per-run model selects EXCLUDE readOnly
       models; seed input (visible when `supportsSeed`)
-- [ ] Pipe UI (`PipeHeader`/`ComposerPanel`): media-mode segmented
+- [x] Pipe UI (`PipeHeader`/`ComposerPanel`): media-mode segmented
       control + conditional keyframes/subjects row visibility (see
       “Media mode” section)
 
-**C. Tests**
-- [ ] vitest: normalize (new fields), catalog defaults/filter helpers,
-      baseUrl normalization
-- [ ] cargo: seed optional-field round-trip, settings normalization
-- [ ] playwright: seed checkbox persists; readOnly excluded from
-      GenerateModal; badge visible in ProviderCard
+**C. Tests — DONE**
+- [x] vitest: normalize (new fields), catalog defaults/filter helpers,
+      baseUrl normalization, media-mode persistence
+- [x] cargo: seed optional-field round-trip, settings normalization
+- [x] playwright: seed checkbox persists; read-only badge + limits
+      visible in ProviderCard; media-mode toggle hides/shows the
+      keyframes⇄subjects rows (new `media-mode.spec.ts`).
+      NOTE: “readOnly excluded from GenerateModal” is verified at unit
+      level (catalog `readOnly` flag + the per-run `.filter`); no
+      dedicated e2e yet — add with the first real-engine run.
 
 **D. Deferred to the engine phase (no mocks — Phase 6)**
 - [ ] request shapers per `requestFormat` (chat / image-gen /

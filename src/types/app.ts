@@ -212,7 +212,7 @@ export interface PipeRow {
   name: string;
   lengthFrames: number;
   qValue: number;    // num_inference_steps
-  cValue: number;    // cfg_scale
+  cValue: number;    // cfg_scale / guidance_scale
   keyframes: PipeKeyframe[];
   /** Subject references — max 5, each with its own temporal range */
   subjectReferences: SubjectReference[];
@@ -220,6 +220,10 @@ export interface PipeRow {
   orderIndex: number;
   /** Last completed generation artifact attached to this pipe (null = empty state) */
   lastGeneration?: PipeLastGeneration | null;
+  /** Media mode for this pipe (docs/agnes-model-catalog.md, Q7). Default
+   *  'keyframes'. Drives keyframes/subject-refs row visibility per the
+   *  configured video model's media capabilities. */
+  mediaMode?: 'keyframes' | 'reference';
 }
 
 /**

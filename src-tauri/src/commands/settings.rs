@@ -40,6 +40,13 @@ pub struct GenerationDefaults {
     pub c_value: f64,
     #[serde(default)]
     pub concurrency: String,
+    /// Legacy rows (pre-seed) default to true: fresh seed each run.
+    #[serde(default = "default_true")]
+    pub always_new_seed: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for GenerationDefaults {
@@ -51,6 +58,7 @@ impl Default for GenerationDefaults {
             q_value: 18.0,
             c_value: 7.0,
             concurrency: "sequential".into(),
+            always_new_seed: true,
         }
     }
 }
@@ -80,19 +88,20 @@ pub struct ProviderSlots {
 impl Default for ProviderSlots {
     fn default() -> Self {
         // Per-kind seed — must stay in sync with the frontend DEFAULT_SETTINGS
-        // (src/lib/settings/guards.ts).
+        // (src/lib/settings/guards.ts). Model ids + host-root base URL come
+        // from the Agnes catalog (docs/agnes-model-catalog.md).
         fn slot(model: &str) -> ProviderSlot {
             ProviderSlot {
                 preset: "agnes".into(),
-                base_url: String::new(),
+                base_url: "https://apihub.agnes-ai.com".into(),
                 api_key: String::new(),
                 model: model.into(),
             }
         }
         Self {
-            text: slot("agnes-text"),
-            image: slot("agnes-image"),
-            video: slot("agnes-video"),
+            text: slot("agnes-2.5-flash"),
+            image: slot("agnes-image-2.5-flash"),
+            video: slot("agnes-video-2.5-flash"),
         }
     }
 }
@@ -130,9 +139,9 @@ pub fn normalize_settings(raw: &Value) -> Settings {
     // A partially corrupted blob may carry empty slots (serde per-field
     // defaults are all-empty) — reseed them per kind, mirroring the
     // frontend normalizeSlot fallbacks.
-    reseed_slot(&mut out.providers.text, "agnes-text");
-    reseed_slot(&mut out.providers.image, "agnes-image");
-    reseed_slot(&mut out.providers.video, "agnes-video");
+    reseed_slot(&mut out.providers.text, "agnes-2.5-flash");
+    reseed_slot(&mut out.providers.image, "agnes-image-2.5-flash");
+    reseed_slot(&mut out.providers.video, "agnes-video-2.5-flash");
     out
 }
 
@@ -295,11 +304,31 @@ mod tests {
         assert_eq!(json["generationDefaults"]["qValue"], 18.0);
         assert_eq!(json["generationDefaults"]["cValue"], 7.0);
         assert_eq!(json["generationDefaults"]["concurrency"], "sequential");
+        assert_eq!(json["generationDefaults"]["alwaysNewSeed"], true);
         assert_eq!(json["providers"]["text"]["preset"], "agnes");
-        assert_eq!(json["providers"]["text"]["model"], "agnes-text");
-        assert_eq!(json["providers"]["image"]["model"], "agnes-image");
-        assert_eq!(json["providers"]["video"]["model"], "agnes-video");
+        assert_eq!(json["providers"]["text"]["model"], "agnes-2.5-flash");
+        assert_eq!(json["providers"]["image"]["model"], "agnes-image-2.5-flash");
+        assert_eq!(json["providers"]["video"]["model"], "agnes-video-2.5-flash");
         assert_eq!(json["providers"]["video"]["apiKey"], "");
+        assert_eq!(
+            json["providers"]["video"]["baseUrl"],
+            "https://apihub.agnes-ai.com"
+        );
+    }
+
+    #[test]
+    fn legacy_generation_defaults_default_to_new_seed() {
+        // Pre-seed row without alwaysNewSeed → defaults to true.
+        let d: GenerationDefaults = serde_json::from_value(serde_json::json!({
+            "fps": 24, "resolution": "720p", "orientation": "horizontal",
+            "qValue": 18, "cValue": 7, "concurrency": "sequential"
+        }))
+        .unwrap();
+        assert!(d.always_new_seed);
+        // Explicit false is honored.
+        let d2: GenerationDefaults =
+            serde_json::from_value(serde_json::json!({ "alwaysNewSeed": false })).unwrap();
+        assert!(!d2.always_new_seed);
     }
 
     #[test]
@@ -315,7 +344,7 @@ mod tests {
         assert_eq!(out.generation_defaults.q_value, 99.0);
         assert_eq!(out.providers.video.model, "custom-video");
         // Missing slots reseed
-        assert_eq!(out.providers.text.model, "agnes-text");
+        assert_eq!(out.providers.text.model, "agnes-2.5-flash");
     }
 
     #[test]

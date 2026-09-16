@@ -26,6 +26,10 @@ pub struct EngineInput {
     pub image_model: Option<String>,
     #[serde(default)]
     pub video_model: Option<String>,
+    /// Reproducibility seed (docs/agnes-model-catalog.md). None = the
+    /// provider picks; sent only to models whose spec has `supportsSeed`.
+    #[serde(default)]
+    pub seed: Option<i64>,
 }
 
 pub trait GenerationEngine: Send + Sync {

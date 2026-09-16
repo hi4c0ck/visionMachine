@@ -494,6 +494,7 @@ mod tests {
             elements: vec![],
             order_index: 0,
             last_generation: None,
+            media_mode: "keyframes".into(),
         }
     }
 
@@ -508,6 +509,7 @@ mod tests {
             c_value: 7.0,
             image_model: None,
             video_model: None,
+            seed: None,
         }
     }
 

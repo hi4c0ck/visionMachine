@@ -9,8 +9,36 @@ export type ProviderKind = 'text' | 'image' | 'video';
 
 export type PresetId = 'agnes' | 'custom';
 
-/** How a model's API wants its request payload (request-builder shaper id). */
-export type RequestFormat = 'chat' | 'image-gen' | 'video-job';
+/** How a model's API wants its request payload (request-builder shaper id).
+ *  `video-job` is the generic OpenAI-shape async job (custom preset). The
+ *  two Agnes variants differ by wire shape (P1/P2): frames-based (V2.0)
+ *  vs seconds-based (V2.5 family). */
+export type RequestFormat =
+  | 'chat'
+  | 'image-gen'
+  | 'video-job'
+  | 'video-job-frames'
+  | 'video-job-seconds';
+
+/** Pipe-level media mode (docs/agnes-model-catalog.md, Q7). Default is
+ *  'keyframes'. Drives keyframes/subject-refs row visibility per model. */
+export type MediaMode = 'keyframes' | 'reference';
+
+/** Per-model media-mode rules — the pipe UI shows/hides the keyframes and
+ *  subject-refs rows based on these (docs/agnes-model-catalog.md, Q7).
+ *  Absent = unknown model → keep today's behavior (both rows, no toggle). */
+export interface ModelMedia {
+  /** Modes the model offers. A single entry = no toggle. */
+  modes: MediaMode[];
+  /** true = keyframes AND reference media allowed simultaneously (paid 2.5). */
+  dual?: boolean;
+  /** true = subjects merge into the keyframes image array (V2.0, shared cap). */
+  sharedArray?: boolean;
+  maxKeyframes?: number;
+  maxRefs?: number;
+  maxAudios?: number;
+  maxVideos?: number;
+}
 
 /**
  * A model owns its request format (the "guaranteed on the flight" rule):
@@ -30,10 +58,20 @@ export interface ModelSpec {
     fps?: number[];
     resolutions?: string[];
     maxFrames?: number;
+    /** Seconds range for seconds-based video models (V2.5: [4, 12]). */
+    seconds?: [number, number];
+    /** Supported aspect ratios (model-driven, P2). */
+    ratios?: string[];
   };
   /** Placeholder until concrete vendor details land — picker disables it. */
   pending?: boolean;
   label?: string;
+  /** Read-only entry: viewable/inspectable in Settings, never generatable. */
+  readOnly?: boolean;
+  /** Model accepts a `seed` parameter (reproducible runs). */
+  supportsSeed?: boolean;
+  /** Media-mode capabilities driving pipe-UI row visibility. */
+  media?: ModelMedia;
 }
 
 /** One vendor template: auth scheme + default URL + its model catalog. */
@@ -63,10 +101,13 @@ export interface GenerationDefaults {
   orientation: string;
   /** Inference steps (quality) */
   qValue: number;
-  /** CFG scale (creativity) */
+  /** CFG / guidance scale (creativity) */
   cValue: number;
   /** Ships 'sequential' (MAX_CONCURRENT = 1); 'parallel' opts in later. */
   concurrency: 'sequential' | 'parallel';
+  /** When true, each run auto-rolls a fresh seed; the seed field then holds
+   *  the last used value but is regenerated on each open. Default true. */
+  alwaysNewSeed: boolean;
 }
 
 export interface Settings {
@@ -97,8 +138,9 @@ export interface GenerationLogPiece {
   status: LogStatus;
   /** Artifact ref (internal) → rendered as a URL via toMediaUrl. Never a raw path. */
   outputRef?: string;
-  /** Snapshot of the params that produced this piece. */
-  params: { fps: number; resolution: string; q: number; c: number };
+  /** Snapshot of the params that produced this piece. `seed` present when
+   *  a concrete value was sent (reproducible re-gen; P4). */
+  params: { fps: number; resolution: string; q: number; c: number; seed?: number };
   /** Sanitized — guaranteed key-free (redactLog). */
   error?: string;
 }

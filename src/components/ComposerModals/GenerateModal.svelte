@@ -25,7 +25,7 @@
 		pipe: PipeRow;
 		session: SessionData;
 		open: boolean;
-		onConfirm: (models: ModelSelection) => Promise<void> | void;
+		onConfirm: (models: ModelSelection, seed: number | null) => Promise<void> | void;
 	}>();
 
 	const prompt = $derived(summarizePipe(pipe));
@@ -39,6 +39,11 @@
 	let videoModel = $state('');
 	let imageModels = $state<ModelSpec[]>([]);
 	let videoModels = $state<ModelSpec[]>([]);
+	// Seed (docs/agnes-model-catalog.md): auto-rolled while Settings →
+	// “Always use a new seed” is ON; otherwise the value stays fixed and
+	// editable (reproducible runs). Shown only for seed-supporting models.
+	let seed = $state<number | null>(null);
+	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
 	$effect(() => {
 		if (!open) return;
 		const s = getSettings();
@@ -46,8 +51,13 @@
 		videoModel = s.providers.video.model;
 		const ip = getPreset(s.providers.image.preset);
 		const vp = getPreset(s.providers.video.preset);
-		imageModels = ip ? modelsFor(ip, 'image') : [];
-		videoModels = vp ? modelsFor(vp, 'video') : [];
+		// Read-only (paid) models are Settings-browse only (Q3) — they are
+		// not confirmable for generation.
+		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly);
+		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly);
+		// Re-roll only when “always new seed” is on; keep the fixed value
+		// across opens otherwise.
+		if (s.generationDefaults.alwaysNewSeed) seed = Math.floor(Math.random() * 100000);
 	});
 
 	async function copyPrompt() {
@@ -63,7 +73,7 @@
 		if (busy) return;
 		busy = true;
 		try {
-			await onConfirm({ imageModel, videoModel });
+			await onConfirm({ imageModel, videoModel }, seed);
 		} finally {
 			busy = false;
 		}
@@ -103,6 +113,19 @@
 							{/each}
 						</select>
 					</div>
+					{#if selectedVideoModel?.supportsSeed}
+						<div class="gen-model">
+							<label for="gen-seed">Seed (video)</label>
+							<input
+								id="gen-seed"
+								type="number"
+								min="0"
+								step="1"
+								value={seed ?? ''}
+								oninput={(e) => (seed = e.currentTarget.value === '' ? null : Number(e.currentTarget.value))}
+							/>
+						</div>
+					{/if}
 				</div>
 				<div class="gen-prompt-wrap">
 					<div class="gen-prompt-head">
@@ -172,7 +195,8 @@
 		color: var(--text-secondary, #a1a1aa);
 	}
 
-	.gen-model select {
+	.gen-model select,
+	.gen-model input {
 		width: 100%;
 		padding: 9px 11px;
 		font-size: 0.85rem;
