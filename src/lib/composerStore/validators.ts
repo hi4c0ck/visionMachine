@@ -166,6 +166,9 @@ export function normalizePipe(pipe: PipeRow): PipeRow {
     pipe.id = crypto.randomUUID();
   }
   if (!pipe.name) pipe.name = 'Pipe';
+  // Media mode (docs/agnes-model-catalog.md, Q7): legacy pipes default to
+  // 'keyframes'; any unknown value coerces back.
+  if (pipe.mediaMode !== 'reference') pipe.mediaMode = 'keyframes';
 
   // Ensure each element has a valid id so keys/stores don't get 'undefined'.
   for (const el of pipe.elements as any[]) {

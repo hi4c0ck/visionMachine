@@ -35,6 +35,19 @@
 	const preset = $derived(getPreset(slot.preset) ?? PRESETS[0]);
 	const presetOptions = $derived(PRESETS.filter((p) => p.kinds.includes(kind)));
 	const modelOptions = $derived(modelsFor(preset, kind));
+	const selectedModel = $derived(modelOptions.find((m) => m.id === slot.model) ?? null);
+	// Read-only (paid) models: the user inspects these parameters here
+	// (docs/agnes-model-catalog.md, Q3) — show the concrete limits.
+	const modelLimitsText = $derived.by(() => {
+		const lim = selectedModel?.limits;
+		if (!lim) return '';
+		const parts: string[] = [];
+		if (lim.resolutions?.length) parts.push(lim.resolutions.join(' / '));
+		if (lim.seconds) parts.push(`${lim.seconds[0]}–${lim.seconds[1]}s`);
+		if (lim.maxFrames) parts.push(`≤${lim.maxFrames} frames`);
+		if (lim.fps?.length) parts.push(`fps ${lim.fps.join(' / ')}`);
+		return parts.join(' · ');
+	});
 
 	// Preset switch reflows URL to the preset default and picks the first
 	// usable model for this kind — predictable, no dangling model.
@@ -127,6 +140,12 @@
 				<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
 			{/each}
 		</select>
+		{#if selectedModel?.readOnly}
+			<span class="hint hint-readonly">Read-only — paid model. Parameters are visible here, but it can't be confirmed for generation.</span>
+		{/if}
+		{#if modelLimitsText}
+			<span class="hint">Limits: {modelLimitsText}</span>
+		{/if}
 	</div>
 
 	<div class="test-row">
@@ -241,6 +260,10 @@
 	.hint {
 		font-size: 0.68rem;
 		color: var(--text-muted, #71717a);
+	}
+
+	.hint-readonly {
+		color: #fbbf24;
 	}
 
 	.hint-error {

@@ -244,6 +244,10 @@ pub struct Pipe {
     /// Last generation artifact (null/absent = proper empty state).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_generation: Option<LastGeneration>,
+    /// Media mode ("keyframes" | "reference"); default "keyframes"
+    /// (docs/agnes-model-catalog.md, Q7).
+    #[serde(default = "default_media_mode")]
+    pub media_mode: String,
 }
 
 fn default_length_frames() -> u32 {
@@ -254,6 +258,9 @@ fn default_q_value() -> u32 {
 }
 fn default_c_value() -> f32 {
     7.0
+}
+fn default_media_mode() -> String {
+    "keyframes".into()
 }
 
 impl Pipe {
@@ -270,6 +277,7 @@ impl Pipe {
             elements: Vec::new(),
             order_index: 0,
             last_generation: None,
+            media_mode: default_media_mode(),
         }
     }
 }
@@ -384,6 +392,9 @@ mod tests {
         assert!(pipe.last_generation.is_none());
         assert!(pipe.keyframes.is_empty());
         assert!(pipe.subject_references.is_empty());
+        // Legacy rows predate mediaMode (docs/agnes-model-catalog.md, Q7) —
+        // they must deserialize to the 'keyframes' default, not fail.
+        assert_eq!(pipe.media_mode, "keyframes");
 
         let value = serde_json::to_value(&pipe).expect("serialize");
         assert!(value.get("lastGeneration").is_none());
@@ -407,6 +418,7 @@ mod tests {
                 generated_at: 1_234_567_890,
                 status: "done".into(),
             }),
+            media_mode: "keyframes".into(),
         };
         let value = serde_json::to_value(&pipe).expect("serialize");
         assert_eq!(value["lastGeneration"]["taskId"], "t1");

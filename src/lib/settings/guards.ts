@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
     qValue: 18,
     cValue: 7,
     concurrency: 'sequential',
+    alwaysNewSeed: true,
   },
   providers: {
     text: defaultSlot('text'),
@@ -55,12 +56,28 @@ export const DEFAULT_SETTINGS: Settings = {
 function normalizeSlot(kind: ProviderKind, raw: unknown): ProviderSlot {
   const def = DEFAULT_SETTINGS.providers[kind];
   const r = (raw ?? {}) as Partial<ProviderSlot>;
+  const preset = typeof r.preset === 'string' && r.preset ? r.preset : def.preset;
   return {
-    preset: typeof r.preset === 'string' && r.preset ? r.preset : def.preset,
-    baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : def.baseUrl,
+    preset,
+    baseUrl:
+      typeof r.baseUrl === 'string' && r.baseUrl
+        ? normalizeBaseUrl(preset, r.baseUrl)
+        : def.baseUrl,
     apiKey: typeof r.apiKey === 'string' ? r.apiKey : '',
     model: typeof r.model === 'string' && r.model ? r.model : def.model,
   };
+}
+
+/**
+ * Per-preset baseUrl normalization. The agnes base is the HOST ROOT — its
+ * create endpoints carry the /v1 prefix themselves, so a pasted
+ * ".../v1" would double the prefix and 404. Other presets keep their base
+ * as-is (custom is /v1-native).
+ */
+export function normalizeBaseUrl(preset: string, raw: string): string {
+  const u = raw.trim();
+  if (preset === 'agnes') return u.replace(/\/v1\/?$/, '');
+  return u;
 }
 
 /** Deep-merge a raw/unknown settings blob into a fully valid Settings object. */
@@ -83,6 +100,7 @@ export function normalizeSettings(raw: unknown): Settings {
       qValue: Number.isFinite(g.qValue) ? (g.qValue as number) : base.generationDefaults.qValue,
       cValue: Number.isFinite(g.cValue) ? (g.cValue as number) : base.generationDefaults.cValue,
       concurrency: g.concurrency === 'parallel' ? 'parallel' : 'sequential',
+      alwaysNewSeed: g.alwaysNewSeed !== false,
     },
     providers: {
       text: normalizeSlot('text', prov.text),

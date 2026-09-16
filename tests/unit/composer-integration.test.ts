@@ -37,6 +37,7 @@ import {
   updateResolution,
   updateOrientation,
   updateQ,
+  setMediaMode,
 } from '../../src/lib/composerStore';
 import type { SessionData, PipeRow, TagType } from '../../src/types/app';
 import { TAG_SPECIFICATIONS } from '../../src/types/app';
@@ -728,6 +729,26 @@ describe('Composer Integration', () => {
       const res = await updateOrientation(session.id, 'diagonal');
       expect(res.errors.length).toBeGreaterThan(0);
       expect(sessions.get(session.id)!.orientation).toBe('horizontal');
+    });
+
+    it('media mode switch persists on the pipe (docs/agnes-model-catalog.md, Q7)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      const pipe = session.pipes[0];
+
+      const res = await setMediaMode(session.id, pipe.id, 'reference');
+      expect(res.errors).toHaveLength(0);
+      expect(pipe.mediaMode).toBe('reference');
+
+      await saveSession(session.id);
+      expect(saveInput()!.input.pipes[0].mediaMode).toBe('reference');
+
+      await setMediaMode(session.id, pipe.id, 'keyframes');
+      await saveSession(session.id);
+      // saveInput() above captures the FIRST call; the second save is the last.
+      const saves = mockInvoke.mock.calls.filter((c) => c[0] === 'save_composer');
+      expect(saves[saves.length - 1]![1].input.pipes[0].mediaMode).toBe('keyframes');
     });
 
     it('a setting mutation marks the session unsynced', async () => {

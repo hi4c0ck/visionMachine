@@ -8,6 +8,7 @@ import type { GenerationLogEntry, Settings } from '../../src/types';
 import {
   DEFAULT_SETTINGS,
   normalizeSettings,
+  normalizeBaseUrl,
   validateHttpUrl,
   maskKey,
   isConfigured,
@@ -46,7 +47,18 @@ describe('normalizeSettings', () => {
     expect(out.profile.displayName).toBe('');
     // Garbage slots reseed from the kind's default slot (Agnes seed).
     expect(out.providers.text.preset).toBe('agnes');
-    expect(out.providers.text.model).toBe('agnes-text');
+    expect(out.providers.text.model).toBe('agnes-2.5-flash');
+  });
+
+  it('alwaysNewSeed: legacy blobs default true, explicit false is kept', () => {
+    expect(normalizeSettings(undefined).generationDefaults.alwaysNewSeed).toBe(true);
+    expect(
+      normalizeSettings({ generationDefaults: { alwaysNewSeed: false } }).generationDefaults.alwaysNewSeed,
+    ).toBe(false);
+    expect(
+      normalizeSettings({ generationDefaults: { alwaysNewSeed: 'junk' as unknown as boolean } })
+        .generationDefaults.alwaysNewSeed,
+    ).toBe(true);
   });
 });
 
@@ -62,6 +74,18 @@ describe('validateHttpUrl', () => {
     expect(validateHttpUrl('file:///etc/passwd')).toBe(false);
     expect(validateHttpUrl('localhost:8000')).toBe(false);
     expect(validateHttpUrl('gopher://x')).toBe(false);
+  });
+});
+
+describe('normalizeBaseUrl (host-root agnes base, catalog doc URL option a)', () => {
+  it('strips a trailing /v1 from an agnes base', () => {
+    expect(normalizeBaseUrl('agnes', 'https://apihub.agnes-ai.com/v1')).toBe('https://apihub.agnes-ai.com');
+    expect(normalizeBaseUrl('agnes', 'https://apihub.agnes-ai.com/v1/')).toBe('https://apihub.agnes-ai.com');
+    expect(normalizeBaseUrl('agnes', 'https://apihub.agnes-ai.com')).toBe('https://apihub.agnes-ai.com');
+  });
+
+  it('leaves non-agnes presets untouched (custom is /v1-native)', () => {
+    expect(normalizeBaseUrl('custom', 'https://api.openai.com/v1')).toBe('https://api.openai.com/v1');
   });
 });
 
@@ -146,15 +170,45 @@ describe('catalog', () => {
   });
 
   it('filters models by kind', () => {
-    expect(modelsFor(AGNES_PRESET, 'video').map((m) => m.id)).toEqual(['agnes-video']);
+    expect(modelsFor(AGNES_PRESET, 'video').map((m) => m.id)).toEqual([
+      'agnes-video-2.5-flash',
+      'agnes-video-v2.0',
+      'agnes-video-2.5',
+    ]);
     expect(modelsFor(CUSTOM_PRESET, 'text').map((m) => m.id)).toEqual(['custom-text']);
   });
 
-  it('marks Agnes specs pending until concrete details land (P2)', () => {
-    for (const m of AGNES_PRESET.models) expect(m.pending).toBe(true);
+  it('ships concrete Agnes specs — the P2 placeholders are filled', () => {
+    expect(AGNES_PRESET.models.every((m) => !m.pending)).toBe(true);
     const cv = getModel(CUSTOM_PRESET, 'custom-video');
-    expect(cv?.pending).toBe(true); // async video job shape unknown
+    expect(cv?.pending).toBe(true); // custom async video shape still unknown
     expect(getModel(CUSTOM_PRESET, 'custom-text')?.pending).toBeFalsy();
+  });
+
+  it('marks the paid 2.5 video model read-only (Q3)', () => {
+    expect(getModel(AGNES_PRESET, 'agnes-video-2.5')?.readOnly).toBe(true);
+    expect(getModel(AGNES_PRESET, 'agnes-video-2.5-flash')?.readOnly).toBeUndefined();
+    expect(getModel(AGNES_PRESET, 'agnes-image-2.5-flash')?.readOnly).toBeUndefined();
+  });
+
+  it('carries per-model media + seconds limits for the pipe UI (Q7)', () => {
+    const flash = getModel(AGNES_PRESET, 'agnes-video-2.5-flash');
+    expect(flash?.limits.seconds).toEqual([4, 12]);
+    expect(flash?.media?.modes).toEqual(['keyframes', 'reference']);
+    expect(flash?.supportsSeed).toBe(true);
+    const v2 = getModel(AGNES_PRESET, 'agnes-video-v2.0');
+    expect(v2?.media?.sharedArray).toBe(true);
+    expect(v2?.limits.maxFrames).toBe(441);
+    const paid = getModel(AGNES_PRESET, 'agnes-video-2.5');
+    expect(paid?.media?.dual).toBe(true);
+  });
+
+  it('defaults pick the first concrete model per kind on the host-root base', () => {
+    expect(DEFAULT_SETTINGS.providers.text.model).toBe('agnes-2.5-flash');
+    expect(DEFAULT_SETTINGS.providers.image.model).toBe('agnes-image-2.5-flash');
+    expect(DEFAULT_SETTINGS.providers.video.model).toBe('agnes-video-2.5-flash');
+    expect(DEFAULT_SETTINGS.providers.video.baseUrl).toBe('https://apihub.agnes-ai.com');
+    expect(DEFAULT_SETTINGS.generationDefaults.alwaysNewSeed).toBe(true);
   });
 
   it('resolves default preset per kind', () => {

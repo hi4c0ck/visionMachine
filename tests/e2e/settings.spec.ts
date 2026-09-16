@@ -26,6 +26,9 @@ test.describe('Settings', () => {
     await page.locator('.settings-entry').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const card = page.locator('.provider-card').first(); // text provider
+    // Use the custom preset for this round-trip: it is /v1-native, while the
+    // agnes preset normalizes a pasted trailing /v1 away (host-root base).
+    await card.locator('#prov-preset-text').selectOption('custom');
     await card.locator('#prov-url-text').fill('https://api.example.com/v1');
     await card.locator('#prov-key-text').fill('sk-test-key-123');
 
@@ -45,6 +48,7 @@ test.describe('Settings', () => {
     await page.locator('.settings-entry').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const card2 = page.locator('.provider-card').first();
+    await expect(card2.locator('#prov-preset-text')).toHaveValue('custom');
     await expect(card2.locator('#prov-url-text')).toHaveValue('https://api.example.com/v1');
     await expect(card2.locator('#prov-key-text')).toHaveValue('sk-test-key-123');
     await expect(card2.locator('.status-badge.ok')).toHaveText('Configured');
@@ -81,6 +85,27 @@ test.describe('Settings', () => {
     await expect(fps).toHaveValue('30');
   });
 
+  test('always-new-seed toggle defaults on and persists off', async ({ page }) => {
+    await page.locator('.settings-entry').click();
+    const box = page.locator('#sd-newseed');
+    await expect(box).toBeChecked();
+    await box.uncheck();
+    await page.locator('.settings-modal .btn-confirm').click();
+    await expect(page.locator('.settings-modal')).toBeHidden();
+
+    const stored = await page.evaluate(() => localStorage.getItem('vm-settings-Test User'));
+    expect(JSON.parse(stored).generationDefaults.alwaysNewSeed).toBe(false);
+  });
+
+  test('paid read-only video model shows a badge + limits in the provider card', async ({ page }) => {
+    await page.locator('.settings-entry').click();
+    await page.locator('.tab-btn:has-text("Providers")').click();
+    const videoCard = page.locator('.provider-card').nth(2);
+    await videoCard.locator('#prov-model-video').selectOption('agnes-video-2.5');
+    await expect(videoCard.locator('.hint-readonly')).toBeVisible();
+    await expect(videoCard.locator('.hint-readonly')).toContainText(/read-only/i);
+    await expect(videoCard.locator('.field .hint').filter({ hasText: 'Limits' })).toContainText('2K');
+  });
   test('provider status chip opens the modal at the Providers tab', async ({ page }) => {
     // The chip lives in the top bar; with the default (keyless) settings it
     // reports the unconfigured state. Clicking it must land on Providers.

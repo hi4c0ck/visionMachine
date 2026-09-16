@@ -83,7 +83,7 @@
 	</div>
 
 	<div class="field">
-		<label for="sd-c">Creativity (CFG scale) — {g.cValue}</label>
+		<label for="sd-c">Creativity (guidance scale) — {g.cValue}</label>
 		<input
 			id="sd-c"
 			type="range"
@@ -93,6 +93,19 @@
 			value={g.cValue}
 			oninput={(e) => setG({ cValue: Number(e.currentTarget.value) })}
 		/>
+	</div>
+
+	<div class="field">
+		<label class="check-row">
+			<input
+				id="sd-newseed"
+				type="checkbox"
+				checked={g.alwaysNewSeed}
+				onchange={() => setG({ alwaysNewSeed: !g.alwaysNewSeed })}
+			/>
+			<span>Always use a new seed — randomize on every generation run</span>
+		</label>
+		<span class="note">Off = the seed is fixed and editable in the generate dialog (reproducible runs).</span>
 	</div>
 
 	<div class="field">
@@ -153,6 +166,17 @@
 	.field input[type='text']:focus {
 		outline: none;
 		border-color: var(--accent-color, #ff3e00);
+	}
+
+	.check-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.check-row input {
+		flex-shrink: 0;
+		accent-color: var(--accent-color, #ff3e00);
 	}
 
 	.field input[type='range'] {

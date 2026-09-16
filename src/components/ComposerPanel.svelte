@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus } from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec } from '$types';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
@@ -34,6 +34,7 @@
 		movePipe as movePipeAction,
 		duplicatePipe as duplicatePipeAction,
 		setPipeLength as setPipeLengthAction,
+		setMediaMode as setMediaModeAction,
 	} from '$lib/composerStore';
 import { flashToast } from '$lib/flashToast';
 
@@ -47,6 +48,8 @@ import { flashToast } from '$lib/flashToast';
 			uiVariant = 'fixed',
 			brokenRefs,
 			onRefSaved,
+			videoModel = null,
+			onmediamodechange,
 		} = $props<{
 			session?: SessionData;
 			totalFrames?: number;
@@ -65,11 +68,56 @@ import { flashToast } from '$lib/flashToast';
 			brokenRefs?: Set<string>;
 			/** A keyframe/subject reference was just saved → re-validate its URL. */
 			onRefSaved?: (pipeId: string, refId: string) => void;
+			/** The configured video model spec — drives the pipe-level media-mode
+			 * UI (keyframes ⇄ reference row visibility). null = unknown → both rows. */
+			videoModel?: ModelSpec | null;
+			/** Persist a pipe media-mode switch (composerStore.setMediaMode). */
+			onmediamodechange?: (pipeId: string, mode: 'keyframes' | 'reference') => void;
 		}>();
 
 	const MAX_KEYFRAMES = 3;
 	const MAX_SUBJECT_REFS = 5;
 	const DEFAULT_FRAME_COUNT = 241;
+
+	// ── Media mode (docs/agnes-model-catalog.md, Q7) ──────────────────────────
+	// Per-pipe row visibility is driven by the configured video model's media
+	// capabilities: unknown / dual / shared-array models keep BOTH rows;
+	// exclusive models show one row + the mode toggle.
+	function mediaState(pipe: PipeRow): {
+		showKf: boolean;
+		showSubjects: boolean;
+		showToggle: boolean;
+		effMode: 'keyframes' | 'reference';
+	} {
+		const media = videoModel?.media;
+		const stored: 'keyframes' | 'reference' = pipe.mediaMode === 'reference' ? 'reference' : 'keyframes';
+		if (!media || media.modes.length === 0 || media.dual || media.sharedArray) {
+			return { showKf: true, showSubjects: true, showToggle: false, effMode: stored };
+		}
+		const effMode: 'keyframes' | 'reference' = media.modes.includes(stored) ? stored : (media.modes[0] ?? 'keyframes');
+		return {
+			showKf: effMode === 'keyframes',
+			showSubjects: effMode === 'reference',
+			showToggle: media.modes.length > 1,
+			effMode,
+		};
+	}
+
+	// Fixed variant: the shared activeAuxPanel may point at a row this pipe
+	// hides (e.g. 'subjects' while the model is keyframes-only) — fall back to
+	// the visible row so the aux body never renders empty.
+	function effectiveAuxPanel(pipe: PipeRow): 'keyframes' | 'subjects' {
+		const st = mediaState(pipe);
+		if (activeAuxPanel === 'keyframes' && st.showKf) return 'keyframes';
+		if (activeAuxPanel === 'subjects' && st.showSubjects) return 'subjects';
+		return st.showKf ? 'keyframes' : 'subjects';
+	}
+
+	async function handleMediaModeChange(pipe: PipeRow, mode: 'keyframes' | 'reference') {
+		if (!session?.id) return;
+		const result = await setMediaModeAction(session.id, pipe.id, mode);
+		if (result.errors.length > 0) flashToast(`Failed to set media mode: ${result.errors.join(', ')}`);
+	}
 
 	// ── Derived state ──────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
@@ -661,6 +709,28 @@ import { flashToast } from '$lib/flashToast';
 				fps={session?.fps}
 			/>
 
+			<!-- ═══ MEDIA MODE (pipe-level, model-driven — docs/agnes-model-catalog.md Q7) ═══ -->
+			{#if mediaState(pipe).showToggle}
+				<div class="media-mode" role="group" aria-label="Media mode" onclick={(e) => e.stopPropagation()}
+				>
+					<span class="media-mode-label">Media</span>
+					<button
+						type="button"
+						class="media-opt"
+						class:active={mediaState(pipe).effMode === 'keyframes'}
+						onclick={() => handleMediaModeChange(pipe, 'keyframes')}>
+						Keyframes
+					</button>
+					<button
+						type="button"
+						class="media-opt"
+						class:active={mediaState(pipe).effMode === 'reference'}
+						onclick={() => handleMediaModeChange(pipe, 'reference')}>
+						Reference
+					</button>
+				</div>
+			{/if}
+
 			<!-- Variant B (fixed) auxiliary panel: tabbed, mutually-exclusive
 			     Keyframes⇄SubjectRefs, each independently collapsible. Variant A
 			     (current): two independent rows (existing layout). Store,
@@ -669,25 +739,29 @@ import { flashToast } from '$lib/flashToast';
 				<!-- ═══ AUX PANEL: KEYFRAMES ⇄ SUBJECT REFS (exclusive tabs, each collapsible) ═══ -->
 				<div class="aux-panel">
 					<div class="aux-tabs" role="tablist">
-						<button
-							class="aux-tab" class:active={activeAuxPanel === 'keyframes'}
-							role="tab" aria-selected={activeAuxPanel === 'keyframes'}
-							onclick={() => (activeAuxPanel = 'keyframes')}>
-							KEYFRAMES
-							<span class="aux-tab-count">{pipe.keyframes.length}/{MAX_KEYFRAMES}</span>
-						</button>
-						<button
-							class="aux-tab" class:active={activeAuxPanel === 'subjects'}
-							role="tab" aria-selected={activeAuxPanel === 'subjects'}
-							onclick={() => (activeAuxPanel = 'subjects')}>
-							SUBJECT REFS
-							<span class="aux-tab-count">
-								{(pipe.subjectReferences ?? []).filter((r: any) => r.visible !== false).length}/{MAX_SUBJECT_REFS}
-							</span>
-						</button>
+						{#if mediaState(pipe).showKf}
+							<button
+								class="aux-tab" class:active={effectiveAuxPanel(pipe) === 'keyframes'}
+								role="tab" aria-selected={effectiveAuxPanel(pipe) === 'keyframes'}
+								onclick={() => (activeAuxPanel = 'keyframes')}>
+								KEYFRAMES
+								<span class="aux-tab-count">{pipe.keyframes.length}/{MAX_KEYFRAMES}</span>
+							</button>
+						{/if}
+						{#if mediaState(pipe).showSubjects}
+							<button
+								class="aux-tab" class:active={effectiveAuxPanel(pipe) === 'subjects'}
+								role="tab" aria-selected={effectiveAuxPanel(pipe) === 'subjects'}
+								onclick={() => (activeAuxPanel = 'subjects')}>
+								SUBJECT REFS
+								<span class="aux-tab-count">
+									{(pipe.subjectReferences ?? []).filter((r: any) => r.visible !== false).length}/{MAX_SUBJECT_REFS}
+								</span>
+							</button>
+						{/if}
 					</div>
 
-					{#if activeAuxPanel === 'keyframes'}
+					{#if effectiveAuxPanel(pipe) === 'keyframes'}
 						<div class="aux-section" class:open={!keyframesCollapsed}>
 							<button
 								class="aux-section-head"
@@ -737,24 +811,28 @@ import { flashToast } from '$lib/flashToast';
 				<!-- Variant A — CURRENT: independent rows, existing layout -->
 
 				<!-- ═══ KEYFRAME ROW ═══ -->
-				<KeyframesRow
-					{pipe}
-					maxKeyframes={MAX_KEYFRAMES}
-					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
-					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
-					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-				/>
+				{#if mediaState(pipe).showKf}
+					<KeyframesRow
+						{pipe}
+						maxKeyframes={MAX_KEYFRAMES}
+						onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
+						onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
+						containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+					/>
+				{/if}
 
 				<!-- ═══ SUBJECT REFERENCES ROW ═══ -->
-				<SubjectRefsRow
-					{pipe}
-					maxSubjectRefs={MAX_SUBJECT_REFS}
-					onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
-					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
-					onAdd={() => openSubjectRefModal(pipeIdx)}
-					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
-					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-				/>
+				{#if mediaState(pipe).showSubjects}
+					<SubjectRefsRow
+						{pipe}
+						maxSubjectRefs={MAX_SUBJECT_REFS}
+						onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
+						onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
+						onAdd={() => openSubjectRefModal(pipeIdx)}
+						onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
+						containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+					/>
+				{/if}
 			{/if}
 
 			<!-- ═══ TIMELINE AREA ═══ (single coordinate canvas — now in TimelineSection) ═══ -->
@@ -1042,6 +1120,44 @@ import { flashToast } from '$lib/flashToast';
 	.aux-section-head:hover .aux-chevron {
 		background: var(--bg-tertiary);
 		color: var(--text-primary);
+	}
+
+	/* ═══ Media mode toggle (docs/agnes-model-catalog.md, Q7) ═══ */
+	.media-mode {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin: 2px 0 6px;
+	}
+
+	.media-mode-label {
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text-secondary);
+		margin-right: 2px;
+	}
+
+	.media-opt {
+		padding: 2px 8px;
+		font-size: 11px;
+		font-family: inherit;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+
+	.media-opt:hover {
+		color: var(--text-primary);
+		border-color: var(--border-light, var(--border));
+	}
+
+	.media-opt.active {
+		background: var(--accent, #ff3e00);
+		border-color: var(--accent, #ff3e00);
+		color: #fff;
 	}
 
 </style>

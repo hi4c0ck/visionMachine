@@ -180,6 +180,13 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
+  async setMediaMode(sessionId: string, pipeId: string, mode: 'keyframes' | 'reference'): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.pipes.setMediaMode(sessionId, pipeId, mode);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
   // Global element operations
   async addGlobalElement(sessionId: string, pipeId: string, frameStart: number, frameEnd: number): Promise<ServiceResult> {
     const s = this.getService(sessionId);
@@ -458,6 +465,7 @@ class ComposerStoreImpl implements ComposerStore {
             lengthFrames: pipe.lengthFrames,
             qValue: pipe.qValue,
             cValue: pipe.cValue,
+            mediaMode: pipe.mediaMode ?? 'keyframes',
             orderIndex: pipe.orderIndex,
             keyframes: pipe.keyframes,
             subjectReferences: (pipe.subjectReferences ?? []).map((ref: any) => ({
@@ -547,6 +555,7 @@ export const duplicatePipe = composerStore.duplicatePipe.bind(composerStore);
 export const updateQ = composerStore.updateQ.bind(composerStore);
 export const updateC = composerStore.updateC.bind(composerStore);
 export const setPipeLength = composerStore.setPipeLength.bind(composerStore);
+export const setMediaMode = composerStore.setMediaMode.bind(composerStore);
 export const addGlobalElement = composerStore.addGlobalElement.bind(composerStore);
 export const updateGlobalRange = composerStore.updateGlobalRange.bind(composerStore);
 export const toggleGlobalElement = composerStore.toggleGlobalElement.bind(composerStore);
