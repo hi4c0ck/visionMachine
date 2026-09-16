@@ -89,7 +89,7 @@
 	<!-- Top section: logo + layout controls -->
 	<div class="frame-top">
 		<div class="logo">
-			<span class="logo-icon">◆</span>
+			<img src="/icons/vm-mark-64.png" alt="VisionMachine" class="logo-icon" width="28" height="28" />
 			<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
 			{#if showWelcome}
 				<span class="welcome-badge">✨ New</span>
@@ -220,12 +220,12 @@
 		letter-spacing: -0.02em;
 	}
 
-	.logo-icon {
-		font-size: 1.3rem;
-		background: var(--gradient-accent);
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		background-clip: text;
+	  .logo-icon {
+		width: 28px;
+		height: 28px;
+		object-fit: contain;
+		display: block;
+		flex-shrink: 0;
 	}
 
 	.welcome-badge {
