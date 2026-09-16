@@ -1,13 +1,20 @@
 <script lang="ts">
-	// Generate confirm modal (read-only, decision D8): presets + the final
-	// prompt string (plain text box, mid size, expandable, copyable).
-	// Confirm is orchestrated by Workspace: ref accessibility gate (D5) →
-	// start_generation → hand-off to the progress modal.
-	import type { PipeRow, SessionData } from '$types';
+	// Generate confirm modal (D8): presets + final prompt (read-only) plus a
+	// per-run model override (Phase 4). Global settings stay the source of
+	// truth; the override applies to THIS generation only and is recorded in
+	// the portable generation log (model + taskId per piece).
+	import type { ModelSpec, PipeRow, SessionData } from '$types';
 	import { summarizePipe } from '$lib/promptEngine';
 	import { flashToast } from '$lib/flashToast';
 	import { APP_CONSTANTS } from '$constants';
+	import { getSettings } from '$lib/settings/store';
+	import { modelsFor, getPreset } from '$lib/settings/catalog';
 	import '../composer-modal.css';
+
+	export interface ModelSelection {
+		imageModel: string;
+		videoModel: string;
+	}
 
 	let {
 		pipe,
@@ -18,12 +25,30 @@
 		pipe: PipeRow;
 		session: SessionData;
 		open: boolean;
-		onConfirm: () => Promise<void> | void;
+		onConfirm: (models: ModelSelection) => Promise<void> | void;
 	}>();
 
 	const prompt = $derived(summarizePipe(pipe));
 	let expanded = $state(false);
 	let busy = $state(false);
+
+	// Per-run model override: seed from the global provider settings each
+	// open; the user may switch models for just this run (regenerating a
+	// piece, A/B between models). The choice is logged, never written back.
+	let imageModel = $state('');
+	let videoModel = $state('');
+	let imageModels = $state<ModelSpec[]>([]);
+	let videoModels = $state<ModelSpec[]>([]);
+	$effect(() => {
+		if (!open) return;
+		const s = getSettings();
+		imageModel = s.providers.image.model;
+		videoModel = s.providers.video.model;
+		const ip = getPreset(s.providers.image.preset);
+		const vp = getPreset(s.providers.video.preset);
+		imageModels = ip ? modelsFor(ip, 'image') : [];
+		videoModels = vp ? modelsFor(vp, 'video') : [];
+	});
 
 	async function copyPrompt() {
 		try {
@@ -38,7 +63,7 @@
 		if (busy) return;
 		busy = true;
 		try {
-			await onConfirm();
+			await onConfirm({ imageModel, videoModel });
 		} finally {
 			busy = false;
 		}
@@ -50,7 +75,7 @@
 		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<div class="modal-header">
 				<h3>Generate — {pipe.name}</h3>
-				<span class="modal-sub">Presets + final prompt (read-only)</span>
+				<span class="modal-sub">Presets + final prompt · pick the models for this run</span>
 			</div>
 			<div class="modal-body">
 				<div class="gen-presets" aria-label="Generation presets">
@@ -60,6 +85,24 @@
 					<span>Q {pipe.qValue}</span>
 					<span>C {pipe.cValue}</span>
 					<span>{pipe.lengthFrames} frames</span>
+				</div>
+				<div class="gen-models" aria-label="Model selection for this run">
+					<div class="gen-model">
+						<label for="gen-image-model">Image model</label>
+						<select id="gen-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
+							{#each imageModels as m (m.id)}
+								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="gen-model">
+						<label for="gen-video-model">Video model</label>
+						<select id="gen-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
+							{#each videoModels as m (m.id)}
+								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+							{/each}
+						</select>
+					</div>
 				</div>
 				<div class="gen-prompt-wrap">
 					<div class="gen-prompt-head">
@@ -108,6 +151,40 @@
 		font-size: 12px;
 		color: var(--text-secondary, #a1a1aa);
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	}
+
+	.gen-models {
+		display: flex;
+		gap: 10px;
+		margin-bottom: 14px;
+	}
+
+	.gen-model {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+	}
+
+	.gen-model label {
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: var(--text-secondary, #a1a1aa);
+	}
+
+	.gen-model select {
+		width: 100%;
+		padding: 9px 11px;
+		font-size: 0.85rem;
+		color: var(--text-primary, #fff);
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 6px;
+	}
+
+	.gen-model select:focus {
+		outline: none;
+		border-color: var(--accent-color, #ff3e00);
 	}
 
 	.gen-prompt-head {

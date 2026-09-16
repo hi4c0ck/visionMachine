@@ -3,7 +3,7 @@
 	// (sub-images first, then the final video), polled live. NO X button —
 	// while the task is active, Esc/backdrop is ignored with a toast; the
 	// dialog closes on terminal states or via "Cancel all".
-	import type { GenerationTaskView } from '$types';
+	import type { GenerationLogEntry, GenerationLogPiece, GenerationTaskView } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
 	import '../composer-modal.css';
@@ -14,6 +14,7 @@
 		open = $bindable(false),
 		onCancel,
 		onClose,
+		logEntry = null,
 	} = $props<{
 		/** Latest polled task view (null = first tick pending) */
 		task: GenerationTaskView | null;
@@ -22,12 +23,36 @@
 		open: boolean;
 		onCancel: () => void;
 		onClose: () => void;
+		/** Portable generation log entry (Phase 4): shows WHICH MODEL made
+		 * each piece + the taskId, so a later re-generation knows what to
+		 * match or swap. null until the log write lands. */
+		logEntry?: GenerationLogEntry | null;
 	}>();
 
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	function statusLabel(status: GenerationTaskView['status']): string {
 		return status === 'running' ? 'running…' : status;
 	}
+
+	// Model actually used for one stage (from the log entry, P4).
+	function modelFor(stage: GenerationTaskView['stages'][number]): string | null {
+		if (!logEntry) return null;
+		const piece = logEntry.pieces.find(
+			(p: GenerationLogPiece) => p.kind === stage.sourceKind && p.refId === stage.sourceId,
+		);
+		return piece ? piece.model : null;
+	}
+
+	// Distinct models for the header line: image pieces + video piece.
+	const headerModels = $derived.by(() => {
+		if (!logEntry) return [];
+		const img = logEntry.pieces.find((p: GenerationLogPiece) => p.kind !== 'video');
+		const vid = logEntry.pieces.find((p: GenerationLogPiece) => p.kind === 'video');
+		const out: string[] = [];
+		if (img) out.push(`img ${img.model}`);
+		if (vid) out.push(`video ${vid.model}`);
+		return out;
+	});
 
 	function tryClose() {
 		if (busy) {
@@ -51,6 +76,9 @@
 			<div class="modal-header">
 				<h3>Generation — {task.pipeId.slice(0, 8)}</h3>
 				<span class="modal-sub">Task {task.taskId.slice(0, 8)} · {statusLabel(task.status)}</span>
+				{#if headerModels.length > 0}
+					<span class="modal-sub gen-models-sub">{headerModels.join(' · ')}</span>
+				{/if}
 			</div>
 			<div class="modal-body">
 				<div class="gen-progress-bar" role="progressbar" aria-valuenow={Math.round(task.progress * 100)} aria-valuemin={0} aria-valuemax={100}>
@@ -66,6 +94,9 @@
 						>
 							<span class="gen-stage-label">{stage.label}</span>
 							<span class="gen-stage-status">
+								{#if modelFor(stage)}
+									<span class="gen-stage-model">{modelFor(stage)}</span>
+								{/if}
 								{stage.status}{stage.error ? ` · ${stage.error}` : ''}
 							</span>
 						</li>
@@ -161,6 +192,21 @@
 		margin: 10px 0 0;
 		font-size: 12px;
 		color: #ef4444;
+	}
+
+	.gen-models-sub {
+		display: block;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 11px;
+		color: var(--text-muted, #71717a);
+		margin-top: 4px;
+	}
+
+	.gen-stage-model {
+		display: block;
+		font-size: 10px;
+		color: var(--text-muted, #71717a);
+		font-family: 'JetBrains Mono', monospace;
 	}
 
 	.gen-cancel-all {

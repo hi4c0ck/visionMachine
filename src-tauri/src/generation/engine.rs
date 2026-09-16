@@ -19,6 +19,13 @@ pub struct EngineInput {
     pub orientation: String,
     pub q_value: u32,
     pub c_value: f32,
+    /// Per-piece model override from the generate modal (Phase 4). None =
+    /// the engine falls back to its default model. Unused until the provider
+    /// engine is configured (the choice is still recorded in the log).
+    #[serde(default)]
+    pub image_model: Option<String>,
+    #[serde(default)]
+    pub video_model: Option<String>,
 }
 
 pub trait GenerationEngine: Send + Sync {

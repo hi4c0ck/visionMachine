@@ -506,6 +506,8 @@ mod tests {
             orientation: "horizontal".into(),
             q_value: 18,
             c_value: 7.0,
+            image_model: None,
+            video_model: None,
         }
     }
 

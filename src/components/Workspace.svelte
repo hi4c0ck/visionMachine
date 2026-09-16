@@ -6,8 +6,10 @@
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
 	import GenerateModal from './ComposerModals/GenerateModal.svelte';
+	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView } from '$types';
+	import SettingsModal from './Settings/SettingsModal.svelte';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece } from '$types';
 	import { getMaxFramesForResolution } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
@@ -19,6 +21,7 @@
 	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation } from '$lib/composerStore';
 	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
+	import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog } from '$lib/settings';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -104,6 +107,13 @@
 	);
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
 
+	// Settings (Phase 2): live object + re-sync on store change. The store
+	// replaces its object on every commit, so a plain reassignment re-renders.
+	let settings = $state<Settings>(getSettings());
+	setOnSettingsChange(() => {
+		settings = getSettings();
+	});
+
 	// ── Generation flow state (pipe-level, decisions D1–D9) ─────────────────
 	// brokenRefs: `${pipeId}:${refId}` of references whose URL failed the
 	// accessibility check (D5) — chips are red-out until re-validated.
@@ -114,6 +124,15 @@
 	let activeTask = $state<GenerationTaskView | null>(null);
 	let poller: PollHandle | null = null;
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
+	// Portable generation log entry for the active task (Phase 4): the
+	// progress modal shows WHICH model made each piece; null until the
+	// log write lands, cleared when the task watch ends.
+	let activeLogEntry = $state<GenerationLogEntry | null>(null);
+
+	// Settings modal (Phase 3): opened from the profile panel (Defaults tab)
+	// or, in Phase 4, the provider status chip (Providers tab).
+	let showSettings = $state(false);
+	let settingsTab = $state<'defaults' | 'providers'>('defaults');
 
 	const anyTaskActive = $derived(activeTask !== null && !isTerminalTaskStatus(activeTask.status));
 	const generatePipe = $derived.by(() => {
@@ -559,14 +578,19 @@
 			const project = projects.find(p => p.id === projectId);
 			if (!project) return;
 
-			const maxFrames = getMaxFramesForResolution('720p');
+			// New sessions inherit the user's generation defaults (Phase 2);
+			// free-form settings strings are coerced into known values.
+			const d = getSettings().generationDefaults;
+			const defaultResolution = knownResolution(d.resolution);
+			const defaultOrientation = knownOrientation(d.orientation);
+			const maxFrames = getMaxFramesForResolution(defaultResolution);
 			const defaultPipe: PipeRow = {
 				id: crypto.randomUUID(),
 				name: 'Pipe 1',
 				lengthFrames: maxFrames,
 				keyframes: [],
-				qValue: 18,
-				cValue: 7,
+				qValue: d.qValue,
+				cValue: d.cValue,
 				subjectReferences: [],
 				elements: [{
 					id: crypto.randomUUID(),
@@ -607,9 +631,9 @@
 				updatedAt: Date.now(),
 				directoryPath: `${project.directoryPath}\\session_${Date.now()}`,
 				pipes: [defaultPipe],
-				fps: 24,
-				resolution: '720p',
-				orientation: 'horizontal',
+				fps: d.fps,
+				resolution: defaultResolution,
+				orientation: defaultOrientation,
 				totalGeneratedFrames: 0,
 			};
 			
@@ -639,14 +663,17 @@
 		const project = projects.find(p => p.id === projectId);
 		if (!project) return;
 		
-		const maxFrames = getMaxFramesForResolution('720p');
+		const d = getSettings().generationDefaults;
+		const defaultResolution = knownResolution(d.resolution);
+		const defaultOrientation = knownOrientation(d.orientation);
+		const maxFrames = getMaxFramesForResolution(defaultResolution);
 		const defaultPipe: PipeRow = {
 			id: crypto.randomUUID(),
 			name: 'Pipe 1',
 			lengthFrames: maxFrames,
 			keyframes: [],
-			qValue: 18,
-			cValue: 7,
+			qValue: d.qValue,
+			cValue: d.cValue,
 			subjectReferences: [],
 			elements: [{
 				id: crypto.randomUUID(),
@@ -663,9 +690,9 @@
 			updatedAt: Date.now(),
 			directoryPath: `${project.directoryPath}\\session_${Date.now()}`,
 			pipes: [defaultPipe],
-			fps: 24,
-			resolution: '720p',
-			orientation: 'horizontal',
+			fps: d.fps,
+			resolution: defaultResolution,
+			orientation: defaultOrientation,
 			totalGeneratedFrames: 0,
 		};
 		
@@ -794,7 +821,7 @@
 	}
 
 	/** D5 gate: unreachable reference → no task, red-out chips, keep the modal open. */
-	async function confirmGenerate() {
+	async function confirmGenerate(models: ModelSelection) {
 		if (!generatePipe || !selectedSession) return;
 		const pipe = generatePipe;
 		const broken = await checkRemoteUrls(collectRemoteUrls(pipe));
@@ -804,14 +831,118 @@
 			return;
 		}
 		try {
+			const startedAt = Date.now();
 			const res = await invoke<{ task_id: string }>('start_generation', {
-				input: { session_id: selectedSession.id, pipe_id: pipe.id, prompt: summarizePipe(pipe) },
+				input: {
+					session_id: selectedSession.id,
+					pipe_id: pipe.id,
+					prompt: summarizePipe(pipe),
+					// Per-run model override (Phase 4): recorded in the log now,
+					// consumed by the provider engine when it lands.
+					image_model: models.imageModel,
+					video_model: models.videoModel,
+				},
 			});
 			showGenerateModal = false;
 			startWatchingTask(res.task_id);
+			// Portable generation log: which model made which piece (P4/P5).
+			const entry = buildGenerationLogEntry(res.task_id, selectedSession.id, pipe, models, startedAt);
+			activeLogEntry = entry;
+			void writeGenerationLogStart(entry);
 		} catch (e) {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
 			showGenerateModal = false;
+		}
+	}
+
+	// ── Portable generation log (P4/P5) ──────────────────────────────
+	/** One piece per keyframe / subject + the video stage; models as chosen. */
+	function buildGenerationLogEntry(
+		taskId: string,
+		sessionId: string,
+		pipe: PipeRow,
+		models: ModelSelection,
+		startedAt: number,
+	): GenerationLogEntry {
+		const s = getSettings();
+		const sess = selectedSession;
+		const params = {
+			fps: sess?.fps ?? s.generationDefaults.fps,
+			resolution: sess?.resolution ?? s.generationDefaults.resolution,
+			q: pipe.qValue,
+			c: pipe.cValue,
+		};
+		const pieces: GenerationLogPiece[] = [
+			...pipe.keyframes.map((k): GenerationLogPiece => ({
+				kind: 'keyframe',
+				refId: k.id,
+				provider: s.providers.image.preset,
+				model: models.imageModel,
+				status: 'pending',
+				params,
+			})),
+			...(pipe.subjectReferences ?? []).map((r): GenerationLogPiece => ({
+				kind: 'subject',
+				refId: r.id,
+				provider: s.providers.image.preset,
+				model: models.imageModel,
+				status: 'pending',
+				params,
+			})),
+			{
+				kind: 'video',
+				refId: pipe.id,
+				provider: s.providers.video.preset,
+				model: models.videoModel,
+				status: 'pending',
+				params,
+			},
+		];
+		return {
+			taskId,
+			sessionId,
+			pipeId: pipe.id,
+			startedAt,
+			status: 'running',
+			pieces,
+		};
+	}
+
+	/** Persist the start entry (redacted before it leaves the process, P5). */
+	async function writeGenerationLogStart(entry: GenerationLogEntry) {
+		try {
+			await logGeneration(entry);
+		} catch (e) {
+			console.error('[Workspace] log_generation (start):', e);
+		}
+	}
+
+	/** Terminal state: upsert the entry with per-piece results + finishedAt. */
+	async function updateGenerationLog(view: GenerationTaskView) {
+		try {
+			const existing = await getGenerationLog(view.taskId);
+			if (!existing) return;
+			for (const stage of view.stages) {
+				const piece = existing.pieces.find(
+					(p) => p.kind === stage.sourceKind && p.refId === stage.sourceId,
+				);
+				if (!piece) continue;
+				if (stage.status === 'done' || stage.status === 'ready') piece.status = 'done';
+				else if (stage.status === 'error') piece.status = 'error';
+				else piece.status = 'cancelled';
+				if (stage.imageOutput) piece.outputRef = stage.imageOutput;
+				if (stage.error) piece.error = stage.error;
+			}
+			if (view.status === 'done' && view.outputPath) {
+				const videoPiece = existing.pieces.find((p) => p.kind === 'video');
+				if (videoPiece) videoPiece.outputRef = view.outputPath;
+			}
+			existing.status = view.status === 'done' ? 'done' : view.status === 'cancelled' ? 'cancelled' : 'error';
+			existing.finishedAt = Date.now();
+			if (activeLogEntry?.taskId === view.taskId) activeLogEntry = existing;
+			await logGeneration(existing);
+		} catch (e) {
+			console.error('[Workspace] log_generation (terminal):', e);
 		}
 	}
 
@@ -836,6 +967,7 @@
 	function startWatchingTask(taskId: string) {
 		stopPoller();
 		activeTask = null;
+		activeLogEntry = null;
 		showProgressModal = true;
 		poller = pollTask({
 			taskId,
@@ -859,6 +991,7 @@
 
 	/** Terminal state: flip reference statuses + attach the artifact (D1/D4). */
 	function handleTaskTerminal(view: GenerationTaskView) {
+		void updateGenerationLog(view);
 		for (const o of refOutcomes(view)) {
 			void markRefStatus(view.sessionId, view.pipeId, o.kind, o.refId, o.status);
 		}
@@ -893,6 +1026,7 @@
 		stopPoller();
 		showProgressModal = false;
 		activeTask = null;
+		activeLogEntry = null;
 	}
 
 	/** ToolsPanel last-gen thumb → top-panel preview (D9). */
@@ -937,9 +1071,15 @@
 		// Wait for Tauri to be ready before loading projects
 		await new Promise(resolve => setTimeout(resolve, 100));
 		await loadProjects();
+		// Settings follow the active profile (Tauri) or the username
+		// (browser dev fallback); a failed load falls back to defaults.
+		void loadSettings(userProfileId || userName);
 	});
 
-	onDestroy(() => stopPoller());
+	onDestroy(() => {
+		stopPoller();
+		setOnSettingsChange(null);
+	});
 </script>
 
 <div class={`workspace ${layoutMode}`}>
@@ -954,6 +1094,11 @@
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
+		providers={settings.providers}
+		onopenprovidersettings={() => {
+			settingsTab = 'providers';
+			showSettings = true;
+		}}
 	/>
 
 	{#if selectedSession && selectedProject}
@@ -987,6 +1132,10 @@
 				{projects}
 				{selectedProjectId}
 				{selectedSessionId}
+				onopensettings={() => {
+					settingsTab = 'defaults';
+					showSettings = true;
+				}}
 			/>
 		</div>
 
@@ -1065,7 +1214,9 @@
 				bind:open={showProgressModal}
 				onCancel={cancelActiveTask}
 				onClose={closeProgressModal}
+				logEntry={activeLogEntry}
 			/>
+			<SettingsModal bind:open={showSettings} initialTab={settingsTab} />
 	</div>
 </div>
 
