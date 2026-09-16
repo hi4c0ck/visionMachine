@@ -171,4 +171,7 @@ Agnes placeholder specs: `agnes-text` / `agnes-image` / `agnes-video`,
   account-scoped settings sync
 
 ## Open items
-- [ ] Agnes API doc → fill `catalog.ts` model specs (endpoint/payload/limits/poll)
+- [x] Agnes API doc → spec researched & user-confirmed in
+      `docs/agnes-model-catalog.md` (container changes, catalog data,
+      seed design, URL composition, media-mode matrix, checklist).
+      Implementation pending final GO on its open items.
