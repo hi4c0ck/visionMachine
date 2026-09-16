@@ -127,6 +127,13 @@ pub fn run() {
             commands::generation::start_generation,
             commands::generation::get_generation_task,
             commands::generation::cancel_generation,
+            // Settings & provider system (Phase 1)
+            commands::settings::get_settings,
+            commands::settings::save_settings,
+            commands::settings::test_provider,
+            commands::settings::log_generation,
+            commands::settings::get_generation_log,
+            commands::settings::list_generation_logs,
             // File management commands
             commands::artifacts::add_project_file,
             commands::artifacts::list_project_files,

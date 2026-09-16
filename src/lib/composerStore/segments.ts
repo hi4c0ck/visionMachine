@@ -3,7 +3,8 @@
 
 import type { SegmentService, ServiceResult } from './interfaces';
 import type { SessionData, PipeRow, Segment, TimelineElement } from '$types';
-import { snapTo8, rangesOverlapStrict, getNextAvailableRange, validateSegments } from '$lib/frameMath';
+import { snapTo8, rangesOverlapStrict, getNextAvailableRange, validateSegments, minZoneSpan } from '$lib/frameMath';
+import { MIN_SPAN } from '$lib/frameGeometry';
 
 export class SegmentServiceImpl implements SegmentService {
   private session: SessionData;
@@ -28,9 +29,20 @@ export class SegmentServiceImpl implements SegmentService {
     if (snappedStart < 0) snappedStart = 0;
     if (snappedEnd > maxSegmentEnd) snappedEnd = maxSegmentEnd;
 
-    // Ensure minimum span
-    if (snappedEnd - snappedStart < 8) {
-      snappedEnd = Math.min(snappedStart + 8, maxSegmentEnd);
+    // Ensure the creation floor (≈1s at session fps, snapped to the 8-grid).
+    // A tight pipe that can't host the floor still accepts the 8-frame
+    // engine floor as a last resort — sub-1s zones are a "hack" path, not
+    // a one-click creation (docs/composer-timeline-sla.md).
+    const minSpan = minZoneSpan(this.session.fps);
+    if (snappedEnd - snappedStart < minSpan) {
+      const extended = Math.min(snappedStart + minSpan, maxSegmentEnd);
+      if (extended - snappedStart >= MIN_SPAN) {
+        snappedEnd = extended;
+      } else {
+        return {
+          errors: [`Zone needs at least ${minSpan} frames (≈1s at ${this.session.fps} fps) — the pipe has no room for it`],
+        };
+      }
     }
 
     // Auto-create timeline if missing

@@ -5,12 +5,15 @@
 		userName,
 		projects,
 		selectedProjectId,
-		selectedSessionId
+		selectedSessionId,
+		onopensettings,
 	} = $props<{
 		userName: string;
 		projects: ProjectData[];
 		selectedProjectId: string | null;
 		selectedSessionId: string | null;
+		/** Opens the settings modal (defaults tab). */
+		onopensettings?: () => void;
 	}>();
 
 	// Calculate real stats from projects
@@ -55,6 +58,12 @@
 			<span class="section-value">{totalGenerations}</span>
 		</div>
 	</div>
+
+	<!-- Settings entry point (Phase 3): per-profile settings + providers -->
+	<button class="settings-entry" onclick={onopensettings}>
+		<span>Settings</span>
+		<span class="settings-entry-chev">›</span>
+	</button>
 </div>
 
 <style>
@@ -63,11 +72,14 @@
 		background: var(--bg-secondary, #3C3F46);
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-		padding: 12px;
+		gap: 8px;
+		padding: 10px 12px;
 		border-top: 1px solid var(--border-color, #4E525A);
-		flex: 1;
-		overflow: hidden;
+		flex-shrink: 0;
+		/* Sit compact at the bottom of the left column; the projects list
+			   above absorbs the free space. Also pins correctly in 'single'
+			   layout mode where the profile is the only child. */
+		margin-top: auto;
 	}
 
 	/* ── Header ── */
@@ -120,7 +132,30 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		overflow-y: auto;
+	}
+
+	.settings-entry {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		padding: 7px 10px;
+		font-size: 0.78rem;
+		font-weight: 500;
+		color: var(--text-secondary, #BFBFBF);
+		background: transparent;
+		border: none;
+		border-radius: 4px;
+		cursor: pointer;
+	}
+
+	.settings-entry:hover {
+		background: var(--bg-tertiary, #4E525A);
+		color: var(--text-primary, #EEEEEE);
+	}
+
+	.settings-entry-chev {
+		color: var(--text-muted, #808080);
 	}
 
 	.section-item {

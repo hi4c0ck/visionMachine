@@ -4,6 +4,11 @@ import { resolve } from 'path';
 
 export default defineConfig({
   base: './',
+  // verbatim static assets (favicon + icon mipmap set) — copied unchanged to /icons/...
+  // so both dev (root=public) and build (outDir=dist) serve the same paths, no hashing.
+  // NOTE: publicDir is resolved relative to `root` (public/), so use an absolute path
+  // pointing to the public-static folder that sits next to public/ at the project root.
+  publicDir: resolve(__dirname, 'public-static'),
   plugins: [svelte()],
   resolve: {
     alias: {

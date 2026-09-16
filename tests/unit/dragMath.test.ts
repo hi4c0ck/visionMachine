@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	calculateElementDrag,
 	getDragBounds,
+	resolveTagDragConflict,
 	type TemporalDragState,
 } from '../../src/lib/dragMath';
 
@@ -108,5 +109,64 @@ describe('calculateElementDrag (tag, contained)', () => {
 	it('tag left thumb keeps MIN_SPAN inside parent', () => {
 		const d = drag({ type: 'tag', handle: 'left', startFrame: 56, endFrame: 64, pointerStartFrame: 0 });
 		expect(calculateElementDrag(d, -1000, g)).toEqual([32, 64]);
+	});
+});
+
+describe('resolveTagDragConflict (same-type siblings never overlap)', () => {
+	const pipe = { min: 0, max: 240 };
+
+	it('returns the candidate when no same-type siblings exist', () => {
+		expect(resolveTagDragConflict('body', [40, 80], [32, 72], [], pipe)).toEqual([40, 80]);
+	});
+
+	it('body: slides onto the nearest clear side of a conflicting sibling', () => {
+		// Sibling [0, 60]; a 60-frame tag dragged left to [12, 72] settles
+		// against the sibling's end (48 right) rather than past its start (72 left).
+		expect(resolveTagDragConflict('body', [12, 72], [60, 120], [[0, 60]], pipe)).toEqual([60, 120]);
+	});
+
+	it('body: slides left onto the sibling start when that is the shorter move', () => {
+		// Sibling [120, 180]; a 60-frame tag dragged right to [108, 168] settles
+		// against the sibling's start (48 left) rather than past its end (72 right).
+		expect(resolveTagDragConflict('body', [108, 168], [60, 120], [[120, 180]], pipe)).toEqual([60, 120]);
+	});
+
+	it('body: settles into the gap between two siblings', () => {
+		// Siblings [0, 60] and [120, 180]; a 60-frame tag dragged into the left
+		// sibling settles into the free gap [60, 120].
+		expect(
+			resolveTagDragConflict('body', [30, 90], [60, 120], [[0, 60], [120, 180]], pipe)
+		).toEqual([60, 120]);
+	});
+
+	it('body: a fully jammed tag falls back to its original range', () => {
+		// Packed zone [0, 32]: sibling [16, 32], tag [0, 16]. Dragging the tag
+		// fully onto the sibling leaves no clear slot -> back to where it was.
+		const packed = { min: 0, max: 32 };
+		expect(resolveTagDragConflict('body', [16, 32], [0, 16], [[16, 32]], packed)).toEqual([0, 16]);
+	});
+
+	it('left grip: start is pushed past the sibling it would overlap', () => {
+		// Sibling [0, 60]; tag [60, 120] with its left grip dragged to 40
+		// cannot enter the sibling -> start stays at 60.
+		expect(resolveTagDragConflict('left', [40, 120], [60, 120], [[0, 60]], pipe)).toEqual([60, 120]);
+	});
+
+	it('left grip: a min-size tag pinned against a sibling stays put', () => {
+		// Sibling [0, 40]; tag [40, 48] (8 frames). The grip wants start 0,
+		// but end - MIN_SPAN pins it back at 40.
+		expect(resolveTagDragConflict('left', [0, 48], [40, 48], [[0, 40]], pipe)).toEqual([40, 48]);
+	});
+
+	it('right grip: end is pulled back before the sibling it would overlap', () => {
+		// Sibling [80, 120]; tag [40, 80] with its right grip dragged to 100
+		// cannot enter the sibling -> end stays at 80.
+		expect(resolveTagDragConflict('right', [40, 100], [40, 80], [[80, 120]], pipe)).toEqual([40, 80]);
+	});
+
+	it('right grip: a min-size tag pinned against a sibling stays put', () => {
+		// Sibling [8, 40]; tag [0, 8] (min size). The grip wants end 24,
+		// but start + MIN_SPAN pins it back at 8.
+		expect(resolveTagDragConflict('right', [0, 24], [0, 8], [[8, 40]], pipe)).toEqual([0, 8]);
 	});
 });

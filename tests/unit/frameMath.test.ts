@@ -23,7 +23,27 @@ import {
   isValidFrameCount,
   getFreeGaps,
   placeTagInZone,
+  evenSplitZone,
+  minZoneSpan,
 } from '../../src/lib/frameMath';
+
+// ── minZoneSpan ──────────────────────────────────────────────────────────────
+
+describe('minZoneSpan', () => {
+  it('snaps the 1s floor up to the 8-grid for each fps', () => {
+    expect(minZoneSpan(18)).toBe(24); // ceil(18/8)*8 = 3*8
+    expect(minZoneSpan(24)).toBe(24); // exactly 3*8
+    expect(minZoneSpan(30)).toBe(32); // ceil(30/8)*8 = 4*8
+    expect(minZoneSpan(48)).toBe(48); // exactly 6*8
+    expect(minZoneSpan(60)).toBe(64); // ceil(60/8)*8 = 8*8
+  });
+
+  it('never drops below the 8-frame engine floor', () => {
+    expect(minZoneSpan(1)).toBe(8);
+    expect(minZoneSpan(0)).toBe(8);
+    expect(minZoneSpan(8)).toBe(8);
+  });
+});
 
 // ── snapTo8 ──────────────────────────────────────────────────────────────────
 
@@ -353,5 +373,46 @@ describe('placeTagInZone', () => {
   it('rejects a packed zone even when the tags are out of order', () => {
     // Same as above but the list is not pre-sorted — the function must sort.
     expect(placeTagInZone(zone(0, 120), [range(80, 120), range(0, 40), range(40, 80)], 8)).toBeNull();
+  });
+});
+
+describe('evenSplitZone', () => {
+  const zone = (s: number, e: number) => ({ frameStart: s, frameEnd: e });
+
+  it('splits a full zone into two even parts on the 8-grid', () => {
+    expect(evenSplitZone(zone(0, 120), 2, 8)).toEqual([
+      { start: 0, end: 64 },
+      { start: 64, end: 120 },
+    ]);
+  });
+
+  it('splits into three equal parts when they land on the grid', () => {
+    expect(evenSplitZone(zone(0, 120), 3, 8)).toEqual([
+      { start: 0, end: 40 },
+      { start: 40, end: 80 },
+      { start: 80, end: 120 },
+    ]);
+  });
+
+  it('a single part is the whole zone', () => {
+    expect(evenSplitZone(zone(0, 120), 1, 8)).toEqual([{ start: 0, end: 120 }]);
+  });
+
+  it('returns null when min-span parts cannot fit (zone too small)', () => {
+    // An 8-frame zone cannot hold two 8-frame tags.
+    expect(evenSplitZone(zone(0, 8), 2, 8)).toBeNull();
+    // 40 frames cannot hold six 8-frame parts.
+    expect(evenSplitZone(zone(0, 40), 6, 8)).toBeNull();
+  });
+
+  it('keeps parts inside the zone, contiguous, and ≥ minSpan', () => {
+    const parts = evenSplitZone(zone(16, 104), 4, 8);
+    expect(parts).toHaveLength(4);
+    expect(parts![0].start).toBe(16);
+    expect(parts![3].end).toBe(104);
+    for (let i = 0; i < 3; i++) {
+      expect(parts![i + 1].start).toBe(parts![i].end);
+      expect(parts![i + 1].start - parts![i].start).toBeGreaterThanOrEqual(8);
+    }
   });
 });

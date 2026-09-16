@@ -6,3 +6,4 @@ pub mod generation;
 pub mod profiles;
 pub mod projects;
 pub mod sessions;
+pub mod settings;

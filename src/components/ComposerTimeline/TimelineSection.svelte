@@ -13,6 +13,7 @@
 	import {
 		calculateElementDrag,
 		getDragBounds,
+		resolveTagDragConflict,
 		type TemporalDragState,
 		type DragBounds,
 	} from '$lib/dragMath';
@@ -140,14 +141,15 @@
 	// The click stops propagation so the panel's document-level "close menus
 	// on outside click" handler doesn't immediately close the menu we just
 	// opened. A real pill/grip drag still emits a `click` on release;
-	// zoneDragHappened suppresses it so dragging never opens the menu.
+	// lastPressWasDrag suppresses it so dragging never opens the menu.
 	function onZonePillClick(e: MouseEvent, segId: string) {
 		e.stopPropagation();
-		if (zoneDragHappened) return;
+		if (lastPressWasDrag) return;
 		onOpenTagMenu(segId, e);
 	}
 
-	function getTimeline(p: PipeRow): any {
+	function getTimeline(p: PipeRow | null | undefined): any {
+		if (!p || !Array.isArray(p.elements)) return null;
 		return p.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
@@ -224,7 +226,8 @@
 		});
 	}
 
-	function getGlobal(p: PipeRow): any {
+	function getGlobal(p: PipeRow | null | undefined): any {
+		if (!p || !Array.isArray(p.elements)) return null;
 		return p.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
 
@@ -285,10 +288,11 @@
 
 	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body, global grips).
 	
-	// Track whether the last zone-pill press turned into a real drag (>3px).
+	// Track whether the last press turned into a real drag (>3px).
 	// The browser still emits a `click` after a drag release; without this
-	// flag that click would wrongly open the add-tag menu after dragging.
-	let zoneDragHappened = $state(false);
+	// flag that click would wrongly open the add-tag menu (zone pill) or the
+	// prompt-edit modal (tag pill) after dragging.
+	let lastPressWasDrag = $state(false);
 
 	function handleElementPointerDown(
 		e: PointerEvent,
@@ -301,7 +305,7 @@
 	) {
 		e.preventDefault();
 		e.stopPropagation();
-		zoneDragHappened = false;
+		lastPressWasDrag = false;
 
 		if (!rulerElement || !rulerGeometry) return;
 
@@ -348,7 +352,27 @@
 			? getTimeline(pipe)?.segments.find((s: Segment) => s.id === d.segmentId)
 			: undefined;
 		const bounds: DragBounds = getDragBounds(d, totalFrames, seg);
-		const [startFrame, endFrame] = calculateElementDrag(dragState, pointerFrame, bounds);
+		let [startFrame, endFrame] = calculateElementDrag(dragState, pointerFrame, bounds);
+
+		// Same-type tags in a zone never overlap: constrain the live preview
+		// against the zone's other same-type siblings (slide/clamp resolver).
+		if (d.type === 'tag' && seg) {
+			const dragged = seg.tags.find((t: TagElement) => t.id === d.id);
+			if (dragged) {
+				const occupied = seg.tags
+					.filter((t: TagElement) => t.tag === dragged.tag && t.id !== dragged.id)
+					.map((t: TagElement) => [t.frameStart, t.frameEnd] as [number, number]);
+				if (occupied.length > 0) {
+					[startFrame, endFrame] = resolveTagDragConflict(
+						d.handle ?? 'body',
+						[startFrame, endFrame],
+						[d.startFrame, d.endFrame],
+						occupied,
+						bounds
+					);
+				}
+			}
+		}
 		previewDragState = {
 			type: dragState.type,
 			id: dragState.id,
@@ -396,8 +420,9 @@
 			return;
 		}
 		// A real drag happened (>3px). Flag it so the subsequent `click` on
-		// the zone pill is not read as an add-tag press.
-		zoneDragHappened = true;
+		// the zone pill is not read as an add-tag press and the click on the
+		// tag pill is not read as a prompt-edit press.
+		lastPressWasDrag = true;
 
 		// Commit to THIS section's pipe, never another pipe: each pipe renders
 		// its own section, so the drag that started on pipe N must resize pipe N.
@@ -612,8 +637,8 @@
 												role="button"
 												tabindex="0"
 												title="{tag.spec?.name}: {tag.frameStart}–{tag.frameEnd} · Zone {zoneIndex}{tag.prompt ? ' · \u201c' + tag.prompt + '\u201d' : ''} · Drag to move, grips to resize, click to edit prompt"
-												onclick={() => onEditTagPrompt(seg, tag)}
-												onkeydown={(e) => e.key === 'Enter' && onEditTagPrompt(seg, tag)}
+												onclick={() => { if (lastPressWasDrag) return; onEditTagPrompt(seg, tag); }}
+												onkeydown={(e) => e.key === 'Enter' && !lastPressWasDrag && onEditTagPrompt(seg, tag)}
 												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
 												onpointermove={handlePointerMove}
 												onpointerup={handlePointerUp}>

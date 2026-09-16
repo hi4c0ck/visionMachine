@@ -9,6 +9,9 @@ import { TAG_SPECIFICATIONS } from '$types';
  * Order: global elements first, then segments sorted by frameStart
  */
 export function compilePrompt(pipe: PipeRow): string {
+  // Defensive: a partial/legacy pipe (missing elements array) must never
+  // crash the live preview.
+  if (!pipe || !Array.isArray(pipe.elements)) return '';
   const lines: string[] = [];
   
   // Global elements first (new two-layer model)
@@ -75,6 +78,7 @@ export function getOrderedTags(pipe: PipeRow): Array<{
   frameStart?: number;
   frameEnd?: number;
 }> {
+  if (!pipe || !Array.isArray(pipe.elements)) return [];
   const result: any[] = [];
   
   // Add global prompt

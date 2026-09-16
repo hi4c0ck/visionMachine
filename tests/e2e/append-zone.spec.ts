@@ -88,7 +88,9 @@ test.describe('Appending zones', () => {
 
 		// Zone 2: append → the modal prefills the WHOLE remaining gap (80–240;
 		// filling it is the default intent). Use only part of it so a third
-		// zone can still be appended without overlap.
+		// zone can still be appended without overlap. (Zone 2 is exactly the
+		// 24-frame creation floor at the default 24 fps — smaller is rejected
+		// by the modal.)
 		await appendBtn.click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		const prefill = [
@@ -97,14 +99,14 @@ test.describe('Appending zones', () => {
 		];
 		expect(Number(prefill[0])).toBe(80);
 		expect(Number(prefill[1])).toBe(240);
-		await addZoneAt(page, prefill[0], '88');
+		await addZoneAt(page, prefill[0], '104');
 		expect(await page.locator('.segment-body').count()).toBe(2);
 
-		// Zone 3: append again → next gap after zone 2's end (88).
+		// Zone 3: append again → next gap after zone 2's end (104).
 		await appendBtn.click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		const prefill3 = await page.locator('.modal input[type="number"]').nth(0).inputValue();
-		expect(Number(prefill3)).toBe(88);
+		expect(Number(prefill3)).toBe(104);
 		await addZoneAt(page, prefill3, await page.locator('.modal input[type="number"]').nth(1).inputValue());
 		expect(await page.locator('.segment-body').count()).toBe(3);
 
@@ -348,20 +350,20 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		await page.locator('.timeline-header').click();
 	});
 
-	test('a packed zone rejects a duplicate same-type tag; other types still fit', async ({ page }) => {
-		// Two adjacent zones with NO free gap between them (0–16 | 16–32): a
-		// first same-type tag in each spans its whole zone, which packs that
-		// zone for further same-type additions — deterministically, without
-		// ruler-pixel drag geometry.
+	test('a packed zone resplits for a duplicate same-type tag; other types still fit', async ({ page }) => {
+		// Two adjacent zones with NO free gap between them (0–24 | 24–48,
+		// 1s at the default 24 fps): a first same-type tag in each spans its
+		// whole zone, which packs that zone for further same-type additions
+		// — deterministically, without ruler-pixel drag geometry.
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
 		await page.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
-		await addZoneAt(page, '0', '16');
+		await addZoneAt(page, '0', '24');
 		await page.locator('.btn-add-zone').click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
-		await addZoneAt(page, '16', '32');
+		await addZoneAt(page, '24', '48');
 
 		async function addTagOfType(zoneIdx: number, typeText: string) {
 			await addTagToZone(page, zoneIdx, typeText);
@@ -373,21 +375,19 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		await addTagOfType(1, 'Camera');
 		expect(await page.locator('.tag-body').count()).toBe(2);
 
-		// 2. Z1 is now packed for Camera: a second same-type tag has no free
-		//    slot ≥ 8 frames, so the store rejects it and a toast surfaces.
-		//    (The toast auto-dismisses in ~3.5s; wait out its full lifetime
-		//    before reopening the menu so the old alert can't shadow the new one.)
-		await pressZoneRow(page, 0);
-		await page.locator('.dropdown-menu .tag-item', { hasText: 'Camera' }).click();
-		await expect(page.locator('div[role="alert"]', { hasText: /No free slot/i })).toBeVisible({ timeout: 5000 });
-		expect(await page.locator('.tag-body').count()).toBe(2);
-		await page.waitForTimeout(4000);
+		// 2. Z1 is now packed for Camera: a second same-type tag finds no free
+		//    slot, so the zone is resplit evenly instead of rejecting — both
+		//    Camera tags share Z1's 24 frames ([0,16] + [16,24]) and no toast
+		//    surfaces (the resplit returns a silent warning).
+		await addTagOfType(0, 'Camera');
+		expect(await page.locator('.tag-body').count()).toBe(3);
+		await expect(page.locator('div[role="alert"]')).toHaveCount(0);
 
 		// 3. A different type is NOT blocked by the packed Camera lane: Scene
 		//    spans Z1 freely and lands on the shared Scene lane with a Z1 badge.
 		await addTagOfType(0, 'Scene');
-		expect(await page.locator('.tag-body').count()).toBe(3);
-	});
+		expect(await page.locator('.tag-body').count()).toBe(4);
+		});
 
 	test('tag pills expose left/right resize grips that commit to the store', async ({ page }) => {
 		// Set up a zone (0–120) + a Camera tag that inherits the full range.

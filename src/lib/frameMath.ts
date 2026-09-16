@@ -17,6 +17,17 @@ import { snapFrameDown, FRAME_STEP } from './frameGeometry';
 export const snapTo8 = snapFrameDown;
 
 /**
+ * Minimum zone span at CREATION: ≈1s of footage at the session fps,
+ * snapped up to the 8-frame grid (24fps→24, 18fps→24, 30fps→32, 60fps→64).
+ * Sub-1s zones stay reachable via drag-resize (8-frame engine floor),
+ * not via zone creation.
+ */
+export function minZoneSpan(fps: number): number {
+  const effective = fps > 0 ? fps : 8;
+  return Math.ceil(effective / 8) * 8;
+}
+
+/**
  * Snap a total frame count to the nearest valid 8n+1 value.
  */
 export function snapTo8nPlus1(frame: number): number {
@@ -191,6 +202,39 @@ export function placeTagInZone(
     return { start: cursor, end: zone.frameEnd };
   }
   return null;
+}
+
+/**
+ * Split a zone into `parts` contiguous even parts, boundaries on the 8-grid,
+ * every part ≥ minSpan. Used as the fallback when a zone is FULL of one tag
+ * type (no free slot): instead of rejecting the new tag, all same-type tags
+ * (existing + new) are redistributed evenly so they share the zone.
+ *
+ * Returns the part ranges, or null when the zone is physically too small to
+ * hold `parts` tags of minSpan frames.
+ */
+export function evenSplitZone(
+  zone: { frameStart: number; frameEnd: number },
+  parts: number,
+  minSpan: number = 8,
+): Array<{ start: number; end: number }> | null {
+  if (parts < 1) return null;
+  const zs = zone.frameStart;
+  const ze = zone.frameEnd;
+  const span = ze - zs;
+  const boundaries: number[] = [zs];
+  for (let i = 1; i < parts; i++) {
+    const ideal = zs + (span * i) / parts;
+    const b = Math.round(ideal / 8) * 8; // snap to the 8-grid
+    if (b - boundaries[boundaries.length - 1] < minSpan) return null; // previous part too small
+    boundaries.push(b);
+  }
+  if (ze - boundaries[boundaries.length - 1] < minSpan) return null; // last part too small
+  const result: Array<{ start: number; end: number }> = [];
+  for (let i = 0; i < parts; i++) {
+    result.push({ start: boundaries[i], end: boundaries[i + 1] ?? ze });
+  }
+  return result;
 }
 
 /**

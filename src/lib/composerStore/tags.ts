@@ -4,7 +4,7 @@
 import type { TagService, ServiceResult } from './interfaces';
 import type { SessionData, PipeRow, TagElement, TimelineElement, Segment, TagType } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
-import { snapTo8, isRangeContained, rangesOverlapStrict, placeTagInZone } from '$lib/frameMath';
+import { snapTo8, isRangeContained, rangesOverlapStrict, placeTagInZone, evenSplitZone } from '$lib/frameMath';
 import { validateTagFrames } from './validators';
 
 export class TagServiceImpl implements TagService {
@@ -40,10 +40,37 @@ export class TagServiceImpl implements TagService {
       8,
     );
     if (!slot) {
+      // The zone is full for this type. Instead of dead-ending, redistribute:
+      // same-type tags share the zone evenly (rule: multiple same-type tags
+      // per zone are allowed, they just never overlap). Existing tags keep
+      // their prompts/values and move to their even slot; the new tag takes
+      // the last slot. Only a zone too small for (n+1) min-span parts fails.
+      const zone = { frameStart: segment.frameStart, frameEnd: segment.frameEnd };
+      const parts = evenSplitZone(zone, sameTypeRanges.length + 1, 8);
+      if (parts) {
+        const existing = segment.tags
+          .filter((t) => t.tag === tagType)
+          .sort((a, b) => a.frameStart - b.frameStart);
+        parts.forEach((part, i) => {
+          if (i < existing.length) {
+            existing[i].frameStart = part.start;
+            existing[i].frameEnd = part.end;
+          } else {
+            segment.tags.push({
+              id: crypto.randomUUID(),
+              tag: tagType,
+              frameStart: part.start,
+              frameEnd: part.end,
+              value: spec.min || 0,
+              spec,
+            });
+          }
+        });
+        return { errors: [], warnings: [`Zone resplit evenly for ${parts.length} ${spec.name} tags`] };
+      }
       return {
-        errors: [
-          `No free slot for another ${spec.name} tag in this zone — shrink an existing one first`,
-        ],
+        errors:
+          [`Zone is too small for another ${spec.name} tag (needs ${8 * (sameTypeRanges.length + 1)}+ frames) — extend the zone first`],
       };
     }
 
@@ -95,6 +122,19 @@ export class TagServiceImpl implements TagService {
     if (valid) {
       const tag = segment.tags.find(t => t.id === tagId);
       if (tag) {
+        // Backstop invariant: same-type tags in a zone never overlap. The
+        // timeline drag already resolves conflicts live; this guards every
+        // other commit path (touching boundaries stay allowed).
+        const tagType = tag.tag;
+        const conflicts = segment.tags.some(
+          (t) => t.id !== tagId && t.tag === tagType &&
+            rangesOverlapStrict(snappedStart, snappedEnd, t.frameStart, t.frameEnd)
+        );
+        if (conflicts) {
+          return {
+            errors: [`Tag overlaps another ${tagType} tag in this zone — same-type tags can't overlap`],
+          };
+        }
         tag.frameStart = snappedStart;
         tag.frameEnd = snappedEnd;
       }

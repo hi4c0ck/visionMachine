@@ -54,6 +54,8 @@ impl Database {
             "../../migrations/0005_video_generation_tasks.sql"
         ))
         .await?;
+        self.execute_migration_sql(include_str!("../../migrations/0006_settings_and_logs.sql"))
+            .await?;
 
         log::info!("[DB] All migrations completed");
         Ok(())
@@ -401,6 +403,15 @@ impl Database {
         .await
         .map_err(|e| e.to_string())?;
 
+        // Portable generation log entries are keyed to session_id too.
+        sqlx::query(
+            "DELETE FROM generation_logs WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)",
+        )
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
         // Project files are keyed to project_id.
         sqlx::query("DELETE FROM project_files WHERE project_id = ?")
             .bind(project_id)
@@ -579,6 +590,11 @@ impl Database {
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM generation_logs WHERE session_id = ?")
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM generated_frames WHERE session_id = ?")
             .bind(session_id)
             .execute(&mut *tx)
@@ -659,6 +675,109 @@ impl Database {
             .map_err(|e| e.to_string())?;
 
         Ok(())
+    }
+
+    // ── Profile settings (per-user, Phase 1) ─────────────────────────────
+    /// Load the raw settings JSON for a profile (None when never saved —
+    /// the frontend seeds defaults in that case).
+    pub async fn get_profile_settings(&self, profile_id: &str) -> Result<Option<String>, String> {
+        let row = sqlx::query("SELECT settings_json FROM profile_settings WHERE profile_id = ?")
+            .bind(profile_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row.and_then(|r| r.try_get(0).ok()))
+    }
+
+    /// Upsert the profile's settings blob.
+    pub async fn save_profile_settings(
+        &self,
+        profile_id: &str,
+        settings_json: &str,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO profile_settings (profile_id, settings_json, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)\n             ON CONFLICT (profile_id) DO UPDATE SET settings_json = excluded.settings_json, updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(profile_id)
+        .bind(settings_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // ── Generation log (portable entries, P5) ────────────────────────────
+    /// Upsert a redacted generation log entry (keyed by task id).
+    pub async fn add_generation_log(&self, entry: &serde_json::Value) -> Result<(), String> {
+        let task_id = entry
+            .get("taskId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let session_id = entry
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pipe_id = entry
+            .get("pipeId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if task_id.is_empty() {
+            return Err("generation log entry missing taskId".to_string());
+        }
+        // Bind as a JSON string (codebase pattern: composers/sessions store
+        // their JSON blobs as TEXT; sqlx SQLite has no native Value bind).
+        let entry_json = entry.to_string();
+        sqlx::query(
+            "INSERT INTO generation_logs (task_id, session_id, pipe_id, entry_json, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)\n             ON CONFLICT (task_id) DO UPDATE SET session_id = excluded.session_id, pipe_id = excluded.pipe_id, entry_json = excluded.entry_json, updated_at = CURRENT_TIMESTAMP",
+        )
+        .bind(&task_id)
+        .bind(&session_id)
+        .bind(&pipe_id)
+        .bind(entry_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn get_generation_log(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let row = sqlx::query("SELECT entry_json FROM generation_logs WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(row
+            .and_then(|r| r.try_get::<String, _>(0).ok())
+            .map(|json| serde_json::from_str(&json).unwrap_or(serde_json::Value::Null)))
+    }
+
+    /// All log entries for a session, newest first.
+    pub async fn list_generation_logs(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let rows = sqlx::query(
+            "SELECT entry_json FROM generation_logs WHERE session_id = ? ORDER BY created_at DESC",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                row.try_get::<String, _>(0)
+                    .ok()
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or(serde_json::Value::Null)
+            })
+            .collect())
     }
 }
 
@@ -771,5 +890,96 @@ mod update_session_tests {
             .await;
         assert!(res.is_err(), "expected error for missing session, got Ok");
         assert!(res.unwrap_err().contains("no-such-session-id"));
+    }
+}
+
+#[cfg(test)]
+mod settings_logs_tests {
+    use super::Database;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Per-test DB file: the harness runs tests in parallel on shared worker
+    // threads, and a shared file races on the seed profile.
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    async fn setup() -> (Database, String, String) {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("vm_setlogs_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir
+            .join(format!("settings_logs_test_{n}.db"))
+            .to_string_lossy()
+            .to_string();
+        let _ = std::fs::remove_file(&path);
+        let db = Database::new(&path).await.unwrap();
+        db.migrate().await.unwrap();
+        db.seed_default_profile().await.unwrap();
+        let project_id = db.create_project("default", "P", None).await.unwrap();
+        let session_id = db
+            .create_session(&project_id, "S", None, None)
+            .await
+            .unwrap();
+        (db, project_id, session_id)
+    }
+
+    #[tokio::test]
+    async fn profile_settings_round_trip_and_upsert() {
+        let (db, _p, _s) = setup().await;
+        assert_eq!(db.get_profile_settings("default").await.unwrap(), None);
+        db.save_profile_settings("default", "{\"generationDefaults\":{\"fps\":30}}")
+            .await
+            .unwrap();
+        let got = db.get_profile_settings("default").await.unwrap().unwrap();
+        assert!(got.contains("\"fps\":30"));
+        // Upsert overwrites and stays one row
+        db.save_profile_settings("default", "{\"fps\":1}")
+            .await
+            .unwrap();
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM profile_settings WHERE profile_id = 'default'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1);
+        let got2 = db.get_profile_settings("default").await.unwrap().unwrap();
+        assert!(got2.contains("\"fps\":1"));
+    }
+
+    #[tokio::test]
+    async fn generation_log_upsert_and_list() {
+        let (db, _p, session_id) = setup().await;
+        let entry = serde_json::json!({
+            "taskId": "t1",
+            "sessionId": session_id,
+            "pipeId": "p1",
+            "startedAt": 1,
+            "status": "done",
+            "pieces": []
+        });
+        db.add_generation_log(&entry).await.unwrap();
+        let got = db.get_generation_log("t1").await.unwrap().unwrap();
+        assert_eq!(got["taskId"], "t1");
+        // Upsert the same task id (terminal-state update)
+        let entry2 = serde_json::json!({
+            "taskId": "t1",
+            "sessionId": session_id,
+            "pipeId": "p1",
+            "startedAt": 1,
+            "finishedAt": 2,
+            "status": "done",
+            "pieces": []
+        });
+        db.add_generation_log(&entry2).await.unwrap();
+        let got = db.get_generation_log("t1").await.unwrap().unwrap();
+        assert_eq!(got["finishedAt"], 2);
+        let entries = db.list_generation_logs(&session_id).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        // Missing taskId is rejected (portable log contract)
+        assert!(db
+            .add_generation_log(&serde_json::json!({ "sessionId": session_id }))
+            .await
+            .is_err());
+        // Unknown task reads back as None
+        assert_eq!(db.get_generation_log("nope").await.unwrap(), None);
     }
 }

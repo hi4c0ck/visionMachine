@@ -14,6 +14,17 @@ pub struct StartGenerationInput {
     pub pipe_id: String,
     /// Final prompt string built by the frontend prompt engine.
     pub prompt: String,
+    /// Per-piece model override from the generate modal (Phase 4). None = use
+    /// the global provider setting. Recorded in the generation log now; the
+    /// provider engine consumes these when it lands.
+    #[serde(default)]
+    pub image_model: Option<String>,
+    #[serde(default)]
+    pub video_model: Option<String>,
+    /// Reproducibility seed (docs/agnes-model-catalog.md). None = the
+    /// provider picks; the value is recorded in the generation log.
+    #[serde(default)]
+    pub seed: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +68,9 @@ pub async fn start_generation(
         orientation: composer.orientation.clone(),
         q_value: pipe.q_value,
         c_value: pipe.c_value,
+        image_model: input.image_model,
+        video_model: input.video_model,
+        seed: input.seed,
     };
 
     state.generation.registry.start(view, engine_input).await?;
@@ -112,4 +126,31 @@ pub async fn cancel_generation(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.generation.registry.cancel(&input.task_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_generation_input_seed_is_optional() {
+        // No seed key (pre-seed callers) → None.
+        let without: StartGenerationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "pipe_id": "p",
+            "prompt": "x"
+        }))
+        .unwrap();
+        assert!(without.seed.is_none());
+
+        // Explicit seed round-trips.
+        let with: StartGenerationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "pipe_id": "p",
+            "prompt": "x",
+            "seed": 42
+        }))
+        .unwrap();
+        assert_eq!(with.seed, Some(42));
+    }
 }

@@ -90,14 +90,14 @@ test.describe('Coordinate Canvas Consistency', () => {
 		// end frame AND pipe-1's segment label must be unchanged. Guards the
 		// "commit to the section's own pipe" invariant (regression test for
 		// the activePipe shortcut).
-		// Pipe 1: add timeline + segment 0..8 via the UI
+		// Pipe 1: add timeline + segment 0..24 (the 1s creation floor) via the UI
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
 		await page.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await page.locator('.modal input[type="number"]').nth(0).fill('0');
-		await page.locator('.modal input[type="number"]').nth(1).fill('8');
+		await page.locator('.modal input[type="number"]').nth(1).fill('24');
 		await page.locator('.modal .btn-confirm').click();
 		await page.waitForSelector('.segment-body', { timeout: 5000 });
 
@@ -111,13 +111,13 @@ test.describe('Coordinate Canvas Consistency', () => {
 		await pipe2.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await page.locator('.modal input[type="number"]').nth(0).fill('0');
-		await page.locator('.modal input[type="number"]').nth(1).fill('8');
+		await page.locator('.modal input[type="number"]').nth(1).fill('24');
 		await page.locator('.modal .btn-confirm').click();
 		await pipe2.locator('.segment-body').waitFor({ timeout: 5000 });
 
 		const pipe1 = page.locator('.pipe').first();
 		const labelBefore = await pipe2.locator('.seg-label').first().innerText();
-		expect(labelBefore.trim()).toBe('0–8');
+		expect(labelBefore.trim()).toBe('0–24');
 
 		// Drag pipe-2's right handle to the far right in 3 steps
 		const handleR = pipe2.locator('.segment-handle-right').first();
@@ -134,9 +134,9 @@ test.describe('Coordinate Canvas Consistency', () => {
 		await page.waitForTimeout(300);
 
 		const labelAfter = await pipe2.locator('.seg-label').first().innerText();
-		// Pipe 2's segment end moved (frame > 8); pipe 1's label is untouched.
-		expect(labelAfter.trim()).not.toBe('0–8');
+		// Pipe 2's segment end moved (frame > 24); pipe 1's label is untouched.
+		expect(labelAfter.trim()).not.toBe('0–24');
 		const pipe1Label = await pipe1.locator('.seg-label').first().innerText();
-		expect(pipe1Label.trim()).toBe('0–8');
+		expect(pipe1Label.trim()).toBe('0–24');
 	});
 });

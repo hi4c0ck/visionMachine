@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus } from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec } from '$types';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
@@ -11,7 +11,7 @@
 	import KeyframesRow from './ComposerRows/KeyframesRow.svelte';
 	import SubjectRefsRow from './ComposerRows/SubjectRefsRow.svelte';
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
-	import { getFreeGaps, getMaxFrames, type FreeGap } from '$lib/frameMath';
+	import { getFreeGaps, getMaxFrames, minZoneSpan, type FreeGap, placeTagInZone, evenSplitZone } from '$lib/frameMath';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import type { ComposerUiVariant } from '$lib/composerUiVariant';
 	import {
@@ -34,6 +34,7 @@
 		movePipe as movePipeAction,
 		duplicatePipe as duplicatePipeAction,
 		setPipeLength as setPipeLengthAction,
+		setMediaMode as setMediaModeAction,
 	} from '$lib/composerStore';
 import { flashToast } from '$lib/flashToast';
 
@@ -47,6 +48,8 @@ import { flashToast } from '$lib/flashToast';
 			uiVariant = 'fixed',
 			brokenRefs,
 			onRefSaved,
+			videoModel = null,
+			onmediamodechange,
 		} = $props<{
 			session?: SessionData;
 			totalFrames?: number;
@@ -65,19 +68,74 @@ import { flashToast } from '$lib/flashToast';
 			brokenRefs?: Set<string>;
 			/** A keyframe/subject reference was just saved → re-validate its URL. */
 			onRefSaved?: (pipeId: string, refId: string) => void;
+			/** The configured video model spec — drives the pipe-level media-mode
+			 * UI (keyframes ⇄ reference row visibility). null = unknown → both rows. */
+			videoModel?: ModelSpec | null;
+			/** Persist a pipe media-mode switch (composerStore.setMediaMode). */
+			onmediamodechange?: (pipeId: string, mode: 'keyframes' | 'reference') => void;
 		}>();
 
 	const MAX_KEYFRAMES = 3;
 	const MAX_SUBJECT_REFS = 5;
 	const DEFAULT_FRAME_COUNT = 241;
 
+	// ── Media mode (docs/agnes-model-catalog.md, Q7) ──────────────────────────
+	// Per-pipe row visibility is driven by the configured video model's media
+	// capabilities: unknown / dual / shared-array models keep BOTH rows;
+	// exclusive models show one row + the mode toggle.
+	function mediaState(pipe: PipeRow): {
+		showKf: boolean;
+		showSubjects: boolean;
+		showToggle: boolean;
+		effMode: 'keyframes' | 'reference';
+	} {
+		const media = videoModel?.media;
+		const stored: 'keyframes' | 'reference' = pipe.mediaMode === 'reference' ? 'reference' : 'keyframes';
+		if (!media || media.modes.length === 0 || media.dual || media.sharedArray) {
+			return { showKf: true, showSubjects: true, showToggle: false, effMode: stored };
+		}
+		const effMode: 'keyframes' | 'reference' = media.modes.includes(stored) ? stored : (media.modes[0] ?? 'keyframes');
+		return {
+			showKf: effMode === 'keyframes',
+			showSubjects: effMode === 'reference',
+			showToggle: media.modes.length > 1,
+			effMode,
+		};
+	}
+
+	// Fixed variant: the shared activeAuxPanel may point at a row this pipe
+	// hides (e.g. 'subjects' while the model is keyframes-only) — fall back to
+	// the visible row so the aux body never renders empty.
+	function effectiveAuxPanel(pipe: PipeRow): 'keyframes' | 'subjects' {
+		const st = mediaState(pipe);
+		if (activeAuxPanel === 'keyframes' && st.showKf) return 'keyframes';
+		if (activeAuxPanel === 'subjects' && st.showSubjects) return 'subjects';
+		return st.showKf ? 'keyframes' : 'subjects';
+	}
+
+	async function handleMediaModeChange(pipe: PipeRow, mode: 'keyframes' | 'reference') {
+		if (!session?.id) return;
+		const result = await setMediaModeAction(session.id, pipe.id, mode);
+		if (result.errors.length > 0) flashToast(`Failed to set media mode: ${result.errors.join(', ')}`);
+	}
+
 	// ── Derived state ──────────────────────────────────────────────────────────
 	let pipes = $derived(session?.pipes ?? []);
 	// Resolution cap (8n+1) the pipe length can grow to.
 	let maxPipeFrames = $derived(getMaxFrames(session?.resolution ?? '720p'));
+	// Read-time clamped pipe lookup. Deriveds evaluate DURING the render
+	// pass, before any clamping $effect runs, so a stale/out-of-range
+	// activePipeIdx (session switch, pipe removal) must never become
+	// pipes[staleIdx] → getTimeline(undefined) → "Cannot read properties
+	// of undefined (reading 'elements')". All render-path reads use this.
+	const activePipe = $derived(
+		activePipeIdx !== null && activePipeIdx >= 0 && activePipeIdx < pipes.length
+			? pipes[activePipeIdx]
+			: null
+	);
 	let totalFrames = $derived(
 		pipes.length > 0
-			? (pipes[activePipeIdx ?? 0]?.lengthFrames ?? DEFAULT_FRAME_COUNT)
+			? ((activePipe ?? pipes[0])?.lengthFrames ?? DEFAULT_FRAME_COUNT)
 			: (propTotalFrames ?? DEFAULT_FRAME_COUNT)
 	);
 
@@ -99,7 +157,7 @@ import { flashToast } from '$lib/flashToast';
 			focus = { level: 'session', id: session?.id ?? '' };
 			return;
 		}
-		const pipe = pipes[activePipeIdx];
+		const pipe = activePipe;
 		if (!pipe) {
 			focus = { level: 'session', id: session?.id ?? '' };
 			return;
@@ -217,10 +275,10 @@ import { flashToast } from '$lib/flashToast';
 
 	// Per-pipe [+] visibility: hide the button when the pipe already owns BOTH
 	// addable track types (Timeline + Global) — the menu would be empty.
-	const hasTimeline = (p: PipeRow): boolean =>
-		p.elements.some((e: any) => e.tag === 'timeline');
-	const hasGlobal = (p: PipeRow): boolean =>
-		p.elements.some((e: any) => e.tag === 'global_style');
+	const hasTimeline = (p: PipeRow | null | undefined): boolean =>
+		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'timeline');
+	const hasGlobal = (p: PipeRow | null | undefined): boolean =>
+		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'global_style');
 	function showAddTrackButton(p: PipeRow): boolean {
 		return !hasTimeline(p) || !hasGlobal(p);
 	}
@@ -249,11 +307,22 @@ import { flashToast } from '$lib/flashToast';
 	// of truth, shared with KeyframesRow). openKeyframeModal uses it to
 	// compute the default next slot.
 
-	function getTimeline(pipe: PipeRow): any {
+	function getTimeline(pipe: PipeRow | null | undefined): any {
+		if (!pipe || !Array.isArray(pipe.elements)) return null;
 		return pipe.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
 
 	// ── Actions ─────────────────────────────────────────────────────────────
+
+	// Clicking a pipe (its chrome / empty space) selects it — the pipe you
+	// point at is the pipe you edit. Interactive children keep working: their
+	// clicks bubble here and select the owning pipe (the correct context).
+	// Zone-pill menu clicks stopPropagation but set activePipeIdx themselves
+	// (handleOpenTagMenu). The focus $effect follows the new activePipeIdx,
+	// so the tools-panel inspector lands on pipe level.
+	function handlePipeSelect(idx: number) {
+		activePipeIdx = idx;
+	}
 
 	async function handleAddPipe() {
 		if (!session?.id) return;
@@ -431,11 +500,12 @@ import { flashToast } from '$lib/flashToast';
 		activePipeIdx = idx;
 
 		// Enumerate EVERY free gap (before/between/after zones) that can host a
-		// new zone. The modal lets the user pick one, so a zone can be inserted
-		// anywhere allowed — not just the first gap the old append found.
-		const gaps = getFreeGaps(tl?.segments ?? [], pipe.lengthFrames, 8);
+		// new zone of the creation floor (≈1s at session fps, 8-grid). The
+		// modal lets the user pick one, so a zone can be inserted anywhere
+		// allowed — not just the first gap the old append found.
+		const gaps = getFreeGaps(tl?.segments ?? [], pipe.lengthFrames, minZoneSpan(session.fps));
 		if (gaps.length === 0) {
-			// Pipe fully packed: no free space fits the minimum 8-frame span.
+			// Pipe fully packed: no free space fits the 1s creation floor.
 			// Opening the modal here would leave no place to put a zone, so
 			// surface the reason instead of a dead confirm.
 			flashToast('No free space for a new segment — shrink an existing segment first');
@@ -455,10 +525,13 @@ import { flashToast } from '$lib/flashToast';
 
 	// SegmentModal calls back with the snapped start/end it computed
 	async function confirmSegment(start: number, end: number) {
-		const pipe = pipes[activePipeIdx!];
+		const pipe = activePipe;
 		if (!pipe || !session?.id) return;
 		const result = await addSegmentAction(session.id, pipe.id, start, end);
 		if (result.errors.length > 0) {
+			// Surface the reason (e.g. tight-pipe floor rejection) instead of
+			// a silent no-op; the modal stays open so the user can adjust.
+			flashToast(result.errors[0]);
 			console.error('[ComposerPanel] addSegment:', result.errors);
 			return;
 		}
@@ -507,26 +580,46 @@ import { flashToast } from '$lib/flashToast';
 	// menu so it can grey them out (choice A). Derived per target zone, not
 	// global, so each zone's own state drives its menu.
 	let tagMenuDeclaredTypes = $derived.by(() => {
-		const pipe = activePipeIdx !== null ? pipes[activePipeIdx] : undefined;
-		if (!pipe) return [];
-		const tl = getTimeline(pipe);
+		if (!activePipe) return [];
+		const tl = getTimeline(activePipe);
 		const seg = (tl?.segments ?? []).find((s: Segment) => s.id === selectedSegmentId);
 		if (!seg) return [];
 		return seg.tags.map((t: TagElement) => t.tag);
 	});
 
+	// Types the target zone physically cannot host one more of: no free slot
+	// AND the zone is too small to resplit for (n+1) same-type tags. The menu
+	// disables those instead of promising a click that only errors.
+	let tagMenuUnavailableTypes = $derived.by(() => {
+		if (!activePipe) return [] as TagType[];
+		const tl = getTimeline(activePipe);
+		const seg = ((tl?.segments ?? []) as Segment[]).find((s: Segment) => s.id === selectedSegmentId);
+		if (!seg) return [] as TagType[];
+		const zone = { frameStart: seg.frameStart, frameEnd: seg.frameEnd };
+		const out: TagType[] = [];
+		for (const type of [...new Set(seg.tags.map((t: TagElement) => t.tag))]) {
+			const ranges = seg.tags
+				.filter((t: TagElement) => t.tag === type)
+				.map((t: TagElement) => ({ frameStart: t.frameStart, frameEnd: t.frameEnd }));
+			const hasSlot = placeTagInZone(zone, ranges, 8) !== null;
+			const canResplit = evenSplitZone(zone, ranges.length + 1, 8) !== null;
+			if (!hasSlot && !canResplit) out.push(type);
+		}
+		return out;
+	});
+
 	// Zones the tag menu can attach to (one entry per existing zone).
 	// Derived, so it stays current when zones are added/removed.
 	let tagMenuSegments = $derived.by(() => {
-		if (activePipeIdx === null) return [];
-		const tl = getTimeline(pipes[activePipeIdx]);
+		if (!activePipe) return [];
+		const tl = getTimeline(activePipe);
 		return (tl?.segments ?? []).map((s: Segment, i: number) => ({ id: s.id, index: i + 1 }));
 	});
 
 	// TagSelectorMenu calls back with the chosen tag type + target zone
 	async function confirmTagSelector(tagType: TagType, segId: string) {
 		if (!session?.id) return;
-		const pipe = pipes[activePipeIdx!];
+		const pipe = activePipe;
 		if (!pipe) return;
 		const tl = getTimeline(pipe);
 		if (!tl) return;
@@ -561,7 +654,7 @@ import { flashToast } from '$lib/flashToast';
 
 	// TagPromptModal calls back with its edited prompt on confirm
 	async function confirmTagPrompt(prompt: string) {
-		const pipe = pipes[activePipeIdx!];
+		const pipe = activePipe;
 		if (!pipe || !session?.id) return;
 		const result = await updateTagPromptAction(session.id, pipe.id, editingSegmentId, editingTagId, prompt);
 		if (result.errors.length > 0) {
@@ -601,7 +694,7 @@ import { flashToast } from '$lib/flashToast';
 
 <div class="composer-panel">
 	{#each pipes as pipe, pipeIdx (pipe.id)}
-		<div class="pipe" class:active={activePipeIdx === pipeIdx}>
+		<div class="pipe" class:active={activePipeIdx === pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>>
 			
 		<!-- ═══ PIPE HEADER ═══ -->
 			<PipeHeader
@@ -616,6 +709,28 @@ import { flashToast } from '$lib/flashToast';
 				fps={session?.fps}
 			/>
 
+			<!-- ═══ MEDIA MODE (pipe-level, model-driven — docs/agnes-model-catalog.md Q7) ═══ -->
+			{#if mediaState(pipe).showToggle}
+				<div class="media-mode" role="group" aria-label="Media mode" onclick={(e) => e.stopPropagation()}
+				>
+					<span class="media-mode-label">Media</span>
+					<button
+						type="button"
+						class="media-opt"
+						class:active={mediaState(pipe).effMode === 'keyframes'}
+						onclick={() => handleMediaModeChange(pipe, 'keyframes')}>
+						Keyframes
+					</button>
+					<button
+						type="button"
+						class="media-opt"
+						class:active={mediaState(pipe).effMode === 'reference'}
+						onclick={() => handleMediaModeChange(pipe, 'reference')}>
+						Reference
+					</button>
+				</div>
+			{/if}
+
 			<!-- Variant B (fixed) auxiliary panel: tabbed, mutually-exclusive
 			     Keyframes⇄SubjectRefs, each independently collapsible. Variant A
 			     (current): two independent rows (existing layout). Store,
@@ -624,25 +739,29 @@ import { flashToast } from '$lib/flashToast';
 				<!-- ═══ AUX PANEL: KEYFRAMES ⇄ SUBJECT REFS (exclusive tabs, each collapsible) ═══ -->
 				<div class="aux-panel">
 					<div class="aux-tabs" role="tablist">
-						<button
-							class="aux-tab" class:active={activeAuxPanel === 'keyframes'}
-							role="tab" aria-selected={activeAuxPanel === 'keyframes'}
-							onclick={() => (activeAuxPanel = 'keyframes')}>
-							KEYFRAMES
-							<span class="aux-tab-count">{pipe.keyframes.length}/{MAX_KEYFRAMES}</span>
-						</button>
-						<button
-							class="aux-tab" class:active={activeAuxPanel === 'subjects'}
-							role="tab" aria-selected={activeAuxPanel === 'subjects'}
-							onclick={() => (activeAuxPanel = 'subjects')}>
-							SUBJECT REFS
-							<span class="aux-tab-count">
-								{(pipe.subjectReferences ?? []).filter((r: any) => r.visible !== false).length}/{MAX_SUBJECT_REFS}
-							</span>
-						</button>
+						{#if mediaState(pipe).showKf}
+							<button
+								class="aux-tab" class:active={effectiveAuxPanel(pipe) === 'keyframes'}
+								role="tab" aria-selected={effectiveAuxPanel(pipe) === 'keyframes'}
+								onclick={() => (activeAuxPanel = 'keyframes')}>
+								KEYFRAMES
+								<span class="aux-tab-count">{pipe.keyframes.length}/{MAX_KEYFRAMES}</span>
+							</button>
+						{/if}
+						{#if mediaState(pipe).showSubjects}
+							<button
+								class="aux-tab" class:active={effectiveAuxPanel(pipe) === 'subjects'}
+								role="tab" aria-selected={effectiveAuxPanel(pipe) === 'subjects'}
+								onclick={() => (activeAuxPanel = 'subjects')}>
+								SUBJECT REFS
+								<span class="aux-tab-count">
+									{(pipe.subjectReferences ?? []).filter((r: any) => r.visible !== false).length}/{MAX_SUBJECT_REFS}
+								</span>
+							</button>
+						{/if}
 					</div>
 
-					{#if activeAuxPanel === 'keyframes'}
+					{#if effectiveAuxPanel(pipe) === 'keyframes'}
 						<div class="aux-section" class:open={!keyframesCollapsed}>
 							<button
 								class="aux-section-head"
@@ -692,24 +811,28 @@ import { flashToast } from '$lib/flashToast';
 				<!-- Variant A — CURRENT: independent rows, existing layout -->
 
 				<!-- ═══ KEYFRAME ROW ═══ -->
-				<KeyframesRow
-					{pipe}
-					maxKeyframes={MAX_KEYFRAMES}
-					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
-					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
-					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-				/>
+				{#if mediaState(pipe).showKf}
+					<KeyframesRow
+						{pipe}
+						maxKeyframes={MAX_KEYFRAMES}
+						onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
+						onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
+						containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+					/>
+				{/if}
 
 				<!-- ═══ SUBJECT REFERENCES ROW ═══ -->
-				<SubjectRefsRow
-					{pipe}
-					maxSubjectRefs={MAX_SUBJECT_REFS}
-					onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
-					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
-					onAdd={() => openSubjectRefModal(pipeIdx)}
-					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
-					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-				/>
+				{#if mediaState(pipe).showSubjects}
+					<SubjectRefsRow
+						{pipe}
+						maxSubjectRefs={MAX_SUBJECT_REFS}
+						onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
+						onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
+						onAdd={() => openSubjectRefModal(pipeIdx)}
+						onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
+						containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+					/>
+				{/if}
 			{/if}
 
 			<!-- ═══ TIMELINE AREA ═══ (single coordinate canvas — now in TimelineSection) ═══ -->
@@ -754,6 +877,7 @@ import { flashToast } from '$lib/flashToast';
 		segments={tagMenuSegments}
 		defaultSegmentId={selectedSegmentId}
 		declaredTypes={tagMenuDeclaredTypes}
+		unavailableTypes={tagMenuUnavailableTypes}
 		menuVersion={tagMenuVersion}
 		onConfirm={(t, segId) => confirmTagSelector(t, segId)}
 		onNewSegment={handleTagMenuNewSegment}
@@ -762,27 +886,27 @@ import { flashToast } from '$lib/flashToast';
 </div>
 
 <!-- ═══ KEYFRAME MODAL ═══ -->
-{#if activePipeIdx !== null}
+{#if activePipe}
 	<KeyframeModal
-		pipe={pipes[activePipeIdx]}
+		pipe={activePipe}
 		sessionId={session?.id}
 		maxFrames={totalFrames}
 		editingSlot={editingKeyframeSlot}
 		bind:open={showKeyframeModal}
-		onSaved={(refId) => onRefSaved?.(pipes[activePipeIdx]?.id ?? '', refId)}
+		onSaved={(refId) => onRefSaved?.(activePipe?.id ?? '', refId)}
 	/>
 {/if}
 
 <!-- ═══ SUBJECT REFERENCE MODAL ═══ -->
-{#if activePipeIdx !== null}
+{#if activePipe}
 	<SubjectRefModal
-		pipe={pipes[activePipeIdx]}
+		pipe={activePipe}
 		sessionId={session?.id}
 		maxFrames={totalFrames}
 		editingRefId={editingSubjectRefId}
 		maxSubjectRefs={MAX_SUBJECT_REFS}
 		bind:open={showSubjectRefModal}
-		onSaved={(refId) => onRefSaved?.(pipes[activePipeIdx]?.id ?? '', refId)}
+		onSaved={(refId) => onRefSaved?.(activePipe?.id ?? '', refId)}
 	/>
 {/if}
 
@@ -792,6 +916,7 @@ import { flashToast } from '$lib/flashToast';
 		endFrame={segEnd}
 		totalFrames={totalFrames}
 		gaps={segGaps}
+		minSpan={session ? minZoneSpan(session.fps) : 8}
 		bind:open={showSegmentModal}
 		onConfirm={(s, e) => confirmSegment(s, e)}
 	/>
@@ -810,10 +935,10 @@ import { flashToast } from '$lib/flashToast';
 	{/if}
 
 	<!-- ═══ TAG PROMPT MODAL ═══ -->
-{#if activePipeIdx !== null}
-	<TagPromptModal
-		sessionId={session?.id}
-		pipeId={pipes[activePipeIdx].id}
+	{#if activePipe}
+		<TagPromptModal
+			sessionId={session?.id}
+			pipeId={activePipe.id}
 		segmentId={editingSegmentId}
 		tagId={editingTagId}
 		prompt={tagPrompt}
@@ -995,6 +1120,44 @@ import { flashToast } from '$lib/flashToast';
 	.aux-section-head:hover .aux-chevron {
 		background: var(--bg-tertiary);
 		color: var(--text-primary);
+	}
+
+	/* ═══ Media mode toggle (docs/agnes-model-catalog.md, Q7) ═══ */
+	.media-mode {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin: 2px 0 6px;
+	}
+
+	.media-mode-label {
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text-secondary);
+		margin-right: 2px;
+	}
+
+	.media-opt {
+		padding: 2px 8px;
+		font-size: 11px;
+		font-family: inherit;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
+		transition: all 0.15s;
+	}
+
+	.media-opt:hover {
+		color: var(--text-primary);
+		border-color: var(--border-light, var(--border));
+	}
+
+	.media-opt.active {
+		background: var(--accent, #ff3e00);
+		border-color: var(--accent, #ff3e00);
+		color: #fff;
 	}
 
 </style>

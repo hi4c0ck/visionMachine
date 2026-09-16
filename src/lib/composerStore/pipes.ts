@@ -89,6 +89,14 @@ export class PipeServiceImpl implements PipeService {
     return { errors: [] };
   }
 
+  async setMediaMode(_sessionId: string, pipeId: string, mode: 'keyframes' | 'reference'): Promise<ServiceResult> {
+    const pipe = this.getPipe(this.session, pipeId);
+    if (pipe) {
+      pipe.mediaMode = mode;
+    }
+    return { errors: [] };
+  }
+
   async setLength(_sessionId: string, pipeId: string, frames: number): Promise<ServiceResult> {
     const pipe = this.getPipe(this.session, pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };

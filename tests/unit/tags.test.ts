@@ -116,6 +116,68 @@ describe('Tag Service', () => {
         expect(segment.tags[i].frameEnd).toBe(120);
       }
     });
+
+    it('resplits the zone when a second same-type tag has no free slot', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      await addSegment(session.id, session.pipes[0].id, 0, 120);
+
+      const pipe = session.pipes[0];
+      const segment = pipe.elements[0].segments[0];
+
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+      const result = await addTagElement(session.id, pipe.id, segment.id, 'scene');
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/resplit evenly/i);
+      expect(segment.tags).toHaveLength(2);
+      const ranges = segment.tags.map((t) => [t.frameStart, t.frameEnd]).sort((a, b) => a[0] - b[0]);
+      expect(ranges).toEqual([[0, 64], [64, 120]]);
+    });
+
+    it('resplits into three parts when a third same-type tag is added', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      await addSegment(session.id, session.pipes[0].id, 0, 120);
+
+      const pipe = session.pipes[0];
+      const segment = pipe.elements[0].segments[0];
+
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+
+      expect(segment.tags).toHaveLength(3);
+      const ranges = segment.tags.map((t) => [t.frameStart, t.frameEnd]).sort((a, b) => a[0] - b[0]);
+      expect(ranges).toEqual([[0, 40], [40, 80], [80, 120]]);
+    });
+
+    it('rejects a same-type tag that exceeds the min-size zone even-split capacity', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+      // min-size zone = 24 frames (the 1s creation floor @ 24fps mock).
+      await addSegment(session.id, session.pipes[0].id, 0, 24);
+
+      const pipe = session.pipes[0];
+      const segment = pipe.elements[0].segments[0];
+
+      // 3 same-type tags fit (even-split into 3 valid parts).
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+      await addTagElement(session.id, pipe.id, segment.id, 'scene');
+      expect(segment.tags).toHaveLength(3);
+
+      // A 4th cannot be evenly split (needs 4×8=32 frames in a 24-frame zone).
+      const result = await addTagElement(session.id, pipe.id, segment.id, 'scene');
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatch(/too small/i);
+      expect(segment.tags).toHaveLength(3);
+    });
   });
 
   // ── removeTagElement Tests ────────────────────────────────────────────────

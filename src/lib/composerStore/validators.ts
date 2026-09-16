@@ -2,7 +2,8 @@
 // Encapsulates 8n+1 rule logic
 
 import { snapTo8, snapTo8nPlus1, getMaxFrames } from '$lib/frameMath';
-import type { PipeRow, TagType } from '$types';
+import { defaultResolutionFor } from '$lib/resolutionPresets';
+import type { PipeRow, SessionData, TagType } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -126,6 +127,28 @@ export function reindexPipes(pipes: any[]): void {
  * "cannot read properties of undefined" crashes when the user re-enters an
  * app whose on-disk session data predates a data-shape change.
  */
+/**
+ * Normalize a raw (legacy or partial) session into a valid SessionData:
+ * session-level scalars get defaults so the tools-panel selects (FPS etc.)
+ * never render empty, `pipes` is guaranteed to be an array, and every pipe
+ * is normalized. Composes normalizePipe — safe to run in place on any
+ * session object (store hydration, localStorage legacy data, backend maps).
+ */
+export function normalizeSession(session: SessionData): SessionData {
+  if (!session.name) session.name = 'Session';
+  if (!Array.isArray(session.pipes)) session.pipes = [];
+  for (const pipe of session.pipes) normalizePipe(pipe);
+  if (!Number.isFinite(session.fps) || (session.fps as number) <= 0) session.fps = 24;
+  // Missing resolution defaults to the orientation's generation preset
+  // (placeholder — provider settings will own these values later).
+  if (!session.resolution) session.resolution = defaultResolutionFor(session.orientation) ?? '720p';
+  if (!session.orientation) session.orientation = 'horizontal';
+  if (session.totalGeneratedFrames === undefined || session.totalGeneratedFrames === null) {
+    session.totalGeneratedFrames = 0;
+  }
+  return session;
+}
+
 export function normalizePipe(pipe: PipeRow): PipeRow {
   // Ensure structural arrays exist (legacy sessions may lack them).
   if (!Array.isArray(pipe.keyframes)) pipe.keyframes = [];
@@ -143,6 +166,9 @@ export function normalizePipe(pipe: PipeRow): PipeRow {
     pipe.id = crypto.randomUUID();
   }
   if (!pipe.name) pipe.name = 'Pipe';
+  // Media mode (docs/agnes-model-catalog.md, Q7): legacy pipes default to
+  // 'keyframes'; any unknown value coerces back.
+  if (pipe.mediaMode !== 'reference') pipe.mediaMode = 'keyframes';
 
   // Ensure each element has a valid id so keys/stores don't get 'undefined'.
   for (const el of pipe.elements as any[]) {

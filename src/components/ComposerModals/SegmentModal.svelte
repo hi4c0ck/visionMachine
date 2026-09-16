@@ -8,6 +8,8 @@
 		totalFrames,
 		/** Free gaps a new zone may be placed into (before/between/after zones). */
 		gaps = [],
+		/** Minimum zone span to allow on creation (≈1s at session fps, 8-grid). */
+		minSpan = 8,
 		open = $bindable(false),
 		onConfirm,
 	} = $props<{
@@ -15,6 +17,7 @@
 		endFrame: number;
 		totalFrames: number;
 		gaps?: FreeGap[];
+		minSpan?: number;
 		open: boolean;
 		onConfirm: (start: number, end: number) => void;
 	}>();
@@ -52,9 +55,14 @@
 	function confirm() {
 		const start = snapTo8(segStart);
 		const end = Math.min(snapTo8(segEnd), totalFrames - 1);
-		if (end <= start) return;
+		if (end - start < minSpan) return;
 		onConfirm(start, end);
 	}
+
+	// Live below-floor check drives the Confirm-button disabled state + hint.
+	const belowMin = $derived(
+		Math.min(snapTo8(segEnd), totalFrames - 1) - snapTo8(segStart) < minSpan
+	);
 </script>
 
 {#if open}
@@ -88,21 +96,30 @@
 				<div class="modal-field">
 					<label id="seg-end-label">End Frame</label>
 					<input type="number" bind:value={segEnd} step={8} min={0} max={totalFrames - 1} class="modal-input" aria-labelledby="seg-end-label" />
+					{#if belowMin}
+						<div class="seg-min-hint">Zones need at least {minSpan} frames (≈1s at session fps)</div>
+					{/if}
 				</div>
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirm} disabled={Math.min(snapTo8(segEnd), totalFrames - 1) <= snapTo8(segStart)}>Confirm</button>
+				<button class="btn-confirm" onclick={confirm} disabled={belowMin}>Confirm</button>
 			</div>
 		</div>
 	</div>
 {/if}
 
-<style>
+	<style>
 	.gap-picker {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 6px;
+	}
+	.seg-min-hint {
+		margin-top: 4px;
+		font-size: 11px;
+		color: var(--text-secondary);
+		opacity: 0.8;
 	}
 	.gap-chip {
 		display: flex;

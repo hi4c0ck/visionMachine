@@ -37,6 +37,9 @@ export interface PipeService {
   duplicate(sessionId: string, pipeId: string): Promise<ServiceResult>;
   updateQ(sessionId: string, pipeId: string, qValue: number): Promise<ServiceResult>;
   updateC(sessionId: string, pipeId: string, cValue: number): Promise<ServiceResult>;
+  /** Switch the pipe's media mode (docs/agnes-model-catalog.md, Q7). Drives
+   *  keyframes/subject-refs row visibility per the video model's media caps. */
+  setMediaMode(sessionId: string, pipeId: string, mode: 'keyframes' | 'reference'): Promise<ServiceResult>;
   setLength(sessionId: string, pipeId: string, frames: number): Promise<ServiceResult>;
   getPipe(session: SessionData, pipeId: string): PipeRow | undefined;
 }
