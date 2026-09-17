@@ -5,7 +5,9 @@
 use serde::Deserialize;
 use tauri::State;
 
-use crate::generation::{EngineInput, GenerationStageView, GenerationTaskView, TaskStatus};
+use crate::generation::{
+    EngineInput, GenerationStageView, GenerationTaskView, ModelSpecWire, TaskStatus,
+};
 use crate::AppState;
 
 #[derive(Deserialize)]
@@ -15,7 +17,7 @@ pub struct StartGenerationInput {
     /// Final prompt string built by the frontend prompt engine.
     pub prompt: String,
     /// Per-piece model override from the generate modal (Phase 4). None = use
-    /// the global provider setting. Recorded in the generation log now; the
+    /// the global provider setting. Recorded in the generation log; the
     /// provider engine consumes these when it lands.
     #[serde(default)]
     pub image_model: Option<String>,
@@ -25,6 +27,16 @@ pub struct StartGenerationInput {
     /// provider picks; the value is recorded in the generation log.
     #[serde(default)]
     pub seed: Option<i64>,
+    /// Provider profile that owns the API slots (docs/provider-engine-tasks.md,
+    /// Phase A). Keys are read from the profile settings blob at request time only.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Resolved model specs from the frontend catalog (Phase A). Tolerant:
+    /// old callers send no specs and the fields default to None.
+    #[serde(default)]
+    pub image_spec: Option<ModelSpecWire>,
+    #[serde(default)]
+    pub video_spec: Option<ModelSpecWire>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +83,9 @@ pub async fn start_generation(
         image_model: input.image_model,
         video_model: input.video_model,
         seed: input.seed,
+        profile_id: input.profile_id,
+        image_spec: input.image_spec,
+        video_spec: input.video_spec,
     };
 
     state.generation.registry.start(view, engine_input).await?;
@@ -152,5 +167,42 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(with.seed, Some(42));
+    }
+
+    #[test]
+    fn start_generation_input_tolerates_missing_specs_and_profile() {
+        // Pre-Phase-A caller: no profile_id / no specs → all None.
+        let legacy: StartGenerationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "pipe_id": "p",
+            "prompt": "x"
+        }))
+        .unwrap();
+        assert!(legacy.profile_id.is_none());
+        assert!(legacy.image_spec.is_none());
+        assert!(legacy.video_spec.is_none());
+
+        // New caller with a full spec round-trips into ModelSpecWire.
+        let full: StartGenerationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "pipe_id": "p",
+            "prompt": "x",
+            "profile_id": "prof-1",
+            "video_spec": {
+                "id": "agnes-video-2.5-flash",
+                "kind": "video",
+                "endpoint": "/v1/videos",
+                "sync": false,
+                "requestFormat": "video-job-seconds",
+                "limits": { "seconds": [4.0, 12.0], "sizeMap": { "720p": "720P" } },
+                "supportsSeed": true
+            }
+        }))
+        .unwrap();
+        assert_eq!(full.profile_id.as_deref(), Some("prof-1"));
+        let vspec = full.video_spec.as_ref().unwrap();
+        assert_eq!(vspec.id, "agnes-video-2.5-flash");
+        assert!(vspec.supports_seed());
+        assert_eq!(vspec.limits.seconds, Some([4.0, 12.0]));
     }
 }

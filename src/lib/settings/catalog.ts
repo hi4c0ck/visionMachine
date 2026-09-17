@@ -27,12 +27,17 @@ export const AGNES_PRESET: PresetSpec = {
     { id: 'agnes-image-2.5-flash', kind: 'image', label: 'Agnes Image 2.5 Flash',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
       limits: { resolutions: ['1K', '2K', '3K', '4K'],
-                ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'] },
+                ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'],
+                // Provisional tier mapping (Q2): session res → tier, orientation → ratio.
+                sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
+                ratioMap: { horizontal: '16:9', vertical: '9:16' } },
       supportsSeed: false },
     { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash (fallback)',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
       limits: { resolutions: ['1K', '2K', '3K', '4K'],
-                ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'] },
+                ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'],
+                sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
+                ratioMap: { horizontal: '16:9', vertical: '9:16' } },
       supportsSeed: false },
     // VIDEO — 2.5-flash first = default (free tier, 720P only, seconds 4–12).
     { id: 'agnes-video-2.5-flash', kind: 'video', label: 'Agnes Video 2.5 Flash (free)',
@@ -40,7 +45,11 @@ export const AGNES_PRESET: PresetSpec = {
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
       requestFormat: 'video-job-seconds',
       limits: { seconds: [4, 12], resolutions: ['720P'],
-                ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+                ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+                // 720P is the ONLY valid size for 2.5-flash (anything else → 400);
+                // every session resolution maps to it.
+                sizeMap: { '480p': '720P', '720p': '720P', '1080p': '720P' },
+                ratioMap: { horizontal: '16:9', vertical: '9:16' } },
       supportsSeed: true,
       media: { modes: ['keyframes', 'reference'],
                maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
@@ -53,7 +62,11 @@ export const AGNES_PRESET: PresetSpec = {
       limits: { fps: [18, 24, 30, 48, 60],
                 resolutions: ['480p', '720p', '1080p'],
                 ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
-                maxFrames: 441 },
+                maxFrames: 441,
+                // v2.0 takes no size/aspect_ratio params today (O4: server
+                // defaults) — the maps are no-ops, kept for consistency.
+                sizeMap: { '480p': '480p', '720p': '720p', '1080p': '1080p' },
+                ratioMap: { horizontal: '16:9', vertical: '9:16' } },
       supportsSeed: true,
       media: { modes: ['keyframes'], sharedArray: true, maxKeyframes: 3, maxRefs: 3 } },
     // 2.5 PAID — READ-ONLY entry (Q3): inspect in Settings, never generable.
@@ -65,7 +78,9 @@ export const AGNES_PRESET: PresetSpec = {
       requestFormat: 'video-job-seconds',
       limits: { seconds: [4, 12],
                 resolutions: ['720P', '1080P', '1K', '2K'],
-                ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+                ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+                sizeMap: { '480p': '720P', '720p': '720P', '1080p': '1080P' },
+                ratioMap: { horizontal: '16:9', vertical: '9:16' } },
       supportsSeed: true, readOnly: true,
       media: { modes: ['keyframes', 'reference'], dual: true,
                maxKeyframes: 2, maxRefs: 8, maxAudios: 3, maxVideos: 1 } },

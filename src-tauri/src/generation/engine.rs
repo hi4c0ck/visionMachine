@@ -7,8 +7,12 @@
 
 use std::sync::atomic::AtomicBool;
 
-/// Everything an engine needs for one stage run. Extended later when the
-/// provider/LLM system lands (model settings, provider selection, etc.).
+use crate::generation::specs::ModelSpecWire;
+
+/// Everything an engine needs for one stage run. The model spec wire mirrors
+/// ride along when the frontend resolves them (docs/provider-engine-tasks.md,
+/// Phase A); the registry still drives stages sequentially from the pipe
+/// snapshot. Extended later when the provider/LLM system lands.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EngineInput {
     /// The final prompt string (built by the frontend prompt engine).
@@ -20,16 +24,24 @@ pub struct EngineInput {
     pub q_value: u32,
     pub c_value: f32,
     /// Per-piece model override from the generate modal (Phase 4). None =
-    /// the engine falls back to its default model. Unused until the provider
-    /// engine is configured (the choice is still recorded in the log).
-    #[serde(default)]
+    /// the engine falls back to its default model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_model: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_model: Option<String>,
     /// Reproducibility seed (docs/agnes-model-catalog.md). None = the
     /// provider picks; sent only to models whose spec has `supportsSeed`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,
+    /// Provider profile that owns the API slots (keys read at request time only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    /// Resolved image-model spec for this run (Phase A; wire-safe, no secrets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_spec: Option<ModelSpecWire>,
+    /// Resolved video-model spec for this run (Phase A; wire-safe, no secrets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_spec: Option<ModelSpecWire>,
 }
 
 pub trait GenerationEngine: Send + Sync {

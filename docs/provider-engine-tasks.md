@@ -235,45 +235,60 @@ no-engine path (D1).
 ## Phases (checkboxes)
 
 ### Phase A — contracts + pre-checks (no HTTP yet)
-- [ ] Frontend `src/lib/settings/resolveSpecs.ts`: `resolveModelSpec`,
+- [x] Frontend `src/lib/settings/resolveSpecs.ts`: `resolveModelSpec`,
       `pipePrechecks`, `secondsPreview` (above).
-- [ ] `src/types/settings.ts`: `ModelSpec.guidance?`,
+      (Note: pre-checks + seconds preview live in `./prechecks.ts`, re-exported
+      by the settings barrel — `resolveSpecs.ts` owns spec resolution.)
+- [x] `src/types/settings.ts`: `ModelSpec.guidance?`,
       `limits.sizeMap?/ratioMap?`; `catalog.ts`: fill `sizeMap`/`ratioMap`
       for the Agnes image + video entries (E8).
-- [ ] `Workspace.confirmGenerate`: resolve specs, run pre-checks (concrete
+- [x] `Workspace.confirmGenerate`: resolve specs, run pre-checks (concrete
       toasts, block on conflict), send `profile_id` + specs in
       `start_generation`.
-- [ ] Rust: `ModelSpecWire` + `StartGenerationInput` extensions
+- [x] Rust: `ModelSpecWire` + `StartGenerationInput` extensions
       (serde camelCase, tolerant deserialization); `EngineStage` /
       `UpstreamOutput` on `EngineInput`; registry builds per-stage input
       from the pipe-media snapshot.
-- **Tests**: vitest — resolve default vs override, pre-check messages
-      (8n+1 violation, cap overflow, fps off-grid, missing txt2img prompt), seconds clamp/1-dec;
-      cargo — `ModelSpecWire` round-trip, per-stage `EngineInput` build,
-      old caller (no specs) still deserializes.
+- **Tests**:
+  - [x] vitest — pre-check messages (8n+1 violation, cap overflow, fps
+    off-grid, missing txt2img prompt), seconds clamp/1-dec
+    (`tests/unit/prechecks.test.ts`, 15 tests).
+  - [x] cargo — `ModelSpecWire` round-trip, `StartGenerationInput`
+    tolerates missing specs/profile; legacy caller still deserializes.
+  - [ ] vitest — resolve default vs override (`resolveModelSpec`).
+
+  Note: `EngineStage`/`UpstreamOutput` are type-level additions on
+  `EngineInput` (shaped in `generation/engine.rs`). The registry's
+  per-stage input build from the pipe-media snapshot is deferred to
+  Phase D (the HTTP engine that consumes it).
 
 ### Phase B — media layout + redaction (no HTTP yet)
-- [ ] `src-tauri/src/generation/media.rs`: tree under
+- [x] `src-tauri/src/generation/media.rs`: tree under
       the session media root ("Media layout" resolution order) per E3; writers for `images/<refId>.png`
       + `log.jsonl` append, `<task>/video.mp4`, `output.json`,
       `request.log`.
-- [ ] Redaction helper: mask `Authorization`/`apiKey` → `[API_KEY]` in
+- [x] Redaction helper: mask `Authorization`/`apiKey` → `[API_KEY]` in
       everything that is persisted or shown (E1, P6).
-- **Tests**: cargo — tree creation, jsonl append semantics, redaction
-      never emits a real key; unit — redaction pure function.
+- **Tests**:
+  - [x] cargo — tree creation (`pipe_media_dirs`), jsonl append semantics,
+        redaction never emits a real key, `request.log` redacted, safe dir names
+        strip traversal, session-media-root fallback chain.
+  - [ ] unit (vitest) — redaction pure function (frontend mirror of `redact`;
+        optional, the Rust side is authoritative).
 
 ### Phase C — shapers (pure)
-- [ ] `src-tauri/src/generation/shaper.rs`: one builder per
+- [x] `src-tauri/src/generation/shaper.rs`: one builder per
       `requestFormat` per the spec above + the shared helpers
       (`formatSeconds`, `substitutePollTemplate`, `clampToRange`,
       `pickImageTier`, `pickRatio`).
-- **Tests**: cargo golden-payload tests per format — image-gen
-      (response_format INSIDE extra_body, size/ratio maps, img2img
-      referenceUrl), video-job-frames (0/1/2–3 media branches, 8n+1
-      passthrough), video-job-seconds (keyframe/reference/text mode
-      field-exclusion rules, 1-dec seconds string, 720P-only size,
-      seed/guidance gating); helper unit tests (clamp/round/format,
-      template substitution).
+- **Tests**:
+  - [x] cargo golden-payload tests — image-gen (response_format INSIDE
+        extra_body, size/ratio maps, img2img referenceUrl, guidance gating),
+        video-job-frames (0/1/2–3 media branches, 8n+1 passthrough, seed/
+        guidance gating), video-job-seconds (keyframe/reference/text
+        field-exclusion, 1-dec clamped seconds, 720P size, seed gating);
+        helper unit tests (format/clamp/round, template substitution).
+        19 tests in `shaper.rs`.
 
 ### Phase D — provider engine (HTTP)
 - [ ] `src-tauri/src/generation/provider.rs`: `ProviderEngine`
@@ -292,7 +307,8 @@ no-engine path (D1).
           media root; `mediaUrl.ts` switches to it under Tauri, renders
           the generated `video.mp4` / keyframes in the existing preview
           plumbing.
-    - [ ] `GenerateModal`: pre-check conflict list + `secondsPreview` hint.
+    - [x] `GenerateModal`: pre-check conflict list + `secondsPreview` hint.
+      (Landed with Phase A; the request-log expander stays in Phase E.)
     - [ ] `GenerationProgressModal`: redacted request-log expander (E1).
     - **Tests**: svelte-check clean; vitest for the pre-check/preview render
           logic; a manual desktop smoke (preview shows the real file).

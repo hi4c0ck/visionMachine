@@ -510,6 +510,9 @@ mod tests {
             image_model: None,
             video_model: None,
             seed: None,
+            profile_id: None,
+            image_spec: None,
+            video_spec: None,
         }
     }
 
