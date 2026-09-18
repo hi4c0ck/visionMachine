@@ -291,14 +291,15 @@ no-engine path (D1).
         19 tests in `shaper.rs`.
 
 ### Phase D — provider engine (HTTP)
-- [ ] `src-tauri/src/generation/provider.rs`: `ProviderEngine`
+- [x] `src-tauri/src/generation/provider.rs`: `ProviderEngine`
       (image sync POST, video create→poll w/ 503 backoff + cancel,
       artifact download, media writes, progress callbacks); wire
       `registry.set_engine(...)` in `lib.rs`.
 - **Tests**: cargo with a mock/stubbed HTTP layer — success path (files
       land in the tree, `output.json` + redacted `request.log` written),
       4xx/5xx → concrete stage error, cancel mid-poll → Cancelled,
-      503 backoff sequencing, no-engine-fallback removed.
+      503 backoff sequencing, no-engine-fallback fail-fast kept (D1).
+      10 tests in `provider.rs` (`StubHttp` scripted transport, no network).
 
     ### Phase E — UI integration + media serving
     - [ ] Media serving: `read_media_file { path }` blob command (Rust) —

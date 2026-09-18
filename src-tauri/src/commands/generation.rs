@@ -3,12 +3,54 @@
 //! in-memory registry, terminal tasks fall back to the DB row.
 
 use serde::Deserialize;
+use sqlx::Row;
 use tauri::State;
 
 use crate::generation::{
     EngineInput, GenerationStageView, GenerationTaskView, ModelSpecWire, TaskStatus,
 };
 use crate::AppState;
+
+/// Resolve the session media root (E3/O6 resolution order) for the provider
+/// engine: the owning project's `directory_path` when set, else the default
+/// media tree under the app-data dir (created lazily by the engine).
+async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str) -> Option<String> {
+    let row = sqlx::query(
+        "SELECT p.directory_path FROM sessions s \
+                  JOIN projects p ON p.id = s.project_id WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()?
+    .map(|r| r.try_get::<Option<String>, _>(0).ok())
+    .flatten()
+    .flatten();
+    if let Some(dir) = row {
+        let trimmed = dir.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    // Default: <appData>/com.visionmachine.desktop/media/<session_id>.
+    if let Some(d) = dirs::data_local_dir() {
+        return Some(
+            d.join("com.visionmachine.desktop")
+                .join("media")
+                .join(session_id)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    Some(
+        std::env::temp_dir()
+            .join("visionmachine")
+            .join("media")
+            .join(session_id)
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
 
 #[derive(Deserialize)]
 pub struct StartGenerationInput {
@@ -62,6 +104,10 @@ pub async fn start_generation(
         .ok_or_else(|| "Pipe not found".to_string())?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
+    let media_root = {
+        let db = &state.db.lock().await;
+        resolve_media_root(db, &input.session_id).await
+    };
     let view = GenerationTaskView {
         task_id: task_id.clone(),
         session_id: input.session_id.clone(),
@@ -73,6 +119,8 @@ pub async fn start_generation(
         output_path: None,
     };
     let engine_input = EngineInput {
+        task_id: task_id.clone(),
+        media_root,
         prompt: input.prompt,
         pipe_id: input.pipe_id.clone(),
         fps: composer.fps,
@@ -86,6 +134,8 @@ pub async fn start_generation(
         profile_id: input.profile_id,
         image_spec: input.image_spec,
         video_spec: input.video_spec,
+        stage: None,
+        upstream: Vec::new(),
     };
 
     state.generation.registry.start(view, engine_input).await?;

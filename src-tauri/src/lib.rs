@@ -19,10 +19,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(db: Database) -> Self {
+        let db_arc = Arc::new(tokio::sync::Mutex::new(db.clone()));
         Self {
             username: Arc::new(tokio::sync::Mutex::new(None)),
             preflight_report: Arc::new(tokio::sync::Mutex::new(PreflightReport::new())),
-            db: Arc::new(tokio::sync::Mutex::new(db.clone())),
+            db: Arc::clone(&db_arc),
+            // The generation service holds the DB handle and wires the provider
+            // engine (docs/provider-engine-tasks.md, Phase D) at construction.
             generation: Arc::new(generation::GenerationService::new(db)),
         }
     }

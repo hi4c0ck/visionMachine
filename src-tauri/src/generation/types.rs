@@ -11,9 +11,10 @@ pub enum StageKind {
 }
 
 /// Where a stage's input comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
+    #[default]
     Keyframe,
     Subject,
     Video,
