@@ -6,33 +6,46 @@
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
 
-let pending: Map<string, Promise<string | null>> = new Map();
+// In-flight dedup: the entry stays in the map after settling so a concurrent
+// call in the microtask window after resolve still reuses the result rather
+// than re-fetching. The map is bounded by the number of distinct media files
+// shown per session — small; entries are cheap (a string + a blob URL).
+const urlCache = new Map<string, Promise<string | null>>();
+
+function mediaMime(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  switch (ext) {
+    case 'mp4':
+      return 'video/mp4';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'webp':
+      return 'image/webp';
+    case 'gif':
+      return 'image/gif';
+    case 'json':
+      return 'application/json';
+    default:
+      return 'application/octet-stream';
+  }
+}
 
 export async function toMediaUrl(path: string | null | undefined): Promise<string | null> {
   if (!path) return null;
   if (!isTauri()) return null;
-  // Deduplicate concurrent fetches of the same file.
-  const existing = pending.get(path);
+  const existing = urlCache.get(path);
   if (existing) return existing;
   const p = invoke('read_media_file', { input: { path } })
     .then((bytes) => {
-      const data: Uint8Array = bytes as Uint8Array;
-      const ext = path.split('.').pop()?.toLowerCase() ?? '';
-      const mime =
-        ext === 'mp4' ? 'video/mp4'
-        : ext === 'png' ? 'image/png'
-        : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-        : ext === 'webp' ? 'image/webp'
-        : ext === 'gif' ? 'image/gif'
-        : ext === 'json' ? 'application/json'
-        : 'application/octet-stream';
-      return URL.createObjectURL(new Blob([data.buffer as ArrayBuffer], { type: mime }));
+      const data = bytes as unknown as Uint8Array;
+      const blob = new Blob([data.buffer as ArrayBuffer], { type: mediaMime(path) });
+      return URL.createObjectURL(blob);
     })
-    .catch(() => null)
-    .finally(() => {
-      pending.delete(path);
-    });
-  pending.set(path, p);
+    .catch(() => null);
+  urlCache.set(path, p);
   return p;
 }
 
