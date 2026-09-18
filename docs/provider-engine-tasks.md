@@ -302,7 +302,7 @@ no-engine path (D1).
       10 tests in `provider.rs` (`StubHttp` scripted transport, no network).
 
     ### Phase E — UI integration + media serving
-    - [ ] Media serving: `read_media_file { path }` blob command (Rust) —
+    - [x] Media serving: `read_media_file { path }` blob command (Rust) —
           per-project directories can't be a static asset-protocol scope,
           so the command validates the path against a known session/project
           media root; `mediaUrl.ts` switches to it under Tauri, renders
@@ -310,9 +310,10 @@ no-engine path (D1).
           plumbing.
     - [x] `GenerateModal`: pre-check conflict list + `secondsPreview` hint.
       (Landed with Phase A; the request-log expander stays in Phase E.)
-    - [ ] `GenerationProgressModal`: redacted request-log expander (E1).
-    - **Tests**: svelte-check clean; vitest for the pre-check/preview render
-          logic; a manual desktop smoke (preview shows the real file).
+    - [x] `GenerationProgressModal`: redacted request-log expander (E1).
+    - **Tests**: svelte-check clean (0 errors); vitest for the pre-check/preview render
+          logic (420 tests green); a manual desktop smoke (preview shows the real file)
+          is pending — requires running the app with a real generation.
 
     ### Phase F — live verification (real keys, no mocks)
     One small generation per model against the real API, then record results
