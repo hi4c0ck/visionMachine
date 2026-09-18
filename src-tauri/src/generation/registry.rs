@@ -179,6 +179,19 @@ impl TaskRegistry {
                 .resolve()
                 .map(|p| p.to_string_lossy().into_owned());
         }
+        // Redacted request/response log for the progress-modal expander (E1):
+        // the file lives in the task's media dir, written per stage by the
+        // engine; keys are masked on write, so serving it is safe.
+        if let Some(root) = input.media_root.as_deref() {
+            if !root.trim().is_empty() {
+                view.request_log = Some(format!(
+                    "{}/{}{}/request.log",
+                    root.trim(),
+                    crate::generation::media::safe_dir_name(&view.pipe_id),
+                    crate::generation::media::safe_dir_name(&view.task_id)
+                ));
+            }
+        }
 
         {
             let mut tasks = self.tasks.lock().unwrap();
@@ -828,6 +841,7 @@ mod tests {
             stages: TaskRegistry::build_stages(task_id, pipe),
             error: None,
             output_path: None,
+            request_log: None,
         }
     }
 

@@ -1058,11 +1058,11 @@
 		activeLogEntry = null;
 	}
 
-	/** ToolsPanel last-gen thumb → top-panel preview (D9). */
+	/** ToolsPanel last-gen thumb → top-panel preview (D9, served via Phase E media command). */
 	function openPreview(pipe: PipeRow) {
-		const url = toMediaUrl(pipe.lastGeneration?.videoPath ?? null);
-		if (!url) return;
-		previewVideo = { url, label: pipe.name };
+		toMediaUrl(pipe.lastGeneration?.videoPath ?? null).then((url) => {
+			if (url) previewVideo = { url, label: pipe.name };
+		});
 	}
 
 	function handleFpsChange(fps: number) {

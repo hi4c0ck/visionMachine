@@ -6,6 +6,7 @@
 	import type { GenerationLogEntry, GenerationLogPiece, GenerationTaskView } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
+	import { readMediaText } from '$lib/mediaUrl';
 	import '../composer-modal.css';
 
 	let {
@@ -61,6 +62,25 @@
 		}
 		onClose();
 	}
+
+	// Redacted request-log expander (E1): the engine writes keys masked to
+	// [API_KEY] on disk, so fetching + showing it is safe.
+	let logExpanded = $state(false);
+	let logText = $state<string | null>(null);
+	let logLoading = $state(false);
+	async function toggleRequestLog() {
+		logExpanded = !logExpanded;
+		if (!logExpanded) return;
+		if (logText) return;
+		const path = task?.requestLog ?? null;
+		if (!path) return;
+		logLoading = true;
+		try {
+			logText = await readMediaText(path);
+		} finally {
+			logLoading = false;
+		}
+	}
 </script>
 
 {#if open && task}
@@ -104,6 +124,20 @@
 				</ul>
 				{#if task.error}
 					<p class="gen-task-error" role="alert">{task.error}</p>
+				{/if}
+				{#if task.requestLog}
+					<button class="gen-log-toggle" onclick={toggleRequestLog}>
+						{logExpanded ? 'Hide request log' : 'Show request log (redacted)'}
+					</button>
+					{#if logExpanded}
+						{#if logLoading}
+							<span class="gen-log-loading">loading…</span>
+						{:else if logText && logText.trim()}
+							<pre class="gen-log-body">{logText}</pre>
+						{:else}
+							<span class="gen-log-loading">no request log yet</span>
+						{/if}
+					{/if}
 				{/if}
 			</div>
 			<div class="modal-footer">
@@ -215,5 +249,45 @@
 
 	.gen-cancel-all:hover {
 		background: rgba(239, 68, 68, 0.12);
+	}
+
+	.gen-log-toggle {
+		margin-top: 10px;
+		background: none;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 6px;
+		color: var(--text-muted, #71717a);
+		font-size: 11px;
+		font-family: 'JetBrains Mono', monospace;
+		padding: 5px 10px;
+		cursor: pointer;
+	}
+
+	.gen-log-toggle:hover {
+		color: var(--text-primary, #fff);
+		border-color: var(--text-muted, #71717a);
+	}
+
+	.gen-log-body {
+		margin: 8px 0 0;
+		max-height: 180px;
+		overflow: auto;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 6px;
+		padding: 8px 10px;
+		font-size: 10px;
+		font-family: 'JetBrains Mono', monospace;
+		color: var(--text-muted, #71717a);
+		white-space: pre-wrap;
+		word-break: break-all;
+	}
+
+	.gen-log-loading {
+		display: block;
+		margin-top: 8px;
+		font-size: 11px;
+		color: var(--text-muted, #71717a);
+		font-family: 'JetBrains Mono', monospace;
 	}
 </style>

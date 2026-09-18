@@ -271,6 +271,8 @@ export interface GenerationTaskView {
   stages: GenerationStageView[];
   error?: string | null;
   outputPath?: string | null;
+  /** Redacted request/response log file (Phase E, E1); expandable in the progress modal. */
+  requestLog?: string | null;
 }
 
 /**

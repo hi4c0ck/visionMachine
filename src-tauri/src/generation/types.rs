@@ -97,4 +97,8 @@ pub struct GenerationTaskView {
     /// Path of the generated video (terminal success only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
+    /// Redacted per-stage request/response log file (E1: keys already
+    /// masked on write; the progress modal expands it on demand).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_log: Option<String>,
 }

@@ -130,6 +130,7 @@ pub fn run() {
             commands::generation::start_generation,
             commands::generation::get_generation_task,
             commands::generation::cancel_generation,
+            commands::generation::read_media_file,
             // Settings & provider system (Phase 1)
             commands::settings::get_settings,
             commands::settings::save_settings,

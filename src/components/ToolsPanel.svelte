@@ -151,6 +151,23 @@
 		focus.level === 'pipe' ? `Pipe · ${focusedPipe?.name ?? focusedPipe?.id ?? ''}` :
 		focus.level === 'segment' ? 'Segment' : 'Tag'
 	);
+
+	// Last-gen preview thumb (D9): served through read_media_file (Phase E).
+	let lastVideoUrl = $state<string | null>(null);
+	$effect(() => {
+		let cancelled = false;
+		const path = focusedPipe?.lastGeneration?.videoPath ?? null;
+		if (!path) {
+			lastVideoUrl = null;
+			return;
+		}
+		toMediaUrl(path).then((url) => {
+			if (!cancelled) lastVideoUrl = url;
+		});
+		return () => {
+			cancelled = true;
+		};
+	});
 </script>
 
 <div class="tools-panel">
@@ -317,27 +334,24 @@
           >
             {APP_CONSTANTS.strings.generate}
           </button>
-          <!-- Last-gen preview (D9): casual muted-looping <video> thumb; with no
-               engine there is no video file yet, so this is the empty state (D1). -->
-          {@const lastVideoUrl = toMediaUrl(focusedPipe.lastGeneration?.videoPath ?? null)}
-          <div class="focus-preview">
-            {#if lastVideoUrl}
-              <video
-                class="focus-video"
-                src={lastVideoUrl}
-                muted
-                loop
-                autoplay
-                playsinline
-                aria-label="Last generation preview"
-              ></video>
-              <button class="focus-preview-open" onclick={() => onopenpreview?.(focusedPipe)}>
-                {APP_CONSTANTS.strings.openInPreview}
-              </button>
-            {:else}
-              <span class="focus-preview-empty">{APP_CONSTANTS.strings.noPreview}</span>
-            {/if}
-          </div>
+          		<div class="focus-preview">
+          			{#if lastVideoUrl}
+          				<video
+          					class="focus-video"
+          					src={lastVideoUrl}
+          					muted
+          					loop
+          					autoplay
+          					playsinline
+          					aria-label="Last generation preview"
+          				></video>
+          				<button class="focus-preview-open" onclick={() => onopenpreview?.(focusedPipe)}>
+          					{APP_CONSTANTS.strings.openInPreview}
+          				</button>
+          			{:else}
+          				<span class="focus-preview-empty">{APP_CONSTANTS.strings.noPreview}</span>
+          			{/if}
+          		</div>
         {:else}
           <p class="focus-hint">No pipe selected.</p>
         {/if}
