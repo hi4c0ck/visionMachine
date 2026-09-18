@@ -91,7 +91,7 @@ describe('buildCommand', () => {
       expect(spec.cmd).toBe('powershell');
       expect(spec.shell).toBe(false);
       const ps1 = spec.args[spec.args.indexOf('-File') + 1];
-      expect(ps1).toBe(path.join(dir, 'build-runner.ps1'));
+      expect(ps1).toBe(path.join(dir, 'build-script', 'build-runner.ps1'));
       // wrapper was actually written and targets the right class
       const body = readFileSync(ps1, 'utf8');
       expect(body).toContain(cls);
