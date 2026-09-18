@@ -7,6 +7,7 @@ import type {
   TagType,
   PipeKeyframe,
   GlobalElement,
+  SoundElement,
   TimelineElement,
   Segment,
   TagElement,
@@ -54,6 +55,13 @@ export interface ElementService {
   addTimeline(sessionId: string, pipeId: string): Promise<ServiceResult>;
   getTimelineElement(pipe: PipeRow): TimelineElement | undefined;
   getGlobalElement(pipe: PipeRow): GlobalElement | undefined;
+  getSoundElement(pipe: PipeRow): SoundElement | undefined;
+  addSound(sessionId: string, pipeId: string, frameStart: number, frameEnd: number): Promise<ServiceResult>;
+  updateSoundRange(sessionId: string, pipeId: string, soundId: string, frameStart: number, frameEnd: number): Promise<ServiceResult>;
+  toggleSound(sessionId: string, pipeId: string, soundId: string): Promise<ServiceResult>;
+  removeSound(sessionId: string, pipeId: string, soundId: string): Promise<ServiceResult>;
+  updateGlobalPrompt(sessionId: string, pipeId: string, globalId: string, prompt: string): Promise<ServiceResult>;
+  updateSoundPrompt(sessionId: string, pipeId: string, soundId: string, prompt: string): Promise<ServiceResult>;
 }
 
 // ── Segment Service Interface ─────────────────────────────────────────────────

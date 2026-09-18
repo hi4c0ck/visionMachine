@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { PipeRow, Segment, TagElement } from '$types';
+	import type { PipeRow, Segment, TagElement, GlobalElement, SoundElement } from '$types';
 	import { TAG_SPECIFICATIONS, type TagType } from '$types';
 	import FrameRuler from '../FrameRuler.svelte';
 	import '../composer-timeline.css';
@@ -21,6 +21,7 @@
 		resizeSegment as resizeSegmentAction,
 		resizeTagElement as resizeTagElementAction,
 		updateGlobalRange as updateGlobalRangeAction,
+		updateSoundRange as updateSoundRangeAction,
 	} from '$lib/composerStore';
 
 	// Timeline area: one frame coordinate canvas (ruler + global lanes +
@@ -35,6 +36,10 @@
 		onAddTrack,
 		onToggleGlobal,
 		onRemoveGlobal,
+		onEditGlobalPrompt,
+		onToggleSound,
+		onRemoveSound,
+		onEditSoundPrompt,
 		onAddSegment,
 		onDeleteSegment,
 		onOpenTagMenu,
@@ -54,6 +59,10 @@
 		onAddTrack: (e: MouseEvent) => void;
 		onToggleGlobal: (globalId: string) => void;
 		onRemoveGlobal: (globalId: string) => void;
+		onEditGlobalPrompt: (global: GlobalElement) => void;
+		onToggleSound: (soundId: string) => void;
+		onRemoveSound: (soundId: string) => void;
+		onEditSoundPrompt: (sound: SoundElement) => void;
 		onAddSegment: () => void;
 		onDeleteSegment: (segId: string) => void;
 		onOpenTagMenu: (segId: string, e: MouseEvent) => void;
@@ -117,7 +126,7 @@
 
 	// Transient preview state for visual feedback during drag
 	let previewDragState = $state<{
-		type: 'segment' | 'tag' | 'global';
+		type: 'segment' | 'tag' | 'global' | 'sound';
 		id: string;
 		segmentId?: string;
 		handle?: 'left' | 'right' | 'body';
@@ -231,6 +240,11 @@
 		return p.elements.find((e: any) => e.tag === 'global_style') ?? null;
 	}
 
+	function getSound(p: PipeRow | null | undefined): any {
+		if (!p || !Array.isArray(p.elements)) return null;
+		return p.elements.find((e: any) => e.tag === 'sound') ?? null;
+	}
+
 	// ── Ruler legend: color key for the lane system (zone/global + tag types
 	//    present in THIS pipe's timeline). Rendered inside the frame-ruler
 	//    space so it aligns with the shared coordinate canvas. ─────────────
@@ -240,6 +254,7 @@
 		return {
 			zone: 'var(--accent-color)',
 			global: '#59B5FF',
+			sound: '#F5A623',
 			tags: lanes.map((l) => ({ name: l.name, color: l.color })),
 		};
 	});
@@ -286,6 +301,14 @@
 		return previewDragState;
 	}
 
+	// Get preview state for the sound range during drag
+	function getPreviewSound(soundId: string) {
+		if (!previewDragState || previewDragState.type !== 'sound' || previewDragState.id !== soundId) {
+			return null;
+		}
+		return previewDragState;
+	}
+
 	// One pointerdown for every temporal element (segment thumb/body, tag thumb/body, global grips).
 	
 	// Track whether the last press turned into a real drag (>3px).
@@ -296,7 +319,7 @@
 
 	function handleElementPointerDown(
 		e: PointerEvent,
-		type: 'segment' | 'tag' | 'global',
+		type: 'segment' | 'tag' | 'global' | 'sound',
 		id: string,
 		segmentId: string,
 		handle: 'left' | 'right' | 'body',
@@ -471,6 +494,19 @@
 			}
 		}
 
+		if (finalPreview.type === 'sound') {
+			const result = await updateSoundRangeAction(
+				sessionId,
+				pipe.id,
+				finalPreview.id,
+				finalPreview.startFrame,
+				finalPreview.endFrame
+			);
+			if (result.errors.length) {
+				console.error('[TimelineSection] updateSoundRange:', result.errors);
+			}
+		}
+
 		previewDragState = null;
 	}
 </script>
@@ -492,53 +528,122 @@
 		<!-- ═══ GLOBAL LANES (in coordinate space) ═══ -->
 		{#each [getGlobal(pipe)] as global}
 			{#if global}
-				<div class="global-lane">
+				<div class="global-lane" style="--lane-color: #59B5FF;">
 					{#if rulerGeometry}
 						{@const gPrev = getPreviewGlobal(global.id)}
 						{@const gStart = gPrev?.startFrame ?? global.frameStart ?? 0}
 						{@const gEnd = gPrev?.endFrame ?? global.frameEnd ?? totalFrames - 1}
+						{@const gText = (global.prompt ?? global.value ?? '').trim()}
 						<div
-							class="global-range"
+							class="pill" class:disabled={!global.enabled}
 							style="left: {frameToPx(gStart, rulerGeometry)}px; width: {rangeWidthPx(gStart, gEnd, rulerGeometry)}px;"
+							role="button" tabindex="0"
+							title="Global: {gStart}–{gEnd} · click to edit prompt{gText ? ' · “' + gText + '”' : ''}"
+							onclick={() => { if (lastPressWasDrag) return; onEditGlobalPrompt(global); }}
+							onkeydown={(e) => e.key === 'Enter' && !lastPressWasDrag && onEditGlobalPrompt(global)}
 							onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'body', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
 							onpointermove={handlePointerMove}
-							onpointerup={handlePointerUp}
-							role="slider" aria-orientation="horizontal" tabindex="0"
-							aria-valuemin={0} aria-valuemax={totalFrames - 1}
-							aria-valuenow={gStart}
-							title="Global style range — drag to move, grips to resize"></div>
-						<div
-							class="global-handle global-handle-left"
-							style="left: {frameToPx(gStart, rulerGeometry)}px;"
-							onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'left', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
-							onpointermove={handlePointerMove}
-							onpointerup={handlePointerUp}
-							role="slider" aria-orientation="horizontal" tabindex="0"
-							aria-valuemin={0} aria-valuemax={totalFrames - 1}
-							aria-valuenow={gStart}
-							title="Drag to resize global range start"></div>
-						<div
-							class="global-handle global-handle-right"
-							style="left: {frameToPx(gEnd, rulerGeometry)}px;"
-							onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'right', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
-							onpointermove={handlePointerMove}
-							onpointerup={handlePointerUp}
-							role="slider" aria-orientation="horizontal" tabindex="0"
-							aria-valuemin={0} aria-valuemax={totalFrames - 1}
-							aria-valuenow={gEnd}
-							title="Drag to resize global range end"></div>
+							onpointerup={handlePointerUp}>
+								<span class="pill-label">Global</span>
+								{#if gText}<span class="pill-text">{gText}</span>{/if}
+								<button
+									class="pill-toggle"
+									onpointerdown={(e) => e.stopPropagation()}
+									onclick={(e) => { e.stopPropagation(); onToggleGlobal(global.id); }}
+									title={global.enabled ? 'Disable global' : 'Enable global'}>
+									{#if global.enabled}◉{:else}○{/if}
+								</button>
+								<button
+									class="pill-del"
+									onpointerdown={(e) => e.stopPropagation()}
+									onclick={(e) => { e.stopPropagation(); onRemoveGlobal(global.id); }}
+									title="Remove global">×</button>
+								<div
+									class="pill-grip pill-grip-left"
+									style="left: 0;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'left', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal" tabindex="0"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={gStart}
+									title="Drag to resize global range start"></div>
+								<div
+									class="pill-grip pill-grip-right"
+									style="left: 100%;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'global', global.id, global.id, 'right', global.frameStart ?? 0, global.frameEnd ?? totalFrames - 1)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal" tabindex="0"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={gEnd}
+									title="Drag to resize global range end"></div>
+						</div>
 					{/if}
-					<div class="global-actions">
-						<button class="btn-icon-sm" onclick={() => onToggleGlobal(global.id)} title="Toggle global">
-							{#if global.enabled}◉{:else}○{/if}
-						</button>
-						<button class="btn-icon-sm btn-del-sm" onclick={() => onRemoveGlobal(global.id)} title="Remove global">×</button>
-					</div>
 				</div>
-			{/if}
-		{/each}
+				{/if}
+			{/each}
 
-		<!-- ═══ TIMELINE LANE (in coordinate space) ═══ -->
+			<!-- ═══ SOUND LANE (global-alike, in coordinate space) ═══ -->
+			{#each [getSound(pipe)] as sound}
+				{#if sound}
+					<div class="global-lane" style="--lane-color: #F5A623;">
+						{#if rulerGeometry}
+							{@const sPrev = getPreviewSound(sound.id)}
+							{@const sStart = sPrev?.startFrame ?? sound.frameStart ?? 0}
+							{@const sEnd = sPrev?.endFrame ?? sound.frameEnd ?? totalFrames - 1}
+							{@const sText = (sound.prompt ?? '').trim()}
+							<div
+								class="pill" class:disabled={!sound.enabled}
+								style="left: {frameToPx(sStart, rulerGeometry)}px; width: {rangeWidthPx(sStart, sEnd, rulerGeometry)}px;"
+								role="button" tabindex="0"
+								title="Sound: {sStart}–{sEnd} · click to edit prompt{sText ? ' · “' + sText + '”' : ''}"
+								onclick={() => { if (lastPressWasDrag) return; onEditSoundPrompt(sound); }}
+								onkeydown={(e) => e.key === 'Enter' && !lastPressWasDrag && onEditSoundPrompt(sound)}
+								onpointerdown={(e) => handleElementPointerDown(e, 'sound', sound.id, sound.id, 'body', sound.frameStart ?? 0, sound.frameEnd ?? totalFrames - 1)}
+								onpointermove={handlePointerMove}
+								onpointerup={handlePointerUp}>
+								<span class="pill-label">♪ Sound</span>
+								{#if sText}<span class="pill-text">{sText}</span>{/if}
+								<button
+									class="pill-toggle"
+									onpointerdown={(e) => e.stopPropagation()}
+									onclick={(e) => { e.stopPropagation(); onToggleSound(sound.id); }}
+									title={sound.enabled ? 'Disable sound' : 'Enable sound'}>
+									{#if sound.enabled}◉{:else}○{/if}
+								</button>
+								<button
+									class="pill-del"
+									onpointerdown={(e) => e.stopPropagation()}
+									onclick={(e) => { e.stopPropagation(); onRemoveSound(sound.id); }}
+									title="Remove sound">×</button>
+								<div
+									class="pill-grip pill-grip-left"
+									style="left: 0;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'sound', sound.id, sound.id, 'left', sound.frameStart ?? 0, sound.frameEnd ?? totalFrames - 1)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal" tabindex="0"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={sStart}
+									title="Drag to resize sound range start"></div>
+								<div
+									class="pill-grip pill-grip-right"
+									style="left: 100%;"
+									onpointerdown={(e) => handleElementPointerDown(e, 'sound', sound.id, sound.id, 'right', sound.frameStart ?? 0, sound.frameEnd ?? totalFrames - 1)}
+									onpointermove={handlePointerMove}
+									onpointerup={handlePointerUp}
+									role="slider" aria-orientation="horizontal" tabindex="0"
+									aria-valuemin={0} aria-valuemax={totalFrames - 1}
+									aria-valuenow={sEnd}
+									title="Drag to resize sound range end"></div>
+						</div>
+					{/if}
+				</div>
+				{/if}
+			{/each}
+
+			<!-- ═══ TIMELINE LANE (in coordinate space) ═══ -->
 		<div class="timeline-lane">
 			{#each [getTimeline(pipe)] as tl}
 				{#if tl}

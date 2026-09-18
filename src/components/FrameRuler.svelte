@@ -19,7 +19,7 @@
 		onframeSelect?: (frame: number) => void;
 		geometry: FrameGeometry | null;
 		/** Optional legend strip (zone + global + tag color key). */
-		legend?: { zone: string; global: string; tags: Array<{ name: string; color: string }> } | null;
+		legend?: { zone: string; global: string; sound?: string; tags: Array<{ name: string; color: string }> } | null;
 		/** Session fps — enables the pin notice seconds readout (frame / fps). */
 		fps?: number;
 	}>();
@@ -34,6 +34,7 @@
 	);
 	let legendZone = $derived(legend?.zone ?? 'var(--accent-color)');
 	let legendGlobal = $derived(legend?.global ?? '#59B5FF');
+	let legendSound = $derived(legend?.sound ?? '#F5A623');
 
 	let markers = $derived(
 		geometry
@@ -61,6 +62,9 @@
 		<div class="ruler-legend" aria-label="Timeline legend">
 			<span class="legend-item" title="Zone segment (accent)"><span class="legend-swatch" style="background: {legendZone}"></span>Zone</span>
 			<span class="legend-item" title="Global style range"><span class="legend-swatch legend-swatch-global" style="background: {legendGlobal}"></span>Global</span>
+			{#if legend?.sound}
+				<span class="legend-item" title="Sound range"><span class="legend-swatch" style="background: {legendSound}"></span>Sound</span>
+			{/if}
 			{#each legendEntries as entry (entry.name)}
 				<span class="legend-item" title={entry.name}><span class="legend-swatch" style="background: {entry.color}"></span>{entry.name}</span>
 			{/each}

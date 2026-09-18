@@ -115,6 +115,17 @@ export class SessionServiceImpl implements SessionService {
         frameStart: el.frame_start ?? el.frameStart ?? 0,
         frameEnd: el.frame_end ?? el.frameEnd ?? 240,
         enabled: el.enabled !== false,
+        prompt: el.prompt,
+      };
+    }
+    if (el.tag === 'sound') {
+      return {
+        id: el.id,
+        tag: 'sound',
+        frameStart: el.frame_start ?? el.frameStart ?? 0,
+        frameEnd: el.frame_end ?? el.frameEnd ?? 240,
+        enabled: el.enabled !== false,
+        prompt: el.prompt,
       };
     }
     // Legacy format: detect by presence of segments

@@ -216,6 +216,49 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
+  async updateGlobalPrompt(sessionId: string, pipeId: string, globalId: string, prompt: string): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.elements.updateGlobalPrompt(sessionId, pipeId, globalId, prompt);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  // Sound element operations
+  async addSoundElement(sessionId: string, pipeId: string, frameStart: number, frameEnd: number): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.elements.addSound(sessionId, pipeId, frameStart, frameEnd);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  async updateSoundRange(sessionId: string, pipeId: string, soundId: string, frameStart: number, frameEnd: number): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.elements.updateSoundRange(sessionId, pipeId, soundId, frameStart, frameEnd);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  async toggleSoundElement(sessionId: string, pipeId: string, soundId: string): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.elements.toggleSound(sessionId, pipeId, soundId);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  async removeSoundElement(sessionId: string, pipeId: string, soundId: string): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.elements.removeSound(sessionId, pipeId, soundId);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  async updateSoundPrompt(sessionId: string, pipeId: string, soundId: string, prompt: string): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.elements.updateSoundPrompt(sessionId, pipeId, soundId, prompt);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
   async addTimelineElement(sessionId: string, pipeId: string): Promise<ServiceResult> {
     const s = this.getService(sessionId);
     const result = await s.elements.addTimeline(sessionId, pipeId);
@@ -500,13 +543,14 @@ class ComposerStoreImpl implements ComposerStore {
                   })),
                 };
               }
-              // Global element - use frame range format
+              // Global / Sound element - use frame range format
               return {
                 id: el.id,
                 tag: el.tag,
                 frameStart: el.frameStart ?? 0,
-                frameEnd: el.frameEnd ?? el.value ? 240 : 0,
+                frameEnd: el.frameEnd ?? 0,
                 enabled: el.enabled,
+                prompt: el.prompt,
               };
             }),
             lastGeneration: pipe.lastGeneration ?? null,
@@ -560,6 +604,12 @@ export const addGlobalElement = composerStore.addGlobalElement.bind(composerStor
 export const updateGlobalRange = composerStore.updateGlobalRange.bind(composerStore);
 export const toggleGlobalElement = composerStore.toggleGlobalElement.bind(composerStore);
 export const removeGlobalElement = composerStore.removeGlobalElement.bind(composerStore);
+export const updateGlobalPrompt = composerStore.updateGlobalPrompt.bind(composerStore);
+export const addSoundElement = composerStore.addSoundElement.bind(composerStore);
+export const updateSoundRange = composerStore.updateSoundRange.bind(composerStore);
+export const toggleSoundElement = composerStore.toggleSoundElement.bind(composerStore);
+export const removeSoundElement = composerStore.removeSoundElement.bind(composerStore);
+export const updateSoundPrompt = composerStore.updateSoundPrompt.bind(composerStore);
 export const addTimelineElement = composerStore.addTimelineElement.bind(composerStore);
 export const addSegment = composerStore.addSegment.bind(composerStore);
 export const removeSegment = composerStore.removeSegment.bind(composerStore);

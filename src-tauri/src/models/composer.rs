@@ -82,6 +82,9 @@ pub struct GlobalElement {
     pub frame_start: u32,
     pub frame_end: u32,
     pub enabled: bool,
+    /// Prompt for the global style zone (primary text source).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 impl GlobalElement {
@@ -91,6 +94,33 @@ impl GlobalElement {
             frame_start: 0,
             frame_end: 240,
             enabled: true,
+            prompt: None,
+        }
+    }
+}
+
+/// Sound element — global-alike: a temporal range bar with its own prompt,
+/// feeding the generated prompt as a `sound:` section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundElement {
+    pub id: String,
+    pub frame_start: u32,
+    pub frame_end: u32,
+    pub enabled: bool,
+    /// Prompt for the sound zone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl SoundElement {
+    pub fn new() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            frame_start: 0,
+            frame_end: 240,
+            enabled: true,
+            prompt: None,
         }
     }
 }
@@ -171,6 +201,8 @@ impl TimelineElement {
 pub enum PipeElement {
     #[serde(rename = "global_style")]
     Global(GlobalElement),
+    #[serde(rename = "sound")]
+    Sound(SoundElement),
     #[serde(rename = "timeline")]
     Timeline(TimelineElement),
 }
@@ -398,6 +430,45 @@ mod tests {
 
         let value = serde_json::to_value(&pipe).expect("serialize");
         assert!(value.get("lastGeneration").is_none());
+    }
+
+    /// A legacy on-disk global element (no prompt field) must still deserialize;
+    /// the new `prompt` + sound shapes round-trip.
+    #[test]
+    fn global_element_legacy_default_and_sound_round_trip() {
+        let legacy = json!({
+            "id": "g1",
+            "tag": "global_style",
+            "frameStart": 0,
+            "frameEnd": 120,
+            "enabled": true
+        });
+        let el: PipeElement = serde_json::from_value(legacy).expect("legacy global deserializes");
+        match &el {
+            PipeElement::Global(g) => {
+                assert!(g.prompt.is_none());
+                assert_eq!(g.frame_start, 0);
+            }
+            _ => panic!("expected global element"),
+        }
+
+        let sound = json!({
+            "id": "s1",
+            "tag": "sound",
+            "frameStart": 16,
+            "frameEnd": 88,
+            "enabled": true,
+            "prompt": "rain on windows"
+        });
+        let el: PipeElement = serde_json::from_value(sound).expect("sound deserializes");
+        match el {
+            PipeElement::Sound(s) => {
+                assert_eq!(s.prompt.as_deref(), Some("rain on windows"));
+                assert_eq!(s.frame_start, 16);
+                assert_eq!(s.frame_end, 88);
+            }
+            _ => panic!("expected sound element"),
+        }
     }
 
     #[test]

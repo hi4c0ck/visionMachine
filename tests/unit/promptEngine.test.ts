@@ -8,7 +8,7 @@ import {
   getSortedZones,
   sectionName,
 } from '../../src/lib/promptEngine';
-import type { PipeRow, GlobalElement, TimelineElement, Segment, TagElement } from '../../src/types/app';
+import type { PipeRow, GlobalElement, SoundElement, TimelineElement, Segment, TagElement } from '../../src/types/app';
 
 function makeTag(tag: TagElement['tag'], frameStart: number, frameEnd: number, extra?: Partial<TagElement>): TagElement {
   return {
@@ -120,6 +120,41 @@ describe('promptEngine.buildHeuristics', () => {
 
   it('returns an empty string when nothing is set', () => {
     expect(buildHeuristics(makePipe())).toBe('');
+  });
+
+  it('prefers the global prompt over the legacy value', () => {
+    const global: GlobalElement = {
+      id: 'g1', tag: 'global_style', value: 'legacy style', prompt: 'prompt style', enabled: true,
+      frameStart: 0, frameEnd: 80,
+    };
+    const pipe = makePipe({ elements: [global as any] });
+    const h = buildHeuristics(pipe);
+    expect(h).toContain('style: prompt style');
+    expect(h).not.toContain('legacy style');
+  });
+
+  it('falls back to the legacy global value when no prompt is set', () => {
+    const global: GlobalElement = {
+      id: 'g1', tag: 'global_style', value: 'legacy style', enabled: true,
+      frameStart: 0, frameEnd: 80,
+    };
+    expect(buildHeuristics(makePipe({ elements: [global as any] }))).toContain('style: legacy style');
+  });
+
+  it('emits a sound: line from the sound element prompt', () => {
+    const sound: SoundElement = {
+      id: 's1', tag: 'sound', frameStart: 0, frameEnd: 80, enabled: true, prompt: 'rain on windows',
+    };
+    const h = buildHeuristics(makePipe({ elements: [sound as any] }));
+    expect(h).toContain('sound: rain on windows');
+  });
+
+  it('omits an empty or disabled sound element', () => {
+    const empty: SoundElement = { id: 's1', tag: 'sound', frameStart: 0, frameEnd: 80, enabled: true };
+    expect(buildHeuristics(makePipe({ elements: [empty as any] }))).not.toContain('sound:');
+
+    const off: SoundElement = { id: 's2', tag: 'sound', frameStart: 0, frameEnd: 80, enabled: false, prompt: 'off' };
+    expect(buildHeuristics(makePipe({ elements: [off as any] }))).not.toContain('sound:');
   });
 });
 
