@@ -858,7 +858,7 @@
 				input: {
 					session_id: selectedSession.id,
 					pipe_id: pipe.id,
-					prompt: summarizePipe(pipe),
+					prompt: summarizePipe(pipe, { fps: selectedSession?.fps ?? undefined }),
 					// Per-run model override (Phase 4): recorded in the log now,
 					// consumed by the provider engine when it lands.
 					image_model: models.imageModel,

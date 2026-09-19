@@ -126,6 +126,13 @@ export interface GenerationDefaults {
   /** When true, each run auto-rolls a fresh seed; the seed field then holds
    *  the last used value but is regenerated on each open. Default true. */
   alwaysNewSeed: boolean;
+  /**
+   * Units for the `length="…"` attribute on compiled `<segments>` blocks.
+   * 'frames' → `121f` (frame-exact, default); 'seconds' → `5s` (human
+   * time hint, fps-converted in the engine). Heuristic for the descriptor
+   * inner lines reads this setting at compile time.
+   */
+  segmentLengthUnit: 'frames' | 'seconds';
 }
 
 export interface Settings {
