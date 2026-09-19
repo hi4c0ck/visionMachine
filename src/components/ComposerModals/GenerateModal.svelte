@@ -32,6 +32,8 @@
 	const prompt = $derived(summarizePipe(pipe));
 	let expanded = $state(false);
 	let busy = $state(false);
+	let justCopied = $state(false);
+	let copyTimer: number | undefined;
 
 	// Per-run model override: seed from the global provider settings each
 	// open; the user may switch models for just this run (regenerating a
@@ -77,6 +79,9 @@
 		try {
 			await navigator.clipboard.writeText(prompt);
 			flashToast(APP_CONSTANTS.strings.promptCopied, 'info');
+			justCopied = true;
+			if (copyTimer) clearTimeout(copyTimer);
+			copyTimer = window.setTimeout(() => (justCopied = false), 1500);
 		} catch {
 			flashToast('Copy failed', 'error');
 		}
@@ -98,18 +103,12 @@
 		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<div class="modal-header">
 				<h3>Generate — {pipe.name}</h3>
-				<span class="modal-sub">Presets + final prompt · pick the models for this run</span>
+				<span class="modal-sub">Final prompt + models for this run</span>
 			</div>
 			<div class="modal-body">
-				<div class="gen-presets" aria-label="Generation presets">
-					<span>{session.fps} fps</span>
-					<span>{session.resolution}</span>
-					<span>{session.orientation}</span>
-					<span>Q {pipe.qValue}</span>
-					<span>C {pipe.cValue}</span>
-					<span>{pipe.lengthFrames} frames</span>
-				</div>
 				<div class="gen-models" aria-label="Model selection for this run">
+					<span class="gen-section-title">Models</span>
+					<div class="gen-model-row">
 					<div class="gen-model">
 						<label for="gen-image-model">Image model</label>
 						<select id="gen-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
@@ -145,31 +144,55 @@
 						</div>
 					{/if}
 				</div>
-				{#if conflicts.length > 0}
-					<ul class="gen-conflicts" aria-label="Generation conflicts">
-						{#each conflicts as c (c.message)}
-							<li>{c.message}</li>
-						{/each}
-					</ul>
-				{/if}
+			</div>
 				<div class="gen-prompt-wrap">
-					<div class="gen-prompt-head">
-						<span class="gen-prompt-label">Final prompt</span>
+					<span class="gen-section-title">Final prompt</span>
+					<div class="gen-prompt-box">
+						<textarea
+							class="modal-textarea gen-prompt"
+							class:expanded
+							readonly
+							rows={expanded ? 18 : 6}
+							value={prompt}
+							aria-label="Final prompt"
+						></textarea>
 						<div class="gen-prompt-actions">
-							<button class="gen-mini-btn" type="button" onclick={() => (expanded = !expanded)}>
-								{expanded ? 'Collapse' : 'Expand'}
+							<button class="gen-mini-btn" type="button" onclick={() => (expanded = !expanded)} aria-expanded={expanded} title={expanded ? 'Collapse' : 'Expand'} aria-label={expanded ? 'Collapse prompt' : 'Expand prompt'}>
+								<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+									{#if expanded}
+										<path d="M2.5 7.5 6 4l3.5 3.5" />
+									{:else}
+										<path d="M2.5 4.5 6 8l3.5-3.5" />
+									{/if}
+								</svg>
 							</button>
-							<button class="gen-mini-btn" type="button" onclick={copyPrompt}>Copy</button>
+							<button class="gen-mini-btn" class:copied={justCopied} type="button" onclick={copyPrompt} title={justCopied ? 'Copied' : 'Copy'} aria-label="Copy prompt">
+								<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+									{#if justCopied}
+										<path d="M2.5 6.5 5 9l4.5-5" />
+									{:else}
+										<rect x="4.2" y="4.2" width="5.6" height="5.6" rx="1" />
+										<path d="M3.8 4V2.6A.6.6 0 0 1 4.4 2h3.8" />
+										{/if}
+								</svg>
+							</button>
 						</div>
 					</div>
-					<textarea
-						class="modal-textarea gen-prompt"
-						class:expanded
-						readonly
-						rows={expanded ? 18 : 6}
-						value={prompt}
-						aria-label="Final prompt"
-					></textarea>
+				</div>
+				{#if conflicts.length > 0}
+						<ul class="gen-conflicts" aria-label="Generation conflicts">
+							{#each conflicts as c (c.message)}
+								<li>{c.message}</li>
+							{/each}
+						</ul>
+					{/if}
+				<div class="gen-presets" aria-label="Generation presets">
+					<span>{session.fps} fps</span>
+					<span>{session.resolution}</span>
+					<span>{session.orientation}</span>
+					<span>Q {pipe.qValue}</span>
+					<span>C {pipe.cValue}</span>
+					<span>{pipe.lengthFrames} frames</span>
 				</div>
 			</div>
 			<div class="modal-footer">
@@ -185,26 +208,24 @@
 {/if}
 
 <style>
-	.gen-presets {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-bottom: 14px;
-	}
-
-	.gen-presets span {
-		padding: 3px 8px;
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 5px;
-		font-size: 12px;
-		color: var(--text-secondary, #a1a1aa);
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	.gen-section-title {
+		font-size: 0.7rem;
+		font-weight: 600;
+		color: var(--text-muted, #71717a);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
 	}
 
 	.gen-models {
 		display: flex;
+		flex-direction: column;
 		gap: 10px;
-		margin-bottom: 14px;
+	}
+
+	.gen-model-row {
+		display: flex;
+		gap: 10px;
+		align-items: flex-end;
 	}
 
 	.gen-model {
@@ -236,42 +257,80 @@
 		border-color: var(--accent-color, #ff3e00);
 	}
 
-	.gen-prompt-head {
+	.gen-prompt-wrap {
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		margin-bottom: 6px;
-	}
-
-	.gen-prompt-label {
-		font-size: 0.75rem;
-		color: var(--text-muted, #71717a);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-	}
-
-	.gen-prompt-actions {
-		display: flex;
+		flex-direction: column;
 		gap: 6px;
 	}
 
+	.gen-prompt-box {
+		position: relative;
+	}
+
+	.gen-prompt-actions {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		display: flex;
+		gap: 5px;
+		opacity: 0.35;
+		transition: opacity 0.15s ease;
+	}
+
+	.gen-prompt-box:hover .gen-prompt-actions {
+		opacity: 0.9;
+	}
+
+	.gen-prompt-actions .gen-mini-btn {
+		padding: 4px;
+		background: var(--bg-elevated, rgba(255, 255, 255, 0.08));
+		backdrop-filter: blur(4px);
+	}
+
 	.gen-mini-btn {
-		padding: 3px 10px;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 9px;
 		font-size: 12px;
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		color: var(--text-primary, #fff);
+		color: var(--text-secondary, #a1a1aa);
 		border: 1px solid var(--border-color, #3f3f46);
 		border-radius: 5px;
 		cursor: pointer;
+		transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+	}
+
+	.gen-mini-btn svg {
+		flex: none;
 	}
 
 	.gen-mini-btn:hover {
 		border-color: var(--accent-color, #ff3e00);
+		color: var(--text-primary, #fff);
+	}
+
+	.gen-mini-btn.copied {
+		color: var(--accent-color, #59B5FF);
+		border-color: var(--accent-color, #59B5FF);
+		background: var(--accent-bg, rgba(89, 181, 255, 0.1));
 	}
 
 	.gen-prompt {
+		color: var(--text-secondary, #a1a1aa);
+		line-height: 1.6;
+		font-size: 0.85rem;
 		resize: none;
 		scrollbar-width: thin;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		width: 100%;
+		min-height: 140px;
+		padding: 12px 14px;
+	}
+
+	.gen-prompt:focus {
+		outline: none;
+		border-color: var(--accent-color, #59B5FF);
 	}
 
 	.gen-prompt.expanded {
@@ -289,6 +348,23 @@
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 	}
 
+	.gen-presets {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		padding-top: 12px;
+		border-top: 1px dashed var(--border-color, #3f3f46);
+	}
+
+	.gen-presets span {
+		padding: 3px 8px;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 5px;
+		font-size: 11px;
+		color: var(--text-muted, #71717a);
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	}
+
 	.gen-conflicts {
 		list-style: none;
 		padding: 8px 10px;
@@ -296,10 +372,10 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
-		border: 1px solid var(--error-color, #ef4444);
+		border: 1px solid var(--danger-color, #ef4444);
 		border-radius: 6px;
-		background: rgba(239, 68, 68, 0.08);
-		color: var(--error-color, #ef4444);
+		background: var(--danger-bg, rgba(239, 68, 68, 0.08));
+		color: var(--danger-color, #ef4444);
 		font-size: 0.78rem;
 	}
 </style>
