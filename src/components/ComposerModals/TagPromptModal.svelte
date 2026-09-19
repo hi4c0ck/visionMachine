@@ -70,30 +70,10 @@
 
 {#if open}
 	<div class="modal-overlay" onclick={() => open = false} role="presentation">
-		<!-- Fake frame: a relative container hugging the card; the icon ring
-		     is positioned around the card on the dark backdrop. -->
+		<!-- Fake frame: a 3x3 grid that reserves real cells for the icon
+		     ring, with the card in the center cell. Outer bounds come from
+		     the slot columns/rows, so the card is correctly inset. -->
 		<div class="tpm-frame" onclick={(e) => e.stopPropagation()}>
-			<div class="modal tpm-modal" role="dialog" aria-modal="true" tabindex="-1">
-				<div class="modal-header">
-					<h3>Edit {specName} Prompt</h3>
-				</div>
-				<div class="modal-body">
-					<div class="tpm-prompt-zone">
-						<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
-						<textarea
-							id="tag-prompt-area"
-							bind:value={tagPrompt}
-							placeholder="Describe this {specName.toLowerCase()}…"
-							class="modal-textarea tpm-textarea"
-							aria-labelledby="tag-prompt-label"
-						></textarea>
-					</div>
-				</div>
-				<div class="modal-footer">
-					<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
-					<button class="btn-confirm" onclick={confirm}>Confirm</button>
-				</div>
-			</div>
 			{#each icons as ic (ic.id)}
 				<button
 					class="tpm-icon"
@@ -109,39 +89,52 @@
 					</span>
 				</button>
 			{/each}
+			<div class="tpm-center" role="dialog" aria-modal="true" tabindex="-1">
+				<div class="modal tpm-modal">
+					<div class="modal-header">
+						<h3>Edit {specName} Prompt</h3>
+						</div>
+						<div class="modal-body">
+							<div class="tpm-prompt-zone">
+								<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
+								<textarea
+									id="tag-prompt-area"
+									bind:value={tagPrompt}
+									placeholder="Describe this {specName.toLowerCase()}…"
+									class="modal-textarea tpm-textarea"
+									aria-labelledby="tag-prompt-label"
+								></textarea>
+							</div>
+						</div>
+						<div class="modal-footer">
+							<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
+							<button class="btn-confirm" onclick={confirm}>Confirm</button>
+						</div>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}
 
 <style>
-	/* Fake frame: hugs the card, becomes the positioning context for the
-	   icon ring, so the marks orbit the card — not the whole overlay. */
+	/* Fake frame: 3x3 grid. The ring cells define the outer bounds; the card
+	   occupies the center cell and is correctly inset from every icon. */
 	.tpm-frame {
 		position: relative;
-		display: inline-flex;
+		display: grid;
+		grid-template-columns: 64px minmax(0, 420px) 64px;
+		grid-template-rows: 64px minmax(0, auto) 64px;
+		gap: 20px;
 	}
 
-	.tpm-modal {
-		max-width: 480px;
-	}
-
-	/* ── Icon ring: absolutely positioned around the card on the dark backdrop. */
-	/* Top row: 3 marks above the header (i1 i2 i3 in the layout sketch). */
-	.slot-nw { top: -32px; left: 0; }
-	.slot-n  { top: -32px; left: 50%; transform: translateX(-50%); }
-	.slot-ne { top: -32px; right: 0; }
-	/* Flanks: beside the prompt area. */
-	.slot-w  { top: 50%; left: -32px; transform: translateY(-50%); }
-	.slot-e  { top: 50%; right: -32px; transform: translateY(-50%); }
-	/* Bottom row: under the footer (i6 i8 in the sketch). */
-	.slot-sw { bottom: -32px; left: 0; }
-	.slot-s  { bottom: -32px; left: 50%; transform: translateX(-50%); }
-	.slot-se { bottom: -32px; right: 0; }
-
+	/* Ring cells: 40px icon tiles sitting inside 64px grid slots, so every
+	   mark has fair space on the dark backdrop. */
 	.tpm-icon {
-		position: absolute;
 		width: 40px;
 		height: 40px;
+		align-self: center;
+		justify-self: center;
+		position: relative;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -155,7 +148,30 @@
 			transform 0.15s ease,
 			border-color 0.15s ease,
 			box-shadow 0.15s ease;
-		z-index: 1;
+	}
+
+	/* Slot → grid cell mapping (icons in promptIcons.ts carry the pos). */
+	.slot-nw { grid-column: 1; grid-row: 1; }
+	.slot-n  { grid-column: 2; grid-row: 1; }
+	.slot-ne { grid-column: 3; grid-row: 1; }
+	.slot-w  { grid-column: 1; grid-row: 2; }
+	.slot-e  { grid-column: 3; grid-row: 2; }
+	.slot-sw { grid-column: 1; grid-row: 3; }
+	.slot-s  { grid-column: 2; grid-row: 3; }
+	.slot-se { grid-column: 3; grid-row: 3; }
+
+	/* The card lives in the center cell, stretched to the slot width so the
+	   prompt zone stays the modal's default readable size. */
+	.tpm-center {
+		grid-column: 2;
+		grid-row: 2;
+		display: flex;
+		justify-content: center;
+	}
+
+	.tpm-modal {
+		width: 100%;
+		max-width: 420px;
 	}
 
 	.tpm-icon:hover svg,
@@ -163,19 +179,13 @@
 		transform: scale(1.12);
 	}
 
-	/* Hover / focus lift — keep the slot's positional transform intact. */
 	.tpm-icon:hover,
 	.tpm-icon:focus-visible {
 		opacity: 1;
 		border-color: var(--accent-color);
 		box-shadow: 0 4px 14px var(--accent-glow, rgba(89, 181, 255, 0.25));
-	}
-	.slot-nw:hover, .slot-ne:hover, .slot-sw:hover, .slot-se:hover {
 		transform: translateY(-3px);
 	}
-	.slot-n:hover, .slot-s:hover { transform: translateX(-50%) translateY(-3px); }
-	.slot-w:hover, .slot-w:focus-visible { transform: translateY(-50%) translateX(-3px); }
-	.slot-e:hover, .slot-e:focus-visible { transform: translateY(-50%) translateX(3px); }
 
 	.tpm-icon:focus-visible {
 		outline: none;
@@ -221,6 +231,22 @@
 		bottom: auto;
 		top: calc(100% + 8px);
 		transform: translateX(-50%) translateY(-4px);
+	}
+
+	/* Side-ring tooltips: point inward toward the card so they never run off
+	   the screen edge. */
+	.slot-w .tpm-icon-tip {
+		left: auto;
+		right: calc(100% + 8px);
+		bottom: 50%;
+		transform: translateY(50%);
+		text-align: right;
+	}
+	.slot-e .tpm-icon-tip {
+		left: calc(100% + 8px);
+		bottom: 50%;
+		transform: translateY(50%);
+		text-align: left;
 	}
 
 	.tpm-icon:hover .tpm-icon-tip,
