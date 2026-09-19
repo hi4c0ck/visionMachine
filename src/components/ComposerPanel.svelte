@@ -246,6 +246,7 @@ import { flashToast } from '$lib/flashToast';
 	let showTagPromptModal = $state(false);
 	let editingTagId = $state<string>('');
 	let editingSegmentId = $state<string>('');
+	let editingTagType = $state<TagType>('scene');
 	let tagPrompt = $state('');
 
 	// Global / Sound prompt modal (global-alike elements)
@@ -697,6 +698,7 @@ import { flashToast } from '$lib/flashToast';
 		activePipeIdx = idx;
 		editingTagId = tag.id;
 		editingSegmentId = seg.id;
+		editingTagType = tag.tag;
 		tagPrompt = tag.prompt || '';
 		showTagPromptModal = true;
 		closeMenus();
@@ -1008,10 +1010,11 @@ import { flashToast } from '$lib/flashToast';
 		<TagPromptModal
 			sessionId={session?.id}
 			pipeId={activePipe.id}
-		segmentId={editingSegmentId}
-		tagId={editingTagId}
-		prompt={tagPrompt}
-		bind:open={showTagPromptModal}
+			segmentId={editingSegmentId}
+			tagId={editingTagId}
+			tagType={editingTagType}
+			prompt={tagPrompt}
+			bind:open={showTagPromptModal}
 		onConfirm={(p) => confirmTagPrompt(p)}
 	/>
 {/if}
