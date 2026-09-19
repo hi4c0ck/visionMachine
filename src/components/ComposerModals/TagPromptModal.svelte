@@ -42,6 +42,8 @@
 		(ICONS_BY_TAG_TYPE as Record<string, AtlasIcon[]>)[safeTagType] ?? ICONS_BY_TAG_TYPE.scene
 	);
 	const specName = $derived(TAG_SPECIFICATIONS[safeTagType].name);
+	// The tag-type palette color themes the ring: glyph + tile accents.
+	const tagColor = $derived(TAG_SPECIFICATIONS[safeTagType].color);
 
 	// Seed from the panel-provided prompt when the modal opens
 	$effect(() => {
@@ -82,7 +84,7 @@
 					aria-label={ic.tag + ' — ' + ic.meaning}
 					onclick={() => insertTag(ic)}
 				>
-					<PromptIcon id={ic.id} size={24} ariaLabel={ic.tag} />
+					<PromptIcon id={ic.id} size={24} color={tagColor} ariaLabel={ic.tag} />
 					<span class="tpm-icon-tip" aria-hidden="true">
 						<b>{ic.tag}</b>
 						{ic.meaning}
@@ -90,26 +92,23 @@
 				</button>
 			{/each}
 			<div class="tpm-center" role="dialog" aria-modal="true" tabindex="-1">
-				<div class="modal tpm-modal">
+				<div class="modal tpm-modal" style="--tag-color: {tagColor};">
 					<div class="modal-header">
 						<h3>Edit {specName} Prompt</h3>
-						</div>
-						<div class="modal-body">
-							<div class="tpm-prompt-zone">
-								<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
-								<textarea
-									id="tag-prompt-area"
-									bind:value={tagPrompt}
-									placeholder="Describe this {specName.toLowerCase()}…"
-									class="modal-textarea tpm-textarea"
-									aria-labelledby="tag-prompt-label"
-								></textarea>
-							</div>
-						</div>
-						<div class="modal-footer">
-							<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
-							<button class="btn-confirm" onclick={confirm}>Confirm</button>
-						</div>
+					</div>
+					<div class="modal-body">
+						<textarea
+							id="tag-prompt-area"
+							bind:value={tagPrompt}
+							placeholder="Describe this {specName.toLowerCase()}…"
+							class="modal-textarea tpm-textarea"
+							aria-label={specName + ' prompt'}
+						></textarea>
+					</div>
+					<div class="modal-footer">
+						<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
+						<button class="btn-confirm" onclick={confirm}>Confirm</button>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -127,11 +126,13 @@
 		gap: 20px;
 	}
 
-	/* Ring cells: 40px icon tiles sitting inside 64px grid slots, so every
-	   mark has fair space on the dark backdrop. */
+	/* Ring cells: 44px icon tiles inside 64px grid slots, so every mark has
+	   fair space on the dark backdrop. Tiles are themed with the tag-type
+	   color: colored border + a soft colored wash, full glyph opacity so the
+	   marks dominate their slot. */
 	.tpm-icon {
-		width: 40px;
-		height: 40px;
+		width: 44px;
+		height: 44px;
 		align-self: center;
 		justify-self: center;
 		position: relative;
@@ -139,15 +140,28 @@
 		align-items: center;
 		justify-content: center;
 		background: var(--bg-elevated);
-		border: 1px solid var(--border-light);
-		border-radius: 9px;
+		border: 1.5px solid var(--tag-color, var(--accent-color));
+		border-radius: 10px;
 		cursor: pointer;
-		opacity: 0.65;
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--tag-color, var(--accent-color)) 12%, transparent);
 		transition:
-			opacity 0.15s ease,
 			transform 0.15s ease,
 			border-color 0.15s ease,
 			box-shadow 0.15s ease;
+	}
+
+	/* A subtle colored wash behind the glyph, themed per tag type. */
+	.tpm-icon::before {
+		content: '';
+		position: absolute;
+		inset: 4px;
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--tag-color, var(--accent-color)) 14%, transparent);
+		transition: background 0.15s ease;
+	}
+	.tpm-icon svg {
+		position: relative;
+		z-index: 1;
 	}
 
 	/* Slot → grid cell mapping (icons in promptIcons.ts carry the pos). */
@@ -176,15 +190,18 @@
 
 	.tpm-icon:hover svg,
 	.tpm-icon:focus-visible svg {
-		transform: scale(1.12);
+		transform: scale(1.15);
 	}
 
 	.tpm-icon:hover,
 	.tpm-icon:focus-visible {
-		opacity: 1;
-		border-color: var(--accent-color);
-		box-shadow: 0 4px 14px var(--accent-glow, rgba(89, 181, 255, 0.25));
 		transform: translateY(-3px);
+		border-color: var(--tag-color, var(--accent-color));
+		box-shadow: 0 0 0 4px color-mix(in srgb, var(--tag-color, var(--accent-color)) 25%, transparent);
+	}
+	.tpm-icon:hover::before,
+	.tpm-icon:focus-visible::before {
+		background: color-mix(in srgb, var(--tag-color, var(--accent-color)) 26%, transparent);
 	}
 
 	.tpm-icon:focus-visible {
@@ -255,13 +272,31 @@
 		transform: translateX(-50%);
 	}
 
-	.tpm-label {
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--text-secondary);
+	/* Prompt zone: full-width editable textarea. Visually distinct from a
+	   readonly field — a tag-colored left rail signals "this is yours to
+	   write", plus an editable affordance on focus. */
+	.tpm-textarea {
+		width: 100%;
+		min-height: 170px;
+		resize: vertical;
+		line-height: 1.6;
+		font-size: 0.9rem;
+		color: var(--text-primary);
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-left: 3px solid var(--tag-color, var(--accent-color));
+		border-radius: 6px;
+		padding: 12px 14px;
 	}
 
-	.tpm-textarea {
-		min-height: 150px;
+	.tpm-textarea:focus {
+		outline: none;
+		border-color: var(--border-color);
+		border-left-color: var(--tag-color, var(--accent-color));
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--tag-color, var(--accent-color)) 20%, transparent);
+	}
+
+	.tpm-textarea::placeholder {
+		color: var(--text-muted);
 	}
 </style>
