@@ -121,10 +121,11 @@ test.describe('Appending zones', () => {
 		}
 	});
 
-	test('pipe-full guard: when no gap fits min span, append shows a toast, not a dead modal', async ({ page }) => {
-		// Pack the whole pipe (0–240 on the default 241-frame pipe), then try
-		// to append. handleAddSegment must short-circuit with a flashToast
-		// instead of opening an unconfirmable modal.
+	test('pipe-full guard: when no gap fits min span, the append affordance disappears', async ({ page }) => {
+		// Pack the whole pipe (0–240 on the default 241-frame pipe) — no free
+		// gap can host a new zone, so the "+ Zone" button is hidden entirely
+		// (a dead modal would be worse than no button). The pipe-full toast
+		// path still guards any direct store commit (e.g. an in-flight drag).
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Timeline' }).click();
@@ -133,15 +134,11 @@ test.describe('Appending zones', () => {
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '240');
 
-		const appendBtn = page.locator('.btn-add-zone');
-		await appendBtn.click();
-
-		// No modal should open…
+		// The append button vanishes — no usable gap remains. It's gone from
+		// the DOM entirely, so it can't open a dead modal; no toast fires.
+		await expect(page.locator('.btn-add-zone')).toHaveCount(0);
+		// And no modal is open anywhere.
 		await expect(page.locator('.modal')).toHaveCount(0);
-		// …and the pipe-full toast should surface.
-		await expect(page.locator('div[role="alert"]', { hasText: /No free space for a new segment/i })).toBeVisible({
-			timeout: 5000,
-		});
 	});
 
 	test('tag lanes persist on the same line when tags come and go', async ({ page }) => {

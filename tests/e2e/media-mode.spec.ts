@@ -2,8 +2,8 @@
  * E2E for the pipe-level media mode (docs/agnes-model-catalog.md, Q7).
  * The default video model (agnes-video-2.5-flash) offers EXCLUSIVE
  * keyframes/reference modes, so the pipe UI renders a toggle and exactly
- * one of the two media rows is available at a time. The default uiVariant
- * is 'fixed' → the rows are the aux-panel tabs.
+ * one of the two media rows is available at a time. The composer ships the
+ * 'current' layout: independent KEYFRAMES / SUBJECT REFS rows (no tabs).
  * Run: npx playwright test tests/e2e/media-mode.spec.ts
  */
 import { test, expect } from '@playwright/test';
@@ -35,14 +35,15 @@ test.describe('Pipe media mode', () => {
     await expect(toggle).toBeVisible();
     await expect(toggle.locator('.media-opt.active')).toHaveText('Keyframes');
 
-    // Fixed variant: in keyframes mode the SUBJECT REFS tab is unavailable.
-    await expect(pipe.locator('.aux-tab', { hasText: 'KEYFRAMES' })).toBeVisible();
-    await expect(pipe.locator('.aux-tab', { hasText: 'SUBJECT REFS' })).toHaveCount(0);
+    // Current variant: in keyframes mode the KEYFRAMES row shows, SUBJECT REFS
+    // row is hidden (both are independent rows, not tabs).
+    await expect(pipe.locator('.row-label', { hasText: 'KEYFRAMES' })).toBeVisible();
+    await expect(pipe.locator('.row-label', { hasText: 'SUBJECT REFS' })).toHaveCount(0);
 
     // Switching to reference flips the available row.
     await toggle.locator('.media-opt', { hasText: 'Reference' }).click();
     await expect(toggle.locator('.media-opt.active')).toHaveText('Reference');
-    await expect(pipe.locator('.aux-tab', { hasText: 'SUBJECT REFS' })).toBeVisible();
-    await expect(pipe.locator('.aux-tab', { hasText: 'KEYFRAMES' })).toHaveCount(0);
+    await expect(pipe.locator('.row-label', { hasText: 'SUBJECT REFS' })).toBeVisible();
+    await expect(pipe.locator('.row-label', { hasText: 'KEYFRAMES' })).toHaveCount(0);
   });
 });
