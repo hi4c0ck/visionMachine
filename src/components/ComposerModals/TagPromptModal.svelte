@@ -45,6 +45,46 @@
 	// The tag-type palette color themes the ring: glyph + tile accents.
 	const tagColor = $derived(TAG_SPECIFICATIONS[safeTagType].color);
 
+	// On a light background, pale-yellow glyphs can't be read (camera tag's
+	// #FFE66D is nearly white). Compute an adjusted color with contrast
+	// ratio ≥ 2.5:1 against --bg-elevated, falling back to the raw color.
+	function tagColorContrast(base: string, bg: string): string {
+		const hx = (hex: string) => {
+			const m = hex.match(/^#?([0-9a-f]{6})$/i);
+			if (!m) return null;
+			const n = parseInt(m[1], 16);
+			return [(n >> 16) & 255, (n >> 8) & 255, n & 255] as const;
+		};
+		const lum = ([r, g, b]: readonly [number, number, number]) => {
+			const f = (v: number) => {
+				const s = v / 255;
+				return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+			};
+			return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+		};
+		const ratio = (l1: number, l2: number) => (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+		const c = hx(base), b = hx(bg);
+		if (!c || !b) return base;
+		const l1 = lum(c), l2 = lum(b);
+		if (ratio(l1, l2) >= 2.5) return base;
+		// dark bg → brighten, light bg → darken
+		const target = l2 > 0.5 ? [0, 0, 0] : [255, 255, 255];
+		// binary search t for contrast >= 3:1
+		let lo = 0, hi = 1;
+		const mix = (t: number) => c.map((v, i) => Math.round(v + (target[i] - v) * t));
+		while (lo < hi - 0.001) {
+			const mid = (lo + hi) / 2;
+			if (ratio(lum(mix(mid) as [number, number, number]), l2) >= 3) hi = mid;
+			else lo = mid;
+		}
+		return '#' + mix(hi).map((v) => v.toString(16).padStart(2, '0')).join('');
+	}
+
+	const themeBg = $derived(
+		(typeof document !== 'undefined' ? getComputedStyle(document.documentElement).getPropertyValue('--bg-elevated') : '').trim() || '#252538'
+	);
+	const tagColorSafe = $derived(tagColorContrast(tagColor, themeBg));
+
 	// Seed from the panel-provided prompt when the modal opens
 	$effect(() => {
 		if (!open) return;
@@ -84,7 +124,7 @@
 					aria-label={ic.tag + ' — ' + ic.meaning}
 					onclick={() => insertTag(ic)}
 				>
-					<PromptIcon id={ic.id} size={24} color={tagColor} ariaLabel={ic.tag} />
+					<PromptIcon id={ic.id} size={24} color={tagColorSafe} ariaLabel={ic.tag} />
 					<span class="tpm-icon-tip" aria-hidden="true">
 						<b>{ic.tag}</b>
 						{ic.meaning}
@@ -92,7 +132,7 @@
 				</button>
 			{/each}
 			<div class="tpm-center" role="dialog" aria-modal="true" tabindex="-1">
-				<div class="modal tpm-modal" style="--tag-color: {tagColor};">
+				<div class="modal tpm-modal" style="--tag-color: {tagColor}; --tag-color-safe: {tagColorSafe};">
 					<div class="modal-header">
 						<h3>Edit {specName} Prompt</h3>
 					</div>
