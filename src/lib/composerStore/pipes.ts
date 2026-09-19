@@ -123,7 +123,7 @@ export class PipeServiceImpl implements PipeService {
     const MIN_SPAN = 8;
 
     for (const el of pipe.elements as any[]) {
-      if (el.tag === 'global_style') {
+      if (el.tag === 'global_style' || el.tag === 'sound') {
         if (Number.isFinite(el.frameStart)) el.frameStart = Math.min(el.frameStart, maxEnd);
         if (Number.isFinite(el.frameEnd)) el.frameEnd = Math.min(el.frameEnd, maxEnd);
         if (el.frameEnd <= el.frameStart) el.frameEnd = Math.min(el.frameStart + MIN_SPAN, maxEnd);

@@ -145,8 +145,26 @@ export interface GlobalElement {
   /** End frame (multiple of 8, ≤ totalFrames - 1) */
   frameEnd: number;
   enabled: boolean;
-  /** Legacy text value — kept for backward compat, not used in new UI */
+  /** Prompt for the global style zone (the primary text source) */
+  prompt?: string;
+  /** Legacy text value — kept for backward compat; falls back when no prompt */
   value?: string;
+}
+
+/**
+ * Sound element — global-alike: a temporal range bar like Global, with its
+ * own prompt that feeds the generated prompt as a `sound:` section.
+ */
+export interface SoundElement {
+  id: string;
+  tag: 'sound';
+  /** Start frame (multiple of 8) */
+  frameStart: number;
+  /** End frame (multiple of 8, ≤ totalFrames - 1) */
+  frameEnd: number;
+  enabled: boolean;
+  /** Prompt for the sound zone */
+  prompt?: string;
 }
 
 /**
@@ -163,7 +181,7 @@ export interface TimelineElement {
  * Pipe element — top-level abstraction in a pipe
  * Can be either Global or Timeline (mutually exclusive at pipe level)
  */
-export type PipeElement = GlobalElement | TimelineElement;
+export type PipeElement = GlobalElement | SoundElement | TimelineElement;
 
 /**
  * Single keyframe in a pipe
@@ -271,6 +289,8 @@ export interface GenerationTaskView {
   stages: GenerationStageView[];
   error?: string | null;
   outputPath?: string | null;
+  /** Redacted request/response log file (Phase E, E1); expandable in the progress modal. */
+  requestLog?: string | null;
 }
 
 /**

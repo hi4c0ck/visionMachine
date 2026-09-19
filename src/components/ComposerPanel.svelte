@@ -1,9 +1,10 @@
 <script lang="ts">
-	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec } from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec, GlobalElement, SoundElement } from '$types';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
 	import PipeLengthModal from './ComposerModals/PipeLengthModal.svelte';
+	import GlobalPromptModal from './ComposerModals/GlobalPromptModal.svelte';
 	import TagPromptModal from './ComposerModals/TagPromptModal.svelte';
 	import AddTrackMenu from './ComposerMenus/AddTrackMenu.svelte';
 	import TagSelectorMenu from './ComposerMenus/TagSelectorMenu.svelte';
@@ -21,6 +22,11 @@
 		addGlobalElement as addGlobalElementAction,
 		toggleGlobalElement as toggleGlobalElementAction,
 		removeGlobalElement as removeGlobalElementAction,
+		updateGlobalPrompt as updateGlobalPromptAction,
+		addSoundElement as addSoundElementAction,
+		toggleSoundElement as toggleSoundElementAction,
+		removeSoundElement as removeSoundElementAction,
+		updateSoundPrompt as updateSoundPromptAction,
 		addTimelineElement as addTimelineElementAction,
 		addSegment as addSegmentAction,
 		removeSegment as removeSegmentAction,
@@ -242,6 +248,16 @@ import { flashToast } from '$lib/flashToast';
 	let editingSegmentId = $state<string>('');
 	let tagPrompt = $state('');
 
+	// Global / Sound prompt modal (global-alike elements)
+	let showGlobalPromptModal = $state(false);
+	let globalPromptLabel = $state('');
+	let globalPromptTarget = $state<{
+		kind: 'global' | 'sound';
+		elementId: string;
+		pipeId: string;
+	} | null>(null);
+	let globalPromptText = $state('');
+
 	// [+] menu
 	let showAddMenu = $state(false);
 	let addMenuX = $state(0);
@@ -279,8 +295,10 @@ import { flashToast } from '$lib/flashToast';
 		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'timeline');
 	const hasGlobal = (p: PipeRow | null | undefined): boolean =>
 		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'global_style');
+	const hasSound = (p: PipeRow | null | undefined): boolean =>
+		!!p && Array.isArray(p.elements) && p.elements.some((e: any) => e.tag === 'sound');
 	function showAddTrackButton(p: PipeRow): boolean {
-		return !hasTimeline(p) || !hasGlobal(p);
+		return !hasTimeline(p) || !hasGlobal(p) || !hasSound(p);
 	}
 
 	// Tag selector menu — selection state now lives in TagSelectorMenu
@@ -487,6 +505,38 @@ import { flashToast } from '$lib/flashToast';
 		showAddMenu = false;
 	}
 
+		function handleAddSound(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		// Sound spans the full length of THIS pipe (its own frame space),
+		// same default as Global — the user trims it via the lane grips.
+		addSoundElementAction(session.id, pipe.id, 0, pipe.lengthFrames - 1).then(r => {
+			if (r.errors?.length) console.error('[ComposerPanel] addSound:', r.errors);
+		});
+		showAddMenu = false;
+	}
+
+		function openGlobalPrompt(kind: 'global' | 'sound', pipe: PipeRow, element: any) {
+		activePipeIdx = pipes.indexOf(pipe);
+		globalPromptLabel = kind === 'sound' ? 'Sound' : 'Global';
+		globalPromptTarget = { kind, elementId: element.id, pipeId: pipe.id };
+		globalPromptText = (element.prompt ?? element.value ?? '');
+		showGlobalPromptModal = true;
+		closeMenus();
+	}
+
+		async function confirmGlobalPrompt(prompt: string) {
+		if (!globalPromptTarget || !session?.id) return;
+		const result = globalPromptTarget.kind === 'sound'
+			? await updateSoundPromptAction(session.id, globalPromptTarget.pipeId, globalPromptTarget.elementId, prompt)
+			: await updateGlobalPromptAction(session.id, globalPromptTarget.pipeId, globalPromptTarget.elementId, prompt);
+		if (result.errors.length > 0) {
+			console.error('[ComposerPanel] updateGlobalPrompt:', result.errors);
+			return;
+		}
+		showGlobalPromptModal = false;
+	}
+
 	// Drag engine + geometry moved to TimelineSection (owns the coordinate
 	// canvas, ResizeObserver, and temporal drag state).
 
@@ -686,6 +736,20 @@ import { flashToast } from '$lib/flashToast';
 		if (result.errors.length > 0) console.error('[ComposerPanel] toggleGlobal:', result.errors);
 	}
 
+		async function handleToggleSound(idx: number, soundId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await toggleSoundElementAction(session.id, pipe.id, soundId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] toggleSound:', result.errors);
+	}
+
+		async function handleRemoveSound(idx: number, soundId: string) {
+		const pipe = pipes[idx];
+		if (!pipe || !session?.id) return;
+		const result = await removeSoundElementAction(session.id, pipe.id, soundId);
+		if (result.errors.length > 0) console.error('[ComposerPanel] removeSound:', result.errors);
+	}
+
 	function closeMenus() {
 		showAddMenu = false;
 		showTagMenu = false;
@@ -846,6 +910,10 @@ import { flashToast } from '$lib/flashToast';
 				onAddTrack={(e) => handleToggleAddMenu(pipeIdx, e)}
 				onToggleGlobal={(globalId) => handleToggleGlobal(pipeIdx, globalId)}
 				onRemoveGlobal={(globalId) => handleRemoveGlobal(pipeIdx, globalId)}
+				onEditGlobalPrompt={(g) => openGlobalPrompt('global', pipe, g)}
+				onToggleSound={(soundId) => handleToggleSound(pipeIdx, soundId)}
+				onRemoveSound={(soundId) => handleRemoveSound(pipeIdx, soundId)}
+				onEditSoundPrompt={(s) => openGlobalPrompt('sound', pipe, s)}
 				onAddSegment={() => handleAddSegment(pipeIdx)}
 				onDeleteSegment={(segId) => handleDeleteSegment(pipeIdx, segId)}
 				onOpenTagMenu={(segId, e) => handleOpenTagMenu(segId, e, pipeIdx)}
@@ -867,7 +935,8 @@ import { flashToast } from '$lib/flashToast';
 		y={addMenuY}
 		onAddTimeline={() => activePipeIdx !== null && handleAddTimeline(activePipeIdx)}
 		onAddGlobal={() => activePipeIdx !== null && handleAddGlobal(activePipeIdx)}
-	/>
+		onAddSound={() => activePipeIdx !== null && handleAddSound(activePipeIdx)}
+/>
 
 	<!-- ═══ TAG SELECTOR DROPDOWN ═══ -->
 	<TagSelectorMenu
@@ -946,6 +1015,16 @@ import { flashToast } from '$lib/flashToast';
 		onConfirm={(p) => confirmTagPrompt(p)}
 	/>
 {/if}
+
+	<!-- ═══ GLOBAL / SOUND PROMPT MODAL ═══ -->
+	{#if activePipe}
+		<GlobalPromptModal
+			label={globalPromptLabel}
+			prompt={globalPromptText}
+			bind:open={showGlobalPromptModal}
+			onConfirm={(p) => confirmGlobalPrompt(p)}
+		/>
+	{/if}
 
 <style>
 

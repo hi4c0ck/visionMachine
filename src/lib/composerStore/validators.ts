@@ -191,10 +191,14 @@ export function normalizePipe(pipe: PipeRow): PipeRow {
           if (tag.spec === undefined || tag.spec === null) tag.spec = TAG_SPECIFICATIONS[tag.tag as TagType];
         }
       }
-    } else if (el.tag === 'global_style') {
+    } else if (el.tag === 'global_style' || el.tag === 'sound') {
       if (!Number.isFinite(el.frameStart) || el.frameStart < 0) el.frameStart = 0;
       if (!Number.isFinite(el.frameEnd) || el.frameEnd > pipe.lengthFrames - 1) el.frameEnd = pipe.lengthFrames - 1;
       if (el.enabled === undefined || el.enabled === null) el.enabled = true;
+      // Prompt fallback: a legacy global element may carry only `value`.
+      if (el.tag === 'global_style' && el.prompt === undefined && el.value !== undefined && el.value !== null) {
+        el.prompt = String(el.value);
+      }
     }
   }
 

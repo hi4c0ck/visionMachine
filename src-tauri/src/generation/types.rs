@@ -11,9 +11,10 @@ pub enum StageKind {
 }
 
 /// Where a stage's input comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
+    #[default]
     Keyframe,
     Subject,
     Video,
@@ -96,4 +97,8 @@ pub struct GenerationTaskView {
     /// Path of the generated video (terminal success only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
+    /// Redacted per-stage request/response log file (E1: keys already
+    /// masked on write; the progress modal expands it on demand).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_log: Option<String>,
 }

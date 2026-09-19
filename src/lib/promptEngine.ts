@@ -37,8 +37,15 @@ export function buildHeuristics(pipe: PipeRow): string {
   const lines: string[] = [];
 
   const global = pipe.elements.find((e) => 'tag' in e && e.tag === 'global_style') as any;
-  if (global && global.enabled !== false && global.value && global.value.trim()) {
-    lines.push(`style: ${global.value.trim()}`);
+  if (global && global.enabled !== false) {
+    const text = (global.prompt ?? global.value ?? '').trim();
+    if (text) lines.push(`style: ${text}`);
+  }
+
+  const sound = pipe.elements.find((e) => 'tag' in e && e.tag === 'sound') as any;
+  if (sound && sound.enabled !== false) {
+    const text = (sound.prompt ?? '').trim();
+    if (text) lines.push(`sound: ${text}`);
   }
 
   const scenes: string[] = [];

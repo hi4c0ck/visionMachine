@@ -21,7 +21,7 @@
 	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
 	import { getComposerUiVariant, setComposerUiVariant, type ComposerUiVariant } from '$lib/composerUiVariant';
-	import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel } from '$lib/settings';
+	import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId } from '$lib/settings';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -844,6 +844,14 @@
 			flashToast('Video model is read-only (paid) — pick a generable model in Settings', 'error');
 			return;
 		}
+		// Phase A: resolve the model specs and run the concrete pre-checks
+		// (E4/E6). Any conflict blocks generation with its specific message.
+		const pair = resolveSpecs(models.imageModel, models.videoModel);
+		const conflicts = pipePrechecks(pipe, selectedSession, pair.image?.spec ?? null, pair.video?.spec ?? null);
+		if (conflicts.length > 0) {
+			for (const c of conflicts) flashToast(c.message, 'error');
+			return;
+		}
 		try {
 			const startedAt = Date.now();
 			const res = await invoke<{ task_id: string }>('start_generation', {
@@ -856,6 +864,10 @@
 					image_model: models.imageModel,
 					video_model: models.videoModel,
 					seed: seed ?? undefined,
+					// Phase A: profile + resolved specs travel with the task.
+					profile_id: getProfileId() ?? undefined,
+					image_spec: pair.image?.spec ?? undefined,
+					video_spec: pair.video?.spec ?? undefined,
 				},
 			});
 			showGenerateModal = false;
@@ -1046,11 +1058,11 @@
 		activeLogEntry = null;
 	}
 
-	/** ToolsPanel last-gen thumb → top-panel preview (D9). */
+	/** ToolsPanel last-gen thumb → top-panel preview (D9, served via Phase E media command). */
 	function openPreview(pipe: PipeRow) {
-		const url = toMediaUrl(pipe.lastGeneration?.videoPath ?? null);
-		if (!url) return;
-		previewVideo = { url, label: pipe.name };
+		toMediaUrl(pipe.lastGeneration?.videoPath ?? null).then((url) => {
+			if (url) previewVideo = { url, label: pipe.name };
+		});
 	}
 
 	function handleFpsChange(fps: number) {

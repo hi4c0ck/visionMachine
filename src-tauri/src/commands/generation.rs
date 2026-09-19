@@ -3,10 +3,54 @@
 //! in-memory registry, terminal tasks fall back to the DB row.
 
 use serde::Deserialize;
+use sqlx::Row;
 use tauri::State;
 
-use crate::generation::{EngineInput, GenerationStageView, GenerationTaskView, TaskStatus};
+use crate::generation::{
+    EngineInput, GenerationStageView, GenerationTaskView, ModelSpecWire, TaskStatus,
+};
 use crate::AppState;
+
+/// Resolve the session media root (E3/O6 resolution order) for the provider
+/// engine: the owning project's `directory_path` when set, else the default
+/// media tree under the app-data dir (created lazily by the engine).
+async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str) -> Option<String> {
+    let row = sqlx::query(
+        "SELECT p.directory_path FROM sessions s \
+                  JOIN projects p ON p.id = s.project_id WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()?
+    .map(|r| r.try_get::<Option<String>, _>(0).ok())
+    .flatten()
+    .flatten();
+    if let Some(dir) = row {
+        let trimmed = dir.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    // Default: <appData>/com.visionmachine.desktop/media/<session_id>.
+    if let Some(d) = dirs::data_local_dir() {
+        return Some(
+            d.join("com.visionmachine.desktop")
+                .join("media")
+                .join(session_id)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    Some(
+        std::env::temp_dir()
+            .join("visionmachine")
+            .join("media")
+            .join(session_id)
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
 
 #[derive(Deserialize)]
 pub struct StartGenerationInput {
@@ -15,7 +59,7 @@ pub struct StartGenerationInput {
     /// Final prompt string built by the frontend prompt engine.
     pub prompt: String,
     /// Per-piece model override from the generate modal (Phase 4). None = use
-    /// the global provider setting. Recorded in the generation log now; the
+    /// the global provider setting. Recorded in the generation log; the
     /// provider engine consumes these when it lands.
     #[serde(default)]
     pub image_model: Option<String>,
@@ -25,6 +69,16 @@ pub struct StartGenerationInput {
     /// provider picks; the value is recorded in the generation log.
     #[serde(default)]
     pub seed: Option<i64>,
+    /// Provider profile that owns the API slots (docs/provider-engine-tasks.md,
+    /// Phase A). Keys are read from the profile settings blob at request time only.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Resolved model specs from the frontend catalog (Phase A). Tolerant:
+    /// old callers send no specs and the fields default to None.
+    #[serde(default)]
+    pub image_spec: Option<ModelSpecWire>,
+    #[serde(default)]
+    pub video_spec: Option<ModelSpecWire>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +104,10 @@ pub async fn start_generation(
         .ok_or_else(|| "Pipe not found".to_string())?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
+    let media_root = {
+        let db = &state.db.lock().await;
+        resolve_media_root(db, &input.session_id).await
+    };
     let view = GenerationTaskView {
         task_id: task_id.clone(),
         session_id: input.session_id.clone(),
@@ -59,8 +117,11 @@ pub async fn start_generation(
         stages: crate::generation::TaskRegistry::build_stages(&task_id, pipe),
         error: None,
         output_path: None,
+        request_log: None,
     };
     let engine_input = EngineInput {
+        task_id: task_id.clone(),
+        media_root,
         prompt: input.prompt,
         pipe_id: input.pipe_id.clone(),
         fps: composer.fps,
@@ -71,6 +132,11 @@ pub async fn start_generation(
         image_model: input.image_model,
         video_model: input.video_model,
         seed: input.seed,
+        profile_id: input.profile_id,
+        image_spec: input.image_spec,
+        video_spec: input.video_spec,
+        stage: None,
+        upstream: Vec::new(),
     };
 
     state.generation.registry.start(view, engine_input).await?;
@@ -116,6 +182,7 @@ pub async fn get_generation_task(
         stages,
         error: row.error,
         output_path: row.output_path,
+        request_log: None,
     };
     Ok(serde_json::to_value(view).map_err(|e| e.to_string())?)
 }
@@ -126,6 +193,62 @@ pub async fn cancel_generation(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.generation.registry.cancel(&input.task_id)
+}
+
+#[derive(Deserialize)]
+pub struct ReadMediaFileInput {
+    pub path: String,
+}
+
+/// Serve a media-tree artifact to the webview (Phase E): per-project media
+/// roots can't be a static asset-protocol scope, so the command validates the
+/// requested path against a known session/project media root and returns the
+/// raw bytes. No arbitrary file reads — a path outside the media roots is
+/// rejected.
+#[tauri::command]
+pub async fn read_media_file(
+    input: ReadMediaFileInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<u8>, String> {
+    let requested = std::path::PathBuf::from(input.path.trim());
+    let inside_root = {
+        let db = &state.db.lock().await;
+        let roots = media_roots(db).await;
+        roots.iter().any(|root| requested.starts_with(root))
+    };
+    if !inside_root {
+        return Err(format!(
+            "path not inside a known media root: {}",
+            input.path
+        ));
+    }
+    if !requested.is_file() {
+        return Err(format!("media file not found: {}", input.path));
+    }
+    std::fs::read(&requested).map_err(|e| format!("read {}: {e}", requested.display()))
+}
+
+/// All known media roots: the project `directory_path` tree + the default
+/// app-data media tree (mirrors `resolve_media_root` in this module).
+async fn media_roots(db: &crate::storage::db::Database) -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(rows) = sqlx::query("SELECT directory_path FROM projects WHERE directory_path IS NOT NULL AND directory_path != ''")
+        .fetch_all(&db.pool)
+        .await
+    {
+        for r in rows {
+            if let Ok(Some(dir)) = r.try_get::<Option<String>, _>(0) {
+                let trimmed = dir.trim().to_string();
+                if !trimmed.is_empty() {
+                    roots.push(std::path::PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
+    if let Some(d) = dirs::data_local_dir() {
+        roots.push(d.join("com.visionmachine.desktop").join("media"));
+    }
+    roots
 }
 
 #[cfg(test)]
@@ -152,5 +275,42 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(with.seed, Some(42));
+    }
+
+    #[test]
+    fn start_generation_input_tolerates_missing_specs_and_profile() {
+        // Pre-Phase-A caller: no profile_id / no specs → all None.
+        let legacy: StartGenerationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "pipe_id": "p",
+            "prompt": "x"
+        }))
+        .unwrap();
+        assert!(legacy.profile_id.is_none());
+        assert!(legacy.image_spec.is_none());
+        assert!(legacy.video_spec.is_none());
+
+        // New caller with a full spec round-trips into ModelSpecWire.
+        let full: StartGenerationInput = serde_json::from_value(serde_json::json!({
+            "session_id": "s",
+            "pipe_id": "p",
+            "prompt": "x",
+            "profile_id": "prof-1",
+            "video_spec": {
+                "id": "agnes-video-2.5-flash",
+                "kind": "video",
+                "endpoint": "/v1/videos",
+                "sync": false,
+                "requestFormat": "video-job-seconds",
+                "limits": { "seconds": [4.0, 12.0], "sizeMap": { "720p": "720P" } },
+                "supportsSeed": true
+            }
+        }))
+        .unwrap();
+        assert_eq!(full.profile_id.as_deref(), Some("prof-1"));
+        let vspec = full.video_spec.as_ref().unwrap();
+        assert_eq!(vspec.id, "agnes-video-2.5-flash");
+        assert!(vspec.supports_seed());
+        assert_eq!(vspec.limits.seconds, Some([4.0, 12.0]));
     }
 }

@@ -7,12 +7,14 @@
 		y,
 		onAddTimeline,
 		onAddGlobal,
+		onAddSound,
 	} = $props<{
 		open: boolean;
 		x: number;
 		y: number;
 		onAddTimeline: () => void;
 		onAddGlobal: () => void;
+		onAddSound: () => void;
 	}>();
 </script>
 
@@ -24,6 +26,9 @@
 		</button>
 		<button class="dropdown-item" onclick={onAddGlobal}>
 			<span class="dropdown-icon">◈</span> Global
+		</button>
+		<button class="dropdown-item" onclick={onAddSound}>
+			<span class="dropdown-icon">♪</span> Sound
 		</button>
 	</div>
 {/if}

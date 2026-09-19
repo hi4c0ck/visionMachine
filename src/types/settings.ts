@@ -62,6 +62,17 @@ export interface ModelSpec {
     seconds?: [number, number];
     /** Supported aspect ratios (model-driven, P2). */
     ratios?: string[];
+    /**
+     * Resolution tier map (E8): session resolution → model size tier
+     * (e.g. "720p" → "1K" for Agnes image, "720p" → "720P" for 2.5-flash).
+     * Absent → the size param is omitted and the provider default applies.
+     */
+    sizeMap?: Record<string, string>;
+    /**
+     * Orientation ratio map (E8): session orientation → model aspect-ratio
+     * value (e.g. "horizontal" → "16:9"). Absent → param omitted.
+     */
+    ratioMap?: Record<string, string>;
   };
   /** Placeholder until concrete vendor details land — picker disables it. */
   pending?: boolean;
@@ -70,6 +81,13 @@ export interface ModelSpec {
   readOnly?: boolean;
   /** Model accepts a `seed` parameter (reproducible runs). */
   supportsSeed?: boolean;
+  /**
+   * Wire param name the engine sends cValue under when it accepts a
+   * guidance/creativity scale (E7, e.g. "guidance_scale"). Absent → the
+   * value is logged only, never sent (dev-managed per model, verified in
+   * the live-verification pass).
+   */
+  guidance?: string;
   /** Media-mode capabilities driving pipe-UI row visibility. */
   media?: ModelMedia;
 }

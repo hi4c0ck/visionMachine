@@ -1,15 +1,16 @@
 //! In-memory generation task registry: spawns/tracks/cancels tasks, builds
 //! stage lists from pipe snapshots, and persists terminal state to SQLite.
 //!
-//! The engine slot is unconfigured in this task (the provider/LLM system is
-//! future work): with no engine, generation stages fail fast with a real
-//! error — never simulated progress (decision D1).
+//! The engine slot is wired at startup with the provider engine (docs/
+//! provider-engine-tasks.md, Phase D): with no engine, generation stages
+//! fail fast with a real error — never simulated progress (decision D1).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::generation::engine::{EngineInput, GenerationEngine};
+use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine};
+use crate::generation::shaper::UpstreamOutput;
 use crate::generation::types::{
     GenerationStageView, GenerationTaskView, SourceKind, StageKind, StageStatus, TaskStatus,
 };
@@ -19,17 +20,58 @@ use crate::storage::db::Database;
 /// Sequential by default (decision D7); raise this to allow parallel tasks.
 pub const MAX_CONCURRENT_TASKS: usize = 1;
 
+/// A media-root resolver for the provider engine (E3/O6 resolution order).
+/// Production wiring (docs/provider-engine-tasks.md, Phase D): the owning
+/// project's `directory_path` when set, else the default app-data media tree.
+/// Kept as a boxed closure so the registry stays testable with a fixed path.
+#[derive(Clone)]
+pub struct MediaRootResolver {
+    inner: Arc<dyn Fn() -> Option<std::path::PathBuf> + Send + Sync>,
+}
+
+impl MediaRootResolver {
+    pub fn new(f: impl Fn() -> Option<std::path::PathBuf> + Send + Sync + 'static) -> Self {
+        Self { inner: Arc::new(f) }
+    }
+
+    /// The default resolver: the app-data media tree under
+    /// `<appData>/com.visionmachine.desktop/media` (created lazily by the
+    /// engine).
+    pub fn app_data_default() -> Self {
+        Self::new(move || match dirs::data_local_dir() {
+            Some(d) => Some(
+                d.join("com.visionmachine.desktop")
+                    .join("media")
+                    .to_path_buf(),
+            ),
+            None => None,
+        })
+    }
+
+    pub fn resolve(&self) -> Option<std::path::PathBuf> {
+        (self.inner)()
+    }
+}
+
 #[derive(Clone)]
 pub struct TaskRegistry {
     tasks: Arc<Mutex<HashMap<String, ManagedTask>>>,
     engine: Arc<Mutex<Option<Arc<dyn GenerationEngine>>>>,
     db: Database,
+    media_root: MediaRootResolver,
 }
 
 struct ManagedTask {
     view: GenerationTaskView,
     cancel: Arc<AtomicBool>,
     input: EngineInput,
+    /// Per-stage context (registry-built from the pipe snapshot at
+    /// `start()`; one `None` per `Ready` stage, which never reaches the
+    /// engine).
+    stage_plan: Vec<Option<EngineStage>>,
+    /// Accumulated upstream image outputs, in stage order (keyframes then
+    /// subjects; O5). `None` for the video stage.
+    upstream_outputs: Vec<Option<UpstreamOutput>>,
 }
 
 impl TaskRegistry {
@@ -38,7 +80,22 @@ impl TaskRegistry {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             engine: Arc::new(Mutex::new(None)),
             db,
+            media_root: MediaRootResolver::app_data_default(),
         }
+    }
+
+    /// Register a custom media-root resolver (production: project
+    /// `directory_path` else app-data; tests: a fixed temp dir).
+    pub fn with_media_root(self, media_root: MediaRootResolver) -> Self {
+        Self { media_root, ..self }
+    }
+
+    /// Expose the media-root resolver as a boxed closure (shared with the
+    /// provider engine at wiring time).
+    pub fn media_root_resolver(&self) -> Arc<dyn Fn() -> Option<std::path::PathBuf> + Send + Sync> {
+        // A fresh clone of the same logic, boxed for the engine.
+        let inner = self.media_root.clone();
+        std::sync::Arc::new(move || inner.resolve())
     }
 
     /// Register a concrete engine (the provider/LLM system plugs in later).
@@ -86,12 +143,56 @@ impl TaskRegistry {
     }
 
     /// Create + spawn a task. Rejects while a slot is busy (sequential).
+    ///
+    /// Holds the pipe-media snapshot at `start()` (docs/provider-engine-
+    /// tasks.md, Phase D) and builds the per-stage plan the engine consumes.
     pub async fn start(
         &self,
         mut view: GenerationTaskView,
-        input: EngineInput,
+        mut input: EngineInput,
     ) -> Result<(), String> {
         view.status = TaskStatus::Running;
+
+        // Pipe-media snapshot -> per-stage plan (keyframes slot order, then
+        // subjects pipe order, then the video stage).
+        let (stage_plan, upstream_outputs) = {
+            let composer = self
+                .db
+                .get_composer(&view.session_id)
+                .await
+                .map_err(|e| e.to_string())?;
+            let pipe = composer
+                .pipes
+                .iter()
+                .find(|p| p.id == view.pipe_id)
+                .cloned()
+                .unwrap_or_else(|| crate::models::composer::Pipe::new("unknown", 121));
+            input.task_id = view.task_id.clone();
+            build_stage_plan(&pipe, &view.stages)
+        };
+
+        // Resolve the media root once at `start()` (E3/O6): the caller's
+        // pre-resolved root wins, else the registry's resolver.
+        if input.media_root.as_deref().map(str::trim).is_none() {
+            input.media_root = self
+                .media_root
+                .resolve()
+                .map(|p| p.to_string_lossy().into_owned());
+        }
+        // Redacted request/response log for the progress-modal expander (E1):
+        // the file lives in the task's media dir, written per stage by the
+        // engine; keys are masked on write, so serving it is safe.
+        if let Some(root) = input.media_root.as_deref() {
+            if !root.trim().is_empty() {
+                view.request_log = Some(format!(
+                    "{}/{}{}/request.log",
+                    root.trim(),
+                    crate::generation::media::safe_dir_name(&view.pipe_id),
+                    crate::generation::media::safe_dir_name(&view.task_id)
+                ));
+            }
+        }
+
         {
             let mut tasks = self.tasks.lock().unwrap();
             let active = tasks
@@ -107,6 +208,8 @@ impl TaskRegistry {
                     view: view.clone(),
                     cancel: Arc::new(AtomicBool::new(false)),
                     input,
+                    stage_plan,
+                    upstream_outputs,
                 },
             );
         }
@@ -159,7 +262,8 @@ impl TaskRegistry {
     // ── Runner ───────────────────────────────────────────────────────────────
 
     async fn run_task(&self, task_id: String) {
-        // No engine registered → fail fast with a real error (D1).
+        // The engine slot is wired at startup (Phase D); if a task lands here
+        // without one, fail fast with a real error instead of simulating.
         if self.engine.lock().unwrap().is_none() {
             self.finish_fail_fast(&task_id).await;
             return;
@@ -176,17 +280,36 @@ impl TaskRegistry {
                 let tasks = self.tasks.lock().unwrap();
                 let entry = match tasks.get(&task_id) {
                     Some(e) => e,
-                    None => return,
+                    None => {
+                        drop(tasks);
+                        return;
+                    }
                 };
-                match entry
+                // Compute everything we need under the lock, then drop it
+                // before any await so the spawned future stays Send.
+                let pos = entry
                     .view
                     .stages
                     .iter()
-                    .position(|s| s.status == StageStatus::Pending)
-                {
-                    Some(i) => Some((i, entry.view.stages[i].clone(), entry.input.clone())),
-                    None => None,
-                }
+                    .position(|s| s.status == StageStatus::Pending);
+                let pair = pos.map(|i| {
+                    let stage = entry.view.stages[i].clone();
+                    // Per-stage input: task-level fields + this stage's
+                    // context + upstream image outputs feeding the video
+                    // stage (Phase D).
+                    let mut input = entry.input.clone();
+                    input.stage = entry.stage_plan.get(i).and_then(|s| s.clone());
+                    if stage.kind == StageKind::Video {
+                        input.upstream = entry
+                            .upstream_outputs
+                            .iter()
+                            .filter_map(|u| u.clone())
+                            .collect();
+                    }
+                    (i, stage, input)
+                });
+                drop(tasks);
+                pair
             };
 
             let Some((i, stage, input)) = next else {
@@ -209,6 +332,9 @@ impl TaskRegistry {
             match result {
                 Ok(path) => {
                     let image_output = (stage.kind == StageKind::Image).then(|| path.clone());
+                    if stage.kind == StageKind::Image {
+                        self.record_upstream(&task_id, i, &path, &input);
+                    }
                     self.patch_stage(&task_id, i, StageStatus::Done, image_output, None);
                     self.patch_progress(&task_id, *progress.lock().unwrap());
                     if stage.kind == StageKind::Video {
@@ -257,8 +383,9 @@ impl TaskRegistry {
         self.persist_terminal(task_id).await;
     }
 
-    /// No engine: every pending generation stage fails with a real error;
-    /// ready stages stay ready. Overall progress reflects true state only.
+    /// Engine slot was somehow cleared: every pending generation stage fails
+    /// with a real error; ready stages stay ready. (Unreachable in
+    /// production — the provider engine is wired at startup, Phase D.)
     async fn finish_fail_fast(&self, task_id: &str) {
         {
             let mut tasks = self.tasks.lock().unwrap();
@@ -339,6 +466,52 @@ impl TaskRegistry {
         }
     }
 
+    /// Record a finished image stage's output as an upstream image feeding
+    /// the video stage (`url` pieces use their remote source instead of a
+    /// generated file). Stable order: keyframes slot order then subjects.
+    fn record_upstream(&self, task_id: &str, idx: usize, path: &str, input: &EngineInput) {
+        let kind = match &input.stage {
+            Some(st) => match st.kind {
+                SourceKind::Keyframe => "keyframe",
+                SourceKind::Subject => "subject",
+                _ => "keyframe",
+            },
+            None => "keyframe",
+        };
+        let source_id = match &input.stage {
+            Some(st) => st
+                .ordinal
+                .map(|o| o.to_string())
+                .unwrap_or_else(|| kind.to_string()),
+            None => kind.to_string(),
+        };
+        let local = if input
+            .stage
+            .as_ref()
+            .and_then(|st| st.image_src.clone())
+            .is_some()
+        {
+            input
+                .stage
+                .as_ref()
+                .and_then(|st| st.image_src.clone())
+                .unwrap()
+        } else {
+            path.to_string()
+        };
+        let up = UpstreamOutput {
+            source_id,
+            kind: kind.to_string(),
+            local_path: local,
+        };
+        let mut tasks = self.tasks.lock().unwrap();
+        if let Some(entry) = tasks.get_mut(task_id) {
+            if let Some(slot) = entry.upstream_outputs.get_mut(idx) {
+                *slot = Some(up);
+            }
+        }
+    }
+
     fn cancel_flag(&self, task_id: &str) -> Arc<AtomicBool> {
         self.tasks
             .lock()
@@ -379,6 +552,120 @@ impl TaskRegistry {
             )
             .await;
     }
+}
+
+/// Build the per-stage `EngineStage` plan + the upstream-output slots from
+/// a pipe snapshot (docs/provider-engine-tasks.md, Phase D). `Ready`
+/// (`url`) pieces get a plan entry with `image_src` set so the video stage
+/// consumes the remote URL directly; generated pieces carry their prompt /
+/// image type / reference URL. The video stage's plan entry carries the pipe
+/// media mode + frame count for the shaper.
+fn build_stage_plan(
+    pipe: &Pipe,
+    stages: &[GenerationStageView],
+) -> (Vec<Option<EngineStage>>, Vec<Option<UpstreamOutput>>) {
+    let mut plan: Vec<Option<EngineStage>> = Vec::with_capacity(stages.len());
+    let mut upstream: Vec<Option<UpstreamOutput>> = Vec::with_capacity(stages.len());
+
+    for stage in stages {
+        match stage.source_kind {
+            SourceKind::Keyframe => {
+                // Match by source_id so the plan aligns with `view.stages`
+                // even when the re-fetched pipe differs from the one that
+                // built the stages (e.g. a session with no saved composer).
+                let kf = pipe
+                    .keyframes
+                    .iter()
+                    .find(|k| k.id == stage.source_id)
+                    .or_else(|| pipe.keyframes.first());
+                plan.push(kf.map(|kf| {
+                    let ty = if kf.kind.is_empty() {
+                        "url"
+                    } else {
+                        kf.kind.as_str()
+                    };
+                    EngineStage {
+                        kind: SourceKind::Keyframe,
+                        prompt: kf.prompt.clone(),
+                        ordinal: Some(u32::from(kf.slot_index)),
+                        image_type: Some(ty.to_string()),
+                        reference_url: kf.reference_url.clone(),
+                        image_src: if ty == "url" {
+                            kf.image_src.clone()
+                        } else {
+                            None
+                        },
+                        media_mode: None,
+                        length_frames: pipe.length_frames,
+                    }
+                }));
+                // Pre-seed `url` pieces: their remote source feeds the video
+                // stage directly (no engine run produces a file for them).
+                upstream.push(
+                    kf.filter(|k| (k.kind.is_empty() || k.kind == "url") && k.image_src.is_some())
+                        .map(|k| UpstreamOutput {
+                            source_id: k.id.clone(),
+                            kind: "keyframe".to_string(),
+                            local_path: k.image_src.clone().unwrap_or_default(),
+                        }),
+                );
+            }
+            SourceKind::Subject => {
+                let sr = pipe
+                    .subject_references
+                    .iter()
+                    .find(|s| s.id == stage.source_id)
+                    .or_else(|| pipe.subject_references.first());
+                plan.push(sr.map(|sr| {
+                    let ty = if sr.kind.is_empty() {
+                        "url"
+                    } else {
+                        sr.kind.as_str()
+                    };
+                    EngineStage {
+                        kind: SourceKind::Subject,
+                        prompt: sr.prompt.clone(),
+                        ordinal: None,
+                        image_type: Some(ty.to_string()),
+                        reference_url: None,
+                        image_src: if ty == "url" {
+                            Some(sr.image_url.clone())
+                        } else {
+                            None
+                        },
+                        media_mode: None,
+                        length_frames: pipe.length_frames,
+                    }
+                }));
+                // Pre-seed `url` subjects the same way.
+                upstream.push(
+                    sr.filter(|s| {
+                        (s.kind.is_empty() || s.kind == "url") && !s.image_url.is_empty()
+                    })
+                    .map(|s| UpstreamOutput {
+                        source_id: s.id.clone(),
+                        kind: "subject".to_string(),
+                        local_path: s.image_url.clone(),
+                    }),
+                );
+            }
+            SourceKind::Video => {
+                plan.push(Some(EngineStage {
+                    kind: SourceKind::Video,
+                    prompt: None,
+                    ordinal: None,
+                    image_type: None,
+                    reference_url: None,
+                    image_src: None,
+                    media_mode: Some(pipe.media_mode.clone()),
+                    length_frames: pipe.length_frames,
+                }));
+                // The video stage carries no upstream slot of its own.
+                upstream.push(None);
+            }
+        }
+    }
+    (plan, upstream)
 }
 
 fn stage_image(
@@ -500,6 +787,8 @@ mod tests {
 
     fn engine_input() -> EngineInput {
         EngineInput {
+            task_id: "t1".into(),
+            media_root: None,
             prompt: "<heuristics>...</heuristics>".into(),
             pipe_id: "p1".into(),
             fps: 24,
@@ -510,6 +799,11 @@ mod tests {
             image_model: None,
             video_model: None,
             seed: None,
+            profile_id: None,
+            image_spec: None,
+            video_spec: None,
+            stage: None,
+            upstream: Vec::new(),
         }
     }
 
@@ -547,6 +841,7 @@ mod tests {
             stages: TaskRegistry::build_stages(task_id, pipe),
             error: None,
             output_path: None,
+            request_log: None,
         }
     }
 

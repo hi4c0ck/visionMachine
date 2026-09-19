@@ -9,6 +9,7 @@
 	import { APP_CONSTANTS } from '$constants';
 	import { getSettings } from '$lib/settings/store';
 	import { modelsFor, getPreset } from '$lib/settings/catalog';
+	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import '../composer-modal.css';
 
 	export interface ModelSelection {
@@ -44,6 +45,18 @@
 	// editable (reproducible runs). Shown only for seed-supporting models.
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
+
+	// Phase A: live pre-checks + seconds hint against the CURRENT model picks,
+	// so conflicts are visible before the user hits Confirm (E4).
+	const conflicts = $derived.by((): PipeConflict[] => {
+		const imgSpec = imageModels.find((m) => m.id === imageModel) ?? null;
+		return pipePrechecks(pipe, session, imgSpec, selectedVideoModel);
+	});
+	const secHint = $derived.by(() => {
+		const spec = selectedVideoModel;
+		if (!spec || spec.requestFormat !== 'video-job-seconds') return null;
+		return secondsPreview(pipe, session, spec);
+	});
 	$effect(() => {
 		if (!open) return;
 		const s = getSettings();
@@ -70,7 +83,7 @@
 	}
 
 	async function confirm() {
-		if (busy) return;
+		if (busy || conflicts.length > 0) return;
 		busy = true;
 		try {
 			await onConfirm({ imageModel, videoModel }, seed);
@@ -126,7 +139,19 @@
 							/>
 						</div>
 					{/if}
+					{#if secHint}
+						<div class="gen-sec-hint" aria-label="Duration for this run">
+							<span>≈ {secHint.shown}s{secHint.clamped ? ' (clamped)' : ''}</span>
+						</div>
+					{/if}
 				</div>
+				{#if conflicts.length > 0}
+					<ul class="gen-conflicts" aria-label="Generation conflicts">
+						{#each conflicts as c (c.message)}
+							<li>{c.message}</li>
+						{/each}
+					</ul>
+				{/if}
 				<div class="gen-prompt-wrap">
 					<div class="gen-prompt-head">
 						<span class="gen-prompt-label">Final prompt</span>
@@ -151,7 +176,7 @@
 				<button class="btn-cancel" onclick={() => (open = false)} disabled={busy}>
 					{APP_CONSTANTS.strings.cancel}
 				</button>
-				<button class="btn-confirm" onclick={confirm} disabled={busy}>
+				<button class="btn-confirm" onclick={confirm} disabled={busy || conflicts.length > 0}>
 					{busy ? 'Starting…' : APP_CONSTANTS.strings.generate}
 				</button>
 			</div>
@@ -251,5 +276,30 @@
 
 	.gen-prompt.expanded {
 		height: 320px;
+	}
+
+	.gen-sec-hint {
+		display: inline-flex;
+		align-items: center;
+		padding: 3px 8px;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 5px;
+		font-size: 12px;
+		color: var(--text-muted, #71717a);
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	}
+
+	.gen-conflicts {
+		list-style: none;
+		padding: 8px 10px;
+		margin: 0 0 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		border: 1px solid var(--error-color, #ef4444);
+		border-radius: 6px;
+		background: rgba(239, 68, 68, 0.08);
+		color: var(--error-color, #ef4444);
+		font-size: 0.78rem;
 	}
 </style>

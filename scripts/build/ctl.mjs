@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { BuildState, tailLines } from './state.mjs';
 import { statusHead, statusDetail } from './render.mjs';
-import { killTree } from './spawn.mjs';
+import { killTree, readPinnedPid } from './spawn.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const state = new BuildState(root);
@@ -100,7 +100,15 @@ if (cmd === 'watch') {
 if (cmd === 'stop') {
   const s = load();
   if (!s || s.status !== 'running') {
-    console.log('[BUILD] nothing running to stop');
+    // Even a finished build may have leaked a detached tree (terminal closed
+    // mid-build): the runner pins the tree's top pid so stop can still reach it.
+    const pinned = readPinnedPid(root);
+    if (pinned) {
+      killTree(pinned);
+      console.log(`[BUILD] nothing running to stop — but pinned orphan tree ${pinned} killed`);
+    } else {
+      console.log('[BUILD] nothing running to stop');
+    }
     process.exit(0);
   }
   if (s.live) {
@@ -112,12 +120,15 @@ if (cmd === 'stop') {
     console.log(`[BUILD] stop requested (pid ${s.pid}) — marked stopped`);
     process.exit(0);
   }
-  // Stale state (process already gone): just clear the record.
+  // Stale state (runner gone, tree may still be alive): fall back to the
+  // pinned tree pid, then just clear the record.
+  const pinned = readPinnedPid(root);
+  if (pinned) killTree(pinned);
   s.status = 'stopped';
-  s.failReason = 'stale state — process already gone';
+  s.failReason = 'stale state — process already gone' + (pinned ? ` (orphan tree ${pinned} killed)` : '');
   s.finishedAt = Date.now();
   state.write(s);
-  console.log('[BUILD] stale state cleared (marked stopped)');
+  console.log(pinned ? `[BUILD] orphan tree ${pinned} killed, stale state cleared` : '[BUILD] stale state cleared (marked stopped)');
   process.exit(0);
 }
 

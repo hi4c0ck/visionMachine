@@ -16,7 +16,7 @@
 //   health.mjs · progress.mjs · state.mjs · render.mjs · spawn.mjs
 
 import { spawn } from 'node:child_process';
-import { createWriteStream, openSync } from 'node:fs';
+import { createWriteStream, mkdirSync, openSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import process from 'node:process';
@@ -134,19 +134,37 @@ let doc = state.write({
 
 if (detach) {
   const logFd = openSync(path.join(root, logFile), 'a');
-  // Forward the fully-resolved values so the background runner is identical.
-  const forwarded = ['--jobs', String(jobs)];
-  if (noLto) forwarded.push('--no-lto');
-  if (codegenUnits) forwarded.push('--codegen-units', String(codegenUnits));
-  forwarded.push('--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs));
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...forwarded], {
-    cwd: root,
-    detached: true,
-    stdio: 'ignore',
-  });
-  child.unref();
-  doc = state.write({ ...doc, pid: child.pid });
-  console.log(`[BUILD] started in background (pid ${child.pid})`);
+  // The background runner is a tiny wrapper: it spawns the real runner with
+  // stdio:'ignore' in a fully detached group and exits immediately. Detached
+  // + stdio:'ignore' breaks the Windows inheritance link, so the whole tree
+  // (wrapper → runner → tauri → cargo → rustc) survives the shell that
+  // started it — that is exactly what --detach must guarantee.
+  const stateDir = path.join(root, 'build-state');
+  mkdirSync(stateDir, { recursive: true });
+  const detachScript = path.join(stateDir, 'build-detach.mjs');
+  const runnerPath = fileURLToPath(import.meta.url);
+  writeFileSync(
+    detachScript,
+    [
+      "import { spawn } from 'node:child_process';",
+      "import { writeFileSync } from 'node:fs';",
+      `const runner = ${JSON.stringify(runnerPath)};`,
+      `const args = ${JSON.stringify(['--jobs', String(jobs), ...((noLto ? ['--no-lto'] : [])), ...((codegenUnits ? ['--codegen-units', String(codegenUnits)] : [])), '--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs)])};`,
+      'const child = spawn(process.execPath, [runner, ...args], {',
+      `  cwd: ${JSON.stringify(root)},`,
+      '  detached: true,',
+      "  stdio: 'ignore',",
+      '});',
+      'child.unref();',
+      "// Pin the runner's pid so ctl stop can still reach the tree even when",
+      "// the runner itself has died (taskkill /T /F walks the whole tree).",
+      `writeFileSync(${JSON.stringify(path.join(stateDir, 'build-pid'))}, String(child.pid));`,
+    ].join('\n'),
+    'utf8',
+  );
+  const wrapper = spawn(process.execPath, [detachScript], { detached: true, stdio: 'ignore' });
+  wrapper.unref();
+  console.log(`[BUILD] started in background (wrapper pid ${wrapper.pid})`);
   console.log(`  log:    ${logFile}`);
   console.log(`  track:  npm run build:status`);
   console.log(`  follow: npm run build:watch`);
@@ -158,11 +176,12 @@ if (detach) {
 
 console.log(`[BUILD] starting tauri build (jobs=${jobs}${noLto ? ', no-lto' : ''}, priority=${priority}, ram-guard=${guardMB} MB)`);
 
+const stateDir = path.join(root, 'build-state');
 const spec = buildCommand({
   jobs,
   noLto,
   priority,
-  stateDir: path.join(root, 'build-state'),
+  stateDir,
   codegenUnits,
 });
 const logStream = createWriteStream(path.join(root, logFile), { flags: 'a' });
@@ -173,6 +192,7 @@ let guardAborted = false;
 let stoppedByUser = false;
 
 const { child, kill } = spawnBuild(spec, {
+  stateDir,
   onLine: (line) => {
     logStream.write(line + '\n');
     parser.feed(line);

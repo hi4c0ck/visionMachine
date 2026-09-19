@@ -17,10 +17,17 @@ export function compilePrompt(pipe: PipeRow): string {
   // Global elements first (new two-layer model)
   for (const el of pipe.elements) {
     if ('tag' in el && el.tag === 'global_style') {
-      // value is legacy/optional — guard before trim
-      const value = el.value;
-      if (value && el.enabled !== false && value.trim()) {
-        lines.push(value);
+      // prompt is the primary source; value is the legacy fallback.
+      const el2 = el as any;
+      const text = (el2.prompt ?? el2.value ?? '').trim();
+      if (text && el.enabled !== false) {
+        lines.push(text);
+      }
+    } else if ('tag' in el && el.tag === 'sound') {
+      const el2 = el as any;
+      const text = (el2.prompt ?? '').trim();
+      if (text && el.enabled !== false) {
+        lines.push(text);
       }
     }
   }
@@ -81,14 +88,20 @@ export function getOrderedTags(pipe: PipeRow): Array<{
   if (!pipe || !Array.isArray(pipe.elements)) return [];
   const result: any[] = [];
   
-  // Add global prompt
-  const global = pipe.elements.find(e => 'tag' in e && e.tag === 'global_style');
-  if (global && 'value' in global && global.value) {
-    result.push({
-      tag: 'scene' as TagType,
-      name: 'Global',
-      value: global.value,
-    });
+  // Add global + sound prompts
+  const global = pipe.elements.find(e => 'tag' in e && e.tag === 'global_style') as any;
+  if (global && global.enabled !== false) {
+    const text = (global.prompt ?? global.value ?? '').trim();
+    if (text) {
+      result.push({ tag: 'scene' as TagType, name: 'Global', value: text });
+    }
+  }
+  const sound = pipe.elements.find(e => 'tag' in e && e.tag === 'sound') as any;
+  if (sound && sound.enabled !== false) {
+    const text = (sound.prompt ?? '').trim();
+    if (text) {
+      result.push({ tag: 'scene' as TagType, name: 'Sound', value: text, frameStart: sound.frameStart, frameEnd: sound.frameEnd });
+    }
   }
   
   // Add segments from timeline sorted by frame

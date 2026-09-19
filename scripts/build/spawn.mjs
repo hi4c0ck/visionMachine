@@ -8,7 +8,7 @@
 //     inherits it, so the laptop stays responsive: "better slow than drained"
 
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 /** Pure command spec — testable without touching a process. */
@@ -20,13 +20,25 @@ export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDi
   // on the app crate (release profile ships with codegen-units = 1).
   if (codegenUnits) env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS = String(codegenUnits);
 
-  if (platform === 'win32' && priority !== 'normal') {
-    const ps1 = path.join(stateDir, 'build-runner.ps1');
-    writeFileSync(ps1, priorityScript(priority), 'utf8');
-    return { cmd: 'powershell', args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1], env, shell: false, useShell: false };
+  let cmd = 'npx';
+  let args = ['tauri', 'build'];
+  let shell = false;
+  if (platform === 'win32') {
+    // npx is npx.cmd on Windows → needs a shell when there is no priority
+    // wrapper. The priority path runs powershell directly, so it is not
+    // affected by the shell flag.
+    shell = true;
   }
-  // npx is npx.cmd on Windows → needs a shell; a plain binary elsewhere.
-  return { cmd: 'npx', args: ['tauri', 'build'], env, shell: platform === 'win32', useShell: platform === 'win32' };
+  if (platform === 'win32' && priority !== 'normal') {
+    const scriptDir = path.join(stateDir, 'build-script');
+    mkdirSync(scriptDir, { recursive: true });
+    const ps1 = path.join(scriptDir, 'build-runner.ps1');
+    writeFileSync(ps1, priorityScript(priority), 'utf8');
+    cmd = 'powershell';
+    args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1];
+    shell = false;
+  }
+  return { cmd, args, env, shell, useShell: shell };
 }
 
 function priorityScript(priority) {
@@ -46,7 +58,7 @@ function priorityScript(priority) {
  * Spawn the build, merge stdout+stderr into one onLine() stream (complete
  * lines only). Returns { child, kill } — kill() terminates the whole tree.
  */
-export function spawnBuild(spec, { onLine }) {
+export function spawnBuild(spec, { onLine, stateDir, keepPin = false }) {
   const child = spawn(spec.cmd, spec.args, {
     cwd: process.cwd(),
     env: spec.env,
@@ -68,11 +80,27 @@ export function spawnBuild(spec, { onLine }) {
   pipe(child.stdout);
   pipe(child.stderr);
 
-  return { child, kill: () => killTree(child.pid) };
+  const pin = stateDir ? path.join(stateDir, 'build-pid') : null;
+  if (pin) {
+    // Record the tree's top pid so that even if this runner process dies
+    // (terminal closed, host shell exit), the detached build tree can still
+    // be reached: ctl.mjs stop / killTree() fall back to this pin. Kept on
+    // completion unless `keepPin` is false (then it is removed on success).
+    try { writeFileSync(pin, String(child.pid)); } catch { /* non-fatal */ }
+  }
+
+  return { child, kill: () => killTree(child.pid, stateDir) };
 }
 
-/** Kill the process *tree* (a plain SIGKILL of the top pid orphans rustc). */
-export function killTree(pid) {
+/**
+ * Kill the process *tree* (a plain SIGKILL of the top pid orphans rustc).
+ * `pid` falls back to the pid recorded by the runner in `stateDir`, so
+ * `ctl.mjs stop` can still reach a detached tree after its runner died.
+ */
+export function killTree(pid, stateDir, { keepPin = false } = {}) {
+  if (!pid && stateDir) {
+    try { pid = readPinnedPid(stateDir, { keep: keepPin }); } catch { /* no pin */ }
+  }
   if (!pid) return;
   if (process.platform === 'win32') {
     // taskkill /T walks the tree; detached so we never block on it.
@@ -80,4 +108,20 @@ export function killTree(pid) {
   } else {
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
   }
+}
+
+/**
+ * Read the tree's top pid recorded by spawnBuild. When `keep` is false the
+ * pin file is removed on read (it served its purpose); when true it is left
+ * in place so later callers (e.g. a follow-up ctl stop) can also reach it.
+ */
+export function readPinnedPid(stateDir, { keep = false } = {}) {
+  const pin = path.join(stateDir, 'build-pid');
+  let txt;
+  try { txt = readFileSync(pin, 'utf8').trim(); } catch { return undefined; }
+  const pid = Number(txt);
+  if (!keep) {
+    try { unlinkSync(pin); } catch { /* already gone */ }
+  }
+  return Number.isFinite(pid) ? pid : undefined;
 }
