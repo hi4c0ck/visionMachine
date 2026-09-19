@@ -49,6 +49,13 @@
 		tagPrompt = prompt;
 	});
 
+	// Insert a mark's tag phrase into the prompt, ";-separated", and keep the
+	// focus position sane for further editing.
+	function insertTag(ic: AtlasIcon) {
+		const t = tagPrompt.replace(/[\s;]+$/, '');
+		tagPrompt = (t.length > 0 ? t + ' ; ' : '') + ic.tag;
+	}
+
 	async function confirm() {
 		if (!sessionId) return;
 		const result = await updateTagPromptAction(sessionId, pipeId, segmentId, tagId, tagPrompt);
@@ -68,63 +75,56 @@
 				<h3>Edit {specName} Prompt</h3>
 			</div>
 			<div class="modal-body">
-				<div class="tpm-viewport">
-					{#each icons as ic, i (ic.id)}
-						<button
-							class="tpm-icon"
-							class:SLOT_CLASS[ic.pos]
-							type="button"
-							aria-label={ic.tag + ' — ' + ic.meaning}
-						>
-							<PromptIcon id={ic.id} size={26} ariaLabel={ic.tag} />
-							<span class="tpm-icon-tip" aria-hidden="true">
-								<b>{ic.tag}</b>
-								{ic.meaning}
-							</span>
-						</button>
-					{/each}
-					<div class="tpm-prompt-zone" style="grid-column: 2; grid-row: 2;">
-						<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
-						<textarea
-							id="tag-prompt-area"
-							bind:value={tagPrompt}
-							placeholder="Describe this {specName.toLowerCase()}…"
-							class="modal-textarea tpm-textarea"
-							aria-labelledby="tag-prompt-label"
-						></textarea>
-					</div>
+				<div class="tpm-prompt-zone">
+					<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
+					<textarea
+						id="tag-prompt-area"
+						bind:value={tagPrompt}
+						placeholder="Describe this {specName.toLowerCase()}…"
+						class="modal-textarea tpm-textarea"
+						aria-labelledby="tag-prompt-label"
+					></textarea>
 				</div>
 			</div>
 			<div class="modal-footer">
-				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
+				<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
 				<button class="btn-confirm" onclick={confirm}>Confirm</button>
 			</div>
 		</div>
+		<!-- Icon ring: lives on the dark overlay around the card, not inside it. -->
+		{#each icons as ic (ic.id)}
+			<button
+				class="tpm-icon"
+				class:SLOT_CLASS[ic.pos]
+				type="button"
+				aria-label={ic.tag + ' — ' + ic.meaning}
+				onclick={() => insertTag(ic)}
+			>
+				<PromptIcon id={ic.id} size={24} ariaLabel={ic.tag} />
+				<span class="tpm-icon-tip" aria-hidden="true">
+					<b>{ic.tag}</b>
+					{ic.meaning}
+				</span>
+			</button>
+		{/each}
 	</div>
 {/if}
 
 <style>
+	/* The dialog card is nudged up so the bottom icon ring has breathing room
+	   on the dark backdrop. */
 	.tpm-modal {
-		max-width: 620px;
+		max-width: 480px;
+		margin-bottom: 56px;
 	}
 
-	.tpm-viewport {
-		position: relative;
-		display: grid;
-		grid-template-columns: 64px minmax(0, 1fr) 64px;
-		grid-template-rows: auto auto auto;
-		gap: 10px 14px;
-		align-items: center;
-		justify-items: center;
-	}
-
-	/* The 3×3 ring slots: corners + edges around the centered prompt zone. */
+	/* ── Icon ring: absolutely positioned around the card on the dark overlay ──
+	   Slots: nw/n/ne across the top, w/e on the flanks, sw/s/se along the
+	   bottom — each on the side of the frame its mark describes. */
 	.tpm-icon {
-		grid-column: auto;
-		grid-row: auto;
-		position: relative;
-		width: 46px;
-		height: 46px;
+		position: absolute;
+		width: 44px;
+		height: 44px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -132,34 +132,45 @@
 		border: 1px solid var(--border-color);
 		border-radius: 10px;
 		cursor: pointer;
-		opacity: 0.55;
+		opacity: 0.6;
 		transition:
 			opacity 0.15s ease,
 			transform 0.15s ease,
 			border-color 0.15s ease,
 			box-shadow 0.15s ease;
+		z-index: 2001; /* above the overlay, beside the card */
 	}
 
-	.slot-nw { grid-column: 1; grid-row: 1; }
-	.slot-n  { grid-column: 2; grid-row: 1; }
-	.slot-ne { grid-column: 3; grid-row: 1; }
-	.slot-w  { grid-column: 1; grid-row: 2; }
-	.slot-e  { grid-column: 3; grid-row: 2; }
-	.slot-sw { grid-column: 1; grid-row: 3; }
-	.slot-s  { grid-column: 2; grid-row: 3; }
-	.slot-se { grid-column: 3; grid-row: 3; }
+	.slot-nw { top: -34px; left: 10%; }
+	.slot-n  { top: -34px; left: 50%; transform: translateX(-50%); }
+	.slot-ne { top: -34px; right: 10%; }
+	.slot-w  { top: 50%; left: -34px; transform: translateY(-50%); }
+	.slot-e  { top: 50%; right: -34px; transform: translateY(-50%); }
+	.slot-sw { bottom: -34px; left: 10%; }
+	.slot-s  { bottom: -34px; left: 50%; transform: translateX(-50%); }
+	.slot-se { bottom: -34px; right: 10%; }
 
 	.tpm-icon:hover svg,
 	.tpm-icon:focus-visible svg {
 		transform: scale(1.12);
 	}
 
+	/* Hover / focus lift — keep the slot's positional transform intact. */
 	.tpm-icon:hover,
 	.tpm-icon:focus-visible {
 		opacity: 1;
 		border-color: var(--accent-color);
 		box-shadow: 0 4px 14px var(--accent-glow, rgba(89, 181, 255, 0.25));
+	}
+	.slot-nw:hover, .slot-ne:hover, .slot-sw:hover, .slot-se:hover {
 		transform: translateY(-3px);
+	}
+	.slot-n:hover, .slot-s:hover { transform: translateX(-50%) translateY(-3px); }
+	.slot-w:hover, .slot-w:focus-visible { transform: translateY(-50%) translateX(-3px); }
+	.slot-e:hover, .slot-e:focus-visible { transform: translateY(-50%) translateX(3px); }
+
+	.tpm-icon:focus-visible {
+		outline: none;
 	}
 
 	/* Tooltip: how the tag reads in the reference vocabulary. */
@@ -208,14 +219,6 @@
 	.tpm-icon:focus-visible .tpm-icon-tip {
 		opacity: 1;
 		transform: translateX(-50%);
-	}
-
-	.tpm-prompt-zone {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		width: 100%;
-		min-width: 0;
 	}
 
 	.tpm-label {
