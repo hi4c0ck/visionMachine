@@ -1,5 +1,6 @@
 <script lang="ts">
-	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec, GlobalElement, SoundElement } from '$types';
+	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec, GlobalElement, SoundElement, ResolutionPreset, Orientation } from '$types';
+	import { RESOLUTION_DIMS } from '$types';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
@@ -14,7 +15,6 @@
 	import TimelineSection from './ComposerTimeline/TimelineSection.svelte';
 	import { getFreeGaps, getMaxFrames, minZoneSpan, type FreeGap, placeTagInZone, evenSplitZone } from '$lib/frameMath';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
-	import type { ComposerUiVariant } from '$lib/composerUiVariant';
 	import {
 		addPipe as addPipeAction,
 		removePipe as removePipeAction,
@@ -51,7 +51,6 @@ import { flashToast } from '$lib/flashToast';
 			activePipeIdx = $bindable(null),
 			focus = $bindable({ level: 'project' } as ComposerFocus),
 			onframechange,
-			uiVariant = 'fixed',
 			brokenRefs,
 			onRefSaved,
 			videoModel = null,
@@ -66,10 +65,6 @@ import { flashToast } from '$lib/flashToast';
 			 * panel renders one inspector per level. */
 			focus?: ComposerFocus;
 			onframechange?: (frame: number) => void;
-			/** A/B presentation variant — same store/services/geometry, two
-			 *  layouts. 'fixed' = tabbed Keyframes⇄SubjectRefs aux panel +
-			 *  live drag-following frame pin. 'current' = the existing rows. */
-			uiVariant?: ComposerUiVariant;
 			/** Broken reference ids (D5), keyed `${pipeId}:${refId}` — chips are red-out. */
 			brokenRefs?: Set<string>;
 			/** A keyframe/subject reference was just saved → re-validate its URL. */
@@ -109,15 +104,6 @@ import { flashToast } from '$lib/flashToast';
 		};
 	}
 
-	// Fixed variant: the shared activeAuxPanel may point at a row this pipe
-	// hides (e.g. 'subjects' while the model is keyframes-only) — fall back to
-	// the visible row so the aux body never renders empty.
-	function effectiveAuxPanel(pipe: PipeRow): 'keyframes' | 'subjects' {
-		const st = mediaState(pipe);
-		if (activeAuxPanel === 'keyframes' && st.showKf) return 'keyframes';
-		if (activeAuxPanel === 'subjects' && st.showSubjects) return 'subjects';
-		return st.showKf ? 'keyframes' : 'subjects';
-	}
 
 	async function handleMediaModeChange(pipe: PipeRow, mode: 'keyframes' | 'reference') {
 		if (!session?.id) return;
@@ -144,6 +130,15 @@ import { flashToast } from '$lib/flashToast';
 			? ((activePipe ?? pipes[0])?.lengthFrames ?? DEFAULT_FRAME_COUNT)
 			: (propTotalFrames ?? DEFAULT_FRAME_COUNT)
 	);
+	// Scene aspect ratio (width:height) from the session's resolution preset
+	// + orientation — the keyframe/subject-ref chip thumbnails carry it so
+	// each chip previews at the same shape as the generated frame.
+	const sceneAspect = $derived.by((): string => {
+		const res = (session?.resolution ?? '720p') as ResolutionPreset;
+		const ori = (session?.orientation ?? 'horizontal') as Orientation;
+		const dims = RESOLUTION_DIMS[res][ori];
+		return `${dims.width} / ${dims.height}`;
+	});
 
 	// ── UI state ─────────────────────────────────────────────────────────────
 	// Clamp activePipeIdx when pipes shrink (removals) — prevents stale index
@@ -264,32 +259,11 @@ import { flashToast } from '$lib/flashToast';
 	let addMenuX = $state(0);
 	let addMenuY = $state(0);
 
-	// Variant B (fixed) aux-panel UI state ────────────────────────────────
-	// Keyframes and Subject Refs are EXCLUSIVE disclosure panels (one shown,
-	// the other hidden — not two independent expandable rows); each also has
-	// its own independent collapse state, so switching tabs does not destroy
-	// the other's disclosure state. Single panel-level set (shared across
-	// visible pipes, reset on session/pipe-list change) — the panel is the
-	// source of truth, the aux panel just reads it.
-	let activeAuxPanel = $state<'keyframes' | 'subjects'>('keyframes');
-	let keyframesCollapsed = $state(false);
-	let subjectsCollapsed = $state(false);
-	let auxTrackedPipeId = $state('');
-
 	// Reset when the *first* pipe changes — a session-switch or pipe-list
 	// swap is the moment the disclosure context becomes stale. Per-pipe
 	// state (like TimelineSection's own) would be over-engineering here
 	// because the panel is shared across all visible pipes.
-	$effect(() => {
-		const firstPipeId = pipes[0]?.id ?? '';
-		if (firstPipeId !== auxTrackedPipeId) {
-			auxTrackedPipeId = firstPipeId;
-			activeAuxPanel = 'keyframes';
-			keyframesCollapsed = false;
-			subjectsCollapsed = false;
-		}
-	});
-
+	
 	// Per-pipe [+] visibility: hide the button when the pipe already owns BOTH
 	// addable track types (Timeline + Global) — the menu would be empty.
 	const hasTimeline = (p: PipeRow | null | undefined): boolean =>
@@ -758,11 +732,10 @@ import { flashToast } from '$lib/flashToast';
 	}
 </script>
 
-<div class="composer-panel">
+	<div class="composer-panel">
 	{#each pipes as pipe, pipeIdx (pipe.id)}
-		<div class="pipe" class:active={activePipeIdx === pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>>
-			
-		<!-- ═══ PIPE HEADER ═══ -->
+		<div class="pipe" class:active={activePipeIdx === pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>
+			<!-- ═══ PIPE HEADER ═══ -->
 			<PipeHeader
 				{pipe}
 				idx={pipeIdx}
@@ -797,108 +770,30 @@ import { flashToast } from '$lib/flashToast';
 				</div>
 			{/if}
 
-			<!-- Variant B (fixed) auxiliary panel: tabbed, mutually-exclusive
-			     Keyframes⇄SubjectRefs, each independently collapsible. Variant A
-			     (current): two independent rows (existing layout). Store,
-			     actions, geometry identical in both; only presentation differs. -->
-			{#if uiVariant === 'fixed'}
-				<!-- ═══ AUX PANEL: KEYFRAMES ⇄ SUBJECT REFS (exclusive tabs, each collapsible) ═══ -->
-				<div class="aux-panel">
-					<div class="aux-tabs" role="tablist">
-						{#if mediaState(pipe).showKf}
-							<button
-								class="aux-tab" class:active={effectiveAuxPanel(pipe) === 'keyframes'}
-								role="tab" aria-selected={effectiveAuxPanel(pipe) === 'keyframes'}
-								onclick={() => (activeAuxPanel = 'keyframes')}>
-								KEYFRAMES
-								<span class="aux-tab-count">{pipe.keyframes.length}/{MAX_KEYFRAMES}</span>
-							</button>
-						{/if}
-						{#if mediaState(pipe).showSubjects}
-							<button
-								class="aux-tab" class:active={effectiveAuxPanel(pipe) === 'subjects'}
-								role="tab" aria-selected={effectiveAuxPanel(pipe) === 'subjects'}
-								onclick={() => (activeAuxPanel = 'subjects')}>
-								SUBJECT REFS
-								<span class="aux-tab-count">
-									{(pipe.subjectReferences ?? []).filter((r: any) => r.visible !== false).length}/{MAX_SUBJECT_REFS}
-								</span>
-							</button>
-						{/if}
-					</div>
+			<!-- ═══ KEYFRAME ROW ═══ -->
+			{#if mediaState(pipe).showKf}
+				<KeyframesRow
+					{pipe}
+					maxKeyframes={MAX_KEYFRAMES}
+					aspect={sceneAspect}
+					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
+					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
+					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+				/>
+			{/if}
 
-					{#if effectiveAuxPanel(pipe) === 'keyframes'}
-						<div class="aux-section" class:open={!keyframesCollapsed}>
-							<button
-								class="aux-section-head"
-								onclick={() => (keyframesCollapsed = !keyframesCollapsed)}
-								title={keyframesCollapsed ? 'Expand keyframes' : 'Collapse keyframes'}>
-								<span class="aux-chevron">{keyframesCollapsed ? '›' : '˅'}</span>
-							</button>
-							{#if !keyframesCollapsed}
-								<div class="aux-body">
-									<KeyframesRow
-										{pipe}
-										maxKeyframes={MAX_KEYFRAMES}
-										onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
-										onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
-										headerless={true}
-										containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-									/>
-								</div>
-							{/if}
-						</div>
-					{:else}
-						<div class="aux-section" class:open={!subjectsCollapsed}>
-							<button
-								class="aux-section-head"
-								onclick={() => (subjectsCollapsed = !subjectsCollapsed)}
-								title={subjectsCollapsed ? 'Expand subject refs' : 'Collapse subject refs'}>
-								<span class="aux-chevron">{subjectsCollapsed ? '›' : '˅'}</span>
-							</button>
-							{#if !subjectsCollapsed}
-								<div class="aux-body">
-									<SubjectRefsRow
-										{pipe}
-										maxSubjectRefs={MAX_SUBJECT_REFS}
-										onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
-										onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
-										onAdd={() => openSubjectRefModal(pipeIdx)}
-										onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
-										headerless={true}
-										containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-									/>
-								</div>
-							{/if}
-						</div>
-				{/if}
-				</div>
-			{:else}
-				<!-- Variant A — CURRENT: independent rows, existing layout -->
-
-				<!-- ═══ KEYFRAME ROW ═══ -->
-				{#if mediaState(pipe).showKf}
-					<KeyframesRow
-						{pipe}
-						maxKeyframes={MAX_KEYFRAMES}
-						onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
-						onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
-						containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-					/>
-				{/if}
-
-				<!-- ═══ SUBJECT REFERENCES ROW ═══ -->
-				{#if mediaState(pipe).showSubjects}
-					<SubjectRefsRow
-						{pipe}
-						maxSubjectRefs={MAX_SUBJECT_REFS}
-						onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
-						onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
-						onAdd={() => openSubjectRefModal(pipeIdx)}
-						onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
-						containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
-					/>
-				{/if}
+			<!-- ═══ SUBJECT REFERENCES ROW ═══ -->
+			{#if mediaState(pipe).showSubjects}
+				<SubjectRefsRow
+					{pipe}
+					maxSubjectRefs={MAX_SUBJECT_REFS}
+					aspect={sceneAspect}
+					onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
+					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
+					onAdd={() => openSubjectRefModal(pipeIdx)}
+					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
+					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+				/>
 			{/if}
 
 			<!-- ═══ TIMELINE AREA ═══ (single coordinate canvas — now in TimelineSection) ═══ -->
@@ -906,7 +801,6 @@ import { flashToast } from '$lib/flashToast';
 				{pipe}
 				sessionId={session?.id}
 				{selectedFrame}
-				livePin={uiVariant === 'fixed'}
 				fps={session?.fps}
 				onFrameChange={(f) => onframechange?.(f)}
 				onAddTrack={(e) => handleToggleAddMenu(pipeIdx, e)}
@@ -1117,91 +1011,6 @@ import { flashToast } from '$lib/flashToast';
 
 		color: var(--accent-color);
 
-	}
-
-	/* ═══ VARIANT B (FIXED): tabbed aux panel ═════════════════════════════ */
-	/* Keyframes ⇄ Subject Refs share ONE disclosure slot (mutually
-	   exclusive tabs) with an independent collapse per active panel.
-	   Uniform vertical rhythm (8px column gap on .pipe) and the same
-	   horizontal padding as the rest of the pipe. */
-	.aux-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.aux-tabs {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 4px;
-	}
-
-	.aux-tab {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		padding: 6px 10px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 6px;
-		color: var(--text-secondary);
-		font-size: 11px;
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: 0.5px;
-		cursor: pointer;
-		transition: all 0.15s;
-	}
-
-	.aux-tab:hover {
-		background: var(--bg-hover, var(--bg-tertiary));
-		color: var(--text-primary);
-	}
-
-	.aux-tab.active {
-		background: var(--accent-bg, var(--bg-tertiary));
-		border-color: var(--accent-color);
-		color: var(--text-primary);
-	}
-
-	.aux-tab-count {
-		opacity: 0.7;
-		font-weight: 500;
-	}
-
-	.aux-section {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		padding: 4px;
-		background: var(--bg-primary);
-		border-radius: 6px;
-		border: 1px solid var(--border-color);
-	}
-
-	.aux-section-head {
-		height: 22px;
-		width: 100%;
-		background: none;
-		border: none;
-		color: var(--text-secondary);
-		cursor: pointer;
-		padding: 0;
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-	}
-
-	.aux-chevron {
-		font-size: 11px;
-		padding: 0 6px;
-		border-radius: 4px;
-	}
-
-	.aux-section-head:hover .aux-chevron {
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
 	}
 
 	/* ═══ Media mode toggle (docs/agnes-model-catalog.md, Q7) ═══ */

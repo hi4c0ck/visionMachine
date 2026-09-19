@@ -10,6 +10,7 @@
 		clientXToFrame,
 		rangeWidthPx,
 	} from '$lib/frameGeometry';
+	import { getFreeGaps, minZoneSpan } from '$lib/frameMath';
 	import {
 		calculateElementDrag,
 		getDragBounds,
@@ -45,9 +46,6 @@
 		onOpenTagMenu,
 		onRemoveTag,
 		onEditTagPrompt,
-		// FIXED variant: the playhead pin follows the drag (live, during
-		// pointermove); CURRENT variant leaves it at the last selectedFrame.
-		livePin = false,
 		// Per-pipe [+] visibility (hide when both tracks already exist).
 		showAddTrack = true,
 		fps
@@ -68,8 +66,6 @@
 		onOpenTagMenu: (segId: string, e: MouseEvent) => void;
 		onRemoveTag: (segId: string, tagId: string) => void;
 		onEditTagPrompt: (seg: Segment, tag: TagElement) => void;
-		/** FIXED variant: playhead follows the drag thumb live. */
-		livePin?: boolean;
 		/** Panel hides the [+] button when the pipe already owns both
 		    addable track types (Timeline + Global). */
 		showAddTrack?: boolean;
@@ -161,6 +157,15 @@
 		if (!p || !Array.isArray(p.elements)) return null;
 		return p.elements.find((e: any) => e.tag === 'timeline') ?? null;
 	}
+
+	// + Zone affordance visibility: hide the button when no free gap fits the
+	// creation floor (≈1s at session fps, 8-grid) — a dead modal is worse than
+	// no button. The first zone is reachable through the empty placeholder.
+	const hasFreeSpace = $derived.by(() => {
+		const tl = getTimeline(pipe);
+		const fpsVal = fps ?? 0;
+		return getFreeGaps(tl?.segments ?? [], pipe?.lengthFrames ?? 0, minZoneSpan(fpsVal)).length > 0;
+	});
 
 	// ── Tag lanes (design: one horizontal line per tag TYPE) ───────────────
 	// The reference layout groups tags by type across zones: all "Camera"
@@ -405,19 +410,16 @@
 			endFrame
 		};
 
-		// FIXED variant: the playhead pin follows the drag LIVE — left thumb
-		// tracks the moving start edge, right thumb the end edge, body the
-		// frame under the cursor. CURRENT variant (livePin=false) keeps the
-		// pin at the last ruler select; only the preview changes.
-		if (livePin) {
-			const pinFrame =
-				dragState.handle === 'left'
-					? startFrame
-					: dragState.handle === 'right'
-						? endFrame
-						: pointerFrame;
-			onFrameChange(pinFrame);
-		}
+		// The ruler playhead pin follows every thumb/body move LIVE: the
+		// left thumb tracks the moving start edge, the right thumb the end
+	// edge, and a body drag the frame under the cursor.
+		const pinFrame =
+			dragState.handle === 'left'
+				? startFrame
+				: dragState.handle === 'right'
+					? endFrame
+					: pointerFrame;
+		onFrameChange(pinFrame);
 	}
 
 	async function handlePointerUp(e: PointerEvent) {
@@ -787,7 +789,10 @@
 						{/each}
 
 							<!-- + Zone affordance: opens the modal with a picker of
-						     every free gap (before/between/after zones). -->
+						     every free gap (before/between/after zones). Hidden when
+						     no gap fits the creation floor — the empty placeholder
+						     covers the first-zone case. -->
+						{#if hasFreeSpace}
 						<div class="segment-chrome segment-chrome-append">
 							<button
 									class="btn-add-zone"
@@ -795,6 +800,7 @@
 									onkeydown={(e) => e.key === 'Enter' && onAddSegment()}
 									title="Add a zone into any free space">+ Zone</button>
 						</div>
+						{/if}
 
 						<!-- No zones yet (no timeline, or empty timeline) — one placeholder,
 							 zone add auto-creates the timeline when needed. -->

@@ -89,17 +89,14 @@ test.describe('Insert zone into any free gap', () => {
 		expect(await page.locator('.segment-body').count()).toBe(3);
 	});
 
-	test('packed pipe still shows the no-space guard, not a dead modal', async ({ page }) => {
-		// One zone filling the whole pipe → no free gap → toast, not a modal.
+	test('packed pipe hides the append affordance — no dead modal', async ({ page }) => {
+		// One zone filling the whole pipe → no free gap → the "+ Zone" button
+		// is hidden entirely, so there's nothing that can open a dead modal.
 		await page.locator('.seg-empty.full-width').first().click();
 		await page.waitForSelector('.modal', { timeout: 5000 });
 		await addZoneAt(page, '0', '240');
 
-		await page.locator('.btn-add-zone').click();
-		await page.waitForTimeout(400);
+		await expect(page.locator('.btn-add-zone')).toHaveCount(0);
 		await expect(page.locator('.modal')).toHaveCount(0);
-		await expect(
-			page.locator('div[role="alert"]', { hasText: /No free space/i })
-		).toBeVisible({ timeout: 5000 });
 	});
 });

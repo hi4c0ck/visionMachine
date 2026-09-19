@@ -1,12 +1,10 @@
 <script lang="ts">
-	import type { PipeRow, SubjectReference } from '$types';
+	import type { PipeRow, SubjectReference, KeyframeType } from '$types';
 	import '../composer-row.css';
 
 	// Subject references row — pure chrome. The panel owns the subject-ref
 	// store actions; this component fires callbacks. Collapses the empty and
 	// non-empty branches into one row (chips render conditionally).
-	// `headerless` hides the row's own label/count (used inside the FIXED
-	// variant's tabbed aux panel, where the tab owns the title + count).
 	let {
 		pipe,
 		maxSubjectRefs,
@@ -14,7 +12,7 @@
 		onRemove,
 		onAdd,
 		onEdit,
-		headerless = false,
+		aspect,
 		containsBroken,
 	} = $props<{
 		pipe: PipeRow;
@@ -24,7 +22,9 @@
 		onAdd: () => void;
 		/** Open the subject-ref modal in EDIT mode for an existing ref. */
 		onEdit?: (refId: string) => void;
-		headerless?: boolean;
+		/** Scene aspect ratio ("W / H") — chips size to it so thumbnails
+		 *  preview at the same shape as the generated frame. */
+		aspect?: string;
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
 	}>();
@@ -33,20 +33,31 @@
 	const refs = $derived(pipe.subjectReferences ?? []);
 	const visibleCount = $derived(refs.filter((r: SubjectReference) => r.visible !== false).length);
 	const refNumber = $derived(refs.length);
+
+	// Human-readable subject type (url / txt2img / img2img); legacy refs
+	// without a preset read as 'url'.
+	const SR_TYPE_LABEL: Record<KeyframeType, string> = {
+		url: 'URL',
+		txt2img: 'txt2img',
+		img2img: 'img2img',
+	};
+
+	function srTypeLabel(sr: SubjectReference): string {
+		const t = (sr.type ?? 'url') as KeyframeType;
+		return SR_TYPE_LABEL[t] ?? t;
+	}
 </script>
 
-	<div class="row-group" class:headerless>
-	{#if !headerless}
+	<div class="row-group">
 	<div class="row-header">
 		<span class="row-label">SUBJECT REFS</span>
 		<span class="row-count">{visibleCount}/{maxSubjectRefs}</span>
 	</div>
-	{/if}
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
 			{@const broken = containsBroken?.(sr.id) ?? false}
 			{#if sr.visible !== false}
-				<div 
+				<div
 					class="sr-chip"
 					class:sr-broken={broken}
 					onclick={() => onEdit?.(sr.id)}
@@ -54,13 +65,13 @@
 					role="button"
 					tabindex={onEdit ? 0 : undefined}
 					title={broken
-						? `URL not accessible · Click to fix`
-						: `Frames ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · Click to edit`}
+						? `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · URL not accessible · Click to fix`
+						: `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · Click to edit`}
 					>
 					{#if broken}
 						<span class="sr-broken-mark" aria-hidden="true">⚠</span>
 					{/if}
-					<button 
+					<button
 						class="sr-eye"
 						onclick={(e) => { e.stopPropagation(); onToggle(sr.id); }}
 						title={sr.visible === false ? 'Enable reference' : 'Disable reference'}>
@@ -71,16 +82,19 @@
 						{/if}
 					</button>
 					{#if sr.imageUrl}
-						<img src={sr.imageUrl} class="sr-img" alt="subject ref" />
+						<img src={sr.imageUrl} class="sr-img" style={aspect ? `aspect-ratio: ${aspect};` : ''} alt="subject ref" />
 					{:else}
-						<span class="sr-dot"></span>
+						<span class="sr-dot" style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}></span>
 					{/if}
-					{#if sr.useFrames}
-						<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>
-					{:else}
-						<span class="sr-label">full</span>
-					{/if}
-					<button 
+					<span class="sr-meta">
+						{#if sr.useFrames}
+							<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>
+						{:else}
+							<span class="sr-label">full</span>
+						{/if}
+						<span class="sr-type">{srTypeLabel(sr)}</span>
+					</span>
+					<button
 						class="sr-del"
 						onclick={(e) => { e.stopPropagation(); onRemove(sr.id); }}
 						title="Remove subject reference">×</button>
@@ -88,9 +102,9 @@
 			{/if}
 		{/each}
 		{#if refNumber < maxSubjectRefs}
-			<button 
-				class="sr-add" 
-				onclick={onAdd} 
+			<button
+				class="sr-add"
+				onclick={onAdd}
 				title="Add subject reference">
 				+ s{refNumber + 1}
 			</button>
@@ -99,16 +113,10 @@
 </div>
 
 <style>
-	/* headerless (inside the FIXED aux panel) drops the whole row-group gap
-	   so the body sits tight. */
-	.row-group.headerless {
-		gap: 0;
-	}
-
 	.sr-row {
 		display: flex;
 		gap: 8px;
-		align-items: center;
+		align-items: stretch;
 		flex-wrap: wrap;
 		min-height: 48px;
 	}
@@ -139,23 +147,45 @@
 		color: var(--text-primary);
 	}
 
+	/* Thumbnail sized to the scene aspect ratio (width fixed, height from
+	   aspect-ratio) — no longer a square, so portrait scenes read correctly. */
 	.sr-img {
-		width: 20px;
-		height: 20px;
+		width: 32px;
+		height: auto;
+		max-height: 36px;
 		object-fit: cover;
-		border-radius: 3px;
+		border-radius: 4px;
+		flex: 0 0 auto;
 	}
 
+	/* Empty thumbnail placeholder — a dot of the scene's shape. */
 	.sr-dot {
-		width: 20px;
-		height: 20px;
+		width: 32px;
+		height: 36px;
 		border-radius: 50%;
 		background: var(--accent-color);
+		flex: 0 0 auto;
+	}
+
+	/* Left meta block: frame range on top, type annotation below. */
+	.sr-meta {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
 	}
 
 	.sr-range, .sr-label {
 		font-size: 11px;
 		color: var(--text-secondary);
+	}
+
+	.sr-type {
+		font-size: 10px;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-muted, var(--text-secondary));
+		text-transform: lowercase;
+		white-space: nowrap;
 	}
 
 	.sr-del {
@@ -165,6 +195,7 @@
 		cursor: pointer;
 		padding: 2px 4px;
 		border-radius: 4px;
+		flex: 0 0 auto;
 	}
 
 	.sr-del:hover {
@@ -180,6 +211,7 @@
 		padding: 6px 12px;
 		border-radius: 6px;
 		font-size: 12px;
+		align-self: center;
 	}
 
 	.sr-add:hover {
@@ -198,5 +230,6 @@
 		color: #ef4444;
 		font-size: 11px;
 		font-weight: 700;
+		flex: 0 0 auto;
 	}
 </style>
