@@ -29,7 +29,8 @@
 		onConfirm: (models: ModelSelection, seed: number | null) => Promise<void> | void;
 	}>();
 
-	const prompt = $derived(summarizePipe(pipe));
+	// Session fps inherited for the engine's seconds math (length units + position cues).
+	const prompt = $derived(summarizePipe(pipe, { fps: session?.fps ?? undefined }));
 	let expanded = $state(false);
 	let busy = $state(false);
 	let justCopied = $state(false);

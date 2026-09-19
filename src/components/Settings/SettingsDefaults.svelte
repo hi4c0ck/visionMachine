@@ -122,6 +122,31 @@
 		</div>
 	</div>
 
+	<div class="field">
+		<span class="field-label">Segment length units (prompt compiler)</span>
+		<div class="radio-row" role="radiogroup" aria-label="Segment length units">
+			<label>
+				<input
+					type="radio"
+					name="sd-seglen"
+					checked={g.segmentLengthUnit === 'frames'}
+					onchange={() => setG({ segmentLengthUnit: 'frames' })}
+				/>
+				Frames — exact frame count (e.g. 121f)
+			</label>
+			<label>
+				<input
+					type="radio"
+					name="sd-seglen"
+					checked={g.segmentLengthUnit === 'seconds'}
+					onchange={() => setG({ segmentLengthUnit: 'seconds' })}
+				/>
+				Seconds — human time hint (e.g. 5s, fps-converted)
+			</label>
+		</div>
+		<span class="note">Applies to the compiled prompt's &lt;segments length="…"&gt; attribute.</span>
+	</div>
+
 	<p class="note">These defaults seed every new session. Existing sessions keep their own values.</p>
 </section>
 

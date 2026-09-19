@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS: Settings = {
     cValue: 7,
     concurrency: 'sequential',
     alwaysNewSeed: true,
+    segmentLengthUnit: 'frames',
   },
   providers: {
     text: defaultSlot('text'),
@@ -101,6 +102,7 @@ export function normalizeSettings(raw: unknown): Settings {
       cValue: Number.isFinite(g.cValue) ? (g.cValue as number) : base.generationDefaults.cValue,
       concurrency: g.concurrency === 'parallel' ? 'parallel' : 'sequential',
       alwaysNewSeed: g.alwaysNewSeed !== false,
+      segmentLengthUnit: g.segmentLengthUnit === 'seconds' ? 'seconds' : 'frames',
     },
     providers: {
       text: normalizeSlot('text', prov.text),

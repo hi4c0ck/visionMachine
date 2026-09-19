@@ -1,16 +1,28 @@
 /**
- * Unit tests for promptEngine.ts — the final prompt string for generation.
+ * Unit tests for promptEngine.ts — nested, properly-closed prompt compiler.
  */
 import { describe, it, expect } from 'vitest';
 import {
   summarizePipe,
-  buildHeuristics,
   getSortedZones,
   sectionName,
+  tagPositionCues,
 } from '../../src/lib/promptEngine';
-import type { PipeRow, GlobalElement, SoundElement, TimelineElement, Segment, TagElement } from '../../src/types/app';
+import type {
+  PipeRow,
+  GlobalElement,
+  SoundElement,
+  TimelineElement,
+  Segment,
+  TagElement,
+} from '../../src/types/app';
 
-function makeTag(tag: TagElement['tag'], frameStart: number, frameEnd: number, extra?: Partial<TagElement>): TagElement {
+function makeTag(
+  tag: TagElement['tag'],
+  frameStart: number,
+  frameEnd: number,
+  extra?: Partial<TagElement>,
+): TagElement {
   return {
     id: `tag-${frameStart}-${tag}`,
     tag,
@@ -50,11 +62,7 @@ describe('promptEngine guards (broken pipe data)', () => {
     expect(getSortedZones(undefined as unknown as PipeRow)).toEqual([]);
   });
 
-  it('returns empty heuristics for a missing pipe', () => {
-    expect(buildHeuristics(undefined as unknown as PipeRow)).toBe('');
-  });
-
-  it('summarizes a missing pipe as the empty heuristics marker', () => {
+  it('summarizes a missing pipe as the empty marker', () => {
     expect(summarizePipe(undefined as unknown as PipeRow)).toBe('<heuristics>empty</heuristics>');
   });
 });
@@ -78,88 +86,38 @@ describe('promptEngine.getSortedZones', () => {
   });
 });
 
-describe('promptEngine.buildHeuristics', () => {
-  it('builds the pre-summary lines from pipe content', () => {
-    const global: GlobalElement = { id: 'g1', tag: 'global_style', value: 'cinematic style', enabled: true };
-    const z1: Segment = {
-      id: 'z1',
-      frameStart: 0,
-      frameEnd: 72,
-      tags: [
-        makeTag('scene', 0, 72, { prompt: 'Mountain approach' }),
-        makeTag('camera', 0, 72, { value: 30 }),
-      ],
-    };
-    const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [z1] };
-    const pipe = makePipe({
-      elements: [global as any, timeline as any],
-      keyframes: [
-        { id: 'k1', frame: 0, slotIndex: 1, type: 'url', imageSrc: 'a.png', status: 'pending' },
-        { id: 'k2', frame: 40, slotIndex: 2, type: 'txt2img', prompt: 'close-up', status: 'pending' },
-      ],
-      subjectReferences: [
-        { id: 's1', imageUrl: 'x.png', useFrames: false, visible: true, type: 'url' },
-        { id: 's2', imageUrl: '', useFrames: false, visible: true, type: 'txt2img', prompt: 'hero' },
-      ],
-    });
-
-    const h = buildHeuristics(pipe);
-    expect(h).toContain('style: cinematic style');
-    expect(h).toContain('scenes: Mountain approach');
-    expect(h).toContain('zones: 1 (f0–f72)');
-    expect(h).toContain('keyframes: k1@f0(url) · k2@f40(txt2img)');
-    expect(h).toContain('subjects: 2 (url, txt2img)');
-  });
-
-  it('defaults legacy subjects without a type to url', () => {
-    const pipe = makePipe({
-      subjectReferences: [{ id: 's1', imageUrl: 'x.png', useFrames: false, visible: true }],
-    });
-    expect(buildHeuristics(pipe)).toContain('subjects: 1 (url)');
-  });
-
-  it('returns an empty string when nothing is set', () => {
-    expect(buildHeuristics(makePipe())).toBe('');
-  });
-
-  it('prefers the global prompt over the legacy value', () => {
-    const global: GlobalElement = {
-      id: 'g1', tag: 'global_style', value: 'legacy style', prompt: 'prompt style', enabled: true,
-      frameStart: 0, frameEnd: 80,
-    };
-    const pipe = makePipe({ elements: [global as any] });
-    const h = buildHeuristics(pipe);
-    expect(h).toContain('style: prompt style');
-    expect(h).not.toContain('legacy style');
-  });
-
-  it('falls back to the legacy global value when no prompt is set', () => {
-    const global: GlobalElement = {
-      id: 'g1', tag: 'global_style', value: 'legacy style', enabled: true,
-      frameStart: 0, frameEnd: 80,
-    };
-    expect(buildHeuristics(makePipe({ elements: [global as any] }))).toContain('style: legacy style');
-  });
-
-  it('emits a sound: line from the sound element prompt', () => {
-    const sound: SoundElement = {
-      id: 's1', tag: 'sound', frameStart: 0, frameEnd: 80, enabled: true, prompt: 'rain on windows',
-    };
-    const h = buildHeuristics(makePipe({ elements: [sound as any] }));
-    expect(h).toContain('sound: rain on windows');
-  });
-
-  it('omits an empty or disabled sound element', () => {
-    const empty: SoundElement = { id: 's1', tag: 'sound', frameStart: 0, frameEnd: 80, enabled: true };
-    expect(buildHeuristics(makePipe({ elements: [empty as any] }))).not.toContain('sound:');
-
-    const off: SoundElement = { id: 's2', tag: 'sound', frameStart: 0, frameEnd: 80, enabled: false, prompt: 'off' };
-    expect(buildHeuristics(makePipe({ elements: [off as any] }))).not.toContain('sound:');
-  });
-});
-
 describe('promptEngine.summarizePipe', () => {
-  it('wraps heuristics in a <heuristics> block and emits one section per tag', () => {
+  it('emits top-level <global_style> and <audio> as properly-closed elements', () => {
+    const global: GlobalElement = {
+      id: 'g1', tag: 'global_style', frameStart: 0, frameEnd: 121, enabled: true, prompt: 'cinematic noir',
+    };
+    const sound: SoundElement = {
+      id: 's1', tag: 'sound', frameStart: 0, frameEnd: 121, enabled: true, prompt: 'rain on glass',
+    };
+    const pipe = makePipe({ elements: [global as any, sound as any] });
+    const out = summarizePipe(pipe);
+    expect(out).toContain('<global_style>cinematic noir</global_style>');
+    expect(out).toContain('<audio>rain on glass</audio>');
+    // Both properly closed — one open + one close per element.
+    expect(out.match(/<global_style>/g)).toHaveLength(1);
+    expect(out.match(/<\/global_style>/g)).toHaveLength(1);
+    expect(out.match(/<audio>/g)).toHaveLength(1);
+    expect(out.match(/<\/audio>/g)).toHaveLength(1);
+  });
+
+  it('skips disabled or empty top-level elements', () => {
+    const off: GlobalElement = {
+      id: 'g1', tag: 'global_style', frameStart: 0, frameEnd: 121, enabled: false, prompt: 'off style',
+    };
+    const empty: SoundElement = {
+      id: 's1', tag: 'sound', frameStart: 0, frameEnd: 121, enabled: true,
+    };
+    const out = summarizePipe(makePipe({ elements: [off as any, empty as any] }));
+    expect(out).not.toContain('global_style');
+    expect(out).not.toContain('audio');
+  });
+
+  it('wraps each segment in a <segments length="…"> container with closed XML tag pairs', () => {
     const z1: Segment = {
       id: 'z1',
       frameStart: 0,
@@ -167,56 +125,140 @@ describe('promptEngine.summarizePipe', () => {
       tags: [
         makeTag('scene', 0, 72, { prompt: 'Mountain approach' }),
         makeTag('camera', 0, 72, { value: 30 }),
-        makeTag('effect', 40, 72, { prompt: 'lens flare' }),
       ],
     };
     const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [z1] };
     const pipe = makePipe({ elements: [timeline as any] });
 
-    const out = summarizePipe(pipe);
-    expect(out).toContain('<heuristics>');
-    expect(out).toContain('</heuristics>');
-    expect(out).toContain('<scene frames="0-72" zone="1">Mountain approach</scene>');
-    // camera uses the json constructRule
-    expect(out).toContain('<camera frames="0-72" zone="1">{"tag":"camera","value":"30"}</camera>');
-    // effect uses the markdown constructRule
-    expect(out).toContain('<effect frames="40-72" zone="1">- **Effect**: lens flare</effect>');
+    const out = summarizePipe(pipe, { unit: 'frames', fps: 24 });
+    // One <segments> container, properly closed.
+    expect(out.match(/<segments length="72f">/g)).toHaveLength(1);
+    expect(out.match(/<\/segments>/g)).toHaveLength(1);
+    // The <segments> block is nested inside a bare <timeline> container (no fps attr).
+    expect(out).toContain('<timeline>\n');
+    expect(out).toContain('</timeline>');
+    expect(out.match(/<timeline/g)).toHaveLength(1);
+    expect(out.match(/<\/timeline>/g)).toHaveLength(1);
+    // Tags inside are closed XML pairs, uniform (no constructRule shaping).
+    expect(out).toContain('<scene>Mountain approach</scene>');
+    expect(out).toContain('<camera>30</camera>');
+    expect(out.match(/<scene>/g)).toHaveLength(1);
+    expect(out.match(/<\/scene>/g)).toHaveLength(1);
+    expect(out.match(/<camera>/g)).toHaveLength(1);
+    expect(out.match(/<\/camera>/g)).toHaveLength(1);
   });
 
-  it('allows repeated same-type tags as repeated sections', () => {
+  it('renders seconds length attribute when unit=seconds', () => {
     const z1: Segment = {
       id: 'z1',
       frameStart: 0,
       frameEnd: 72,
-      tags: [
-        makeTag('scene', 0, 32, { prompt: 'first scene' }),
-        makeTag('scene', 40, 72, { prompt: 'second scene' }),
-      ],
+      tags: [makeTag('scene', 0, 72, { prompt: 'A' })],
     };
     const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [z1] };
     const pipe = makePipe({ elements: [timeline as any] });
 
-    const out = summarizePipe(pipe);
-    const matches = out.match(/<scene [^>]*>/g);
-    expect(matches).toHaveLength(2);
-    expect(out).toContain('<scene frames="0-32" zone="1">first scene</scene>');
-    expect(out).toContain('<scene frames="40-72" zone="1">second scene</scene>');
+    // 72 frames / 24 fps = 3 seconds → "3s".
+    const out = summarizePipe(pipe, { unit: 'seconds', fps: 24 });
+    expect(out).toContain('<segments length="3s">');
   });
 
-  it('emits an empty heuristics marker for a bare pipe and no tag sections', () => {
-    const out = summarizePipe(makePipe());
-    expect(out).toBe('<heuristics>empty</heuristics>');
-  });
-
-  it('numbers zones in frame order regardless of segment order', () => {
+  it('orders segments by frameStart regardless of stored order', () => {
     const za: Segment = { id: 'za', frameStart: 72, frameEnd: 121, tags: [makeTag('scene', 72, 121, { prompt: 'B' })] };
     const zb: Segment = { id: 'zb', frameStart: 0, frameEnd: 72, tags: [makeTag('scene', 0, 72, { prompt: 'A' })] };
     const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [za, zb] };
     const pipe = makePipe({ elements: [timeline as any] });
 
-    const out = summarizePipe(pipe);
-    expect(out.indexOf('zone="1"')).toBeLessThan(out.indexOf('zone="2"'));
-    expect(out).toContain('<scene frames="0-72" zone="1">A</scene>');
-    expect(out).toContain('<scene frames="72-121" zone="2">B</scene>');
+    const out = summarizePipe(pipe, { unit: 'frames', fps: 24 });
+    // zb (frame 0) must come before za (frame 72).
+    expect(out.indexOf('<scene>A</scene>')).toBeLessThan(out.indexOf('<scene>B</scene>'));
+    expect(out).toContain('<segments length="72f">');
+    expect(out).toContain('<segments length="49f">');
+  });
+
+  it('emits an empty marker for a bare pipe', () => {
+    expect(summarizePipe(makePipe(), { unit: 'frames', fps: 24 })).toBe('<heuristics>empty</heuristics>');
+  });
+
+  it('renders an empty segment as a closed <segments> with no body', () => {
+    const z1: Segment = { id: 'z1', frameStart: 0, frameEnd: 72, tags: [] };
+    const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [z1] };
+    const pipe = makePipe({ elements: [timeline as any] });
+
+    const out = summarizePipe(pipe, { unit: 'frames', fps: 24 });
+    expect(out).toBe('<timeline>\n<segments length="72f">\n\n</segments>\n</timeline>');
+  });
+
+  it('wraps all segments in a single <timeline fps> container', () => {
+    const za: Segment = { id: 'za', frameStart: 0, frameEnd: 72, tags: [makeTag('scene', 0, 72, { prompt: 'A' })] };
+    const zb: Segment = { id: 'zb', frameStart: 72, frameEnd: 121, tags: [makeTag('scene', 72, 121, { prompt: 'B' })] };
+    const tl: TimelineElement = { id: 't1', tag: 'timeline', segments: [za, zb] };
+    const pipe = makePipe({ elements: [tl as any] });
+
+    const out = summarizePipe(pipe, { unit: 'frames', fps: 24 });
+    // Exactly one <timeline> wraps both <segments> blocks.
+    expect(out.match(/<timeline/g)).toHaveLength(1);
+    expect(out.match(/<\/timeline>/g)).toHaveLength(1);
+    expect(out.match(/<segments /g)).toHaveLength(2);
+    // Each block keeps its own length, in chronological order.
+    expect(out).toContain('<segments length="72f">');
+    expect(out).toContain('<segments length="49f">');
+  });
+
+  it('inlines position cues into the tag content (after / for-along)', () => {
+    // Zone 0–72. A camera tag 12–48 → starts 12 frames (0.5s @ 24fps) in, ends
+    // 24 frames (1s) before the zone end → cues: "after 0.5s", "for 1s along".
+    const z1: Segment = {
+      id: 'z1',
+      frameStart: 0,
+      frameEnd: 72,
+      tags: [makeTag('camera', 12, 48, { value: 30 })],
+    };
+    const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [z1] };
+    const pipe = makePipe({ elements: [timeline as any] });
+
+    const out = summarizePipe(pipe, { unit: 'frames', fps: 24 });
+    // Cues prefix the content inside the SAME closed pair.
+    expect(out).toContain('<camera>after 0.5s, for 1s along - 30</camera>');
+    // Still properly closed: exactly one open + one close.
+    expect(out.match(/<camera>/g)).toHaveLength(1);
+    expect(out.match(/<\/camera>/g)).toHaveLength(1);
+  });
+
+  it('emits no cues for a tag spanning the full zone', () => {
+    const z1: Segment = {
+      id: 'z1',
+      frameStart: 0,
+      frameEnd: 72,
+      tags: [makeTag('scene', 0, 72, { prompt: 'Mountain approach' })],
+    };
+    const timeline: TimelineElement = { id: 't1', tag: 'timeline', segments: [z1] };
+    const pipe = makePipe({ elements: [timeline as any] });
+
+    const out = summarizePipe(pipe, { unit: 'frames', fps: 24 });
+    expect(out).toContain('<scene>Mountain approach</scene>');
+    expect(out).not.toContain('after');
+    expect(out).not.toContain('along');
+  });
+
+  it('tagPositionCues returns both cues when both edges differ', () => {
+    const cues = tagPositionCues(
+      { frameStart: 12, frameEnd: 48 },
+      { frameStart: 0, frameEnd: 72 },
+      24,
+    );
+    expect(cues).toEqual(['after 0.5s', 'for 1s along']);
+  });
+
+  it('tagPositionCues returns [] when the tag matches the zone exactly', () => {
+    expect(tagPositionCues({ frameStart: 0, frameEnd: 72 }, { frameStart: 0, frameEnd: 72 }, 24)).toEqual([]);
+  });
+
+  it('tagPositionCues returns only "after" when start differs but end matches', () => {
+    expect(tagPositionCues({ frameStart: 36, frameEnd: 72 }, { frameStart: 0, frameEnd: 72 }, 24)).toEqual(['after 1.5s']);
+  });
+
+  it('tagPositionCues returns only "for-along" when end differs but start matches', () => {
+    expect(tagPositionCues({ frameStart: 0, frameEnd: 36 }, { frameStart: 0, frameEnd: 72 }, 24)).toEqual(['for 1.5s along']);
   });
 });
