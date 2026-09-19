@@ -70,85 +70,93 @@
 
 {#if open}
 	<div class="modal-overlay" onclick={() => open = false} role="presentation">
-		<div class="modal tpm-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-			<div class="modal-header">
-				<h3>Edit {specName} Prompt</h3>
-			</div>
-			<div class="modal-body">
-				<div class="tpm-prompt-zone">
-					<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
-					<textarea
-						id="tag-prompt-area"
-						bind:value={tagPrompt}
-						placeholder="Describe this {specName.toLowerCase()}…"
-						class="modal-textarea tpm-textarea"
-						aria-labelledby="tag-prompt-label"
-					></textarea>
+		<!-- Fake frame: a relative container hugging the card; the icon ring
+		     is positioned around the card on the dark backdrop. -->
+		<div class="tpm-frame" onclick={(e) => e.stopPropagation()}>
+			<div class="modal tpm-modal" role="dialog" aria-modal="true" tabindex="-1">
+				<div class="modal-header">
+					<h3>Edit {specName} Prompt</h3>
+				</div>
+				<div class="modal-body">
+					<div class="tpm-prompt-zone">
+						<label for="tag-prompt-area" id="tag-prompt-label" class="tpm-label">{specName} prompt</label>
+						<textarea
+							id="tag-prompt-area"
+							bind:value={tagPrompt}
+							placeholder="Describe this {specName.toLowerCase()}…"
+							class="modal-textarea tpm-textarea"
+							aria-labelledby="tag-prompt-label"
+						></textarea>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
+					<button class="btn-confirm" onclick={confirm}>Confirm</button>
 				</div>
 			</div>
-			<div class="modal-footer">
-				<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
-				<button class="btn-confirm" onclick={confirm}>Confirm</button>
-			</div>
+			{#each icons as ic (ic.id)}
+				<button
+					class="tpm-icon"
+					class:SLOT_CLASS[ic.pos]
+					type="button"
+					aria-label={ic.tag + ' — ' + ic.meaning}
+					onclick={() => insertTag(ic)}
+				>
+					<PromptIcon id={ic.id} size={24} ariaLabel={ic.tag} />
+					<span class="tpm-icon-tip" aria-hidden="true">
+						<b>{ic.tag}</b>
+						{ic.meaning}
+					</span>
+				</button>
+			{/each}
 		</div>
-		<!-- Icon ring: lives on the dark overlay around the card, not inside it. -->
-		{#each icons as ic (ic.id)}
-			<button
-				class="tpm-icon"
-				class:SLOT_CLASS[ic.pos]
-				type="button"
-				aria-label={ic.tag + ' — ' + ic.meaning}
-				onclick={() => insertTag(ic)}
-			>
-				<PromptIcon id={ic.id} size={24} ariaLabel={ic.tag} />
-				<span class="tpm-icon-tip" aria-hidden="true">
-					<b>{ic.tag}</b>
-					{ic.meaning}
-				</span>
-			</button>
-		{/each}
 	</div>
 {/if}
 
 <style>
-	/* The dialog card is nudged up so the bottom icon ring has breathing room
-	   on the dark backdrop. */
-	.tpm-modal {
-		max-width: 480px;
-		margin-bottom: 56px;
+	/* Fake frame: hugs the card, becomes the positioning context for the
+	   icon ring, so the marks orbit the card — not the whole overlay. */
+	.tpm-frame {
+		position: relative;
+		display: inline-flex;
 	}
 
-	/* ── Icon ring: absolutely positioned around the card on the dark overlay ──
-	   Slots: nw/n/ne across the top, w/e on the flanks, sw/s/se along the
-	   bottom — each on the side of the frame its mark describes. */
+	.tpm-modal {
+		max-width: 480px;
+	}
+
+	/* ── Icon ring: absolutely positioned around the card on the dark backdrop. */
+	/* Top row: 3 marks above the header (i1 i2 i3 in the layout sketch). */
+	.slot-nw { top: -32px; left: 0; }
+	.slot-n  { top: -32px; left: 50%; transform: translateX(-50%); }
+	.slot-ne { top: -32px; right: 0; }
+	/* Flanks: beside the prompt area. */
+	.slot-w  { top: 50%; left: -32px; transform: translateY(-50%); }
+	.slot-e  { top: 50%; right: -32px; transform: translateY(-50%); }
+	/* Bottom row: under the footer (i6 i8 in the sketch). */
+	.slot-sw { bottom: -32px; left: 0; }
+	.slot-s  { bottom: -32px; left: 50%; transform: translateX(-50%); }
+	.slot-se { bottom: -32px; right: 0; }
+
 	.tpm-icon {
 		position: absolute;
-		width: 44px;
-		height: 44px;
+		width: 40px;
+		height: 40px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 10px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light);
+		border-radius: 9px;
 		cursor: pointer;
-		opacity: 0.6;
+		opacity: 0.65;
 		transition:
 			opacity 0.15s ease,
 			transform 0.15s ease,
 			border-color 0.15s ease,
 			box-shadow 0.15s ease;
-		z-index: 2001; /* above the overlay, beside the card */
+		z-index: 1;
 	}
-
-	.slot-nw { top: -34px; left: 10%; }
-	.slot-n  { top: -34px; left: 50%; transform: translateX(-50%); }
-	.slot-ne { top: -34px; right: 10%; }
-	.slot-w  { top: 50%; left: -34px; transform: translateY(-50%); }
-	.slot-e  { top: 50%; right: -34px; transform: translateY(-50%); }
-	.slot-sw { bottom: -34px; left: 10%; }
-	.slot-s  { bottom: -34px; left: 50%; transform: translateX(-50%); }
-	.slot-se { bottom: -34px; right: 10%; }
 
 	.tpm-icon:hover svg,
 	.tpm-icon:focus-visible svg {
