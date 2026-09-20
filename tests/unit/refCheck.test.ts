@@ -60,6 +60,7 @@ describe('refCheck.collectRemoteUrls', () => {
 
   it('collects subject references per preset type (url/img2img use imageUrl, txt2img does not)', () => {
     const pipe = pipeWith({
+      mediaMode: 'reference',
       subjectReferences: [
         { id: 's1', imageUrl: 'https://a.com/s1.png', useFrames: false, visible: true, type: 'url' },
         { id: 's2', imageUrl: '', useFrames: false, visible: true, type: 'txt2img', prompt: 'hero' },
@@ -69,6 +70,31 @@ describe('refCheck.collectRemoteUrls', () => {
     });
     const targets = collectRemoteUrls(pipe);
     expect(targets.map((t: RefUrlTarget) => t.refId)).toEqual(['s1', 's3']);
+  });
+
+  it('skips subjects in keyframes mode (subjects are inert there)', () => {
+    const pipe = pipeWith({
+      mediaMode: 'keyframes',
+      subjectReferences: [
+        { id: 's1', imageUrl: 'https://a.com/s1.png', useFrames: false, visible: true, type: 'url' },
+        { id: 's2', imageUrl: 'https://a.com/s2.png', useFrames: false, visible: true, type: 'img2img' },
+      ],
+    });
+    // Plain keyframes mode, non-sharedArray model → no subject targets.
+    expect(collectRemoteUrls(pipe)).toEqual([]);
+    // sharedArray model → subjects merge into the keyframe array, still checked.
+    expect(collectRemoteUrls(pipe, { sharedArray: true }).map((t) => t.refId)).toEqual(['s1', 's2']);
+  });
+
+  it('skips url subjects with an empty imageUrl (nothing to check)', () => {
+    const pipe = pipeWith({
+      mediaMode: 'reference',
+      subjectReferences: [
+        { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+        { id: 's2', imageUrl: 'https://a.com/s2.png', useFrames: false, visible: true, type: 'url' },
+      ],
+    });
+    expect(collectRemoteUrls(pipe).map((t) => t.refId)).toEqual(['s2']);
   });
 });
 

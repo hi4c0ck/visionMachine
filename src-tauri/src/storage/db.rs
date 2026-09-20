@@ -56,8 +56,35 @@ impl Database {
         .await?;
         self.execute_migration_sql(include_str!("../../migrations/0006_settings_and_logs.sql"))
             .await?;
+        self.run_additive_task_columns().await?;
 
         log::info!("[DB] All migrations completed");
+        Ok(())
+    }
+
+    /// Additive columns for `video_generation_tasks` (migration 0007): a bare
+    /// `ALTER TABLE ADD COLUMN` in a migration file hard-fails on databases
+    /// that already ran it, so follow the same idempotent pattern as
+    /// `run_additive_columns` above — the 0007 file documents the column, the
+    /// code applies it tolerantly (duplicate-column errors ignored).
+    async fn run_additive_task_columns(&self) -> Result<(), String> {
+        let columns = [
+            // E1: persist the redacted request-log path so the DB fallback in
+            // `get_generation_task` can rebuild the task view after the
+            // in-memory registry evicts a terminal task (or after restart).
+            "ALTER TABLE video_generation_tasks ADD COLUMN request_log TEXT",
+            // 0008: persist the task start timestamp (Unix ms) so the DB
+            // fallback can rebuild the live elapsed timer after restart / the
+            // registry evicted the task. NULL on pre-0008 rows (frontend
+            // shows no timer rather than a bogus value).
+            "ALTER TABLE video_generation_tasks ADD COLUMN started_at INTEGER",
+        ];
+
+        for sql in columns {
+            // Ignore "duplicate column" errors on already-migrated DBs.
+            let _ = sqlx::query(sql).execute(&self.pool).await;
+        }
+
         Ok(())
     }
 
@@ -460,11 +487,15 @@ impl Database {
     }
 
     pub async fn list_sessions(&self, project_id: &str) -> Result<Vec<serde_json::Value>, String> {
-        let rows = sqlx::query("SELECT id, project_id, name, fps, resolution, orientation, pipes_json, total_generated_frames, created_at FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
-            .bind(project_id)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        let rows = sqlx::query(
+            "SELECT s.id, s.project_id, s.name, s.fps, s.resolution, s.orientation, s.pipes_json, s.total_generated_frames, s.created_at, p.directory_path \
+             FROM sessions s LEFT JOIN projects p ON p.id = s.project_id \
+             WHERE s.project_id = ? ORDER BY s.created_at DESC",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
         let sessions: Vec<serde_json::Value> = rows
             .iter()
@@ -479,6 +510,7 @@ impl Database {
                     "pipes_json": row.get::<Option<String>, usize>(6),
                     "total_generated_frames": row.get::<i64, usize>(7),
                     "created_at": row.get::<String, usize>(8),
+                    "directory_path": row.get::<Option<String>, usize>(9).unwrap_or_default(),
                 })
             })
             .collect();

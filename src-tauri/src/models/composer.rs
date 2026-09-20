@@ -138,6 +138,11 @@ pub struct SubjectReference {
     /// Prompt for txt2img / img2img subjects.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Generated-image preview pair (same semantics as Keyframe).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_remote_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_local_path: Option<String>,
     /// Generation status of this reference's image (pending/generating/done/error).
     #[serde(default = "default_ref_status")]
     pub status: String,
@@ -169,6 +174,8 @@ impl SubjectReference {
             image_url,
             kind: "url".to_string(),
             prompt: None,
+            preview_remote_url: None,
+            preview_local_path: None,
             status: "pending".to_string(),
             use_frames,
             frame_start: None,
@@ -223,6 +230,12 @@ pub struct Keyframe {
     pub prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference_url: Option<String>,
+    /// Generated-image preview pair (post-generation artifact). Tolerant:
+    /// legacy rows without these fields deserialize to None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_remote_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_local_path: Option<String>,
     #[serde(default)]
     pub status: String, // pending, generating, done, error
 }
@@ -237,6 +250,8 @@ impl Keyframe {
             image_src: None,
             prompt: None,
             reference_url: None,
+            preview_remote_url: None,
+            preview_local_path: None,
             status: "pending".to_string(),
         }
     }
@@ -391,6 +406,8 @@ mod tests {
             image_url: "https://example.com/ref.jpg".into(),
             kind: "txt2img".into(),
             prompt: Some("a mountain".into()),
+            preview_remote_url: None,
+            preview_local_path: None,
             status: "done".into(),
             use_frames: true,
             frame_start: Some(0),

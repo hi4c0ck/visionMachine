@@ -154,6 +154,12 @@ New module `src-tauri/src/generation/`:
   - [x] stage list in order: sub-images (keyframes then subjects; `ready` items shown `ready`, D4) → final video; per-stage status pill + progress.
   - [x] **no X button** (D6): Esc/backdrop while running → `flashToast("Task not finished")` + stay open; terminal states → allow close.
   - [x] **Cancel all** → `cancel_generation` + close.
+- [x] **State-machine push model** (backend owns state, frontend renders):
+  - [x] `TaskRegistry` gains a no-op-default event sink; `lib.rs` wires it to `emit_to("main", "gen-task", &GenTaskEvent)` in `setup()`.
+  - [x] `GenTaskEvent` = `{ taskId, kind: "update"|"terminal", status?, view }`; emitted on stage-status change (force), coalesced progress ticks (100 ms), and every terminal transition (`finish_done` / `finish_cancelled` / `finish_fail_fast` / `abort_with_error`).
+  - [x] `subscribeGenTask` (`src/lib/generationEvents.ts`) → modal live-updates `activeTask` from the embedded authoritative `view`; terminal event triggers `reconcileTerminal`.
+  - [x] On-demand re-sync: `refreshActiveTask` re-pulls `get_generation_task` (registry, DB fallback) on modal open + window focus + a manual **Refresh** button in the modal footer.
+  - [x] The 1 s poller is retained only as a fallback (dropped event / backgrounded tab); terminal side-effects dedup via a `terminalHandled` set so event + poll + refresh can't double-apply.
 - [x] Completion wiring (Workspace):
   - [x] terminal `done` (only possible once a real engine lands) → green success toast, attach `lastGeneration` via `attachLastGeneration`, keyframe/subject statuses via `markRefStatus` (url items → `done`, engine items → their stage result).
   - [x] terminal `error` → red toast with task error; `markRefStatus` engine items → `error`; `lastGeneration` stays absent.

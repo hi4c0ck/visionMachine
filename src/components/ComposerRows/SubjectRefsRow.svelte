@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { PipeRow, SubjectReference, KeyframeType } from '$types';
+	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
 	import '../composer-row.css';
 
 	// Subject references row — pure chrome. The panel owns the subject-ref
@@ -46,6 +47,64 @@
 		const t = (sr.type ?? 'url') as KeyframeType;
 		return SR_TYPE_LABEL[t] ?? t;
 	}
+
+	// Resolve a subject image source to a renderable URL. Priority:
+	//  1. previewLocalPath — the generated artifact (local media-tree file),
+	//     the most current representation after a successful run.
+	//  2. imageUrl — user-supplied remote URL (url-mode subjects). Remote
+	//     URLs load directly; local paths go through read_media_file.
+	let srImageUrls = $state<Map<string, string>>(new Map());
+	// The source string each cached URL was resolved FROM — a source change
+	// (new artifact, recovery backfill) must re-fetch, not reuse the stale
+	// blob (the old `has(sr.id)` skip broke newly-attached local paths).
+	let srImageUrlsFor = $state<Map<string, string>>(new Map());
+	// Sources we've already attempted to resolve, so a `toMediaUrl` that
+	// settled to null doesn't re-trigger an IPC call on every effect re-run.
+	// Voided when the source changes (checked above) so a new path re-attempts.
+	let srAttempted = $state<Map<string, string>>(new Map());
+	// Sources whose <img> failed to load (stale local paths, expired remote
+	// URLs). Excluded from srSrc so the chip falls back to the dot placeholder
+	// instead of the browser's broken-image glyph.
+	let failedSrSources = $state<Set<string>>(new Set());
+	$effect(() => {
+		for (const sr of refs) {
+			const src = sr.previewLocalPath || sr.imageUrl || '';
+			if (!src || !isLocalPath(src)) continue;
+			if (srImageUrlsFor.get(sr.id) === src) continue;
+			if (srAttempted.get(sr.id) === src) continue;
+			srAttempted = new Map([...srAttempted, [sr.id, src]]);
+			toMediaUrl(src).then((url) => {
+				if (url) {
+					failedSrSources = new Set([...failedSrSources].filter((k) => k !== sr.id));
+					srImageUrls = new Map([...srImageUrls, [sr.id, url]]);
+					srImageUrlsFor = new Map([...srImageUrlsFor, [sr.id, src]]);
+				}
+			});
+		}
+	});
+
+	function srSrc(sr: SubjectReference): string | null {
+		const src = sr.previewLocalPath || sr.imageUrl || null;
+		if (!src || failedSrSources.has(sr.id)) return null;
+		if (isLocalPath(src)) {
+			const cached = srImageUrls.get(sr.id);
+			return cached !== undefined && srImageUrlsFor.get(sr.id) === src ? cached : null;
+		}
+		return src;
+	}
+
+	/** Drop the cached entry so srSrc() falls back to the placeholder instead
+	 *  of the browser's broken-image glyph. */
+	function markSrImageFailed(sr: SubjectReference) {
+		const src = sr.previewLocalPath || sr.imageUrl || null;
+		if (!src) return;
+		if (isLocalPath(src)) {
+			const next = new Map(srImageUrls);
+			next.delete(sr.id);
+			srImageUrls = next;
+		}
+		failedSrSources = new Set([...failedSrSources, sr.id]);
+	}
 </script>
 
 	<div class="row-group">
@@ -56,6 +115,7 @@
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
 			{@const broken = containsBroken?.(sr.id) ?? false}
+			{@const srSrcResolved = srSrc(sr)}
 			{#if sr.visible !== false}
 				<div
 					class="sr-chip"
@@ -81,11 +141,17 @@
 							<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
 						{/if}
 					</button>
-					{#if sr.imageUrl}
-						<img src={sr.imageUrl} class="sr-img" style={aspect ? `aspect-ratio: ${aspect};` : ''} alt="subject ref" />
-					{:else}
-						<span class="sr-dot" style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}></span>
-					{/if}
+					{#if srSrcResolved}
+						<img
+							src={srSrcResolved}
+							class="sr-img"
+							style={aspect ? `aspect-ratio: ${aspect};` : ''}
+							alt="subject ref"
+							onerror={() => markSrImageFailed(sr)}
+						/>
+				{:else}
+					<span class="sr-dot" style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}></span>
+				{/if}
 					<span class="sr-meta">
 						{#if sr.useFrames}
 							<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>

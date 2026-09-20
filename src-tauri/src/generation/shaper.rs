@@ -22,7 +22,15 @@ pub struct UpstreamOutput {
     pub source_id: String,
     /// "keyframe" | "subject".
     pub kind: String,
-    /// Local path or remote URL of the finished image.
+    /// Primary source for the video API: a fetchable remote URL when the
+    /// provider returned one; the local media-tree path otherwise. The
+    /// shaper sends this value to the provider.
+    #[serde(default, alias = "local_path")]
+    pub primary: String,
+    /// Fallback source (local media-tree file). The provider engine can
+    /// base64-encode this if the remote primary is unreachable. Always
+    /// present for generated pieces; mirrors `primary` for `url` pieces.
+    #[serde(default)]
     pub local_path: String,
 }
 
@@ -193,9 +201,9 @@ fn frames_media(spec: &ModelSpecWire, ctx: &StageContext) -> (Option<String>, Op
     let urls: Vec<String> = ctx
         .upstream
         .iter()
-        .filter(|u| !u.local_path.is_empty())
+        .filter(|u| !u.primary.is_empty())
         .take(cap)
-        .map(|u| u.local_path.clone())
+        .map(|u| u.primary.clone())
         .collect();
     match urls.len() {
         0 => (None, None),
@@ -211,7 +219,7 @@ fn shape_video_job_frames(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     let refs_total = ctx
         .upstream
         .iter()
-        .filter(|u| !u.local_path.is_empty())
+        .filter(|u| !u.primary.is_empty())
         .count();
     // Mode selection (O3): 0 refs -> ti2vid (text-only); 1 ref -> ti2vid +
     // top-level image; 2-3 refs -> keyframes + extra_body.image + mode.
@@ -287,8 +295,8 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
             let kfs: Vec<&String> = ctx
                 .upstream
                 .iter()
-                .filter(|u| !u.local_path.is_empty())
-                .map(|u| &u.local_path)
+                .filter(|u| !u.primary.is_empty())
+                .map(|u| &u.primary)
                 .take(2) // first_frame / last_frame (maxKeyframes=2)
                 .collect();
             if !kfs.is_empty() {
@@ -303,9 +311,9 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
             let imgs: Vec<String> = ctx
                 .upstream
                 .iter()
-                .filter(|u| !u.local_path.is_empty())
+                .filter(|u| !u.primary.is_empty())
                 .take(cap)
-                .map(|u| u.local_path.clone())
+                .map(|u| u.primary.clone())
                 .collect();
             if !imgs.is_empty() {
                 payload["images"] = json!(imgs);
@@ -395,7 +403,8 @@ mod tests {
         UpstreamOutput {
             source_id: source_id.into(),
             kind: kind.into(),
-            local_path: path.into(),
+            primary: path.into(),
+            local_path: String::new(),
         }
     }
 

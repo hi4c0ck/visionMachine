@@ -18,6 +18,13 @@ pub struct GenerationTaskRow {
     pub stages_json: Option<String>,
     pub output_path: Option<String>,
     pub error: Option<String>,
+    /// Redacted request-log path (0007; None on rows written before the
+    /// column existed — the DB fallback in `get_generation_task` then
+    /// reports no expander rather than a dead path).
+    pub request_log: Option<String>,
+    /// Unix ms the task started running (0008; None on pre-migration rows —
+    /// the DB fallback defaults to 0 so the frontend shows no timer).
+    pub started_at: Option<i64>,
 }
 
 impl Database {
@@ -39,6 +46,42 @@ impl Database {
         .execute(&self.pool)
         .await
         .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Persist the request-log path up front (E1): the path is known at
+    /// `start()` time, and the registry's in-memory view is the live source
+    /// — this column only matters for the terminal-DB fallback. Best-effort:
+    /// a pre-0007 DB missing the column can't lose task state over it.
+    pub async fn set_generation_task_request_log(
+        &self,
+        task_id: &str,
+        request_log: &str,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE video_generation_tasks SET request_log = ? WHERE id = ?")
+            .bind(request_log)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Set the persisted start timestamp (0008; Unix ms) on a running task
+    /// so the DB fallback can rebuild the live elapsed timer after a
+    /// restart / registry eviction. Best-effort: a pre-0008 DB missing the
+    /// column can't lose task state over it.
+    pub async fn set_generation_task_started_at(
+        &self,
+        task_id: &str,
+        started_at: i64,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE video_generation_tasks SET started_at = ? WHERE id = ?")
+            .bind(started_at)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -74,7 +117,7 @@ impl Database {
         task_id: &str,
     ) -> Result<Option<GenerationTaskRow>, String> {
         let row = sqlx::query(
-            "SELECT id, session_id, pipe_id, status, progress, stages_json, output_path, error \
+            "SELECT id, session_id, pipe_id, status, progress, stages_json, output_path, error, request_log, started_at \
              FROM video_generation_tasks WHERE id = ?",
         )
         .bind(task_id)
@@ -91,6 +134,12 @@ impl Database {
             stages_json: r.get("stages_json"),
             output_path: r.get("output_path"),
             error: r.get("error"),
+            // Tolerant: pre-0007 DBs lack the column — `r.get` on a
+            // non-selected column can't happen (we select it explicitly),
+            // but a legacy row's NULL is the expected value.
+            request_log: r.get::<Option<String>, _>("request_log"),
+            // 0008: pre-migration rows carry NULL → None on the wire.
+            started_at: r.get::<Option<i64>, _>("started_at"),
         }))
     }
 }

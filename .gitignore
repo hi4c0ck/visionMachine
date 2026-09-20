@@ -110,6 +110,9 @@ scripts/*
 # Build-orchestrator runtime state (logs + heartbeat), regenerated locally
 build-state/
 
+# Agent tooling (local skills/config)
+.agents/
+
 # Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/

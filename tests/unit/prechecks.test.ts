@@ -159,6 +159,39 @@ describe('pipePrechecks — media caps (E4)', () => {
     expect(over.map((c) => c.code)).toContain('media-cap');
   });
 
+  it('sharedArray: hidden subject refs do not count toward the cap', () => {
+    const spec = framesSpec({
+      media: { modes: ['keyframes'], sharedArray: true, maxKeyframes: 3, maxRefs: 3 },
+    });
+    // 3 keyframes + 1 hidden subject = 3 total; hidden ref is excluded.
+    const c = pipePrechecks(
+      pipeWith({
+        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        subjectReferences: [
+          { id: 's1', imageUrl: '', useFrames: false, visible: false, type: 'url' },
+        ],
+      }),
+      sess,
+      null,
+      spec,
+    );
+    expect(c.map((x) => x.code)).not.toContain('media-cap');
+
+    // 3 keyframes + 1 visible subject = 4 > cap 3 → conflict.
+    const c2 = pipePrechecks(
+      pipeWith({
+        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        subjectReferences: [
+          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+        ],
+      }),
+      sess,
+      null,
+      spec,
+    );
+    expect(c2.map((x) => x.code)).toContain('media-cap');
+  });
+
   it('keyframes mode: caps keyframe count, ignores subjects', () => {
     const spec = secondsSpec({
       media: { modes: ['keyframes', 'reference'], maxKeyframes: 2, maxRefs: 5 },
@@ -209,9 +242,10 @@ describe('pipePrechecks — media caps (E4)', () => {
 });
 
 describe('pipePrechecks — txt2img prompt rule (O1)', () => {
-  it('requires a prompt only on txt2img pieces', () => {
+  it('requires a prompt only on txt2img pieces (reference mode: subjects are inputs)', () => {
     const c = pipePrechecks(
       pipeWith({
+        mediaMode: 'reference',
         keyframes: [
           { id: 'k1', frame: 0, slotIndex: 1, type: 'txt2img', status: 'pending' },
           { id: 'k2', frame: 8, slotIndex: 2, type: 'txt2img', prompt: 'a cat', status: 'pending' },
@@ -231,6 +265,60 @@ describe('pipePrechecks — txt2img prompt rule (O1)', () => {
       'keyframe 1 (txt2img) needs a prompt',
       'subject s1 (txt2img) needs a prompt',
     ]);
+  });
+
+  it('skips txt2img subject checks in keyframes mode (subjects are inert)', () => {
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'keyframes',
+        keyframes: [
+          { id: 'k1', frame: 0, slotIndex: 1, type: 'txt2img', status: 'pending' },
+        ],
+        subjectReferences: [
+          // Inert in keyframes mode: no conflict, even empty.
+          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'txt2img' },
+        ],
+      }),
+      sessionWith(),
+      null,
+      secondsSpec(),
+    );
+    const hits = c.filter((x) => x.code === 'txt2img-no-prompt');
+    // Only the keyframe conflict; the subject is ignored.
+    expect(hits.map((x) => x.message)).toEqual(['keyframe 1 (txt2img) needs a prompt']);
+  });
+
+  it('checks subjects even in keyframes mode when the model is sharedArray', () => {
+    const spec = secondsSpec({
+      media: { modes: ['keyframes'], sharedArray: true, maxKeyframes: 3, maxRefs: 3 },
+    });
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'keyframes',
+        subjectReferences: [
+          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'txt2img' },
+        ],
+      }),
+      sessionWith(),
+      null,
+      spec,
+    );
+    expect(c.map((x) => x.code)).toContain('txt2img-no-prompt');
+  });
+
+  it('flags empty url subjects in reference mode', () => {
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'reference',
+        subjectReferences: [
+          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+        ],
+      }),
+      sessionWith(),
+      null,
+      secondsSpec({ media: { modes: ['keyframes', 'reference'], maxRefs: 2 } }),
+    );
+    expect(c.some((x) => x.message === 'subject s1 has no reference image — set a URL or switch to txt2img')).toBe(true);
   });
 });
 

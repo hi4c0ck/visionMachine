@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::time::sleep;
 
 use crate::commands::settings::{normalize_settings, ProviderSlot};
-use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine};
+use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine, StageOutput};
 use crate::generation::media::{append_jsonl, append_request_log, pipe_media_dirs, write_json};
 use crate::generation::shaper::StageContext;
 use crate::generation::shaper::{shape_request, substitute_poll_template};
@@ -25,8 +25,10 @@ use crate::generation::specs::ModelSpecWire;
 use crate::generation::types::SourceKind;
 use crate::storage::db::Database;
 
-/// Poll cadence for async video jobs (catalog: every 1-2 s).
-const POLL_INTERVAL: Duration = Duration::from_millis(1500);
+/// Poll cadence for async video jobs. 8 s balances responsiveness against the
+/// provider's shared-endpoint rate limits: a video render takes minutes, so a
+/// tighter-than-5 s cadence only burns quota and triggers 429s faster.
+const POLL_INTERVAL: Duration = Duration::from_secs(8);
 /// 503 `video_queue_full` backoff sequence (catalog hermes note):
 /// 30 s, 60 s, 120 s, then hold at 120 s.
 const BACKOFF_SECS: [u64; 3] = [30, 60, 120];
@@ -155,7 +157,15 @@ impl ProviderEngine {
             .db
             .get_profile_settings(&profile_id)
             .await
-            .map_err(|e| EngineError::Failure(format!("load settings: {e}")))?;
+            .map_err(|e| {
+                let msg = format!("load settings: {e}");
+                log::error!(
+                    "[Generation] task {} provider slot failed: {}",
+                    input.task_id,
+                    msg
+                );
+                EngineError::Failure(msg)
+            })?;
         let raw = raw.unwrap_or_else(|| json!({}).to_string());
         let value: serde_json::Value =
             serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
@@ -165,14 +175,22 @@ impl ProviderEngine {
             _ => settings.providers.video.clone(),
         };
         if slot.base_url.trim().is_empty() {
-            return Err(EngineError::Failure(format!(
-                "provider base URL is empty for profile {profile_id}"
-            )));
+            let msg = format!("provider base URL is empty for profile {profile_id}");
+            log::error!(
+                "[Generation] task {} provider slot failed: {}",
+                input.task_id,
+                msg
+            );
+            return Err(EngineError::Failure(msg));
         }
         if slot.api_key.trim().is_empty() {
-            return Err(EngineError::Failure(format!(
-                "API key is not set for profile {profile_id} ({kind} slot)"
-            )));
+            let msg = format!("API key is not set for profile {profile_id} ({kind} slot)");
+            log::error!(
+                "[Generation] task {} provider slot failed: {}",
+                input.task_id,
+                msg
+            );
+            return Err(EngineError::Failure(msg));
         }
         Ok(slot)
     }
@@ -184,13 +202,17 @@ impl GenerationEngine for ProviderEngine {
         input: &'a EngineInput,
         cancel: &'a AtomicBool,
         on_progress: &'a (dyn Fn(f32) + Sync),
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+        on_event: &'a (dyn Fn(&str) + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StageOutput, String>> + Send + 'a>>
     {
         let this = self;
         let input = input.clone();
         Box::pin(async move {
-            match this.execute_stage(&input, cancel, on_progress).await {
-                Ok(path) => Ok(path),
+            match this
+                .execute_stage(&input, cancel, on_progress, on_event)
+                .await
+            {
+                Ok(out) => Ok(out),
                 Err(e) => {
                     if e.is_cancelled() {
                         cancel.store(true, Ordering::Release);
@@ -221,19 +243,57 @@ impl ProviderEngine {
         input: &EngineInput,
         cancel: &AtomicBool,
         on_progress: &(dyn Fn(f32) + Sync),
-    ) -> Result<String, EngineError> {
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<StageOutput, EngineError> {
         if cancel.load(Ordering::Acquire) {
+            log::warn!(
+                "[Generation] stage for task {} skipped: cancel already set",
+                input.task_id
+            );
             return Err(EngineError::Cancelled);
         }
         let stage = input.stage.clone().unwrap_or_else(|| EngineStage {
             kind: SourceKind::Video,
             ..Default::default()
         });
+        log::info!(
+            "[Generation] execute task {} stage kind={:?} spec_kind={:?}",
+            input.task_id,
+            stage.kind,
+            match stage.kind {
+                SourceKind::Keyframe | SourceKind::Subject => input
+                    .image_spec
+                    .as_ref()
+                    .map(|s| s.id.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                SourceKind::Video => input
+                    .video_spec
+                    .as_ref()
+                    .map(|s| s.id.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            }
+        );
         match stage.kind {
             SourceKind::Keyframe | SourceKind::Subject => {
-                self.run_image_stage(input, cancel, on_progress).await
+                let (local, remote_url) = self
+                    .run_image_stage(input, cancel, on_progress, on_event)
+                    .await?;
+                Ok(StageOutput {
+                    local_path: local,
+                    remote_url,
+                })
             }
-            SourceKind::Video => self.run_video_stage(input, cancel, on_progress).await,
+            SourceKind::Video => {
+                let local = self
+                    .run_video_stage(input, cancel, on_progress, on_event)
+                    .await?;
+                Ok(StageOutput {
+                    local_path: local,
+                    remote_url: None,
+                })
+            }
         }
     }
 }
@@ -242,25 +302,42 @@ impl ProviderEngine {
     /// Sync image stage: POST, parse `data[0].url` / `b64_json`, download
     /// into `<mediaRoot>/<pipe>/images/<refId>.png`, append `log.jsonl`,
     /// record the redacted request line (docs/provider-engine-tasks.md,
-    /// Phase D step 4). Returns the local path.
+    /// Phase D step 4). Returns `(local path, provider remote URL)`.
     async fn run_image_stage(
         &self,
         input: &EngineInput,
         cancel: &AtomicBool,
         on_progress: &(dyn Fn(f32) + Sync),
-    ) -> Result<String, EngineError> {
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<(String, Option<String>), EngineError> {
         let stage = input.stage.clone().unwrap_or_default();
         let spec = input.image_spec.clone().ok_or_else(|| {
-            EngineError::Failure(format!(
-                "image stage {:?} has no resolved image spec",
-                stage.kind
-            ))
+            let msg = format!("image stage {:?} has no resolved image spec", stage.kind);
+            log::error!("[Generation] image task {} failed: {}", input.task_id, msg);
+            EngineError::Failure(msg)
         })?;
-        let slot = self.provider_slot(input, spec.kind.clone()).await?;
+        let slot = self
+            .provider_slot(input, spec.kind.clone())
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "[Generation] image task {} provider slot failed: {}",
+                    input.task_id,
+                    e.message()
+                );
+                e
+            })?;
 
         // Build the payload with the stage shaper (pure, Phase C).
         let ctx = self.stage_context(input, &stage, &spec)?;
-        let payload = shape_request(&spec, &ctx).map_err(EngineError::Failure)?;
+        let payload = shape_request(&spec, &ctx).map_err(|e| {
+            log::error!(
+                "[Generation] image task {} payload shape failed: {}",
+                input.task_id,
+                e
+            );
+            EngineError::Failure(e)
+        })?;
 
         // The key/secret are used ONLY while issuing the request (E1);
         // everything persisted is masked below.
@@ -269,20 +346,73 @@ impl ProviderEngine {
         let secrets: Vec<String> = vec![slot.api_key.trim().to_string()];
         let secrets_refs: Vec<&str> = secrets.iter().map(|s| s.as_str()).collect();
 
-        let (status, resp) = self
-            .http
-            .post(&url, &payload, slot.api_key.trim(), IMAGE_TIMEOUT)
-            .await
-            .map_err(|e| EngineError::Failure(format!("transport: {e}")))?;
+        // Publish progress at each phase of the image stage so the UI shows
+        // per-piece motion (original design): 0.0 start, 0.4 request in
+        // flight, 0.6 response received, 1.0 artifact materialized.
+        on_progress(0.0);
+        on_event("image request in flight");
 
-        // Append the redacted request/response to the task log (best-effort:
-        // a log failure must not abort the stage).
+        // 429 rate-limited → bounded backoff retry (30/60/120 s ladder), not a
+        // hard failure. After the ladder is exhausted a persistent 429 still
+        // surfaces through the >=400 check below as a concrete error.
+        let (status, resp) = {
+            let mut backoff_idx = 0usize;
+            loop {
+                on_progress(0.4); // request in flight
+                let (st, rs) = self
+                    .http
+                    .post(&url, &payload, slot.api_key.trim(), IMAGE_TIMEOUT)
+                    .await
+                    .map_err(|e| {
+                        log::error!(
+                            "[Generation] image task {} transport failed: {}",
+                            input.task_id,
+                            e
+                        );
+                        EngineError::Failure(format!("transport: {e}"))
+                    })?;
+                if st != 429 {
+                    break (st, rs);
+                }
+                let delay = self
+                    .backoff_secs
+                    .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                    .copied()
+                    .unwrap_or(120);
+                backoff_idx += 1;
+                log::warn!(
+                    "[Generation] image task {} rate-limited (429), backing off {} s (consecutive 429 #{})",
+                    input.task_id, delay, backoff_idx
+                );
+                // Live state line so the modal shows "rate-limited — retry in
+                // N s" instead of a frozen bar (the request/response detail
+                // stays in the redacted log, not here).
+                on_event(&format!("rate-limited — retry in {} s", delay));
+                if cancel.load(Ordering::Acquire) {
+                    return Err(EngineError::Cancelled);
+                }
+                sleep(Duration::from_secs(delay)).await;
+            }
+        };
+
+        on_progress(0.5); // response received, parsing + download next
+        on_event("downloading image artifact");
+
+        // Append the full redacted request + response to the task log so a
+        // later replay / diagnosis sees exactly what was sent and returned
+        // (URL, method, redacted headers, payload, status, full body).
         let media = self.media_root_for(input);
         if let Some(root) = &media {
             if let Ok((_, task_dir)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
                 let entry = json!({
                     "stage": "image",
                     "model": spec.id,
+                    "request": {
+                        "method": "POST",
+                        "url": url,
+                        "headers": { "Authorization": "Bearer [API_KEY]", "Content-Type": "application/json" },
+                        "body": payload,
+                    },
                     "status": status,
                     "response": resp,
                 });
@@ -292,16 +422,23 @@ impl ProviderEngine {
 
         if status >= 400 {
             let body = resp.get("error").cloned().unwrap_or(resp);
-            return Err(EngineError::Failure(format!(
+            let msg = format!(
                 "image generation HTTP {status} ({}): {}",
                 spec.id,
                 body.to_string()
-            )));
+            );
+            log::error!("[Generation] image task {} failed: {}", input.task_id, msg);
+            return Err(EngineError::Failure(msg));
         }
 
         // Parse the artifact location: prefer a URL, else b64_json.
         let data0 = resp.get("data").and_then(|d| d.get(0)).cloned();
         let Some(data0) = data0 else {
+            log::error!(
+                "[Generation] image task {} response missing data[0] (body: {})",
+                input.task_id,
+                resp.to_string()
+            );
             return Err(EngineError::Failure(
                 "image response missing data[0]".into(),
             ));
@@ -313,17 +450,28 @@ impl ProviderEngine {
             .and_then(|b| b.as_str())
             .map(String::from);
 
-        // Resolve + download the artifact into the media tree.
+        // Resolve + download the artifact into the media tree. Keep the
+        // provider's remote URL alongside the local path: the registry links
+        // both back to the keyframe/subject (previewRemoteUrl / previewLocalPath)
+        // so the next video run can prefer the fetchable remote source.
         let local = self
             .materialize_image(
-                remote_url,
+                remote_url.clone(),
                 b64,
                 &input.pipe_id,
                 &input.task_id,
                 &stage,
                 input,
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "[Generation] image task {} materialize failed: {}",
+                    input.task_id,
+                    e.message()
+                );
+                e
+            })?;
 
         // Append the artifact history line (O2: latest per ref; history here).
         if let Some(root) = &media {
@@ -345,10 +493,16 @@ impl ProviderEngine {
         }
 
         if cancel.load(Ordering::Acquire) {
+            log::warn!(
+                "[Generation] image task {} cancelled after artifact produced",
+                input.task_id
+            );
             return Err(EngineError::Cancelled);
         }
         on_progress(1.0);
-        Ok(local)
+        on_event("image complete");
+        log::info!("[Generation] image task {} ok ({})", input.task_id, local);
+        Ok((local, remote_url))
     }
 }
 impl ProviderEngine {
@@ -457,28 +611,54 @@ impl ProviderEngine {
         input: &EngineInput,
         cancel: &AtomicBool,
         on_progress: &(dyn Fn(f32) + Sync),
+        on_event: &(dyn Fn(&str) + Sync),
     ) -> Result<String, EngineError> {
         let stage = input.stage.clone().unwrap_or_default();
         let spec = input.video_spec.clone().ok_or_else(|| {
-            EngineError::Failure(format!(
+            let msg = format!(
                 "video stage has no resolved video spec (pipe {})",
                 input.pipe_id
-            ))
+            );
+            log::error!("[Generation] video task {} failed: {}", input.task_id, msg);
+            EngineError::Failure(msg)
         })?;
-        let slot = self.provider_slot(input, spec.kind.clone()).await?;
+        let slot = self
+            .provider_slot(input, spec.kind.clone())
+            .await
+            .map_err(|e| {
+                log::error!(
+                    "[Generation] video task {} provider slot failed: {}",
+                    input.task_id,
+                    e.message()
+                );
+                e
+            })?;
 
         let ctx = self.stage_context(input, &stage, &spec)?;
-        let payload = shape_request(&spec, &ctx).map_err(EngineError::Failure)?;
+        let payload = shape_request(&spec, &ctx).map_err(|e| {
+            log::error!(
+                "[Generation] video task {} payload shape failed: {}",
+                input.task_id,
+                e
+            );
+            EngineError::Failure(e)
+        })?;
 
         let base = slot.base_url.trim().trim_end_matches('/');
         let create_url = format!("{base}{}", spec.endpoint);
         let secrets = vec![slot.api_key.trim()];
+        on_event("creating video job");
 
         // 1) Create the job (503 queue-full backs off and retries).
         let mut backoff_idx = 0usize;
         let create_resp = loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
+            }
+            // First attempt: mark the stage as "creating" so the modal shows
+            // motion instead of a frozen 0.0 bar.
+            if backoff_idx == 0 {
+                on_progress(0.51);
             }
             let (status, resp) = self
                 .http
@@ -506,25 +686,67 @@ impl ProviderEngine {
                 .copied()
                 .unwrap_or(120);
             backoff_idx += 1;
+            // Live state line: the modal shows "queue full — retry in N s"
+            // instead of a frozen bar while the provider queue is saturated
+            // (the full 503 body stays in the redacted log, not here).
+            on_event(&format!("queue full — retry in {} s", delay));
+            // Publish the in-backoff state so the stage row shows the amber
+            // rate-limited hint (0.51 = first rung of the ladder band, the
+            // registry maps 0.51–0.53 to `RateLimited`).
+            on_progress(0.51 + 0.01 * (backoff_idx as f32).min(3.0));
             self.log_entry(
                 input,
                 &secrets,
-                &json!({ "stage": "video-create-503", "backoff": delay, "resp": resp }),
+                &json!({
+                    "stage": "video-create-503",
+                    "backoff": delay,
+                    "request": {
+                        "method": "POST",
+                        "url": create_url,
+                        "headers": { "Authorization": "Bearer [API_KEY]", "Content-Type": "application/json" },
+                        "body": payload.clone(),
+                    },
+                    "resp": resp,
+                }),
             )
             .await;
             sleep(Duration::from_secs(delay)).await;
         };
         let (create_status, create_body) = match create_resp {
             Ok(v) => v,
-            Err(e) => return Err(e),
+            Err(e) => {
+                log::error!(
+                    "[Generation] video task {} create failed: {}",
+                    input.task_id,
+                    e.message()
+                );
+                return Err(e);
+            }
         };
-        self.log_entry(input, &secrets, &json!({ "stage": "video-create", "status": create_status, "resp": create_body.clone() })).await;
+        self.log_entry(
+                input,
+                &secrets,
+                &json!({
+                    "stage": "video-create",
+                    "request": {
+                        "method": "POST",
+                        "url": create_url,
+                        "headers": { "Authorization": "Bearer [API_KEY]", "Content-Type": "application/json" },
+                        "body": payload.clone(),
+                    },
+                    "status": create_status,
+                    "resp": create_body.clone(),
+                }),
+            )
+            .await;
         if create_status >= 400 {
-            return Err(EngineError::Failure(format!(
+            let msg = format!(
                 "video create HTTP {create_status} ({}): {}",
                 spec.id,
                 create_body.get("error").cloned().unwrap_or(create_body)
-            )));
+            );
+            log::error!("[Generation] video task {} failed: {}", input.task_id, msg);
+            return Err(EngineError::Failure(msg));
         }
 
         // 2) Job id from the create response (defensive: catalog shape is
@@ -537,19 +759,46 @@ impl ProviderEngine {
             .and_then(|v| v.as_str())
             .map(String::from)
             .ok_or_else(|| {
-                EngineError::Failure(format!(
+                let msg = format!(
                     "video create response missing job id (body: {})",
                     create_body.to_string()
-                ))
+                );
+                log::error!("[Generation] video task {} failed: {}", input.task_id, msg);
+                EngineError::Failure(msg)
             })?;
 
         let poll_tpl = spec.poll_endpoint.clone().ok_or_else(|| {
-            EngineError::Failure(format!("model {} has no poll endpoint", spec.id))
+            let msg = format!("model {} has no poll endpoint", spec.id);
+            log::error!("[Generation] video task {} failed: {}", input.task_id, msg);
+            EngineError::Failure(msg)
         })?;
         on_progress(0.5);
+        on_event("job created — rendering");
+        log::info!(
+            "[Generation] video task {} job created ({})",
+            input.task_id,
+            video_id
+        );
 
-        // 3) Poll until terminal. 503 queue-full backs off, cancel aborts.
+        // 3) Poll until terminal. 503 queue-full and 429 rate-limited both
+        // back off; cancel aborts.
+        //
+        // 429 handling is critical: the provider's poll endpoint is shared
+        // with the create endpoint and rate-limits aggressively. The poller
+        // must not hammer it at full cadence — each 429 walks the 30/60/120 s
+        // backoff ladder (same schedule as 503s). The ladder only resets on
+        // a clean 200 `in_progress` poll AND only after a full backoff-delay
+        // has elapsed, so an alternating 429/200 pattern can no longer lock
+        // the poller into a perpetual 30 s stall.
+        //
+        // Live progress: the provider's poll responses carry a `progress`
+        // field (0–100) for in-flight video jobs. We publish it (clamped,
+        // blended with the job-created milestone) so the UI's top bar and
+        // the video stage row move during the multi-minute render instead of
+        // sitting still at the 0.5 "job created" value.
         let mut backoff_idx = 0usize;
+        let mut saw_429 = false;
+        let mut last_published = 0.5f32;
         let final_body = loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
@@ -573,7 +822,53 @@ impl ProviderEngine {
                         .copied()
                         .unwrap_or(120);
                     backoff_idx += 1;
-                    self.log_entry(input, &secrets, &json!({ "stage": "video-poll-503", "backoff": delay, "resp": body.clone() })).await;
+                    saw_429 = false;
+                    self.log_entry(input, &secrets, &json!({
+                        "stage": "video-poll-503",
+                        "backoff": delay,
+                        "request": { "method": "GET", "url": poll_url, "headers": { "Authorization": "Bearer [API_KEY]" } },
+                        "resp": body.clone(),
+                    })).await;
+                    log::warn!(
+                        "[Generation] video task {} poll queue-full (503), backing off {} s",
+                        input.task_id,
+                        delay
+                    );
+                    // Live state line: "poll queue full — retry in N s" so the
+                    // modal shows the task is alive, not stuck.
+                    on_event(&format!("poll queue full — retry in {} s", delay));
+                    sleep(Duration::from_secs(delay)).await;
+                    continue;
+                }
+                Ok((429, body)) => {
+                    // Rate-limited: walk the 30/60/120 s ladder. `saw_429`
+                    // tracks whether the previous poll also hit 429 — the
+                    // ladder index only resets on a clean `in_progress` 200
+                    // that arrives at least one full backoff-delay after the
+                    // last 429, so a 429/200/429 pattern escalates instead
+                    // of stalling at the first rung.
+                    let delay = self
+                        .backoff_secs
+                        .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                        .copied()
+                        .unwrap_or(120);
+                    backoff_idx += 1;
+                    saw_429 = true;
+                    self.log_entry(input, &secrets, &json!({
+                        "stage": "video-poll-429",
+                        "backoff": delay,
+                        "request": { "method": "GET", "url": poll_url, "headers": { "Authorization": "Bearer [API_KEY]" } },
+                        "resp": body.clone(),
+                    })).await;
+                    log::warn!(
+                        "[Generation] video task {} poll rate-limited (429), backing off {} s",
+                        input.task_id,
+                        delay
+                    );
+                    // Publish the in-backoff state live so the modal shows
+                    // "waiting for provider window" instead of a frozen bar.
+                    on_progress(0.5 + (0.01 * (backoff_idx as f32).min(3.0)));
+                    on_event(&format!("rate-limited — retry in {} s", delay));
                     sleep(Duration::from_secs(delay)).await;
                     continue;
                 }
@@ -585,31 +880,90 @@ impl ProviderEngine {
                         .to_string();
                     match s.to_lowercase().as_str() {
                         "failed" | "error" => {
-                            return Err(EngineError::Failure(format!(
+                            let msg = format!(
                                 "video job {video_id} failed ({}): {}",
                                 spec.id,
                                 body.get("error").cloned().unwrap_or(body)
-                            )));
+                            );
+                            log::error!(
+                                "[Generation] video task {} job {} failed: {}",
+                                input.task_id,
+                                video_id,
+                                msg
+                            );
+                            return Err(EngineError::Failure(msg));
                         }
-                        "completed" | "succeeded" | "success" => break body,
+                        "completed" | "succeeded" | "success" => {
+                            log::info!(
+                                "[Generation] video task {} job {} completed",
+                                input.task_id,
+                                video_id
+                            );
+                            break body;
+                        }
                         _ => {
-                            // Still processing: keep polling.
+                            // Clean in_progress 200: only reset the ladder if
+                            // the last poll was NOT a 429 (i.e. we had a real
+                            // gap of successful polls). This prevents the
+                            // alternating 429/200 pattern from perpetually
+                            // resetting to the 30 s rung.
+                            if !saw_429 {
+                                backoff_idx = 0;
+                            }
+                            // The provider's own job progress (0–100) when it
+                            // reports one — publish it live so the UI's top bar
+                            // and the video stage row move during the render.
+                            // The value is clamped into the 0.5–0.9 band so it
+                            // blends with the 0.5 "job created" milestone and
+                            // never collides with the 1.0 completion marker.
+                            let provider_pct = body
+                                .get("progress")
+                                .and_then(|v| v.as_f64())
+                                .map(|p| (p.clamp(0.0, 100.0) / 100.0) as f32);
+                            if let Some(pct) = provider_pct {
+                                let published = (0.5 + 0.4 * pct).min(0.9);
+                                if published > last_published {
+                                    on_progress(published);
+                                    last_published = published;
+                                }
+                            }
+                            // Live state line: "rendering N%" (or "in progress"
+                            // when the provider doesn't report a percentage).
+                            let pct_display = body
+                                .get("progress")
+                                .and_then(|v| v.as_f64())
+                                .map(|p| format!("rendering {}%", (p / 100.0 * 100.0) as u32))
+                                .unwrap_or_else(|| "rendering — in progress".to_string());
+                            on_event(&pct_display);
                             self.log_entry(
                                 input,
                                 &secrets,
-                                &json!({ "stage": "video-poll", "http": status, "status": s }),
+                                &json!({
+                                    "stage": "video-poll",
+                                    "http": status,
+                                    "status": s,
+                                    "request": { "method": "GET", "url": poll_url, "headers": { "Authorization": "Bearer [API_KEY]" } },
+                                    "resp": body.clone(),
+                                }),
                             )
                             .await;
                         }
                     }
                 }
                 Err(e) => {
+                    log::error!(
+                        "[Generation] video task {} poll transport failed: {}",
+                        input.task_id,
+                        e
+                    );
                     return Err(EngineError::Failure(format!("video poll transport: {e}")));
                 }
             }
         };
 
         // 4) Final video URL (defensive key check; live-verified in Phase F).
+        on_progress(0.9); // job completed, downloading artifact next
+        on_event("downloading video");
         let video_url = final_body
             .get("video_url")
             .or_else(|| final_body.get("videoUrl"))
@@ -617,10 +971,12 @@ impl ProviderEngine {
             .or_else(|| final_body.get("download_url"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                EngineError::Failure(format!(
+                let msg = format!(
                     "video job {video_id} completed but no video url in response: {}",
                     final_body.to_string()
-                ))
+                );
+                log::error!("[Generation] video task {} failed: {}", input.task_id, msg);
+                EngineError::Failure(msg)
             })?
             .to_string();
 
@@ -632,6 +988,11 @@ impl ProviderEngine {
                     .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
                 self.http.download(&video_url, &dest).await.map_err(|e| {
+                    log::error!(
+                        "[Generation] video task {} download failed: {}",
+                        input.task_id,
+                        e
+                    );
                     EngineError::Failure(format!("video download {video_url}: {e}"))
                 })?;
                 let out = json!({
@@ -652,6 +1013,8 @@ impl ProviderEngine {
         };
 
         on_progress(1.0);
+        on_event("complete");
+        log::info!("[Generation] video task {} ok ({})", input.task_id, local);
         Ok(local)
     }
 
@@ -966,7 +1329,8 @@ mod tests {
         input.upstream = vec![UpstreamOutput {
             source_id: "k1".into(),
             kind: "keyframe".into(),
-            local_path: "https://cdn.test/k1.png".into(),
+            primary: "https://cdn.test/k1.png".into(),
+            local_path: String::new(),
         }];
         input
     }
@@ -1000,11 +1364,16 @@ mod tests {
         let input = image_input(&media);
 
         let out = engine
-            .run(&input, &cancel, &|_p| {})
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
             .await
             .expect("image stage should succeed");
         let images_dir = media.join("pipe1").join("images");
-        assert_eq!(out, images_dir.join("1.png").to_string_lossy().into_owned());
+        assert_eq!(
+            out.local_path,
+            images_dir.join("1.png").to_string_lossy().into_owned()
+        );
+        // The provider's remote URL is carried through StageOutput.
+        assert_eq!(out.remote_url.as_deref(), Some("https://cdn.test/k1.png"));
         assert!(images_dir.join("1.png").is_file(), "artifact written");
         assert!(
             images_dir.join("log.jsonl").is_file(),
@@ -1045,13 +1414,18 @@ mod tests {
 
         let seen: StdMutex<Vec<f32>> = StdMutex::new(Vec::new());
         let out = engine
-            .run(&input, &cancel, &|p| seen.lock().unwrap().push(p))
+            .run(
+                &input,
+                &cancel,
+                &|p| seen.lock().unwrap().push(p),
+                &|_line| {},
+            )
             .await
             .expect("video stage should succeed");
 
         let task_dir = media.join("pipe1").join("task1");
         assert_eq!(
-            out,
+            out.local_path,
             task_dir.join("video.mp4").to_string_lossy().into_owned()
         );
         assert!(
@@ -1087,7 +1461,10 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let mut input = image_input(std::path::Path::new("/unused"));
         input.media_root = None; // no media tree → log writes skipped, fine
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert!(err.contains("HTTP 400"), "got: {err}");
         assert!(err.contains("prompt too short"), "got: {err}");
     }
@@ -1106,7 +1483,10 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), http, [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(false));
         let input = video_input(std::path::Path::new("/unused"));
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert!(err.contains("vid-1 failed"), "got: {err}");
         assert!(err.contains("content policy"), "got: {err}");
     }
@@ -1124,7 +1504,10 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let mut input = image_input(std::path::Path::new("/unused"));
         input.media_root = None; // neither the input nor the resolver offers a root
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert!(err.contains("no media root"), "got: {err}");
     }
 
@@ -1134,7 +1517,12 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), Arc::new(StubHttp::new()), [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(true));
         let input = image_input(std::path::Path::new("/unused"));
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine.run(
+                &input,
+                &cancel,
+                &|_p| {},
+                &|_line| {},
+            ).await.unwrap_err();
         assert_eq!(err, "cancelled");
     }
 
@@ -1156,7 +1544,12 @@ mod tests {
             flipper.store(true, Ordering::Release);
         });
         let input = video_input(&media);
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine.run(
+                &input,
+                &cancel,
+                &|_p| {},
+                &|_line| {},
+            ).await.unwrap_err();
         assert_eq!(err, "cancelled");
         let _ = std::fs::remove_dir_all(&media);
     }
@@ -1185,10 +1578,15 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let input = video_input(&media);
 
-        let out = engine.run(&input, &cancel, &|_p| {}).await.unwrap();
+        let out = engine.run(
+                &input,
+                &cancel,
+                &|_p| {},
+                &|_line| {},
+            ).await.unwrap();
         let task_dir = media.join("pipe1").join("task1");
         assert_eq!(
-            out,
+            out.local_path,
             task_dir.join("video.mp4").to_string_lossy().into_owned()
         );
         // The 503 entries were logged (redacted) before the successful create.
@@ -1208,7 +1606,12 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), http, [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(false));
         let input = video_input(std::path::Path::new("/unused"));
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine.run(
+                &input,
+                &cancel,
+                &|_p| {},
+                &|_line| {},
+            ).await.unwrap_err();
         assert!(err.contains("maintenance"), "got: {err}");
     }
 
@@ -1218,7 +1621,12 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), Arc::new(StubHttp::new()), [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(false));
         let input = image_input(std::path::Path::new("/unused"));
-        let err = engine.run(&input, &cancel, &|_p| {}).await.unwrap_err();
+        let err = engine.run(
+                &input,
+                &cancel,
+                &|_p| {},
+                &|_line| {},
+            ).await.unwrap_err();
         assert!(err.contains("API key is not set"), "got: {err}");
     }
 }

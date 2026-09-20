@@ -51,6 +51,12 @@
 	// (poster extraction etc.) is explicitly deferred.
 	let videoEl = $state<HTMLVideoElement | null>(null);
 	let videoPlaying = $state(false);
+	// The media URL is ready but the element hasn't finished its first load
+	// (network still in flight or codec probing). While true the panel shows a
+	// spinner instead of a dead 0:00 shell — clearing the element on each new
+	// preview (below) means a freshly-assigned blob URL re-triggers canplay,
+	// so this never gets stuck.
+	let videoLoading = $state(false);
 
 	function toggleVideoPlay() {
 		const el = videoEl;
@@ -66,13 +72,26 @@
 	}
 
 	function resetVideoState() {
+		videoEl = null; // force a fresh element on the next preview
 		videoPlaying = false;
+		videoLoading = false;
 	}
 
+	// `videoLoading` tracks whether the <video> element has finished its first
+	// load. It starts `false`; when the `video` prop first appears (or its url
+	// changes), the $effect below sets it to `true` so the spinner shows while
+	// the element mounts. `oncanplay` (in the template) flips it back to
+	// `false` once playback is possible. `onerror` also clears it so a broken
+	// codec / dead blob can't leave the spinner spinning forever.
 	$effect(() => {
-		// reset the toggle when the video source changes
 		void video?.url;
-		resetVideoState();
+		if (video) {
+			// A fresh preview → show the spinner until the <video> element's
+			// oncanplay fires.
+			videoLoading = true;
+		} else {
+			resetVideoState();
+		}
 	});
 
 	function setLayout(mode: string) {
@@ -113,11 +132,23 @@
 	<div class="frame-preview">
 		{#if video}
 			<div class="frame-video-wrap">
+				<!-- Spinner overlay while the <video> element is still probing.
+				     The element itself always mounts when video is present so
+				     its canplay handler can fire; the overlay just visually
+				     hides the 0:00 shell until that happens. -->
+				{#if videoLoading}
+					<div class="frame-video-loading" aria-hidden="true">
+						<span class="frame-video-loading-label">loading…</span>
+					</div>
+				{/if}
 				<video
 					bind:this={videoEl}
 					class="frame-video"
 					src={video.url}
-					controls
+					muted
+					playsinline
+					oncanplay={() => (videoLoading = false)}
+					onerror={() => (videoLoading = false)}
 					onpause={() => (videoPlaying = false)}
 					onplay={() => (videoPlaying = true)}
 					onended={() => (videoPlaying = false)}
@@ -308,6 +339,40 @@
 		height: 100%;
 		object-fit: contain;
 		background: #000;
+		position: relative;
+		z-index: 0;
+	}
+
+	/* Shown while the blob is still loading — a 0:00 <video> shell is dead
+	   anyway, so a spinner reads as "loading" instead of "broken".
+	   It overlays the <video> (which is always mounted so its canplay
+	   can fire) until the element is ready. */
+	.frame-video-loading {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 10px;
+		background: #000;
+	}
+	.frame-video-loading::after {
+		content: '';
+		width: 26px;
+		height: 26px;
+		border-radius: 50%;
+		border: 2px solid var(--border);
+		border-top-color: var(--accent-color, #ff3e00);
+		animation: frame-video-spin 0.8s linear infinite;
+	}
+	.frame-video-loading-label {
+		font-size: 0.7rem;
+		color: var(--text-muted, #71717a);
+		font-family: 'JetBrains Mono', monospace;
+	}
+	@keyframes frame-video-spin {
+		to { transform: rotate(360deg); }
 	}
 
 	.frame-video-play {

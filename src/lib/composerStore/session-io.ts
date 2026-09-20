@@ -75,6 +75,8 @@ export class SessionServiceImpl implements SessionService {
         imageSrc: kf.imageSrc,
         prompt: kf.prompt,
         referenceUrl: kf.referenceUrl,
+        previewRemoteUrl: kf.previewRemoteUrl,
+        previewLocalPath: kf.previewLocalPath,
         status: kf.status || 'pending',
       })),
       subjectReferences: (p.subjectReferences || []).map((r: any) => {
@@ -83,6 +85,11 @@ export class SessionServiceImpl implements SessionService {
           id: r.id,
           imageUrl: r.imageUrl || '',
           useFrames,
+          type: r.type ?? 'url',
+          prompt: r.prompt,
+          previewRemoteUrl: r.previewRemoteUrl,
+          previewLocalPath: r.previewLocalPath,
+          status: r.status ?? 'pending',
           ...(useFrames && (r.frameStart !== undefined || r.frameEnd !== undefined) ? {
             frameStart: r.frameStart ?? 0,
             frameEnd: r.frameEnd ?? 240,

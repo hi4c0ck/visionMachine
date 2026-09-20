@@ -16,11 +16,13 @@
 	import { summarizePipe } from '$lib/promptEngine';
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
+	import { subscribeGenTask } from '$lib/generationEvents';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
-	import { migratePipe, attachLastGeneration, markRefStatus } from '$lib/composerStore';
+	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId } from '$lib/settings';
+		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -116,16 +118,73 @@
 	// brokenRefs: `${pipeId}:${refId}` of references whose URL failed the
 	// accessibility check (D5) — chips are red-out until re-validated.
 	let brokenRefs = $state<Set<string>>(new Set());
+	// Last task's terminal view, kept after the active watch ends so a later
+	// refresh on the SAME task (focus / refresh button) still works: the
+	// in-memory registry drops terminal tasks once it sees them, so the
+	// backend fallback (DB row) no longer carries requestLog — re-seeding
+	// from the cached view keeps the expander functional across re-syncs.
+	let lastTaskView = $state<GenerationTaskView | null>(null);
 	let generateModalPipeId = $state<string | null>(null);
 	let showGenerateModal = $state(false);
 	let showProgressModal = $state(false);
 	let activeTask = $state<GenerationTaskView | null>(null);
+	let activeTaskId = $state<string | null>(null);
 	let poller: PollHandle | null = null;
+	let genUnlisten: (() => void) | null = null;
+	// Tasks whose terminal state we've already processed, so a live event + an
+	// on-demand refresh (focus / refresh button) + the fallback poll don't
+	// double-apply the terminal side-effects.
+	let terminalHandled = new Set<string>();
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
 	// Portable generation log entry for the active task (Phase 4): the
-	// progress modal shows WHICH model made each piece; null until the
-	// log write lands, cleared when the task watch ends.
+	// progress modal shows WHICH model made each piece. Attached synchronously
+	// when the watch starts, so the modal has the run's state from the moment
+	// it opens; re-assigned on the terminal upsert; cleared when the watch ends.
 	let activeLogEntry = $state<GenerationLogEntry | null>(null);
+
+	// Minimized progress modal (D10): the user hides the modal to keep working
+	// while the task watcher (poller + event stream) stays live. A persistent
+	// pill in the top panel shows the active task so the user can return to the
+	// full modal with one click. Distinct from `closeProgressModal` (which stops
+	// watching) — this only toggles the DOM visibility.
+	let progressMinimized = $state(false);
+	// The pill's terminal marker (D10): when a task finishes while the modal is
+	// minimized, the pill flips to done/error so the outcome is visible in the
+	// top panel even without re-opening the modal. Reset on the next task.
+	let pillTerminal = $state<'done' | 'error' | null>(null);
+	// Close-app guard (D10): the backend blocks a window close while a
+	// generation task is live (closing would cancel the provider job) and
+	// emits `close-blocked` with the active count. Show a confirm dialog; on
+	// "close anyway" the user cancels the task(s) first, then re-issues the
+	// close (which now finds 0 active tasks and succeeds). "Keep working"
+	// just dismisses the dialog.
+	let closeBlocked = $state(false);
+	let closeBlockedCount = $state(0);
+	let closeBlockedUnlisten: (() => void) | null = null;
+
+	/** "Close anyway": cancel all active tasks, stop watching, then re-issue
+	 *  the window close (the backend now finds 0 active tasks and allows it). */
+	async function closeAnyway() {
+		closeBlocked = false;
+		if (activeTaskId) {
+			try {
+				await invoke('cancel_generation', { task_id: activeTaskId });
+			} catch (e) {
+				console.warn('[Workspace] cancel on close-anyway failed:', e);
+			}
+		}
+		stopWatching();
+		// The backend re-checks the active count on the next close request.
+		if (isTauri()) {
+			const { getCurrentWindow } = await import('@tauri-apps/api/window');
+			getCurrentWindow().close();
+		}
+	}
+
+	/** "Keep working": dismiss the dialog, the app stays open. */
+	function keepWorking() {
+		closeBlocked = false;
+	}
 
 	// Settings modal (Phase 3): opened from the profile panel (Defaults tab)
 	// or, in Phase 4, the provider status chip (Providers tab).
@@ -822,7 +881,12 @@
 	async function confirmGenerate(models: ModelSelection, seed: number | null = null) {
 		if (!generatePipe || !selectedSession) return;
 		const pipe = generatePipe;
-		const broken = await checkRemoteUrls(collectRemoteUrls(pipe));
+		// Pass the video media spec so collectRemoteUrls can skip subjects
+		// when the model is in plain keyframe mode (subjects are inert there).
+		const videoSpecForCheck = getPreset(settings.providers.video.preset) ?
+			getModel(getPreset(settings.providers.video.preset)!, models.videoModel) : undefined;
+		const videoMedia = videoSpecForCheck?.media;
+		const broken = await checkRemoteUrls(collectRemoteUrls(pipe, videoMedia));
 		if (broken.length > 0) {
 			markBrokenRefs(pipe.id, broken);
 			flashToast(`${APP_CONSTANTS.strings.refNotAccessible}: ${broken[0].url}`, 'error');
@@ -845,31 +909,45 @@
 		}
 		try {
 			const startedAt = Date.now();
-			const res = await invoke<{ task_id: string }>('start_generation', {
-				input: {
-					session_id: selectedSession.id,
-					pipe_id: pipe.id,
-					prompt: summarizePipe(pipe, { fps: selectedSession?.fps ?? undefined }),
-					// Per-run model override (Phase 4): recorded in the log now,
-					// consumed by the provider engine when it lands.
-					image_model: models.imageModel,
-					video_model: models.videoModel,
-					seed: seed ?? undefined,
-					// Phase A: profile + resolved specs travel with the task.
-					profile_id: getProfileId() ?? undefined,
-					image_spec: pair.image?.spec ?? undefined,
-					video_spec: pair.video?.spec ?? undefined,
-				},
-			});
+			// 10 s guard: `start_generation` should resolve in < 1 s normally
+			// (DB lock + registry start). A hang means the backend is stuck —
+			// surface it rather than leaving the button on “Starting…” forever.
+			const res = await Promise.race([
+				invoke<{ task_id: string; view?: GenerationTaskView }>('start_generation', {
+					input: {
+						session_id: selectedSession.id,
+						pipe_id: pipe.id,
+						prompt: summarizePipe(pipe, { fps: selectedSession?.fps ?? undefined }),
+						// Per-run model override (Phase 4): recorded in the log now,
+						// consumed by the provider engine when it lands.
+						image_model: models.imageModel,
+						video_model: models.videoModel,
+						seed: seed ?? undefined,
+						// Phase A: profile + resolved specs travel with the task.
+						profile_id: getProfileId() ?? undefined,
+						image_spec: pair.image?.spec ?? undefined,
+						video_spec: pair.video?.spec ?? undefined,
+					},
+				}),
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error('start_generation timed out after 10 s — backend is stuck')), 10000),
+				),
+			]);
 			showGenerateModal = false;
-			startWatchingTask(res.task_id);
+			startWatchingTask(res.task_id, res.view ?? null);
 			// Portable generation log: which model made which piece (P4/P5).
+			// Built AFTER startWatchingTask (which resets the entry) so the
+			// progress modal shows the run's state (models + full stage list)
+			// from the moment it opens.
 			const entry = buildGenerationLogEntry(res.task_id, selectedSession.id, pipe, models, startedAt, seed);
 			activeLogEntry = entry;
 			void writeGenerationLogStart(entry);
 		} catch (e) {
+			// start_generation rejected (or timed out): log the concrete reason
+			// so a failed start is diagnosable, then keep the modal open — the
+			// user can read the toast and re-try (a broken modal would hide it).
+			console.error('[Workspace] start_generation failed:', e);
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
-			showGenerateModal = false;
 		}
 	}
 
@@ -901,7 +979,7 @@
 				status: 'pending',
 				params,
 			})),
-			...(pipe.subjectReferences ?? []).map((r): GenerationLogPiece => ({
+			...(pipe.subjectReferences ?? []).filter((r) => r.visible !== false).map((r): GenerationLogPiece => ({
 				kind: 'subject',
 				refId: r.id,
 				provider: s.providers.image.preset,
@@ -970,7 +1048,9 @@
 	async function recheckRef(pipeId: string, refId: string) {
 		const pipe = pipes.find((p) => p.id === pipeId);
 		if (!pipe) return;
-		const targets = collectRemoteUrls(pipe).filter((t) => t.refId === refId);
+		const vs = getPreset(settings.providers.video.preset);
+		const vm = vs?.models.find((m) => m.id === settings.providers.video.model)?.media;
+		const targets = collectRemoteUrls(pipe, vm).filter((t) => t.refId === refId);
 		const broken = await checkRemoteUrls(targets);
 		if (broken.length === 0) {
 			const key = `${pipeId}:${refId}`;
@@ -984,16 +1064,60 @@
 		return (await invoke('get_generation_task', { task_id: taskId })) as GenerationTaskView;
 	}
 
-	function startWatchingTask(taskId: string) {
-		stopPoller();
-		activeTask = null;
+	/** Apply the terminal side-effects exactly once per task. A live event + an
+	 *  on-demand refresh (focus / refresh button) + the fallback poll can all see
+	 *  the terminal state; this dedups so the effects run once. */
+	async function reconcileTerminal(view: GenerationTaskView) {
+		if (terminalHandled.has(view.taskId)) return;
+		terminalHandled.add(view.taskId);
+		// Cache the terminal view so the requestLog path (absent on DB-fallback
+		// rows on pre-0007 DBs, always dropped by the evicted-registry path)
+		// survives later re-syncs of the same task.
+		if (view.requestLog) lastTaskView = view;
+		await handleTaskTerminal(view);
+	}
+
+	/** Watch a task: subscribe to the backend state-machine events (primary,
+	 *  low latency) AND keep the 1 s poll as a fallback in case an event is
+	 *  dropped (webview reloaded, tab backgrounded). Both drive the same
+	 *  `activeTask` view; terminal side-effects apply once via `reconcileTerminal`. */
+	function startWatchingTask(taskId: string, initialView?: GenerationTaskView | null) {
+		stopWatching();
+		lastTaskView = initialView ?? null;
+		activeTaskId = taskId;
+		activeTask = initialView ?? null;
 		activeLogEntry = null;
 		showProgressModal = true;
+		// A fresh task: clear the previous task's terminal marker + minimize
+		// flag so the pill reads as a new running task, not a stale outcome.
+		pillTerminal = null;
+		progressMinimized = false;
+		// Seed with the authoritative view right now (the machine may already be
+		// ahead of the first event / tick), then follow the live stream.
+		// The `start_generation` command returns the initial view so the modal
+		// has state (stage list + progress) from the moment it opens instead of
+		// waiting for the first refresh/event round-trip.
+		void refreshActiveTask();
 		poller = pollTask({
 			taskId,
 			fetchTask: fetchGenerationTask,
 			onTick: onTaskTick,
 		});
+		subscribeGenTask((ev) => {
+			if (ev.taskId !== activeTaskId) return;
+			activeTask = ev.view;
+			if (ev.view.requestLog) lastTaskView = ev.view;
+			if (ev.kind === 'terminal') void reconcileTerminal(ev.view);
+		}).then((unlisten) => {
+			genUnlisten = unlisten;
+		});
+	}
+
+	function stopWatching() {
+		stopPoller();
+		genUnlisten?.();
+		genUnlisten = null;
+		activeTaskId = null;
 	}
 
 	function stopPoller() {
@@ -1001,19 +1125,72 @@
 		poller = null;
 	}
 
+	/** Fallback tick (1 s poll): drive `activeTask` the same way events do. */
 	function onTaskTick(view: GenerationTaskView) {
 		activeTask = view;
+		if (view.requestLog) lastTaskView = view;
 		if (isTerminalTaskStatus(view.status)) {
 			stopPoller();
-			handleTaskTerminal(view);
+			void reconcileTerminal(view);
+		}
+	}
+
+	/** On-demand refresh: re-read the authoritative view from the backend cache
+	 *  (registry / DB fallback). Triggered by the modal's refresh button and by
+	 *  window focus — the user's "am I on the latest?" gesture. The DB fallback
+	 *  row drops `requestLog`, so re-seed it from the cached view when we have
+	 *  one for this task: the expander must stay usable on re-syncs, not just
+	 *  on the initial event stream. */
+	async function refreshActiveTask() {
+		if (!activeTaskId) return;
+		try {
+			const view = await fetchGenerationTask(activeTaskId);
+			if (view.taskId !== activeTaskId) return; // task changed mid-fetch
+			if (!view.requestLog && lastTaskView?.taskId === activeTaskId && lastTaskView.requestLog) {
+				view.requestLog = lastTaskView.requestLog;
+			}
+			activeTask = view;
+			if (isTerminalTaskStatus(view.status)) await reconcileTerminal(view);
+		} catch (e) {
+			console.error('[Workspace] refreshActiveTask:', e);
+		}
+	}
+
+	/** Window focus may have let events be coalesced/throttled; re-sync. */
+	function onWindowFocus() {
+		if (activeTaskId && activeTask && !isTerminalTaskStatus(activeTask.status)) {
+			void refreshActiveTask();
 		}
 	}
 
 	/** Terminal state: flip reference statuses + attach the artifact (D1/D4). */
-	function handleTaskTerminal(view: GenerationTaskView) {
-		void updateGenerationLog(view);
+	async function handleTaskTerminal(view: GenerationTaskView) {
+		await updateGenerationLog(view);
 		for (const o of refOutcomes(view)) {
-			void markRefStatus(view.sessionId, view.pipeId, o.kind, o.refId, o.status);
+			await markRefStatus(view.sessionId, view.pipeId, o.kind, o.refId, o.status);
+		}
+		// Link every completed image stage back to its keyframe/subject so the
+		// chip shows the thumbnail and the next video run can prefer the
+		// fetchable remote URL. Await each attach so the in-memory session is
+		// fully updated before the forced save below persists it to SQLite —
+		// the 800 ms notifyUpdate debounce alone is not enough: the user can
+		// close the app before it fires, and the recovery backfill (session
+		// load) has to re-do the work on every start.
+		for (const stage of view.stages) {
+			if (
+				stage.imageOutput &&
+				(stage.status === 'done' || stage.status === 'ready') &&
+				stage.sourceKind !== 'video'
+			) {
+				await attachGeneratedImage(
+					view.sessionId,
+					view.pipeId,
+					stage.sourceKind === 'keyframe' ? 'keyframe' : 'subject',
+					stage.sourceId,
+					stage.imageOutput,
+					stage.imageRemoteUrl ?? undefined,
+				);
+			}
 		}
 		if (view.status === 'done' && view.outputPath) {
 			void attachLastGeneration(view.sessionId, view.pipeId, {
@@ -1026,10 +1203,33 @@
 		} else if (view.status === 'cancelled') {
 			flashToast(APP_CONSTANTS.strings.generationCancelled, 'info');
 		} else {
-			flashToast(view.error ?? APP_CONSTANTS.strings.generationFailed, 'error');
+			// Terminal task error (or missing error): surface the concrete
+			// reason (task-level error, else the failing stage's message).
+			const reason = generationFailureMessage(view) ?? APP_CONSTANTS.strings.generationFailed;
+			console.error('[Workspace] generation task failed:', {
+				taskId: view.taskId,
+				status: view.status,
+				reason,
+				stages: stageErrorLines(view),
+			});
+			flashToast(reason, 'error');
 		}
-		showProgressModal = false;
-		activeTask = null;
+		// D10 notification-on-terminal: when the user minimized the modal to
+		// keep working, the toast above is the only in-app signal — the pill
+		// (top panel) flips to the terminal color so it's visible even without
+		// watching the modal. If the modal is open the user already sees the
+		// outcome (OK footer), so no extra noise.
+		if (progressMinimized) {
+			pillTerminal = view.status === 'done' ? 'done' : 'error';
+		}
+		// Force-persist the just-mutated session (ref statuses + preview
+		// paths + last-generation artifact) so it survives an immediate app
+		// close; the 800 ms notifyUpdate debounce is not guaranteed to fire.
+		void saveSession(view.sessionId);
+		// Keep the modal open on terminal state: the user must click OK to
+		// acknowledge the outcome (success / error / cancel). Auto-closing hid
+		// the result before the user could read it, especially when a task
+		// failed fast right after start.
 	}
 
 	async function cancelActiveTask() {
@@ -1043,17 +1243,53 @@
 	}
 
 	function closeProgressModal() {
-		stopPoller();
+		const closedId = activeTaskId;
+		stopWatching();
 		showProgressModal = false;
+		progressMinimized = false;
 		activeTask = null;
 		activeLogEntry = null;
+		// No longer watching: drop the cached view too (a fresh task re-seeds it).
+		lastTaskView = null;
+		// The task ended + the user acknowledged it; the dedup record is no
+		// longer needed (a regenerate starts a fresh task id).
+		if (closedId) terminalHandled.delete(closedId);
+	}
+
+	/** Minimize the modal (D10): hide the DOM, keep the watcher (poller +
+	 *  event stream) running so the task keeps advancing and the terminal
+	 *  side-effects still fire. The persistent pill re-opens the modal. */
+	function minimizeProgressModal() {
+		if (!anyTaskActive) return; // terminal: just close it instead
+		showProgressModal = false;
+		progressMinimized = true;
+	}
+
+	/** Re-open the modal from the pill (D10). */
+	function restoreProgressModal() {
+		if (!activeTaskId) return;
+		showProgressModal = true;
+		progressMinimized = false;
+		void refreshActiveTask(); // re-sync now that the user is back
 	}
 
 	/** ToolsPanel last-gen thumb → top-panel preview (D9, served via Phase E media command). */
 	function openPreview(pipe: PipeRow) {
-		toMediaUrl(pipe.lastGeneration?.videoPath ?? null).then((url) => {
-			if (url) previewVideo = { url, label: pipe.name };
-		});
+		// Clear the current preview first: a fresh blob URL is about to take
+		// over, and a stale/failed shell (0:00 <video>) must not linger in
+		// the top panel while the new one loads.
+		previewVideo = null;
+		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
+			.then((url) => {
+				if (url) previewVideo = { url, label: pipe.name };
+			})
+			.catch((e) => {
+				// Media read failed (path moved / not under a media root): keep
+				// the top panel on its empty state instead of a dead <video>,
+				// and surface why so the user knows it's not a silent no-op.
+				console.error('[Workspace] openPreview:', e);
+				flashToast('Could not load the generated video preview', 'error');
+			});
 	}
 
 	function handleFpsChange(fps: number) {
@@ -1094,10 +1330,25 @@
 		// Settings follow the active profile (Tauri) or the username
 		// (browser dev fallback); a failed load falls back to defaults.
 		void loadSettings(userProfileId || userName);
+		// On-demand re-sync: if the window regains focus while a task is live,
+		// the event stream may have been throttled / the webview backgrounded —
+		// pull the authoritative view so the modal catches up.
+		window.addEventListener('focus', onWindowFocus);
+		// Close-app guard (D10): the backend blocks a window close while a
+		// generation task is live and tells us via `close-blocked`. Show the
+		// confirm dialog so the user can cancel the task(s) and close for real.
+		if (isTauri()) {
+			void listen('close-blocked', (e) => {
+				closeBlockedCount = (e.payload as number) ?? 0;
+				closeBlocked = true;
+			}).then((un) => closeBlockedUnlisten = un);
+		}
 	});
 
 	onDestroy(() => {
-		stopPoller();
+		window.removeEventListener('focus', onWindowFocus);
+		closeBlockedUnlisten?.();
+		stopWatching();
 		setOnSettingsChange(null);
 	});
 </script>
@@ -1222,8 +1473,61 @@
 				bind:open={showProgressModal}
 				onCancel={cancelActiveTask}
 				onClose={closeProgressModal}
+				onMinimize={minimizeProgressModal}
+				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
-			/>
+				/>
+
+			<!-- D10 persistent pill: visible when the progress modal is minimized
+			     (or the task just went terminal while it was), so the user can
+			     return to the full modal with one click instead of hunting for it.
+			     Terminal color (done = green, error = red) signals the outcome
+			     without needing to re-open the modal. -->
+			{#if (progressMinimized || (pillTerminal !== null && !showProgressModal)) && activeTask}
+				<button
+					class="gen-pill"
+					class:gen-pill-done={pillTerminal === 'done'}
+					class:gen-pill-error={pillTerminal === 'error'}
+					onclick={restoreProgressModal}
+					title="Generation task — click to open the progress modal"
+				>
+					<span class="gen-pill-dot" aria-hidden="true"></span>
+					{#if pillTerminal === 'done'}
+						<span class="gen-pill-text">Generation complete</span>
+					{:else if pillTerminal === 'error'}
+						<span class="gen-pill-text">Generation failed</span>
+					{:else if anyTaskActive}
+						<span class="gen-pill-text">Generation running · {activeTask.taskId.slice(0, 8)}</span>
+					{:else}
+						<span class="gen-pill-text">Generation finished · {activeTask.taskId.slice(0, 8)}</span>
+					{/if}
+				</button>
+			{/if}
+
+			<!-- D10 close-app guard: the backend blocked a window close while a
+			     task was live. "Close anyway" cancels the task(s) then re-issues
+			     the close; "Keep working" dismisses. -->
+			{#if closeBlocked}
+				<div class="modal-overlay" role="presentation">
+					<div class="modal close-guard-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+						<div class="modal-header">
+							<h3>Running generation task{closeBlockedCount > 1 ? 's' : ''}</h3>
+						</div>
+						<div class="modal-body">
+							<p>
+								You have {closeBlockedCount} generation task{closeBlockedCount > 1 ? 's are' : ' is'} still running.
+								Closing the app now will cancel them — the provider jobs will be
+								aborted and any in-progress stage will be lost.
+							</p>
+						</div>
+						<div class="modal-footer">
+							<button class="btn-cancel" onclick={keepWorking}>Keep working</button>
+							<button class="btn-confirm" onclick={closeAnyway}>Cancel task &amp; close</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+
 			<SettingsModal bind:open={showSettings} initialTab={settingsTab} />
 	</div>
 </div>
@@ -1256,6 +1560,52 @@
 		align-items: center;
 		padding: 0 12px;
 		gap: 16px;
+	}
+
+	/* ── D10 generation pill (minimized progress modal) ── */
+	.gen-pill {
+		position: fixed;
+		right: 16px;
+		bottom: 16px;
+		z-index: 9999;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 14px;
+		border-radius: 999px;
+		border: 1px solid var(--border-color, #3f3f46);
+		background: var(--bg-secondary, #1f1f2e);
+		color: var(--text-primary, #fff);
+		font-size: 12px;
+		font-family: 'JetBrains Mono', monospace;
+		cursor: pointer;
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+		transition: border-color 0.2s, background 0.2s;
+	}
+	.gen-pill:hover {
+		border-color: var(--accent-color, #ff3e00);
+	}
+	.gen-pill-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--accent-color, #ff3e00);
+		animation: gen-pill-pulse 1.4s ease-in-out infinite;
+	}
+	.gen-pill-done .gen-pill-dot {
+		background: #22c55e;
+		animation: none;
+	}
+	.gen-pill-error .gen-pill-dot {
+		background: #ef4444;
+		animation: none;
+	}
+	.gen-pill-text {
+		color: var(--text-muted, #a1a1aa);
+	}
+	@keyframes gen-pill-pulse {
+		0%, 100% { opacity: 0.5; }
+		50% { opacity: 1; }
 	}
 
 	.frame-indicator {

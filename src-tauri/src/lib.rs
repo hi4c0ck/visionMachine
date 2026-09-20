@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tauri::{Emitter, Manager, WindowEvent};
+
 mod preflight;
 pub use preflight::{run_preflight_checks, PreflightReport};
 mod commands;
@@ -110,6 +112,34 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .manage(AppState::new(db))
+        .on_window_event(|window, event| {
+            // Close guard: closing the app while a generation task is live
+            // would cancel the provider job, so block the close and let the
+            // frontend warn the user (it re-issues the close after the user
+            // confirms). No-op when no task is active.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let handle = window.app_handle();
+                let state = handle.state::<AppState>();
+                let active = state.generation.registry.active_task_count();
+                if active > 0 {
+                    let label = window.label();
+                    let _ = handle.emit_to(label, "close-blocked", active);
+                    api.prevent_close();
+                }
+            }
+        })
+        .setup(|app| {
+            // Wire the generation state machine's event sink to the UI window
+            // ("backend owns state, frontend renders"): every meaningful
+            // task transition is pushed to `main` on the `gen-task` event so
+            // the progress modal renders live instead of only via the 1 s poll.
+            let handle = app.handle().clone();
+            let state = app.state::<AppState>();
+            state.generation.set_event_sink(move |event| {
+                let _ = handle.emit_to("main", "gen-task", &event);
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::auth::login_user,
             commands::auth::logout_user,
@@ -130,6 +160,7 @@ pub fn run() {
             commands::generation::start_generation,
             commands::generation::get_generation_task,
             commands::generation::cancel_generation,
+            commands::generation::generation_active_task_count,
             commands::generation::read_media_file,
             // Settings & provider system (Phase 1)
             commands::settings::get_settings,

@@ -11,6 +11,15 @@ use crate::generation::{
 };
 use crate::AppState;
 
+/// Unix ms since the epoch (0 on error, which the frontend treats as
+/// "no timer" — pre-started_at DB rows carry 0 / NULL).
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Resolve the session media root (E3/O6 resolution order) for the provider
 /// engine: the owning project's `directory_path` when set, else the default
 /// media tree under the app-data dir (created lazily by the engine).
@@ -93,22 +102,33 @@ pub async fn start_generation(
 ) -> Result<serde_json::Value, String> {
     let composer = {
         let db = &state.db.lock().await;
-        db.get_composer(&input.session_id)
-            .await
-            .map_err(|e| e.to_string())?
+        db.get_composer(&input.session_id).await.map_err(|e| {
+            log::error!(
+                "[Generation] start_generation: get_composer {} failed: {e}",
+                input.session_id
+            );
+            e.to_string()
+        })?
     };
     let pipe = composer
         .pipes
         .iter()
         .find(|p| p.id == input.pipe_id)
-        .ok_or_else(|| "Pipe not found".to_string())?;
+        .ok_or_else(|| {
+            log::warn!(
+                "[Generation] start_generation: pipe {} not found in session {}",
+                input.pipe_id,
+                input.session_id
+            );
+            "Pipe not found".to_string()
+        })?;
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let media_root = {
         let db = &state.db.lock().await;
         resolve_media_root(db, &input.session_id).await
     };
-    let view = GenerationTaskView {
+    let mut view = GenerationTaskView {
         task_id: task_id.clone(),
         session_id: input.session_id.clone(),
         pipe_id: input.pipe_id.clone(),
@@ -118,7 +138,23 @@ pub async fn start_generation(
         error: None,
         output_path: None,
         request_log: None,
+        started_at: now_unix_ms(),
     };
+    // Precompute the redacted request/response log path (E1) so the INITIAL
+    // view the frontend receives already carries it — the progress modal's
+    // expander is usable from the moment it opens, before any stage has
+    // written to the file. Build it through `pipe_media_dirs` — the same
+    // helper the engine uses to write the file — so the path matches the
+    // on-disk layout exactly (`<root>/<pipe>/<task>/request.log`).
+    if let Some(root) = media_root.as_deref().filter(|r| !r.trim().is_empty()) {
+        if let Ok((_, task_dir)) = crate::generation::pipe_media_dirs(
+            std::path::Path::new(root.trim()),
+            &view.pipe_id,
+            &view.task_id,
+        ) {
+            view.request_log = Some(task_dir.join("request.log").to_string_lossy().into_owned());
+        }
+    }
     let engine_input = EngineInput {
         task_id: task_id.clone(),
         media_root,
@@ -139,9 +175,35 @@ pub async fn start_generation(
         upstream: Vec::new(),
     };
 
-    state.generation.registry.start(view, engine_input).await?;
-
-    Ok(serde_json::json!({ "task_id": task_id }))
+    match state
+        .generation
+        .registry
+        .start(view.clone(), engine_input)
+        .await
+    {
+        Ok(()) => {
+            log::info!(
+                "[Generation] start_generation: task {} queued for pipe {}",
+                task_id,
+                input.pipe_id
+            );
+            // Hand the frontend the INITIAL view (stages already built, request_log
+            // path precomputed) so the progress modal renders the full state from
+            // the moment it opens instead of waiting for the first refresh tick.
+            Ok(serde_json::json!({
+                "task_id": task_id,
+                "view": view,
+            }))
+        }
+        Err(e) => {
+            log::error!(
+                "[Generation] start_generation: task {} rejected: {}",
+                task_id,
+                e
+            );
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -182,7 +244,12 @@ pub async fn get_generation_task(
         stages,
         error: row.error,
         output_path: row.output_path,
-        request_log: None,
+        // Persisted at task start (0007) so the DB fallback can rebuild the
+        // expander state after the in-memory registry evicted the task.
+        request_log: row.request_log,
+        // 0008: pre-migration rows carry NULL → 0 so the frontend shows no
+        // elapsed timer rather than a garbage value.
+        started_at: row.started_at.unwrap_or(0),
     };
     Ok(serde_json::to_value(view).map_err(|e| e.to_string())?)
 }
@@ -193,6 +260,14 @@ pub async fn cancel_generation(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state.generation.registry.cancel(&input.task_id)
+}
+
+/// Number of generation tasks that are not yet terminal (queued + running).
+/// The frontend's close-app guard queries this: closing the app while a task
+/// is live cancels the provider job, so the user is warned first.
+#[tauri::command]
+pub async fn generation_active_task_count(state: State<'_, AppState>) -> Result<usize, String> {
+    Ok(state.generation.registry.active_task_count())
 }
 
 #[derive(Deserialize)]

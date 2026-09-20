@@ -1,0 +1,12 @@
+-- VisionMachine: persist the task start timestamp on generation tasks.
+-- `started_at` (Unix ms) is set when the task moves to Running at
+-- `start()` time and travels with the in-memory task view. Without a
+-- column, the DB fallback in `get_generation_task` (used after the
+-- registry evicts a terminal task, or after an app restart) has no
+-- start reference and the progress modal's elapsed timer would be
+-- blank — even though the task row itself is still there.
+--
+-- NULL on rows written before this migration; the backend reads the
+-- column tolerantly (Option<i64> → 0 default on the wire, so the
+-- frontend simply doesn't render a timer for pre-migration tasks).
+ALTER TABLE video_generation_tasks ADD COLUMN started_at INTEGER;

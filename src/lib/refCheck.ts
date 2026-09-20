@@ -21,7 +21,7 @@ export function isRemoteUrl(url: string): boolean {
  *  - subjects:  url / img2img → imageUrl (txt2img has none)
  * Non-http(s) paths are skipped here (uncheckable for now — D5).
  */
-export function collectRemoteUrls(pipe: PipeRow): RefUrlTarget[] {
+export function collectRemoteUrls(pipe: PipeRow, videoMedia?: { sharedArray?: boolean }): RefUrlTarget[] {
   const out: RefUrlTarget[] = [];
   const push = (refKind: RefUrlTarget['refKind'], refId: string, url: string | undefined) => {
     const u = url?.trim();
@@ -32,9 +32,17 @@ export function collectRemoteUrls(pipe: PipeRow): RefUrlTarget[] {
     if (ty === 'url') push('keyframe', kf.id, kf.imageSrc);
     if (ty === 'img2img') push('keyframe', kf.id, kf.referenceUrl);
   }
-  for (const sr of pipe.subjectReferences ?? []) {
-    const ty = sr.type ?? 'url';
-    if (ty === 'url' || ty === 'img2img') push('subject', sr.id, sr.imageUrl);
+  // Subjects only matter when the model actually consumes them:
+  //  - sharedArray: subjects merge into the keyframe image array
+  //  - reference mode: subjects are the primary input
+  // In plain keyframes mode, subjects are inert — skip them.
+  const mode = pipe.mediaMode ?? 'keyframes';
+  if (videoMedia?.sharedArray || mode === 'reference') {
+    for (const sr of pipe.subjectReferences ?? []) {
+      if (sr.visible === false) continue; // hidden refs are inert — neither checked nor counted
+      const ty = sr.type ?? 'url';
+      if (ty === 'url' || ty === 'img2img') push('subject', sr.id, sr.imageUrl);
+    }
   }
   return out;
 }

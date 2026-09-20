@@ -191,15 +191,35 @@ export interface PipeKeyframe {
   frame: number;
   slotIndex: number;  // 1, 2, or 3
   type: KeyframeType;
+  /**
+   * `url` keyframes: the user-supplied remote image URL. For generated
+   * (txt2img / img2img) keyframes this stays undefined — the generated
+   * artifact lives in previewLocalPath / previewRemoteUrl.
+   */
   imageSrc?: string;
   prompt?: string;
   referenceUrl?: string;
+  /**
+   * Generated-image preview pair (post-generation artifact), set on every
+   * valid keyframe after a successful run:
+   *  - previewRemoteUrl: the provider's remote output URL — primary source
+   *    for the video API (fetchable by the provider).
+   *  - previewLocalPath: the local media-tree file — UI chip preview +
+   *    fallback for the video API when the remote URL is unreachable.
+   * Both round-trip through the composer config so they survive restarts.
+   */
+  previewRemoteUrl?: string;
+  previewLocalPath?: string;
   status: GenerationStatus;
 }
 
 export interface SubjectReference {
   id: string;
-  /** Image URL for the reference */
+  /**
+   * Remote image URL for `url`-type references. For generated subjects
+   * (txt2img / img2img) the generated artifact lives in previewLocalPath /
+   * previewRemoteUrl instead.
+   */
   imageUrl: string;
   /**
    * Generation preset type — subjects follow the same rules as keyframes:
@@ -209,6 +229,11 @@ export interface SubjectReference {
   type?: KeyframeType;
   /** Prompt for txt2img / img2img subjects */
   prompt?: string;
+  /**
+   * Generated-image preview pair (same semantics as PipeKeyframe).
+   */
+  previewRemoteUrl?: string;
+  previewLocalPath?: string;
   /** Generation status of this reference's image */
   status?: GenerationStatus;
   /** Whether to use frame range for this reference */
@@ -261,7 +286,7 @@ export interface PipeLastGeneration {
 // GENERATION TASK VIEWS (mirror src-tauri/src/generation/types.rs)
 // ============================================================================
 
-export type GenerationStageStatus = 'ready' | 'pending' | 'generating' | 'done' | 'error' | 'cancelled';
+export type GenerationStageStatus = 'ready' | 'pending' | 'generating' | 'rate-limited' | 'done' | 'error' | 'cancelled';
 export type GenerationTaskStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
 
 export interface GenerationStageView {
@@ -276,7 +301,17 @@ export interface GenerationStageView {
   /** 0..=1 — reflects real stage state only, never simulated */
   progress: number;
   error?: string | null;
+  /** Local path of the generated image artifact (image stages only). */
   imageOutput?: string | null;
+  /** Provider remote URL returned for this image (image stages only) —
+   *  the primary fetchable source for the next video run. */
+  imageRemoteUrl?: string | null;
+  /** Short live state line from the engine (e.g. "queue full — retry in 30 s",
+   *  "rendering 42%"). Deliberately terse — the full request/response detail
+   *  stays in the redacted request log (E1), not here. */
+  lastEvent?: string | null;
+  /** Unix ms timestamp of lastEvent (drives the modal's "last activity" line). */
+  lastEventAt?: number | null;
 }
 
 export interface GenerationTaskView {
@@ -291,6 +326,10 @@ export interface GenerationTaskView {
   outputPath?: string | null;
   /** Redacted request/response log file (Phase E, E1); expandable in the progress modal. */
   requestLog?: string | null;
+  /** Unix ms the task started running (0 = unknown / pre-migration DB row →
+   *  the modal shows no elapsed timer). Drives the live "elapsed" counter so
+   *  a long provider queue-full wait reads as alive, not stuck. */
+  startedAt?: number;
 }
 
 /**

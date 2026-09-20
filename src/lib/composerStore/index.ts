@@ -28,6 +28,7 @@ import { MigrationServiceImpl } from './migrations';
 import { SubjectReferenceServiceImpl } from './subjectRefs';
 import { GenerationServiceImpl } from './generation';
 import { normalizeSession } from './validators';
+import { backfillGeneratedImages } from '$lib/generatedImageBackfill';
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -444,6 +445,23 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
+  /** Link a generated image path back to its keyframe/subject so the chip
+   *  shows a thumbnail. Persists via the normal notifyUpdate → saveSession
+   *  path, so it survives app restarts. */
+  async attachGeneratedImage(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+    localPath: string,
+    remoteUrl?: string,
+  ): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.generation.attachGeneratedImage(sessionId, pipeId, kind, refId, localPath, remoteUrl);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
   // Session operations.
   // Canonical mutation path: store state mutates, then notifyUpdate() marks
   // the session unsynced and fires the Workspace onUpdate callback, which
@@ -483,8 +501,20 @@ class ComposerStoreImpl implements ComposerStore {
         // Session-level fields + every pipe, so the store copy is always
         // render-safe regardless of the on-disk shape.
         normalizeSession(result.session);
+        // One-time: link already-generated image artifacts back onto their
+        // keyframes/subjects from the media-tree log (runs before the first
+        // render so the chips show thumbnails on the next app run).
+        const backfilled = await backfillGeneratedImages(result.session);
         sessions.set(sessionId, result.session);
-        unsynced.delete(sessionId);
+        if (backfilled) {
+          // Recovery filled previewLocalPath/previewRemoteUrl that the DB row
+          // doesn't have yet — persist it immediately so a later save (or the
+          // next app start) doesn't overwrite the recovery with stale data.
+          unsynced.add(sessionId);
+          void this.saveSession(sessionId);
+        } else {
+          unsynced.delete(sessionId);
+        }
       }
       return result;
     } catch (e) {
@@ -520,6 +550,8 @@ class ComposerStoreImpl implements ComposerStore {
               visible: ref.visible !== false,
               type: ref.type ?? 'url',
               prompt: ref.prompt,
+              previewRemoteUrl: ref.previewRemoteUrl ?? undefined,
+              previewLocalPath: ref.previewLocalPath ?? undefined,
               status: ref.status ?? 'pending',
             })),
             elements: pipe.elements.map((el: any) => {
@@ -631,6 +663,7 @@ export const updateSubjectRefUseFrames = composerStore.updateSubjectRefUseFrames
 export const updateSubjectRef = composerStore.updateSubjectRef.bind(composerStore);
 export const attachLastGeneration = composerStore.attachLastGeneration.bind(composerStore);
 export const markRefStatus = composerStore.markRefStatus.bind(composerStore);
+export const attachGeneratedImage = composerStore.attachGeneratedImage.bind(composerStore);
 export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
 export const updateOrientation = composerStore.updateOrientation.bind(composerStore);

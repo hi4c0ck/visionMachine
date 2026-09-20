@@ -209,6 +209,10 @@ export function normalizePipe(pipe: PipeRow): PipeRow {
     if (!kf.id) kf.id = crypto.randomUUID();
     if (!Number.isFinite(kf.slotIndex)) kf.slotIndex = 1;
     if (!kf.status) kf.status = 'pending';
+    // Drop empty-string preview fields so stale data doesn't render as
+    // a broken local-path chip after the media file has been removed.
+    if (kf.previewRemoteUrl === '') delete kf.previewRemoteUrl;
+    if (kf.previewLocalPath === '') delete kf.previewLocalPath;
   }
 
   // Subject-ref frame ranges within pipe bounds.

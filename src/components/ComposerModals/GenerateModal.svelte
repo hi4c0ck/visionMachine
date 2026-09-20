@@ -93,6 +93,11 @@
 		busy = true;
 		try {
 			await onConfirm({ imageModel, videoModel }, seed);
+		} catch (e) {
+			// Never swallow the error silently: surface it so the user knows
+			// generation was blocked and why (the modal stays open, they can
+			// retry or inspect the settings).
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
 		} finally {
 			busy = false;
 		}

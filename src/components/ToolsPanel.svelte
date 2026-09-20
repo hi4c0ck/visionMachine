@@ -154,15 +154,30 @@
 
 	// Last-gen preview thumb (D9): served through read_media_file (Phase E).
 	let lastVideoUrl = $state<string | null>(null);
+	// True while lastVideoUrl is in flight — the <video> is then hidden so a
+	// stale/failed 0:00 shell can't sit in the panel (mirrors Frame's
+	// "don't render an unloaded <video>" behavior).
+	let lastVideoLoading = $state(false);
 	$effect(() => {
 		let cancelled = false;
 		const path = focusedPipe?.lastGeneration?.videoPath ?? null;
 		if (!path) {
 			lastVideoUrl = null;
+			lastVideoLoading = false;
 			return;
 		}
+		lastVideoUrl = null;
+		lastVideoLoading = true;
 		toMediaUrl(path).then((url) => {
-			if (!cancelled) lastVideoUrl = url;
+			if (cancelled) return;
+			lastVideoUrl = url;
+			lastVideoLoading = false;
+		}).catch(() => {
+			// read_media_file failed (path moved / not under a media root):
+			// fall back to the empty state instead of a dead <video> element.
+			if (cancelled) return;
+			lastVideoUrl = null;
+			lastVideoLoading = false;
 		});
 		return () => {
 			cancelled = true;

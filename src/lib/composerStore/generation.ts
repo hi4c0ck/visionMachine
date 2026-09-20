@@ -8,6 +8,8 @@ import type {
   PipeRow,
   PipeLastGeneration,
   GenerationStatus,
+  PipeKeyframe,
+  SubjectReference,
 } from '$types';
 
 export class GenerationServiceImpl implements GenerationService {
@@ -46,6 +48,38 @@ export class GenerationServiceImpl implements GenerationService {
         : (pipe.subjectReferences ?? []).find((r) => r.id === refId);
     if (!target) return { errors: ['Reference not found'] };
     target.status = status;
+    return { errors: [] };
+  }
+
+  /**
+   * Link a generated image back to its keyframe / subject so the chip shows a
+   * thumbnail + the video stage carries the right upstream source. The two
+   * fields are:
+   *  - previewRemoteUrl: the provider's remote output URL (primary for the
+   *    video API — fetchable by the provider).
+   *  - previewLocalPath: the local media-tree file (UI chip preview + fallback
+   *    for the video API when the remote URL is unreachable).
+   * Both round-trip through the composer config JSON, so they survive restarts.
+   */
+  async attachGeneratedImage(
+    _sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+    localPath: string,
+    remoteUrl?: string,
+  ): Promise<ServiceResult> {
+    const pipe = this.getPipe(pipeId);
+    if (!pipe) return { errors: ['Pipe not found'] };
+    const target =
+      kind === 'keyframe'
+        ? pipe.keyframes.find((k) => k.id === refId)
+        : (pipe.subjectReferences ?? []).find((r) => r.id === refId);
+    if (!target) return { errors: ['Reference not found'] };
+    // Only set the local path when we have one; the remote URL when present.
+    const tgt = target as PipeKeyframe | SubjectReference;
+    if (localPath && localPath.trim()) tgt.previewLocalPath = localPath;
+    if (remoteUrl && remoteUrl.trim()) tgt.previewRemoteUrl = remoteUrl;
     return { errors: [] };
   }
 }

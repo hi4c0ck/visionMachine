@@ -152,6 +152,19 @@ export interface GenerationService {
     refId: string,
     status: GenerationStatus,
   ): Promise<ServiceResult>;
+  /**
+   * Link a generated image back to its keyframe / subject: sets previewLocalPath
+   * (UI preview + fallback source) and previewRemoteUrl (primary video-API
+   * source). Persists via notifyUpdate → saveSession so it survives restarts.
+   */
+  attachGeneratedImage(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+    localPath: string,
+    remoteUrl?: string,
+  ): Promise<ServiceResult>;
 }
 
 // ── Session Service Interface ─────────────────────────────────────────────────

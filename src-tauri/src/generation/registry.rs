@@ -7,15 +7,36 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine};
 use crate::generation::shaper::UpstreamOutput;
 use crate::generation::types::{
-    GenerationStageView, GenerationTaskView, SourceKind, StageKind, StageStatus, TaskStatus,
+    GenTaskEvent, GenerationStageView, GenerationTaskView, SourceKind, StageKind, StageStatus,
+    TaskStatus,
 };
+
+/// A boxed event sink: the registry is tauri-free (stays unit-testable) and
+/// delegates the actual `emit_to` to a sink wired in at startup (see
+/// `lib.rs`). Defaults to a no-op slot so tests need no UI handle.
+type EventSink = Arc<dyn Fn(GenTaskEvent) + Send + Sync>;
+
+/// Progress ticks are coalesced: the engine reports progress many times per
+/// second, so we forward at most one UI event per window to keep the
+/// event→renderer channel cheap without dropping live motion.
+const EMIT_THROTTLE_MS: u64 = 100;
 use crate::models::composer::Pipe;
 use crate::storage::db::Database;
+
+/// Unix ms since the epoch (0 on error, which the frontend treats as
+/// "no timer" — pre-started_at DB rows carry 0 / NULL).
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 /// Sequential by default (decision D7); raise this to allow parallel tasks.
 pub const MAX_CONCURRENT_TASKS: usize = 1;
@@ -59,6 +80,8 @@ pub struct TaskRegistry {
     engine: Arc<Mutex<Option<Arc<dyn GenerationEngine>>>>,
     db: Database,
     media_root: MediaRootResolver,
+    /// UI event sink (no-op until wired in `lib.rs`; shared across clones).
+    sink: Arc<RwLock<Option<EventSink>>>,
 }
 
 struct ManagedTask {
@@ -72,6 +95,8 @@ struct ManagedTask {
     /// Accumulated upstream image outputs, in stage order (keyframes then
     /// subjects; O5). `None` for the video stage.
     upstream_outputs: Vec<Option<UpstreamOutput>>,
+    /// Last time a progress event was forwarded (live-tick throttling).
+    last_emit_at: Option<Instant>,
 }
 
 impl TaskRegistry {
@@ -81,9 +106,14 @@ impl TaskRegistry {
             engine: Arc::new(Mutex::new(None)),
             db,
             media_root: MediaRootResolver::app_data_default(),
+            sink: Arc::new(RwLock::new(None)),
         }
     }
 
+    /// Wire the event sink that forwards `GenTaskEvent`s to the UI (the
+    /// Tauri `emit_to` closure, set up in `lib.rs`). Shared across all
+    /// registry clones so the spawned task loop sees the same sink.
+    ///
     /// Register a custom media-root resolver (production: project
     /// `directory_path` else app-data; tests: a fixed temp dir).
     pub fn with_media_root(self, media_root: MediaRootResolver) -> Self {
@@ -103,6 +133,62 @@ impl TaskRegistry {
         *self.engine.lock().unwrap() = Some(engine);
     }
 
+    /// Wire the UI event sink (the `emit_to` closure from `lib.rs`). Called
+    /// once at startup; before that, emission is a no-op so the registry
+    /// stays usable in tests.
+    pub fn set_event_sink(&self, f: impl Fn(GenTaskEvent) + Send + Sync + 'static) {
+        *self.sink.write().unwrap() = Some(Arc::new(f));
+    }
+
+    /// Forward an event to the UI (no-op when no sink is wired).
+    fn emit(&self, event: GenTaskEvent) {
+        if let Some(sink) = self.sink.read().unwrap().as_ref() {
+            sink(event);
+        }
+    }
+
+    /// Forward a live snapshot to the UI. `force` = a status change (always
+    /// emit); otherwise coalesce rapid progress ticks to at most one per
+    /// `EMIT_THROTTLE_MS`.
+    fn emit_update(&self, task_id: &str, force: bool) {
+        let mut tasks = self.tasks.lock().unwrap();
+        let entry = match tasks.get_mut(task_id) {
+            Some(e) => e,
+            None => return,
+        };
+        let now = Instant::now();
+        if !force {
+            if let Some(last) = entry.last_emit_at {
+                if now.duration_since(last) < Duration::from_millis(EMIT_THROTTLE_MS) {
+                    return;
+                }
+            }
+        }
+        entry.last_emit_at = Some(now);
+        let view = entry.view.clone();
+        drop(tasks);
+        self.emit(GenTaskEvent {
+            task_id: task_id.to_string(),
+            kind: "update".into(),
+            status: None,
+            view,
+        });
+    }
+
+    /// Forward a terminal snapshot (carries the final status) to the UI so
+    /// the progress modal reconciles + surfaces the outcome without waiting
+    /// on a poll tick.
+    fn emit_terminal(&self, task_id: &str) {
+        if let Some(view) = self.get(task_id) {
+            self.emit(GenTaskEvent {
+                status: Some(view.status),
+                kind: "terminal".into(),
+                task_id: task_id.to_string(),
+                view,
+            });
+        }
+    }
+
     /// Build the stage list from a pipe snapshot: keyframes, then subjects
     /// (`url` type = instant `ready`), then the final video stage.
     pub fn build_stages(task_id: &str, pipe: &Pipe) -> Vec<GenerationStageView> {
@@ -110,23 +196,51 @@ impl TaskRegistry {
         for kf in &pipe.keyframes {
             let ty = if kf.kind.is_empty() { "url" } else { &kf.kind };
             let ready = ty == "url";
-            stages.push(stage_image(
+            let mut stage = stage_image(
                 task_id,
                 &format!("Keyframe {} ({})", kf.slot_index, ty),
                 SourceKind::Keyframe,
                 &kf.id,
                 ready,
-            ));
+            );
+            // A settled previewRemoteUrl survives a restart and marks the
+            // piece as already-available (the next video run consumes it
+            // without regenerating).
+            if kf
+                .preview_remote_url
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .is_some()
+            {
+                stage.status = StageStatus::Ready;
+                stage.progress = 1.0;
+            }
+            stages.push(stage);
         }
+        // Hidden subject refs (visible = false) are parked — neither rendered
+        // in the composer nor sent to the API, so they produce no stage.
         for (i, sr) in pipe.subject_references.iter().enumerate() {
+            if !sr.visible {
+                continue;
+            }
             let ready = sr.kind == "url";
-            stages.push(stage_image(
+            let mut stage = stage_image(
                 task_id,
                 &format!("Subject {} ({})", i + 1, sr.kind),
                 SourceKind::Subject,
                 &sr.id,
                 ready,
-            ));
+            );
+            if sr
+                .preview_remote_url
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .is_some()
+            {
+                stage.status = StageStatus::Ready;
+                stage.progress = 1.0;
+            }
+            stages.push(stage);
         }
         stages.push(GenerationStageView {
             id: format!("{task_id}:video"),
@@ -138,6 +252,10 @@ impl TaskRegistry {
             progress: 0.0,
             error: None,
             image_output: None,
+            image_remote_url: None,
+            rate_limited: None,
+            last_event: None,
+            last_event_at: None,
         });
         stages
     }
@@ -152,6 +270,15 @@ impl TaskRegistry {
         mut input: EngineInput,
     ) -> Result<(), String> {
         view.status = TaskStatus::Running;
+        log::info!(
+            "[Generation] start task {} pipe {} session {} model img={:?} video={:?} seed={:?}",
+            view.task_id,
+            view.pipe_id,
+            view.session_id,
+            input.image_model,
+            input.video_model,
+            input.seed
+        );
 
         // Pipe-media snapshot -> per-stage plan (keyframes slot order, then
         // subjects pipe order, then the video stage).
@@ -179,17 +306,28 @@ impl TaskRegistry {
                 .resolve()
                 .map(|p| p.to_string_lossy().into_owned());
         }
+        // Stamp the task start time (Unix ms) so the progress modal can render
+        // a live elapsed timer even during long provider queue-full waits. The
+        // value is persisted to the DB (0008) so the terminal DB fallback can
+        // rebuild it after a restart / registry eviction. 0 = unknown
+        // (pre-migration rows / browser dev) → the frontend shows no timer.
+        if view.started_at == 0 {
+            view.started_at = now_unix_ms();
+        }
         // Redacted request/response log for the progress-modal expander (E1):
         // the file lives in the task's media dir, written per stage by the
-        // engine; keys are masked on write, so serving it is safe.
-        if let Some(root) = input.media_root.as_deref() {
-            if !root.trim().is_empty() {
-                view.request_log = Some(format!(
-                    "{}/{}{}/request.log",
-                    root.trim(),
-                    crate::generation::media::safe_dir_name(&view.pipe_id),
-                    crate::generation::media::safe_dir_name(&view.task_id)
-                ));
+        // engine; keys are masked on write, so serving it is safe. Build the
+        // path through `pipe_media_dirs` — the same helper the engine uses
+        // to write the file — so the pre-computed path is guaranteed to
+        // match the on-disk layout (`<root>/<pipe>/<task>/request.log`).
+        if let Some(root) = input.media_root.as_deref().filter(|r| !r.trim().is_empty()) {
+            if let Ok((_, task_dir)) = crate::generation::pipe_media_dirs(
+                std::path::Path::new(root.trim()),
+                &view.pipe_id,
+                &view.task_id,
+            ) {
+                view.request_log =
+                    Some(task_dir.join("request.log").to_string_lossy().into_owned());
             }
         }
 
@@ -200,6 +338,10 @@ impl TaskRegistry {
                 .filter(|t| matches!(t.view.status, TaskStatus::Queued | TaskStatus::Running))
                 .count();
             if active >= MAX_CONCURRENT_TASKS {
+                log::warn!(
+                    "[Generation] start task {} rejected: generation already in progress",
+                    view.task_id
+                );
                 return Err("Generation already in progress".to_string());
             }
             tasks.insert(
@@ -210,6 +352,7 @@ impl TaskRegistry {
                     input,
                     stage_plan,
                     upstream_outputs,
+                    last_emit_at: None,
                 },
             );
         }
@@ -226,6 +369,22 @@ impl TaskRegistry {
             // keep memory and DB consistent
             self.tasks.lock().unwrap().remove(&view.task_id);
             return Err(e);
+        }
+        // Best-effort: the in-memory view is the live source; the column only
+        // matters for the terminal DB fallback (and post-restart re-fetch).
+        // A pre-0008 DB without the column would error here — ignore it, the
+        // fallback just shows no elapsed timer for that task.
+        if view.started_at != 0 {
+            let _ = self
+                .db
+                .set_generation_task_started_at(&view.task_id, view.started_at)
+                .await;
+        }
+        if let Some(log_path) = view.request_log.as_deref() {
+            let _ = self
+                .db
+                .set_generation_task_request_log(&view.task_id, log_path)
+                .await;
         }
 
         let this = Arc::new(self.clone());
@@ -259,12 +418,27 @@ impl TaskRegistry {
         Ok(())
     }
 
+    /// Number of non-terminal tasks (queued + running). The close-app guard
+    /// in `lib.rs` uses this: closing while > 0 would cancel the provider
+    /// jobs, so the frontend warns the user before allowing it.
+    pub fn active_task_count(&self) -> usize {
+        let tasks = self.tasks.lock().unwrap();
+        tasks
+            .values()
+            .filter(|t| !t.view.status.is_terminal())
+            .count()
+    }
+
     // ── Runner ───────────────────────────────────────────────────────────────
 
     async fn run_task(&self, task_id: String) {
         // The engine slot is wired at startup (Phase D); if a task lands here
         // without one, fail fast with a real error instead of simulating.
         if self.engine.lock().unwrap().is_none() {
+            log::error!(
+                "[Generation] run task {}: no engine configured, failing fast",
+                task_id
+            );
             self.finish_fail_fast(&task_id).await;
             return;
         }
@@ -317,34 +491,105 @@ impl TaskRegistry {
                 return;
             };
 
-            self.patch_stage(&task_id, i, StageStatus::Generating, None, None);
+            self.patch_stage(&task_id, i, StageStatus::Generating, None, None, None);
 
             let engine = self.engine.lock().unwrap().clone().unwrap();
             let progress = Arc::new(Mutex::new(0.0f32));
+            let task_id_for_live = task_id.clone();
+            let registry_for_live = self.clone();
+            log::debug!(
+                "[Generation] task {} stage {} ({}) running",
+                task_id,
+                stage.id,
+                stage.label
+            );
             let result = engine
-                .run(&input, &cancel, &|p| {
-                    if let Ok(mut g) = progress.lock() {
-                        *g = p.min(1.0).max(0.0);
-                    }
-                })
+                .run(
+                    &input,
+                    &cancel,
+                    &|p| {
+                        let clamped = p.min(1.0).max(0.0);
+                        if let Ok(mut g) = progress.lock() {
+                            *g = clamped;
+                        }
+                        // Live-update the in-memory stage view so the progress
+                        // modal's next `get_generation_task` poll sees motion.
+                        // Video stages use two distinct value bands:
+                        //  0.51–0.53 = 429/503 backoff ladder rung (0.51/0.52/0.53),
+                        //  which maps to the `rate-limited` status so the UI shows
+                        //  an amber "waiting for provider window" hint;
+                        //  0.5–0.9 (excluding the ladder band) = the provider's own
+                        //  job progress (0–100 % scaled into the band), which
+                        //  keeps the stage in `Generating` so the top bar moves
+                        //  but no false rate-limit hint is shown.
+                        // Image stages only ever report 0.0/0.4/0.5/0.9, so >0.5
+                        // on an image stage is never rate-limited.
+                        let is_video = stage.kind == StageKind::Video;
+                        let in_backoff_ladder = clamped > 0.5 && clamped <= 0.53;
+                        let stage_status = if is_video && in_backoff_ladder {
+                            StageStatus::RateLimited
+                        } else {
+                            StageStatus::Generating
+                        };
+                        // Mirror the value onto the stage + recompute the task
+                        // average so the top progress bar moves live too.
+                        registry_for_live.patch_stage_progress(
+                            &task_id_for_live,
+                            i,
+                            stage_status,
+                            clamped,
+                        );
+                        // Forward live progress to the UI (coalesced); a status
+                        // change is emitted separately by `patch_stage`.
+                        registry_for_live.emit_update(&task_id_for_live, false);
+                    },
+                    &|line| {
+                        // Mirror the engine's short state line onto the stage view
+                        // (lastEvent + lastEventAt) so the progress modal can show
+                        // a live "last event" line instead of a frozen bar. The
+                        // line is deliberately terse — the full request/response
+                        // detail stays in the redacted log (E1).
+                        registry_for_live.patch_stage_event(&task_id_for_live, i, line);
+                    },
+                )
                 .await;
 
             match result {
-                Ok(path) => {
-                    let image_output = (stage.kind == StageKind::Image).then(|| path.clone());
+                Ok(out) => {
+                    let local = out.local_path.clone();
+                    let image_output = (stage.kind == StageKind::Image).then(|| local.clone());
                     if stage.kind == StageKind::Image {
-                        self.record_upstream(&task_id, i, &path, &input);
+                        self.record_upstream(
+                            &task_id,
+                            i,
+                            &local,
+                            out.remote_url.as_deref(),
+                            &input,
+                        );
                     }
-                    self.patch_stage(&task_id, i, StageStatus::Done, image_output, None);
+                    self.patch_stage(
+                        &task_id,
+                        i,
+                        StageStatus::Done,
+                        image_output,
+                        out.remote_url.clone(),
+                        None,
+                    );
                     self.patch_progress(&task_id, *progress.lock().unwrap());
                     if stage.kind == StageKind::Video {
-                        self.patch_output(&task_id, &path);
+                        self.patch_output(&task_id, &local);
                     }
                 }
                 Err(e) => {
                     if cancel.load(Ordering::Acquire) {
                         self.finish_cancelled(&task_id).await;
                     } else {
+                        log::error!(
+                            "[Generation] task {} stage {} failed: {}",
+                            task_id,
+                            stage.label,
+                            e
+                        );
                         // Fail-fast (D5): abort the task, cancel the rest.
                         self.abort_with_error(&task_id, i, e).await;
                     }
@@ -361,8 +606,10 @@ impl TaskRegistry {
                 entry.view.status = TaskStatus::Done;
             }
         }
+        log::info!("[Generation] task {} done", task_id);
         self.refresh_progress(task_id);
         self.persist_terminal(task_id).await;
+        self.emit_terminal(task_id);
     }
 
     async fn finish_cancelled(&self, task_id: &str) {
@@ -371,7 +618,12 @@ impl TaskRegistry {
             if let Some(entry) = tasks.get_mut(task_id) {
                 if !entry.view.status.is_terminal() {
                     for stage in &mut entry.view.stages {
-                        if matches!(stage.status, StageStatus::Pending | StageStatus::Generating) {
+                        if matches!(
+                            stage.status,
+                            StageStatus::Pending
+                                | StageStatus::Generating
+                                | StageStatus::RateLimited
+                        ) {
                             stage.status = StageStatus::Cancelled;
                         }
                     }
@@ -379,8 +631,10 @@ impl TaskRegistry {
                 }
             }
         }
+        log::info!("[Generation] task {} cancelled", task_id);
         self.refresh_progress(task_id);
         self.persist_terminal(task_id).await;
+        self.emit_terminal(task_id);
     }
 
     /// Engine slot was somehow cleared: every pending generation stage fails
@@ -400,8 +654,13 @@ impl TaskRegistry {
                 entry.view.error = Some("No generation engine configured".to_string());
             }
         }
+        log::error!(
+            "[Generation] task {} failed: no generation engine configured",
+            task_id
+        );
         self.refresh_progress(task_id);
         self.persist_terminal(task_id).await;
+        self.emit_terminal(task_id);
     }
 
     async fn abort_with_error(&self, task_id: &str, failed_idx: usize, message: String) {
@@ -412,8 +671,10 @@ impl TaskRegistry {
                     if i == failed_idx {
                         stage.status = StageStatus::Error;
                         stage.error = Some(message.clone());
-                    } else if matches!(stage.status, StageStatus::Pending | StageStatus::Generating)
-                    {
+                    } else if matches!(
+                        stage.status,
+                        StageStatus::Pending | StageStatus::Generating | StageStatus::RateLimited
+                    ) {
                         stage.status = StageStatus::Cancelled;
                     }
                 }
@@ -421,8 +682,14 @@ impl TaskRegistry {
                 entry.view.error = Some(message);
             }
         }
+        log::error!(
+            "[Generation] task {} failed at stage {}",
+            task_id,
+            failed_idx
+        );
         self.refresh_progress(task_id);
         self.persist_terminal(task_id).await;
+        self.emit_terminal(task_id);
     }
 
     // ── Small state patches (single lock each) ───────────────────────────────
@@ -433,21 +700,29 @@ impl TaskRegistry {
         idx: usize,
         status: StageStatus,
         image_output: Option<String>,
+        image_remote_url: Option<String>,
         error: Option<String>,
     ) {
-        let mut tasks = self.tasks.lock().unwrap();
-        if let Some(entry) = tasks.get_mut(task_id) {
-            if let Some(stage) = entry.view.stages.get_mut(idx) {
-                stage.status = status;
-                if let Some(p) = image_output {
-                    stage.image_output = Some(p);
-                    stage.progress = 1.0;
-                }
-                if let Some(e) = error {
-                    stage.error = Some(e);
+        {
+            let mut tasks = self.tasks.lock().unwrap();
+            if let Some(entry) = tasks.get_mut(task_id) {
+                if let Some(stage) = entry.view.stages.get_mut(idx) {
+                    stage.status = status;
+                    if let Some(p) = image_output {
+                        stage.image_output = Some(p);
+                        stage.progress = 1.0;
+                    }
+                    if let Some(r) = image_remote_url {
+                        stage.image_remote_url = Some(r);
+                    }
+                    if let Some(e) = error {
+                        stage.error = Some(e);
+                    }
                 }
             }
         }
+        // A status change is a meaningful transition — always forward it.
+        self.emit_update(task_id, true);
     }
 
     fn patch_progress(&self, task_id: &str, value: f32) {
@@ -457,6 +732,42 @@ impl TaskRegistry {
                 s.progress = s.progress.max(value);
             });
         }
+    }
+
+    /// Set a stage's status + mirror the live progress value onto it, then
+    /// recompute the task-level average so the modal's top bar moves on
+    /// every `on_progress` tick instead of only at stage completion.
+    fn patch_stage_progress(&self, task_id: &str, idx: usize, status: StageStatus, value: f32) {
+        let mut tasks = self.tasks.lock().unwrap();
+        if let Some(entry) = tasks.get_mut(task_id) {
+            if let Some(stage) = entry.view.stages.get_mut(idx) {
+                stage.status = status;
+                stage.progress = value;
+            }
+            if !entry.view.stages.is_empty() {
+                let sum: f32 = entry.view.stages.iter().map(|s| s.progress).sum();
+                entry.view.progress = sum / entry.view.stages.len() as f32;
+            }
+        }
+    }
+
+    /// Mirror the engine's short state line onto the stage view so the
+    /// progress modal's "last event" line updates live (e.g. "queue full —
+    /// retry in 30 s", "rendering 42%"). Timestamp = now (Unix ms); the
+    /// full request/response detail stays in the redacted log (E1).
+    fn patch_stage_event(&self, task_id: &str, idx: usize, line: &str) {
+        let now = now_unix_ms();
+        let mut tasks = self.tasks.lock().unwrap();
+        if let Some(entry) = tasks.get_mut(task_id) {
+            if let Some(stage) = entry.view.stages.get_mut(idx) {
+                stage.last_event = Some(line.to_string());
+                stage.last_event_at = Some(now);
+            }
+        }
+        drop(tasks);
+        // Forward the live snapshot so the modal sees the new state line
+        // without waiting for the next progress tick.
+        self.emit_update(task_id, false);
     }
 
     fn patch_output(&self, task_id: &str, path: &str) {
@@ -469,7 +780,14 @@ impl TaskRegistry {
     /// Record a finished image stage's output as an upstream image feeding
     /// the video stage (`url` pieces use their remote source instead of a
     /// generated file). Stable order: keyframes slot order then subjects.
-    fn record_upstream(&self, task_id: &str, idx: usize, path: &str, input: &EngineInput) {
+    fn record_upstream(
+        &self,
+        task_id: &str,
+        idx: usize,
+        path: &str,
+        remote_url: Option<&str>,
+        input: &EngineInput,
+    ) {
         let kind = match &input.stage {
             Some(st) => match st.kind {
                 SourceKind::Keyframe => "keyframe",
@@ -499,9 +817,29 @@ impl TaskRegistry {
         } else {
             path.to_string()
         };
+        // `url` pieces: primary is the user's remote source (image_src), local
+        // is the generated-preview path when one exists. Generated pieces:
+        // primary is the provider's remote URL (from StageOutput) when
+        // returned, else the local file the provider engine materialized.
+        let remote = remote_url.filter(|r| !r.is_empty());
+        let primary = remote
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| {
+                if input
+                    .stage
+                    .as_ref()
+                    .and_then(|st| st.image_src.clone())
+                    .is_some()
+                {
+                    local.clone()
+                } else {
+                    path.to_string()
+                }
+            });
         let up = UpstreamOutput {
             source_id,
             kind: kind.to_string(),
+            primary,
             local_path: local,
         };
         let mut tasks = self.tasks.lock().unwrap();
@@ -599,15 +937,36 @@ fn build_stage_plan(
                         length_frames: pipe.length_frames,
                     }
                 }));
-                // Pre-seed `url` pieces: their remote source feeds the video
-                // stage directly (no engine run produces a file for them).
+                // Pre-seed already-available pieces: the user's remote URL for
+                // `url` keyframes, or a settled previewRemoteUrl for generated
+                // ones (skipped from regeneration by build_stages). Either way
+                // the video stage consumes the fetchable source directly.
                 upstream.push(
-                    kf.filter(|k| (k.kind.is_empty() || k.kind == "url") && k.image_src.is_some())
-                        .map(|k| UpstreamOutput {
+                    kf.filter(|k| {
+                        let has_url =
+                            (k.kind.is_empty() || k.kind == "url") && k.image_src.is_some();
+                        let has_preview = k
+                            .preview_remote_url
+                            .as_deref()
+                            .filter(|u| !u.is_empty())
+                            .is_some();
+                        has_url || has_preview
+                    })
+                    .map(|k| {
+                        let primary = k
+                            .preview_remote_url
+                            .as_deref()
+                            .filter(|u| !u.is_empty())
+                            .or(k.image_src.as_deref())
+                            .unwrap_or_default()
+                            .to_string();
+                        UpstreamOutput {
                             source_id: k.id.clone(),
                             kind: "keyframe".to_string(),
-                            local_path: k.image_src.clone().unwrap_or_default(),
-                        }),
+                            primary,
+                            local_path: k.preview_local_path.clone().unwrap_or_default(),
+                        }
+                    }),
                 );
             }
             SourceKind::Subject => {
@@ -637,15 +996,33 @@ fn build_stage_plan(
                         length_frames: pipe.length_frames,
                     }
                 }));
-                // Pre-seed `url` subjects the same way.
+                // Pre-seed already-available subjects: the user's remote URL
+                // for `url` refs, or a settled previewRemoteUrl for generated
+                // ones (skipped from regeneration by build_stages).
                 upstream.push(
                     sr.filter(|s| {
-                        (s.kind.is_empty() || s.kind == "url") && !s.image_url.is_empty()
+                        let has_url =
+                            (s.kind.is_empty() || s.kind == "url") && !s.image_url.is_empty();
+                        let has_preview = s
+                            .preview_remote_url
+                            .as_deref()
+                            .filter(|u| !u.is_empty())
+                            .is_some();
+                        has_url || has_preview
                     })
-                    .map(|s| UpstreamOutput {
-                        source_id: s.id.clone(),
-                        kind: "subject".to_string(),
-                        local_path: s.image_url.clone(),
+                    .map(|s| {
+                        let primary = s
+                            .preview_remote_url
+                            .as_deref()
+                            .filter(|u| !u.is_empty())
+                            .unwrap_or(&s.image_url)
+                            .to_string();
+                        UpstreamOutput {
+                            source_id: s.id.clone(),
+                            kind: "subject".to_string(),
+                            primary,
+                            local_path: s.preview_local_path.clone().unwrap_or_default(),
+                        }
                     }),
                 );
             }
@@ -676,7 +1053,7 @@ fn stage_image(
     ready: bool,
 ) -> GenerationStageView {
     GenerationStageView {
-        id: format!("{task_id}:{source_kind:?}"),
+        id: format!("{task_id}:{source_kind:?}:{source_id}"),
         label: label.to_string(),
         kind: StageKind::Image,
         source_kind,
@@ -689,6 +1066,10 @@ fn stage_image(
         progress: if ready { 1.0 } else { 0.0 },
         error: None,
         image_output: None,
+        image_remote_url: None,
+        rate_limited: None,
+        last_event: None,
+        last_event_at: None,
     }
 }
 
@@ -697,6 +1078,7 @@ fn stage_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generation::engine::StageOutput;
     use crate::models::composer::{Keyframe, Pipe, SubjectReference};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
@@ -713,9 +1095,14 @@ mod tests {
             _input: &'a EngineInput,
             cancel: &'a AtomicBool,
             on_progress: &'a (dyn Fn(f32) + Sync),
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
-        {
+            on_event: &'a (dyn Fn(&str) + Sync),
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<StageOutput, String>> + Send + 'a>,
+        > {
             Box::pin(async move {
+                // Test double: report one state line so the registry's
+                // `patch_stage_event` path is exercised in tests too.
+                on_event("test engine running");
                 let step = std::time::Duration::from_millis(20);
                 let ticks = self.delay_ms / 20;
                 for _ in 0..ticks {
@@ -730,7 +1117,10 @@ mod tests {
                 if self.fail {
                     return Err("engine exploded".to_string());
                 }
-                Ok("/tmp/out.mp4".to_string())
+                Ok(StageOutput {
+                    local_path: "/tmp/out.mp4".into(),
+                    remote_url: None,
+                })
             })
         }
     }
@@ -748,6 +1138,8 @@ mod tests {
                 None
             },
             reference_url: None,
+            preview_remote_url: None,
+            preview_local_path: None,
             status: "pending".into(),
         }
     }
@@ -758,6 +1150,8 @@ mod tests {
             image_url: img.into(),
             kind: ty.into(),
             prompt: Some(prompt.into()),
+            preview_remote_url: None,
+            preview_local_path: None,
             status: "pending".into(),
             use_frames: false,
             frame_start: None,
@@ -842,6 +1236,7 @@ mod tests {
             error: None,
             output_path: None,
             request_log: None,
+            started_at: 0, // start() stamps the real value
         }
     }
 
@@ -884,6 +1279,22 @@ mod tests {
         assert_eq!(stages[2].source_kind, SourceKind::Subject);
         assert_eq!(stages[3].kind, StageKind::Video);
         assert_eq!(stages[3].status, StageStatus::Pending);
+    }
+
+    #[test]
+    fn build_stages_produces_unique_stage_ids() {
+        // Regression: image-stage ids were `{task}:{SourceKind}` only, so two
+        // keyframes (or two subjects) in one pipe shared an id. The progress
+        // modal keys its stage list on `stage.id`, which threw
+        // `each_key_duplicate`. The id must now be unique per piece.
+        let pipe = fixture_pipe();
+        let stages = TaskRegistry::build_stages("t1", &pipe);
+        let ids: std::collections::HashSet<_> = stages.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(
+            ids.len(),
+            stages.len(),
+            "stage ids must be unique (frontend keys the list on them)"
+        );
     }
 
     #[tokio::test]

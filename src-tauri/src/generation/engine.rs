@@ -92,14 +92,33 @@ pub struct EngineStage {
     pub length_frames: u32,
 }
 
+/// Output of a single engine stage run. Image stages report both the
+/// materialized local file path and the provider's remote output URL (when
+/// the provider returned one); the registry links both back to the keyframe
+/// / subject so the next video run can prefer the fetchable remote source.
+#[derive(Debug, Clone, Default)]
+pub struct StageOutput {
+    /// Local media-tree file path (image stages only).
+    pub local_path: String,
+    /// Provider remote URL for the produced image (image stages only).
+    pub remote_url: Option<String>,
+}
+
 pub trait GenerationEngine: Send + Sync {
     /// Run one stage to completion or failure.
-    /// `cancel` is polled for user cancellation; `on_progress` reports 0.0..=1.0.
-    /// Returns the path of the generated file.
+    /// `cancel` is polled for user cancellation; `on_progress` reports 0.0..=1.0;
+    /// `on_event` reports a short human-readable state line (e.g. "503 queue
+    /// full — retry in 30 s", "polling: in_progress 42%") that the registry
+    /// mirrors onto the stage view so the UI's progress modal can show a live
+    /// "last event" line instead of a frozen bar during long provider waits.
+    /// The line is deliberately terse — NOT the full request/response; the
+    /// redacted request-log expander (E1) carries the full detail.
+    /// Returns the produced artifact (local path + optional remote URL).
     fn run<'a>(
         &'a self,
         input: &'a EngineInput,
         cancel: &'a AtomicBool,
         on_progress: &'a (dyn Fn(f32) + Sync),
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>;
+        on_event: &'a (dyn Fn(&str) + Sync),
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StageOutput, String>> + Send + 'a>>;
 }

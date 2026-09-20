@@ -47,4 +47,14 @@ impl GenerationService {
         registry.set_engine(std::sync::Arc::new(engine));
         Self { registry }
     }
+
+    /// Wire the UI event sink that pushes `GenTaskEvent`s (the `emit_to`
+    /// closure from `lib.rs`). The registry stays tauri-free; this only
+    /// routes the sink to the shared slot.
+    pub fn set_event_sink(
+        &self,
+        f: impl Fn(crate::generation::types::GenTaskEvent) + Send + Sync + 'static,
+    ) {
+        self.registry.set_event_sink(f);
+    }
 }

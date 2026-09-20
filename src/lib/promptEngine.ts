@@ -189,7 +189,7 @@ export function summarizePipe(pipe: PipeRow, opts?: { unit?: SegmentLengthUnit; 
   if (zones.length > 0) {
     const blocks: string[] = [];
     zones.forEach((zone, i) => {
-      const seg = zone as Segment;
+      const seg = zone as unknown as Segment;
       const body: string[] = [...renderSegmentTags(seg, fps)];
       // Heuristic inner lines (currently none — the slot for your injected rules).
       for (const rule of segmentInnerHeuristics) {
