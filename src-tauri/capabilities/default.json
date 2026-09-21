@@ -8,6 +8,7 @@
     "core:window:allow-create",
     "core:window:allow-center",
     "core:window:allow-set-title",
+    "core:window:allow-close",
     "core:app:default",
     "core:app:allow-set-app-theme",
     "log:default"

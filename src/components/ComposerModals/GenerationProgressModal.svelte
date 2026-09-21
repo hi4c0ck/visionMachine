@@ -17,6 +17,7 @@
 		onMinimize,
 		onRefresh,
 		onReset,
+		onQuit,
 		logEntry = null,
 	} = $props<{
 		/** Latest polled task view (null = first tick pending) */
@@ -36,6 +37,10 @@
 		/** Stop this task and start a fresh one (used by the "load looks
 		 *  broken" reset notice). */
 		onReset?: () => void;
+		/** "Close app" — only offered in the `cancelled` terminal state
+		 *  (after Cancel all). Waits out the cancel settle window, then
+		 *  closes the window (backend close-guard passes: 0 active). */
+		onQuit?: () => void;
 		/** Portable generation log entry (Phase 4): shows WHICH MODEL made
 		 * each piece + the taskId, so a later re-generation knows what to
 		 * match or swap. null until the log write lands. */
@@ -298,6 +303,11 @@
 						 Backdrop click and Esc are disabled (the overlay carries no
 						 handler) — this modal is not closable by any other means. -->
 					{@const okEnabled = task !== null && ['done', 'error', 'cancelled'].includes(task.status)}
+					{#if task?.status === 'cancelled' && onQuit}
+						<button class="btn-confirm" onclick={onQuit}>
+							Close app
+						</button>
+					{/if}
 					<button class="btn-confirm" onclick={onClose} disabled={!okEnabled}>
 						{!okEnabled ? '…' : 'OK'}
 					</button>

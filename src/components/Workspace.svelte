@@ -1303,18 +1303,47 @@
 	}
 
 	function closeProgressModal() {
-		const closedId = activeTaskId;
-		stopWatching();
-		showProgressModal = false;
-		progressMinimized = false;
-		activeTask = null;
-		activeLogEntry = null;
-		// No longer watching: drop the cached view too (a fresh task re-seeds it).
-		lastTaskView = null;
-		// The task ended + the user acknowledged it; the dedup record is no
-		// longer needed (a regenerate starts a fresh task id).
-		if (closedId) terminalHandled.delete(closedId);
-	}
+			const closedId = activeTaskId;
+			stopWatching();
+			showProgressModal = false;
+			progressMinimized = false;
+			activeTask = null;
+			activeLogEntry = null;
+			// No longer watching: drop the cached view too (a fresh task re-seeds it).
+			lastTaskView = null;
+			// The task ended + the user acknowledged it; the dedup record is no
+			// longer needed (a regenerate starts a fresh task id).
+			if (closedId) terminalHandled.delete(closedId);
+		}
+
+		/** "Close app" from the progress-modal terminal footer (optional):
+		 *  only valid when the backend confirms 0 active tasks. Waits out the
+		 *  cooperative-cancel settle window (mirrors the close-guard), then
+		 *  re-issues the window close — the backend close-guard (lib.rs) only
+		 *  blocks when a task is still live, so by this point it allows it.
+		 *  The `cancel_generation` invoke error above is tolerated: if the task
+		 *  already settled to a terminal state the registry no longer knows it
+		 *  (that's fine — we only need the active count to hit 0). */
+		async function quitAppAfterCancel() {
+			if (!isTauri()) return;
+			if (closeCancelling) return; // close-guard path already in flight
+			closeCancelling = true;
+			stopWatching();
+			try {
+				const deadline = Date.now() + 30_000;
+				while (Date.now() < deadline) {
+					const active = await invoke<number>('generation_active_task_count');
+					if (active === 0) break;
+					await new Promise((r) => setTimeout(r, 250));
+				}
+			} catch (e) {
+				console.warn('[Workspace] active-count wait on quit failed:', e);
+			}
+			closeCancelling = false;
+			closeBlocked = false;
+			const { getCurrentWindow } = await import('@tauri-apps/api/window');
+			getCurrentWindow().close();
+		}
 
 	/** Minimize the modal (D10): hide the DOM, keep the watcher (poller +
 	 *  event stream) running so the task keeps advancing and the terminal
@@ -1541,6 +1570,7 @@
 				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
 				onReset={resetGeneration}
+				onQuit={quitAppAfterCancel}
 			/>
 
 			<!-- D10 persistent pill: visible when the progress modal is minimized
