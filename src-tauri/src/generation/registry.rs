@@ -409,16 +409,34 @@ impl TaskRegistry {
     }
 
     /// User cancel: stop all remaining stages. No-op on terminal tasks.
+    ///
+    /// Tolerant of unknown / already-terminal tasks (the frontend races this
+    /// against the engine's own terminal transition, and a task evicted or
+    /// finalized since the last poll must not error the caller — e.g. the
+    /// close-guard's cancel-all-then-quit flow).
     pub fn cancel(&self, task_id: &str) -> Result<(), String> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let entry = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| "Task not found".to_string())?;
-        if entry.view.status.is_terminal() {
-            return Ok(());
+        let tasks = self.tasks.lock().unwrap();
+        if let Some(entry) = tasks.get(task_id) {
+            if !entry.view.status.is_terminal() {
+                entry.cancel.store(true, Ordering::Release);
+            }
         }
-        entry.cancel.store(true, Ordering::Release);
         Ok(())
+    }
+
+    /// Cancel every non-terminal task in one call: the close-guard's
+    /// "cancel all active tasks" path needs the whole registry, not just the
+    /// one task the progress modal happens to watch.
+    pub fn cancel_all(&self) -> usize {
+        let tasks = self.tasks.lock().unwrap();
+        let mut cancelled = 0;
+        for entry in tasks.values() {
+            if !entry.view.status.is_terminal() {
+                entry.cancel.store(true, Ordering::Release);
+                cancelled += 1;
+            }
+        }
+        cancelled
     }
 
     /// Number of non-terminal tasks (queued + running). The close-app guard
@@ -1415,6 +1433,52 @@ mod tests {
             .filter(|s| s.status == StageStatus::Cancelled)
             .count();
         assert!(pending >= 1, "remaining stages must be cancelled");
+    }
+
+    #[tokio::test]
+    async fn cancel_unknown_or_terminal_task_is_noop() {
+        // Tolerance (close-guard fix): a cancel racing the engine's own
+        // terminal transition — or hitting an evicted id — must not error
+        // the caller; it just lands as a no-op.
+        let (db, _sid) = no_engine_db().await;
+        let registry = TaskRegistry::new(db);
+        registry.cancel("never-started").unwrap();
+        assert_eq!(registry.active_task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_all_cancels_every_non_terminal_task() {
+        let (db, sid) = no_engine_db().await;
+        let registry = TaskRegistry::new(db);
+        registry.set_engine(Arc::new(TestEngine {
+            delay_ms: 500,
+            fail: false,
+        }) as Arc<dyn GenerationEngine>);
+        let pipe = fixture_pipe();
+
+        registry
+            .start(make_view("t1", &pipe, &sid), engine_input())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let cancelled = registry.cancel_all();
+        assert_eq!(cancelled, 1, "the non-terminal task gets the flag");
+        let out = wait_terminal(&registry, "t1").await;
+        assert_eq!(out.status, TaskStatus::Cancelled);
+        assert_eq!(registry.active_task_count(), 0, "terminal once settled");
+
+        // A second run after the first settles: cancel_all still flags every
+        // live task (sequential slot freed) and an already-terminal task is
+        // counted as 0, not re-cancelled.
+        registry
+            .start(make_view("t2", &pipe, &sid), engine_input())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+        let cancelled2 = registry.cancel_all();
+        assert_eq!(cancelled2, 1);
+        let out2 = wait_terminal(&registry, "t2").await;
+        assert_eq!(out2.status, TaskStatus::Cancelled);
     }
 
     #[tokio::test]

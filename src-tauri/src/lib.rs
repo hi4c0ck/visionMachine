@@ -160,6 +160,7 @@ pub fn run() {
             commands::generation::start_generation,
             commands::generation::get_generation_task,
             commands::generation::cancel_generation,
+            commands::generation::cancel_all_generation,
             commands::generation::generation_active_task_count,
             commands::generation::read_media_file,
             // Settings & provider system (Phase 1)

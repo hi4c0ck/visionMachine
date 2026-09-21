@@ -165,28 +165,47 @@
 	let closeBlocked = $state(false);
 	let closeBlockedCount = $state(0);
 	let closeBlockedUnlisten: (() => void) | null = null;
+	// "Cancel task & close" is in progress: cancel-all was issued, but the
+	// engine hasn't reached its terminal state yet (cooperative cancel — it
+	// notices between poll ticks). The guard stays open showing this state
+	// so the user isn't stuck with no feedback; the close re-issue happens
+	// only once the backend confirms 0 active tasks.
+	let closeCancelling = $state(false);
 
-	/** "Close anyway": cancel all active tasks, stop watching, then re-issue
-	 *  the window close (the backend now finds 0 active tasks and allows it). */
+	/** "Close anyway": cancel ALL active tasks, wait for the terminal
+	 *  transition (the engine is cooperative — cancel is observed between
+	 *  poll ticks, up to 10 s, or up to the 503 backoff hold), then re-issue
+	 *  the window close. The backend finds 0 active tasks and allows it. */
 	async function closeAnyway() {
-		closeBlocked = false;
-		if (activeTaskId) {
-			try {
-				await invoke('cancel_generation', { task_id: activeTaskId });
-			} catch (e) {
-				console.warn('[Workspace] cancel on close-anyway failed:', e);
-			}
-		}
+		if (closeCancelling) return; // already in flight
+		if (!isTauri()) return;
+		closeCancelling = true;
 		stopWatching();
-		// The backend re-checks the active count on the next close request.
-		if (isTauri()) {
-			const { getCurrentWindow } = await import('@tauri-apps/api/window');
-			getCurrentWindow().close();
+		try {
+			await invoke('cancel_all_generation');
+			// Wait for the cooperative cancel to land (tasks reach terminal
+			// `cancelled` → active count drops to 0). Bounded so a stuck
+			// engine can't wedge the quit flow forever; on timeout we still
+			// re-issue the close and let the backend guard decide.
+			const deadline = Date.now() + 30_000;
+			while (Date.now() < deadline) {
+				const active = await invoke<number>('generation_active_task_count');
+				if (active === 0) break;
+				await new Promise((r) => setTimeout(r, 250));
+			}
+		} catch (e) {
+			console.warn('[Workspace] cancel-all on close-anyway failed:', e);
 		}
+		closeCancelling = false;
+		closeBlocked = false;
+		// The backend re-checks the active count on the next close request.
+		const { getCurrentWindow } = await import('@tauri-apps/api/window');
+		getCurrentWindow().close();
 	}
 
 	/** "Keep working": dismiss the dialog, the app stays open. */
 	function keepWorking() {
+		if (closeCancelling) return; // cancel-all in flight: don't dismiss
 		closeBlocked = false;
 	}
 
@@ -1380,6 +1399,10 @@
 		// confirm dialog so the user can cancel the task(s) and close for real.
 		if (isTauri()) {
 			void listen('close-blocked', (e) => {
+				// A cancel-all is already in flight: the close re-issue is coming
+				// as soon as the backend confirms 0 active tasks — don't re-open
+				// the guard dialog on a close attempt that lands mid-cancel.
+				if (closeCancelling) return;
 				closeBlockedCount = (e.payload as number) ?? 0;
 				closeBlocked = true;
 			}).then((un) => closeBlockedUnlisten = un);
@@ -1549,22 +1572,35 @@
 			<!-- D10 close-app guard: the backend blocked a window close while a
 			     task was live. "Close anyway" cancels the task(s) then re-issues
 			     the close; "Keep working" dismisses. -->
-			{#if closeBlocked}
+			{#if closeBlocked || closeCancelling}
 				<div class="modal-overlay" role="presentation">
 					<div class="modal close-guard-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 						<div class="modal-header">
-							<h3>Running generation task{closeBlockedCount > 1 ? 's' : ''}</h3>
+							<h3>{closeCancelling ? 'Cancelling generation…' : `Running generation task${closeBlockedCount > 1 ? 's' : ''}`}</h3>
 						</div>
 						<div class="modal-body">
+							{#if closeCancelling}
+								<p>
+									Cancelling {closeBlockedCount} generation task{closeBlockedCount > 1 ? 's' : ''}.
+									The app will close as soon as the running stage finishes
+									its current step — this can take up to a minute if the
+									provider is mid-backoff.
+								</p>
+							{:else}
 							<p>
-								You have {closeBlockedCount} generation task{closeBlockedCount > 1 ? 's are' : ' is'} still running.
-								Closing the app now will cancel them — the provider jobs will be
-								aborted and any in-progress stage will be lost.
-							</p>
+									You have {closeBlockedCount} generation task{closeBlockedCount > 1 ? 's are' : ' is'} still running.
+									Closing the app now will cancel them — the provider jobs will be
+									aborted and any in-progress stage will be lost.
+								</p>
+							{/if}
 						</div>
 						<div class="modal-footer">
-							<button class="btn-cancel" onclick={keepWorking}>Keep working</button>
-							<button class="btn-confirm" onclick={closeAnyway}>Cancel task &amp; close</button>
+							{#if closeCancelling}
+								<button class="btn-cancel" disabled>Waiting…</button>
+							{:else}
+								<button class="btn-cancel" onclick={keepWorking}>Keep working</button>
+								<button class="btn-confirm" onclick={closeAnyway}>Cancel task &amp; close</button>
+							{/if}
 						</div>
 					</div>
 				</div>

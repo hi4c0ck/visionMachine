@@ -262,6 +262,13 @@ pub async fn cancel_generation(
     state.generation.registry.cancel(&input.task_id)
 }
 
+#[tauri::command]
+/// Cancel every non-terminal task in one call (the close-guard's "cancel all
+/// active tasks" path). Returns how many tasks were actually cancelled.
+pub async fn cancel_all_generation(state: State<'_, AppState>) -> Result<usize, String> {
+    Ok(state.generation.registry.cancel_all())
+}
+
 /// Number of generation tasks that are not yet terminal (queued + running).
 /// The frontend's close-app guard queries this: closing the app while a task
 /// is live cancels the provider job, so the user is warned first.
