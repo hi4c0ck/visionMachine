@@ -137,6 +137,33 @@ describe('Keyframe Service', () => {
       expect(pipe.keyframes[0].frame).toBe(88);
     });
 
+    it('preserves sibling fields when switching modes (no data loss on mode change)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      // Start as img2img with a prompt + reference.
+      await addKeyframe(
+        session.id, pipe.id, 2, 80, 'img2img',
+        'transform prompt',
+        'https://example.com/ref.jpg',
+      );
+
+      // Switch to url: the prompt must NOT be wiped — it stays on the
+      // record (inert metadata for a url piece, active again on switch back).
+      await addKeyframe(session.id, pipe.id, 2, 80, 'url', 'https://example.com/a.png');
+      expect(pipe.keyframes).toHaveLength(1);
+      expect(pipe.keyframes[0].type).toBe('url');
+      expect(pipe.keyframes[0].imageSrc).toBe('https://example.com/a.png');
+      expect(pipe.keyframes[0].prompt).toBe('transform prompt'); // preserved
+
+      // Switch back to txt2img: the old prompt is immediately usable again.
+      await addKeyframe(session.id, pipe.id, 2, 80, 'txt2img', 'fresh prompt');
+      expect(pipe.keyframes[0].type).toBe('txt2img');
+      expect(pipe.keyframes[0].prompt).toBe('fresh prompt');
+    });
+
     it('should reject an incomplete img2img edit without overwriting the existing keyframe', async () => {
       const session = createMockSession();
       sessions.set(session.id, session);

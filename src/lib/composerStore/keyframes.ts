@@ -50,7 +50,20 @@ export class KeyframeServiceImpl implements KeyframeService {
     // stacking a duplicate entry in the same slot. Existing ID preserved.
     const existing = pipe.keyframes.find((k) => k.slotIndex === slotIndex);
     if (existing) {
-      Object.assign(existing, fields, { id: existing.id });
+      // Split fields per type (active data); keep the SIBLING fields of a
+      // previous mode on an unused basis — the user's text must not vanish
+      // when switching modes (url ⇄ txt2img ⇄ img2img), and switching
+      // back instantly restores the work.
+      if (type === 'url') {
+        existing.imageSrc = value;
+      } else {
+        existing.prompt = value;
+      }
+      if (type === 'img2img') existing.referenceUrl = referenceUrl ?? undefined;
+      // Shared edit fields always apply (not mode-dependent).
+      existing.type = type;
+      existing.frame = snappedFrame;
+      existing.status = 'pending';
     } else {
       pipe.keyframes.push({
         id: crypto.randomUUID(),

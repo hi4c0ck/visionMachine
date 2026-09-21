@@ -164,8 +164,11 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     if (errors.length === 0) {
       ref.type = presetType;
       ref.imageUrl = (update.imageUrl ?? '').trim();
-      ref.prompt = update.prompt !== undefined ? update.prompt : ref.prompt;
-      if (presetType === 'url') delete ref.prompt;
+      // Keep the prompt across a mode switch (e.g. txt2img → url) so the
+      // user's text survives — it's inert metadata for `url` pieces (the
+      // engine only reads it for txt2img/img2img), and switching back to a
+      // prompt mode instantly restores the work. Never delete it here.
+      if (update.prompt !== undefined) ref.prompt = update.prompt;
       // edited input ⇒ image not generated yet
       ref.status = 'pending';
       ref.useFrames = update.useFrames;

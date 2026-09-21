@@ -411,6 +411,31 @@ describe('Subject Reference Service', () => {
       expect(pipe.subjectReferences[0].frameEnd).toBe(120);
     });
 
+    it('preserves the prompt when switching a subject to url mode (no data loss)', async () => {
+      const session = createMockSession();
+      sessions.set(session.id, session);
+      await addPipe(session.id);
+
+      const pipe = session.pipes[0];
+      await addSubjectRef(
+        session.id, pipe.id, '', false, undefined, undefined, 'txt2img', 'transform me',
+      );
+      const refId = pipe.subjectReferences[0].id;
+
+      // txt2img → url: the prompt must stay on the record (inert for url,
+      // active again if the user switches back to a prompt mode).
+      const result = await updateSubjectRef(session.id, pipe.id, refId, {
+        imageUrl: 'https://example.com/x.jpg',
+        useFrames: false,
+        type: 'url',
+        prompt: 'transform me',
+      });
+
+      expect(result.errors).toHaveLength(0);
+      expect(pipe.subjectReferences[0].type).toBe('url');
+      expect(pipe.subjectReferences[0].prompt).toBe('transform me'); // not deleted
+    });
+
     it('rejects a missing/empty URL without clobbering the range', async () => {
       const session = createMockSession();
       sessions.set(session.id, session);
