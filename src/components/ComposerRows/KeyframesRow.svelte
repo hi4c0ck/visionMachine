@@ -123,6 +123,14 @@
 		return KF_TYPE_LABEL[kf.type] ?? kf.type;
 	}
 
+	function kfDotTitleFor(state: RefDotState): string {
+		return state === 'ready'
+			? 'Asset ready — click to regenerate'
+			: state === 'broken'
+				? 'Asset missing or failed — click to regenerate'
+				: 'Not generated yet — click to force generate';
+	}
+
 	/**
 	 * Readiness dot for a keyframe chip: green = settled asset (generated
 	 * preview present, or a valid url-mode source), red = broken (url check
@@ -186,30 +194,31 @@
 					{#if broken}
 						<span class="kf-broken-mark" aria-hidden="true">⚠</span>
 					{/if}
-					{#if kfSrcResolved}
-						<img
-							src={kfSrcResolved}
-							class="kf-img"
-							style={aspect ? `aspect-ratio: ${aspect};` : ''}
-							alt="keyframe"
-							onerror={() => markKfImageFailed(kf)}
-						/>
-					{:else}
-						{@const dotTitle = dot === 'ready'
-							? 'Asset ready — click to regenerate'
-							: dot === 'broken'
-								? 'Asset missing or failed — click to regenerate'
-								: 'Not generated yet — click to force generate'}
+					<!-- Media box: thumbnail when a source resolves, dashed
+						 placeholder when not. The small status dot badge overlays
+						 the box corner ALWAYS, so readiness is visible whether or
+						 not a thumbnail is present (the dot the user asked for). -->
+					<div class="kf-media">
+						{#if kfSrcResolved}
+							<img
+								src={kfSrcResolved}
+								class="kf-img"
+								style={aspect ? `aspect-ratio: ${aspect};` : ''}
+								alt="keyframe"
+								onerror={() => markKfImageFailed(kf)}
+							/>
+						{:else}
+							<span class="kf-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>
+						{/if}
 						<button
-							class="kf-dot"
-							class:kf-dot-ready={dot === 'ready'}
-							class:kf-dot-broken={dot === 'broken'}
-							style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}
+							class="kf-status"
+							class:kf-status-ready={dot === 'ready'}
+							class:kf-status-broken={dot === 'broken'}
 							onclick={(e) => { e.stopPropagation(); onRegenerate?.(kf.id); }}
-							title={dotTitle}
-							aria-label={dotTitle}
+							title={kfDotTitleFor(dot)}
+							aria-label={kfDotTitleFor(dot)}
 						></button>
-					{/if}
+					</div>
 						<span class="kf-meta">
 							<span class="kf-label">k{kfNum}</span>
 							<span class="kf-type">{kfTypeLabel(kf)}</span>
@@ -295,31 +304,40 @@
 		flex: 0 0 auto;
 	}
 
-	/* Status dot in place of the thumbnail: green = settled asset (generated
-	   preview / valid url), red = broken (url check failed / generated piece
-	   errored / empty URL), neutral (default accent) = not generated yet.
-	   Clicking force-regenerates the piece. */
-	.kf-dot {
-		width: 48px;
-		height: 40px;
-		border-radius: 50%;
-		background: var(--accent-color);
-		border: none;
-		padding: 0;
-		cursor: pointer;
+	/* Media box: thumbnail or dashed placeholder + the persistent status-dot
+	   badge in its corner. Green = settled asset, red = broken/failed,
+	   neutral (accent) = not generated yet. Clicking the badge force-
+	   regenerates the piece. */
+	.kf-media {
+		position: relative;
 		flex: 0 0 auto;
 	}
 
-	.kf-dot-ready {
+	/* Status badge — small dot overlaid on the media box corner, always
+	   visible so readiness reads even when a thumbnail is present. */
+	.kf-status {
+		position: absolute;
+		right: -3px;
+		bottom: -3px;
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background: var(--accent-color);
+		border: 2px solid var(--bg-tertiary);
+		padding: 0;
+		cursor: pointer;
+	}
+
+	.kf-status-ready {
 		background: #22c55e;
 	}
 
-	.kf-dot-broken {
+	.kf-status-broken {
 		background: #ef4444;
 	}
 
-	.kf-dot:hover {
-		filter: brightness(1.2);
+	.kf-status:hover {
+		transform: scale(1.3);
 	}
 	.kf-placeholder-empty {
 		border-color: var(--border-light, var(--border-color));

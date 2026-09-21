@@ -41,7 +41,10 @@
 	// Store mutations replace pipe arrays, so the counts must stay derived.
 	const refs = $derived(pipe.subjectReferences ?? []);
 	const visibleCount = $derived(refs.filter((r: SubjectReference) => r.visible !== false).length);
-	const refNumber = $derived(refs.length);
+	// Add-button numbering + gate key off the VISIBLE refs only: a toggled-off
+	// (eye-closed) subject still occupies an array slot and would otherwise
+	// silently eat into the 5-ref cap the user can't see.
+	const refNumber = $derived(visibleCount);
 
 	// Human-readable subject type (url / txt2img / img2img); legacy refs
 	// without a preset read as 'url'.
@@ -114,13 +117,13 @@
 		failedSrSources = new Set([...failedSrSources, sr.id]);
 	}
 
-	/**
-	 * Readiness dot for a subject chip: green = settled asset (generated
-	 * preview present, or a valid url-mode URL), red = broken (url check
-	 * failed / generated piece errored / empty URL), neutral = not yet
-	 * generated. Clicking the dot force-regenerates the piece when a
-	 * regenerate callback is wired.
-	 */
+	function dotTitleFor(state: RefDotState): string {
+		return state === 'ready'
+			? 'Asset ready — click to regenerate'
+			: state === 'broken'
+				? 'Asset missing or failed — click to regenerate'
+				: 'Not generated yet — click to force generate';
+	}
 	function srDot(sr: SubjectReference): RefDotState {
 		const ty = (sr.type ?? 'url') as KeyframeType;
 		return refDotState(
@@ -176,40 +179,41 @@
 					{#if broken}
 						<span class="sr-broken-mark" aria-hidden="true">⚠</span>
 					{/if}
-					<button
-						class="sr-eye"
-						onclick={(e) => { e.stopPropagation(); onToggle(sr.id); }}
-						title={sr.visible === false ? 'Enable reference' : 'Disable reference'}>
-						{#if sr.visible === false}
-							<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.5"/></svg>
-						{:else}
-							<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-						{/if}
-					</button>
-					{#if srSrcResolved}
-						<img
-							src={srSrcResolved}
-							class="sr-img"
-							style={aspect ? `aspect-ratio: ${aspect};` : ''}
-							alt="subject ref"
-							onerror={() => markSrImageFailed(sr)}
-						/>
-					{:else}
-						{@const dotTitle = dot === 'ready'
-							? 'Asset ready — click to regenerate'
-							: dot === 'broken'
-								? 'Asset missing or failed — click to regenerate'
-								: 'Not generated yet — click to force generate'}
 						<button
-							class="sr-dot"
-							class:sr-dot-ready={dot === 'ready'}
-							class:sr-dot-broken={dot === 'broken'}
-							style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}
-							onclick={(e) => { e.stopPropagation(); onRegenerate?.(sr.id); }}
-							title={dotTitle}
-							aria-label={dotTitle}
-						></button>
-					{/if}
+							class="sr-eye"
+							onclick={(e) => { e.stopPropagation(); onToggle(sr.id); }}
+							title={sr.visible === false ? 'Enable reference' : 'Disable reference'}>
+							{#if sr.visible === false}
+								<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.5"/></svg>
+							{:else}
+								<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+							{/if}
+						</button>
+						<!-- Media box: thumbnail when a source resolves, dashed
+							 placeholder when not. The small status dot badge overlays
+							 the box corner ALWAYS, so readiness is visible whether or
+							 not a thumbnail is present (the dot the user asked for). -->
+						<div class="sr-media">
+							{#if srSrcResolved}
+								<img
+									src={srSrcResolved}
+									class="sr-img"
+									style={aspect ? `aspect-ratio: ${aspect};` : ''}
+									alt="subject ref"
+									onerror={() => markSrImageFailed(sr)}
+								/>
+							{:else}
+								<span class="sr-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>
+							{/if}
+							<button
+								class="sr-status"
+								class:sr-status-ready={dot === 'ready'}
+								class:sr-status-broken={dot === 'broken'}
+								onclick={(e) => { e.stopPropagation(); onRegenerate?.(sr.id); }}
+								title={dotTitleFor(dot)}
+								aria-label={dotTitleFor(dot)}
+							></button>
+						</div>
 					<span class="sr-meta">
 						{#if sr.useFrames}
 							<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>
@@ -282,31 +286,50 @@
 		flex: 0 0 auto;
 	}
 
-	/* Empty thumbnail placeholder — a status dot of the scene's shape.
-	   Green = settled asset (generated preview / valid url), red = broken,
-	   neutral (default accent) = not generated yet. Clicking force-
+	/* Media box: thumbnail or dashed placeholder + the persistent status-dot
+	   badge in its corner. Green = settled asset, red = broken/failed,
+	   neutral (accent) = not generated yet. Clicking the badge force-
 	   regenerates the piece. */
-	.sr-dot {
+	.sr-media {
+		position: relative;
+		flex: 0 0 auto;
+	}
+
+	/* Dashed placeholder when no image source resolves. */
+	.sr-placeholder {
 		width: 32px;
 		height: 36px;
+		border-radius: 4px;
+		border: 1px dashed var(--border-color);
+		background: var(--bg-tertiary);
+		display: block;
+	}
+
+	/* Status badge — small dot overlaid on the media box corner, always
+	   visible so readiness reads even when a thumbnail is present. */
+	.sr-status {
+		position: absolute;
+		right: -3px;
+		bottom: -3px;
+		width: 12px;
+		height: 12px;
 		border-radius: 50%;
 		background: var(--accent-color);
-		flex: 0 0 auto;
-		border: none;
+		border: 2px solid var(--bg-tertiary);
 		padding: 0;
 		cursor: pointer;
 	}
 
-	.sr-dot-ready {
+	.sr-status-ready {
 		background: #22c55e;
 	}
 
-	.sr-dot-broken {
+	.sr-status-broken {
 		background: #ef4444;
 	}
 
-	.sr-dot:hover {
-		filter: brightness(1.2);
+	.sr-status:hover {
+		transform: scale(1.3);
 	}
 
 	/* Left meta block: frame range on top, type annotation below. */
