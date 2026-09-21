@@ -570,7 +570,27 @@ class ComposerStoreImpl implements ComposerStore {
             cValue: pipe.cValue,
             mediaMode: pipe.mediaMode ?? 'keyframes',
             orderIndex: pipe.orderIndex,
-            keyframes: pipe.keyframes,
+            // Keyframes: map explicitly — the frontend shape is camelCase
+            // while the Rust composer model (ComposerConfig::Keyframe)
+            // deserializes with `#[serde(rename_all = "camelCase")]` too,
+            // so this is a field-for-field pass-through. forceRegen MUST be
+            // written explicitly here: an absent key on a legacy row is
+            // fine (Rust defaults it false), but a missing `forceRegen`
+            // on a fresh save silently drops the queued-regen flag on
+            // reload → the dot comes back "always queued".
+            keyframes: (pipe.keyframes ?? []).map((kf: any) => ({
+              id: kf.id,
+              frame: kf.frame,
+              slotIndex: kf.slotIndex,
+              type: kf.type ?? 'url',
+              imageSrc: kf.imageSrc,
+              prompt: kf.prompt,
+              referenceUrl: kf.referenceUrl,
+              previewRemoteUrl: kf.previewRemoteUrl ?? undefined,
+              previewLocalPath: kf.previewLocalPath ?? undefined,
+              status: kf.status ?? 'pending',
+              forceRegen: kf.forceRegen === true,
+            })),
             subjectReferences: (pipe.subjectReferences ?? []).map((ref: any) => ({
               id: ref.id,
               imageUrl: ref.imageUrl,

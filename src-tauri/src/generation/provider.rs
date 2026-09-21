@@ -25,6 +25,29 @@ use crate::generation::specs::ModelSpecWire;
 use crate::generation::types::SourceKind;
 use crate::storage::db::Database;
 
+/// Sleep up to `d`, waking immediately when `cancel` flips (the cancel
+/// flag is checked between poll/backoff ticks AND *during* the sleeps
+/// themselves — a user who clicks Cancel while the engine sits in a
+/// 30/60/120 s 503 hold must not wait it out). Returns `true` when the
+/// sleep was interrupted by a cancel; callers `return Err(Cancelled)`.
+async fn cancel_aware_sleep(cancel: &AtomicBool, d: Duration) -> bool {
+    tokio::select! {
+        _ = sleep(d) => false,
+        _ = cancel_watcher(cancel) => true,
+    }
+}
+
+/// Polls the cancel flag every 500 ms until it is set (or the future is
+/// dropped when the racing sleep finishes first).
+async fn cancel_watcher(cancel: &AtomicBool) {
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+}
+
 /// Poll cadence floor for async video jobs. The provider's shared-endpoint
 /// rate limits mean a video render — which takes minutes — is not a UX
 /// problem when polled slowly; a tighter-than-10 s cadence only burns quota
@@ -392,7 +415,9 @@ impl ProviderEngine {
                 if cancel.load(Ordering::Acquire) {
                     return Err(EngineError::Cancelled);
                 }
-                sleep(Duration::from_secs(delay)).await;
+                if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                    return Err(EngineError::Cancelled);
+                }
             }
         };
 
@@ -755,7 +780,9 @@ impl ProviderEngine {
                 }),
             )
             .await;
-            sleep(Duration::from_secs(delay)).await;
+            if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                return Err(EngineError::Cancelled);
+            }
         };
         let (create_status, create_body) = match create_resp {
             Ok(v) => v,
@@ -857,7 +884,12 @@ impl ProviderEngine {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
             }
-            sleep(self.poll_interval).await;
+            // Cancel-aware: a user who clicks Cancel while the poll cadence
+            // is in flight wakes this within 500 ms instead of waiting out
+            // the full interval.
+            if cancel_aware_sleep(cancel, self.poll_interval).await {
+                return Err(EngineError::Cancelled);
+            }
             let poll_path = substitute_poll_template(&poll_tpl, &video_id, &spec.id);
             let poll_url = if poll_path.starts_with("http") {
                 poll_path.clone()
@@ -891,7 +923,9 @@ impl ProviderEngine {
                     // Live state line: "poll queue full — retry in N s" so the
                     // modal shows the task is alive, not stuck.
                     on_event(&format!("poll queue full — retry in {} s", delay));
-                    sleep(Duration::from_secs(delay)).await;
+                    if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                        return Err(EngineError::Cancelled);
+                    }
                     continue;
                 }
                 Ok((429, body)) => {
@@ -923,7 +957,9 @@ impl ProviderEngine {
                     // "waiting for provider window" instead of a frozen bar.
                     on_progress(0.5 + (0.01 * (backoff_idx as f32).min(3.0)));
                     on_event(&format!("rate-limited — retry in {} s", delay));
-                    sleep(Duration::from_secs(delay)).await;
+                    if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                        return Err(EngineError::Cancelled);
+                    }
                     continue;
                 }
                 Ok((status, body)) => {
@@ -1040,7 +1076,9 @@ impl ProviderEngine {
                         return Err(EngineError::Failure(msg));
                     }
                     on_event(&format!("poll connection error — retry in {} s", delay));
-                    sleep(Duration::from_secs(delay)).await;
+                    if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                        return Err(EngineError::Cancelled);
+                    }
                     continue;
                 }
             }
