@@ -254,6 +254,7 @@ impl TaskRegistry {
             image_output: None,
             image_remote_url: None,
             rate_limited: None,
+            saturated_since: None,
             last_event: None,
             last_event_at: None,
         });
@@ -321,7 +322,7 @@ impl TaskRegistry {
         // to write the file — so the pre-computed path is guaranteed to
         // match the on-disk layout (`<root>/<pipe>/<task>/request.log`).
         if let Some(root) = input.media_root.as_deref().filter(|r| !r.trim().is_empty()) {
-            if let Ok((_, task_dir)) = crate::generation::pipe_media_dirs(
+            if let Ok((_, task_dir, _task_images_dir)) = crate::generation::pipe_media_dirs(
                 std::path::Path::new(root.trim()),
                 &view.pipe_id,
                 &view.task_id,
@@ -737,10 +738,22 @@ impl TaskRegistry {
     /// Set a stage's status + mirror the live progress value onto it, then
     /// recompute the task-level average so the modal's top bar moves on
     /// every `on_progress` tick instead of only at stage completion.
+    ///
+    /// Saturation tracking (video stages): when a stage enters the 0.51–0.53
+    /// backoff band, stamp `saturated_since` (Unix ms) so the modal can flag
+    /// "provider load could be broken" after a long 503/429 run; when the
+    /// stage leaves the band, clear it.
     fn patch_stage_progress(&self, task_id: &str, idx: usize, status: StageStatus, value: f32) {
         let mut tasks = self.tasks.lock().unwrap();
         if let Some(entry) = tasks.get_mut(task_id) {
             if let Some(stage) = entry.view.stages.get_mut(idx) {
+                let in_backoff = value > 0.5 && value <= 0.53;
+                if in_backoff && stage.saturated_since.is_none() {
+                    stage.saturated_since = Some(now_unix_ms());
+                }
+                if !in_backoff {
+                    stage.saturated_since = None;
+                }
                 stage.status = status;
                 stage.progress = value;
             }
@@ -926,6 +939,7 @@ fn build_stage_plan(
                         kind: SourceKind::Keyframe,
                         prompt: kf.prompt.clone(),
                         ordinal: Some(u32::from(kf.slot_index)),
+                        ref_id: Some(kf.id.clone()),
                         image_type: Some(ty.to_string()),
                         reference_url: kf.reference_url.clone(),
                         image_src: if ty == "url" {
@@ -985,6 +999,7 @@ fn build_stage_plan(
                         kind: SourceKind::Subject,
                         prompt: sr.prompt.clone(),
                         ordinal: None,
+                        ref_id: Some(sr.id.clone()),
                         image_type: Some(ty.to_string()),
                         reference_url: None,
                         image_src: if ty == "url" {
@@ -1031,6 +1046,7 @@ fn build_stage_plan(
                     kind: SourceKind::Video,
                     prompt: None,
                     ordinal: None,
+                    ref_id: None,
                     image_type: None,
                     reference_url: None,
                     image_src: None,
@@ -1068,6 +1084,7 @@ fn stage_image(
         image_output: None,
         image_remote_url: None,
         rate_limited: None,
+        saturated_since: None,
         last_event: None,
         last_event_at: None,
     }

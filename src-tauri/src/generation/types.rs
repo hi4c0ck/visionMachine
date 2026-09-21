@@ -103,6 +103,13 @@ pub struct GenerationStageView {
     /// sees the task is moving even when the provider queue is saturated.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_event_at: Option<i64>,
+    /// Unix ms the stage first entered the 503/429 backoff band (video
+    /// stages only); `None` = not currently saturated. The progress modal
+    /// uses it to flag "provider load could be broken" after a long
+    /// saturation and offer a reset. Default so persisted stage blobs
+    /// written before this field existed still deserialize.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub saturated_since: Option<i64>,
     /// A short human-readable line describing the most recent poll/retry
     /// state (e.g. "queue full — retrying in 30 s", "rendering 42%").
     /// Kept intentionally terse — NOT the full request/response; the

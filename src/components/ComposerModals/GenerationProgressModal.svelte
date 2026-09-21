@@ -16,6 +16,7 @@
 		onClose,
 		onMinimize,
 		onRefresh,
+		onReset,
 		logEntry = null,
 	} = $props<{
 		/** Latest polled task view (null = first tick pending) */
@@ -32,11 +33,27 @@
 		/** Manual re-sync: pull the authoritative view from the backend cache
 		 *  (the "am I on the latest?" gesture — also triggered on window focus). */
 		onRefresh: () => void;
+		/** Stop this task and start a fresh one (used by the "load looks
+		 *  broken" reset notice). */
+		onReset?: () => void;
 		/** Portable generation log entry (Phase 4): shows WHICH MODEL made
 		 * each piece + the taskId, so a later re-generation knows what to
 		 * match or swap. null until the log write lands. */
 		logEntry?: GenerationLogEntry | null;
 	}>();
+
+	// ── Provider-overload notice ──────────────────────────────────────────────
+	// A video stage stuck in the 503/429 backoff band for longer than this is
+	// a bad sign the provider queue is effectively broken (the provider's
+	// queue cap is ~45 min, so >6 min of sustained saturation is worth
+	// offering a reset instead of making the user wait it out).
+	const SATURATION_WARN_MS = 6 * 60 * 1000;
+	const videoSaturated = $derived.by(() => {
+		if (!task || !busy) return false;
+		const video = task.stages.find((s: GenerationTaskView['stages'][number]) => s.kind === 'video');
+		if (!video?.saturatedSince) return false;
+		return now - video.saturatedSince >= SATURATION_WARN_MS;
+	});
 
 	// ── Live elapsed timer + "last activity" (drives the user's "is it alive?"
 	//    question during long provider queue-full waits) ─────────────────────
@@ -169,6 +186,14 @@
 					<div class="gen-progress-bar" role="progressbar" aria-valuenow={Math.round(task.progress * 100)} aria-valuemin={0} aria-valuemax={100}>
 						<div class="gen-progress-fill" style={`width: ${Math.round(task.progress * 100)}%`}></div>
 					</div>
+					{#if videoSaturated}
+						<div class="gen-overload" role="alert">
+							<p>Provider load looks broken — the video queue has been saturated for a while. Keep waiting, or reset to start over.</p>
+							{#if onReset}
+								<button class="btn-confirm gen-reset" onclick={onReset}>Reset generation</button>
+							{/if}
+						</div>
+					{/if}
 					<ul class="gen-stage-list">
 						<!-- Key on id + label so the list stays collision-free even for
 							 previously-persisted task rows whose stage ids predate the
@@ -400,6 +425,29 @@
 		margin: 10px 0 0;
 		font-size: 12px;
 		color: var(--text-muted, #71717a);
+	}
+
+	.gen-overload {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 10px;
+		margin: 10px 0 0;
+		padding: 10px 12px;
+		border: 1px solid rgba(245, 158, 11, 0.4);
+		border-radius: 6px;
+		background: rgba(245, 158, 11, 0.08);
+	}
+
+	.gen-overload p {
+		flex: 1 1 220px;
+		margin: 0;
+		font-size: 12px;
+		color: #f59e0b;
+	}
+
+	.gen-overload .gen-reset {
+		flex: 0 0 auto;
 	}
 
 	.gen-models-sub {

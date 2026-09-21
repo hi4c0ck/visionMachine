@@ -147,7 +147,7 @@ pub async fn start_generation(
     // helper the engine uses to write the file — so the path matches the
     // on-disk layout exactly (`<root>/<pipe>/<task>/request.log`).
     if let Some(root) = media_root.as_deref().filter(|r| !r.trim().is_empty()) {
-        if let Ok((_, task_dir)) = crate::generation::pipe_media_dirs(
+        if let Ok((_, task_dir, _task_images_dir)) = crate::generation::pipe_media_dirs(
             std::path::Path::new(root.trim()),
             &view.pipe_id,
             &view.task_id,

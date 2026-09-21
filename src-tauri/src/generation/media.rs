@@ -29,26 +29,37 @@ pub fn session_media_root(
 ///
 /// ```text
 /// <sessionRoot>/<pipe_id>/
-///   images/             # generated keyframe/subject bitmaps
-///     <refId>.png       # latest per ref (overwritten each gen)
-///     log.jsonl         # append-only artifact history
+///   images/
+///     log.jsonl         # append-only artifact history (task-scoped files below)
 ///   <task_id>/
+///     images/
+///       <refName>.png   # generated keyframe/subject bitmaps, one per task
+///                       # (task-scoped + unique ref name, so no two artifacts
+///                       # ever share/overwrite a file)
 ///     video.mp4
 ///     output.json
 ///     request.log
 /// ```
+///
+/// Returns `(pipe-level images dir, task dir, task-scoped artifact images
+/// dir)`. All three are created; the pipe-level dir holds the append-only
+/// `log.jsonl`, the task-scoped dir holds each generation's own bitmaps so
+/// consecutive tasks never stack artifacts on one file.
 pub fn pipe_media_dirs(
     session_root: &std::path::Path,
     pipe_id: &str,
     task_id: &str,
-) -> Result<(PathBuf, PathBuf), String> {
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
     let safe_pipe = safe_dir_name(pipe_id);
     let safe_task = safe_dir_name(task_id);
     let images = session_root.join(&safe_pipe).join("images");
     let task = session_root.join(&safe_pipe).join(&safe_task);
+    let task_images = task.join("images");
     fs::create_dir_all(&images).map_err(|e| format!("create {}: {e}", images.display()))?;
     fs::create_dir_all(&task).map_err(|e| format!("create {}: {e}", task.display()))?;
-    Ok((images, task))
+    fs::create_dir_all(&task_images)
+        .map_err(|e| format!("create {}: {e}", task_images.display()))?;
+    Ok((images, task, task_images))
 }
 /// Reject path-traversal characters in ref/task ids so a crafted id can
 /// never escape the media tree.
@@ -165,6 +176,26 @@ mod tests {
         assert_eq!(safe_dir_name("..\\evil"), "evil");
         assert_eq!(safe_dir_name("ok"), "ok");
         assert_eq!(safe_dir_name(""), "unknown");
+    }
+
+    #[test]
+    fn pipe_media_dirs_creates_pipe_task_and_task_scoped_images() {
+        let dir = std::env::temp_dir().join(format!("vm_media_dirs_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let root = dir.join("root");
+        let (images, task_dir, task_images) = pipe_media_dirs(&root, "pipe-1", "task-1").unwrap();
+        assert!(images.is_dir(), "pipe-level images dir created");
+        assert!(task_dir.is_dir(), "task dir created");
+        assert!(task_images.is_dir(), "task-scoped images dir created");
+        // Task-scoped images dir lives inside the task dir, not the pipe dir.
+        assert!(task_images.starts_with(&task_dir));
+        assert_eq!(images, root.join("pipe-1").join("images"));
+        assert_eq!(task_dir, root.join("pipe-1").join("task-1"));
+        assert_eq!(
+            task_images,
+            root.join("pipe-1").join("task-1").join("images")
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

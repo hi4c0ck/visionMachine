@@ -4,10 +4,12 @@
 //
 // The media tree records every artifact in `<root>/<pipe>/images/log.jsonl`:
 //   { refId, localPath, remoteUrl, ts, model }
-// We take the LATEST entry per refId and link it onto the pipe. The keyframe
-// refId in the log is the slotIndex (registry `record_upstream` uses the
-// ordinal), so matching is by slotIndex for keyframes and by id for subjects.
-// Runs on session load (Tauri only); no-op in the browser.
+// We take the LATEST entry per refId and link it onto the pipe. The refId in
+// the log is the piece's stable reference id: a keyframe's `id` or a
+// subject's `id`, so matching is by `id` for both. (Pre-task-scoped
+// logs wrote keyframe refIds as the slotIndex; those lines no longer
+// backfill — only the current task-scoped layout does.) Runs on session
+// load (Tauri only); no-op in the browser.
 
 import { isTauri } from '@tauri-apps/api/core';
 import { readMediaText } from '$lib/mediaUrl';
@@ -73,8 +75,8 @@ export async function backfillGeneratedImages(session: SessionData): Promise<boo
       if (latest.size === 0) continue;
 
       for (const [refId, entry] of latest) {
-        // Keyframe refId in the log is the slotIndex (registry ordinal).
-        const kf = pipe.keyframes?.find((k) => String(k.slotIndex) === refId);
+        // Keyframe refId in the log is the keyframe's stable id.
+        const kf = pipe.keyframes?.find((k) => k.id === refId);
         if (
           kf &&
           (!kf.previewLocalPath || !kf.previewRemoteUrl) &&

@@ -75,6 +75,12 @@ pub struct EngineStage {
     /// Keyframe slot index / subject ordinal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ordinal: Option<u32>,
+    /// Stable reference id for this piece: keyframe id / subject reference
+    /// id. The media tree stores image artifacts as
+    /// `<pipe>/<task>/images/<ref_id>.png` — unique per stage kind so no two
+    /// artifacts ever stack onto one file (the old "latest" overwrite).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ref_id: Option<String>,
     /// Piece's image type: "url" | "txt2img" | "img2img" (image stages).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_type: Option<String>,

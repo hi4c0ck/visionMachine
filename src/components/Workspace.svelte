@@ -141,6 +141,10 @@
 	// when the watch starts, so the modal has the run's state from the moment
 	// it opens; re-assigned on the terminal upsert; cleared when the watch ends.
 	let activeLogEntry = $state<GenerationLogEntry | null>(null);
+	// Last generate-params capture: models + seed from the most recent
+	// `confirmGenerate`, kept so a "Reset generation" (stop this task + resend)
+	// can replay the exact same run without re-opening the generate modal.
+	let lastGenerateParams = $state<{ pipeId: string; models: ModelSelection; seed: number | null } | null>(null);
 
 	// Minimized progress modal (D10): the user hides the modal to keep working
 	// while the task watcher (poller + event stream) stays live. A persistent
@@ -934,6 +938,9 @@
 				),
 			]);
 			showGenerateModal = false;
+			// Capture the exact run params so a later "Reset generation" can
+			// replay this same run (same models + seed) without re-picking.
+			lastGenerateParams = { pipeId: pipe.id, models, seed: seed ?? null };
 			startWatchingTask(res.task_id, res.view ?? null);
 			// Portable generation log: which model made which piece (P4/P5).
 			// Built AFTER startWatchingTask (which resets the entry) so the
@@ -1242,6 +1249,40 @@
 		}
 	}
 
+	/** "Reset generation" (long 503/429 saturation): stop the current task and
+	 *  immediately resend the same run. The cancel resolves to the terminal
+	 *  `cancelled` state via the existing watcher; once the slot is free the
+	 *  re-fired `confirmGenerate` starts a fresh task with identical params
+	 *  (models + seed captured at the last confirm). Guarded against a double
+	 *  click racing the terminal event. */
+	async function resetGeneration() {
+		const cancelledId = activeTaskId;
+		if (!cancelledId || !anyTaskActive || !lastGenerateParams) return;
+		const params = lastGenerateParams;
+		try {
+			await invoke('cancel_generation', { task_id: cancelledId });
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+			return;
+		}
+		// Wait until the cancelled task reaches its terminal state so the
+		// sequential engine slot is free for the re-send, then replay.
+		const reSend = () => {
+			if (cancelledId === activeTaskId || anyTaskActive) {
+				// Terminal not seen yet (or a different task took over) — poll.
+				setTimeout(reSend, 250);
+				return;
+			}
+			const pipe = selectedSession?.pipes.find((p) => p.id === params.pipeId);
+			if (!pipe) {
+				flashToast('Reset: pipe no longer available', 'error');
+				return;
+			}
+			void confirmGenerate(params.models, params.seed ?? undefined);
+		};
+		reSend();
+	}
+
 	function closeProgressModal() {
 		const closedId = activeTaskId;
 		stopWatching();
@@ -1476,7 +1517,8 @@
 				onMinimize={minimizeProgressModal}
 				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
-				/>
+				onReset={resetGeneration}
+			/>
 
 			<!-- D10 persistent pill: visible when the progress modal is minimized
 			     (or the task just went terminal while it was), so the user can

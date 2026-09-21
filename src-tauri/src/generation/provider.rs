@@ -25,10 +25,11 @@ use crate::generation::specs::ModelSpecWire;
 use crate::generation::types::SourceKind;
 use crate::storage::db::Database;
 
-/// Poll cadence for async video jobs. 8 s balances responsiveness against the
-/// provider's shared-endpoint rate limits: a video render takes minutes, so a
-/// tighter-than-5 s cadence only burns quota and triggers 429s faster.
-const POLL_INTERVAL: Duration = Duration::from_secs(8);
+/// Poll cadence floor for async video jobs. The provider's shared-endpoint
+/// rate limits mean a video render — which takes minutes — is not a UX
+/// problem when polled slowly; a tighter-than-10 s cadence only burns quota
+/// and keeps us off the 429 radar.
+const POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// 503 `video_queue_full` backoff sequence (catalog hermes note):
 /// 30 s, 60 s, 120 s, then hold at 120 s.
 const BACKOFF_SECS: [u64; 3] = [30, 60, 120];
@@ -115,7 +116,7 @@ impl ProviderEngine {
         }
     }
 
-    /// Production wiring: 1.5 s poll cadence + 30/60/120 s 503 backoff.
+    /// Production wiring: 10 s poll cadence + 30/60/120 s 503 backoff.
     pub fn default_wiring(
         db: Database,
         media_root: Arc<dyn Fn() -> Option<std::path::PathBuf> + Send + Sync>,
@@ -403,7 +404,7 @@ impl ProviderEngine {
         // (URL, method, redacted headers, payload, status, full body).
         let media = self.media_root_for(input);
         if let Some(root) = &media {
-            if let Ok((_, task_dir)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
+            if let Ok((_, task_dir, _)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
                 let entry = json!({
                     "stage": "image",
                     "model": spec.id,
@@ -462,6 +463,7 @@ impl ProviderEngine {
                 &input.task_id,
                 &stage,
                 input,
+                &secrets,
             )
             .await
             .map_err(|e| {
@@ -473,16 +475,24 @@ impl ProviderEngine {
                 e
             })?;
 
-        // Append the artifact history line (O2: latest per ref; history here).
+        // Append the artifact history line. The log stays in the PIPE-level
+        // images dir (append-only, shared by all of this pipe's tasks), but
+        // `refId` is the stage's stable reference id (keyframe id / subject
+        // id) and `localPath` points at the task-scoped artifact, so the
+        // frontend can link the latest generation onto its piece.
         if let Some(root) = &media {
-            if let Ok((images_dir, _)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
-                let ref_id = stage.ordinal.map(|o| o.to_string()).unwrap_or_default();
+            if let Ok((images_dir, _, _)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
+                let ref_id = stage
+                    .ref_id
+                    .clone()
+                    .filter(|r| !r.trim().is_empty())
+                    .unwrap_or_else(|| "latest".into());
                 let line = json!({
                     "ts": std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs() as i64)
                         .unwrap_or(0),
-                    "refId": if ref_id.is_empty() { "latest" } else { &ref_id },
+                    "refId": ref_id,
                     "model": spec.id,
                     "seed": input.seed,
                     "remoteUrl": remote_url_for_log,
@@ -550,7 +560,9 @@ impl ProviderEngine {
     }
 
     /// Materialize a generated image into the media tree: remote URL or
-    /// in-band base64 -> `<images>/<refId>.png` (O2: latest overwritten).
+    /// in-band base64 -> `<task>/images/<refName>.png`, where the ref name
+    /// is the stage's stable reference id (keyframe id / subject id) so no
+    /// two artifacts ever stack onto one file.
     async fn materialize_image(
         &self,
         remote_url: Option<String>,
@@ -559,6 +571,7 @@ impl ProviderEngine {
         task_id: &str,
         stage: &EngineStage,
         input: &EngineInput,
+        secrets: &[String],
     ) -> Result<String, EngineError> {
         let root = match &input.media_root {
             Some(r) if !r.trim().is_empty() => std::path::PathBuf::from(r.trim()),
@@ -571,20 +584,52 @@ impl ProviderEngine {
                 }
             },
         };
-        let (images_dir, _task_dir) =
+        let (_, _, task_images_dir) =
             pipe_media_dirs(&root, pipe_id, task_id).map_err(EngineError::Failure)?;
         let ref_id = stage
-            .ordinal
-            .map(|o| o.to_string())
-            .filter(|o| !o.is_empty())
+            .ref_id
+            .clone()
+            .filter(|r| !r.trim().is_empty())
             .unwrap_or_else(|| "latest".into());
-        let dest = images_dir.join(format!("{ref_id}.png"));
+        let safe_ref = crate::generation::media::safe_dir_name(&ref_id);
+        let dest = task_images_dir.join(format!("{safe_ref}.png"));
         match remote_url {
             Some(url) => {
-                self.http
-                    .download(&url, &dest)
-                    .await
-                    .map_err(|e| EngineError::Failure(format!("image download {url}: {e}")))?;
+                let dest_str = dest.to_string_lossy().into_owned();
+                let secrets_refs: Vec<&str> = secrets.iter().map(|s| s.as_str()).collect();
+                match self.http.download(&url, &dest).await {
+                    Ok(()) => {
+                        self.log_entry(
+                            input,
+                            &secrets_refs,
+                            &json!({
+                                "stage": "image-download",
+                                "url": url,
+                                "dest": dest_str,
+                                "bytes": true,
+                            }),
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        self.log_entry(
+                            input,
+                            &secrets_refs,
+                            &json!({
+                                "stage": "image-download",
+                                "url": url,
+                                "error": e,
+                            }),
+                        )
+                        .await;
+                        log::error!(
+                            "[Generation] image task {} download failed: {}",
+                            input.task_id,
+                            e
+                        );
+                        return Err(EngineError::Failure(format!("image download {url}: {e}")));
+                    }
+                }
             }
             None => {
                 let Some(b64) = b64 else {
@@ -796,9 +841,18 @@ impl ProviderEngine {
         // blended with the job-created milestone) so the UI's top bar and
         // the video stage row move during the multi-minute render instead of
         // sitting still at the 0.5 "job created" value.
+        // 3) Poll until terminal. 503 queue-full and 429 rate-limited both
+        // back off; cancel aborts. A TRANSIENT transport failure (network
+        // blip, DNS, connection reset) is NOT fatal: it is logged to the
+        // redacted request log (diagnostic) and retried on the same
+        // 30/60/120 s backoff ladder, so a single hiccup no longer kills a
+        // multi-minute render. Only after three consecutive transport
+        // failures does the task abort with the last concrete error.
         let mut backoff_idx = 0usize;
         let mut saw_429 = false;
         let mut last_published = 0.5f32;
+        let mut transport_failures = 0usize;
+        const MAX_TRANSPORT_FAILURES: usize = 3;
         let final_body = loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
@@ -951,12 +1005,43 @@ impl ProviderEngine {
                     }
                 }
                 Err(e) => {
-                    log::error!(
-                        "[Generation] video task {} poll transport failed: {}",
+                    // Transient transport failure: log it (so the request log
+                    // shows exactly which poll attempt failed and why), back
+                    // off, and retry. Aborting a long provider render on one
+                    // dropped request was the old, unforgiving behavior.
+                    transport_failures += 1;
+                    let delay = self
+                        .backoff_secs
+                        .get(transport_failures - 1)
+                        .copied()
+                        .unwrap_or(120);
+                    self.log_entry(input, &secrets, &json!({
+                        "stage": "video-poll-transport-error",
+                        "error": e.clone(),
+                        "attempt": transport_failures,
+                        "backoff": delay,
+                        "request": { "method": "GET", "url": poll_url, "headers": { "Authorization": "Bearer [API_KEY]" } },
+                    })).await;
+                    log::warn!(
+                        "[Generation] video task {} poll transport failed ({}): {} — retrying in {} s",
                         input.task_id,
-                        e
+                        transport_failures,
+                        e,
+                        delay
                     );
-                    return Err(EngineError::Failure(format!("video poll transport: {e}")));
+                    if transport_failures >= MAX_TRANSPORT_FAILURES {
+                        let msg = format!(
+                            "video poll transport failed {MAX_TRANSPORT_FAILURES}x in a row: {e}"
+                        );
+                        log::error!(
+                            "[Generation] video task {} poll gave up: {msg}",
+                            input.task_id
+                        );
+                        return Err(EngineError::Failure(msg));
+                    }
+                    on_event(&format!("poll connection error — retry in {} s", delay));
+                    sleep(Duration::from_secs(delay)).await;
+                    continue;
                 }
             }
         };
@@ -984,17 +1069,45 @@ impl ProviderEngine {
         let media = self.media_root_for(input);
         let local = match &media {
             Some(root) => {
-                let (_images_dir, task_dir) = pipe_media_dirs(root, &input.pipe_id, &input.task_id)
-                    .map_err(EngineError::Failure)?;
+                let (_images_dir, task_dir, _task_images_dir) =
+                    pipe_media_dirs(root, &input.pipe_id, &input.task_id)
+                        .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                self.http.download(&video_url, &dest).await.map_err(|e| {
-                    log::error!(
-                        "[Generation] video task {} download failed: {}",
-                        input.task_id,
-                        e
-                    );
-                    EngineError::Failure(format!("video download {video_url}: {e}"))
-                })?;
+                match self.http.download(&video_url, &dest).await {
+                    Ok(()) => {
+                        self.log_entry(
+                            input,
+                            &secrets,
+                            &json!({
+                                "stage": "video-download",
+                                "url": video_url,
+                                "dest": dest.to_string_lossy(),
+                                "bytes": true,
+                            }),
+                        )
+                        .await
+                    }
+                    Err(e) => {
+                        self.log_entry(
+                            input,
+                            &secrets,
+                            &json!({
+                                "stage": "video-download",
+                                "url": video_url,
+                                "error": e,
+                            }),
+                        )
+                        .await;
+                        log::error!(
+                            "[Generation] video task {} download failed: {}",
+                            input.task_id,
+                            e
+                        );
+                        return Err(EngineError::Failure(format!(
+                            "video download {video_url}: {e}"
+                        )));
+                    }
+                }
                 let out = json!({
                     "videoPath": dest.to_string_lossy(),
                     "videoUrl": video_url,
@@ -1023,7 +1136,8 @@ impl ProviderEngine {
         let Some(root) = self.media_root_for(input) else {
             return;
         };
-        if let Ok((_images_dir, task_dir)) = pipe_media_dirs(&root, &input.pipe_id, &input.task_id)
+        if let Ok((_images_dir, task_dir, _task_images_dir)) =
+            pipe_media_dirs(&root, &input.pipe_id, &input.task_id)
         {
             let _ = append_request_log(&task_dir.join("request.log"), entry, secrets);
         }
@@ -1082,17 +1196,31 @@ impl HttpClient for ReqwestClient {
     }
 
     async fn download(&self, url: &str, dest: &std::path::Path) -> Result<(), String> {
-        let bytes = self
+        // Read the response explicitly instead of `error_for_status()` so a
+        // non-2xx carries its status + body preview in the error string —
+        // that is what makes a failed artifact fetch diagnosable from the
+        // task log (a bare transport error hides the CDN status).
+        let resp = self
             .client
             .get(url)
             .send()
             .await
-            .map_err(|e| e.to_string())?
-            .error_for_status()
-            .map_err(|e| e.to_string())?
-            .bytes()
-            .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("GET {url} failed: {e}"))?;
+        let status = resp.status().as_u16();
+        let bytes = if (200..300).contains(&status) {
+            resp.bytes()
+                .await
+                .map_err(|e| format!("GET {url} read failed: {e}"))?
+        } else {
+            let body_preview = resp
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(500)
+                .collect::<String>();
+            return Err(format!("GET {url} HTTP {status}: {body_preview}"));
+        };
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create {}: {e}", parent.display()))?;
@@ -1149,6 +1277,11 @@ mod tests {
             self.gets.lock().unwrap().push_back(r);
             self
         }
+        /// Simulate a failing artifact download (non-2xx, status embedded).
+        fn fail_download(self) -> Self {
+            *self.download_ok.lock().unwrap() = false;
+            self
+        }
     }
 
     #[async_trait::async_trait]
@@ -1187,7 +1320,7 @@ mod tests {
                 .unwrap()
                 .push(dest.to_string_lossy().into_owned());
             if !*self.download_ok.lock().unwrap() {
-                return Err(format!("simulated download failure {url}"));
+                return Err(format!("GET {url} HTTP 503: simulated provider outage"));
             }
             // Provide an artifact file so download-style assertions see real bytes.
             if let Some(parent) = dest.parent() {
@@ -1200,15 +1333,18 @@ mod tests {
 
     // ── Fixtures ────────────────────────────────────────────────────────────────
 
+    /// Each media root is uniquely suffixed by a process-wide counter: the
+    /// harness runs these tests in parallel on shared worker threads, and a
+    /// timestamp-only path collides whenever two fixtures are created within
+    /// the same millisecond — then one test's `remove_dir_all` wipes the
+    /// shared tree while the other is still in flight (losing its
+    /// best-effort request.log lines).
+    static MEDIA_ROOT_COUNTER: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
     fn temp_media_root() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "vm_provider_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        ))
+        let n = MEDIA_ROOT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::env::temp_dir().join(format!("vm_provider_test_{}_{}", std::process::id(), n))
     }
 
     async fn db_with_slots(image_key: &str, video_key: &str) -> (Database, std::path::PathBuf) {
@@ -1304,6 +1440,7 @@ mod tests {
                 kind: SourceKind::Keyframe,
                 prompt: Some("piece prompt".into()),
                 ordinal: Some(1),
+                ref_id: Some("kf-1".into()),
                 image_type: Some("txt2img".into()),
                 reference_url: None,
                 image_src: None,
@@ -1320,6 +1457,7 @@ mod tests {
             kind: SourceKind::Video,
             prompt: Some("video prompt".into()),
             ordinal: None,
+            ref_id: None,
             image_type: None,
             reference_url: None,
             image_src: None,
@@ -1367,29 +1505,123 @@ mod tests {
             .run(&input, &cancel, &|_p| {}, &|_line| {})
             .await
             .expect("image stage should succeed");
-        let images_dir = media.join("pipe1").join("images");
+        // Task-scoped artifact dir: <root>/pipe1/task1/images/kf-1.png
+        let task_images_dir = media.join("pipe1").join("task1").join("images");
         assert_eq!(
             out.local_path,
-            images_dir.join("1.png").to_string_lossy().into_owned()
+            task_images_dir
+                .join("kf-1.png")
+                .to_string_lossy()
+                .into_owned()
         );
         // The provider's remote URL is carried through StageOutput.
         assert_eq!(out.remote_url.as_deref(), Some("https://cdn.test/k1.png"));
-        assert!(images_dir.join("1.png").is_file(), "artifact written");
+        assert!(
+            task_images_dir.join("kf-1.png").is_file(),
+            "artifact written"
+        );
+        // The log stays in the pipe-level images dir (append-only, shared).
+        let images_dir = media.join("pipe1").join("images");
         assert!(
             images_dir.join("log.jsonl").is_file(),
             "artifact history appended"
         );
 
         let history = std::fs::read_to_string(images_dir.join("log.jsonl")).unwrap();
-        let line: serde_json::Value =
-            serde_json::from_str(history.lines().next().unwrap()).unwrap();
-        assert_eq!(line["refId"], "1");
+        // The log is shared across test runs (a temp-tree quirk), so assert
+        // on the LAST line this run appended rather than an absolute count.
+        let lines: Vec<serde_json::Value> = history
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(!lines.is_empty(), "log.jsonl empty: {history}");
+        let line = lines.last().unwrap();
+        assert_eq!(line["refId"], "kf-1");
+        assert_eq!(line["localPath"], out.local_path);
         assert_eq!(line["model"], "agnes-image-2.5-flash");
 
         // The raw key never appears; it's absent from these entries entirely.
         let req_log =
             std::fs::read_to_string(media.join("pipe1").join("task1").join("request.log")).unwrap();
         assert!(!req_log.contains("sk-image-key"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// Two different image stages of the same task (a keyframe + a subject)
+    /// must produce DIFFERENT artifact files under the same task dir —
+    /// the bug this layout change fixes (previously they stacked on one
+    /// "latest"-style name).
+    #[tokio::test]
+    async fn distinct_stages_produce_distinct_artifact_files() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let resp_a: serde_json::Value =
+            serde_json::json!({ "data": [{ "url": "https://cdn.test/a.png" }] });
+        let resp_b: serde_json::Value =
+            serde_json::json!({ "data": [{ "url": "https://cdn.test/b.png" }] });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200u16, resp_a)))
+                .queue_post(Ok((200u16, resp_b))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        // Stage 1: keyframe kf-1.
+        let kf_input = image_input(&media);
+        let out_a = engine
+            .run(&kf_input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("keyframe stage should succeed");
+
+        // Stage 2: a subject with its own stable id.
+        let mut subject_input = image_input(&media);
+        subject_input.stage = Some(EngineStage {
+            kind: SourceKind::Subject,
+            prompt: Some("subject prompt".into()),
+            ordinal: None,
+            ref_id: Some("subj-1".into()),
+            image_type: Some("txt2img".into()),
+            reference_url: None,
+            image_src: None,
+            media_mode: None,
+            length_frames: 121,
+        });
+        let out_b = engine
+            .run(&subject_input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("subject stage should succeed");
+
+        let task_images_dir = media.join("pipe1").join("task1").join("images");
+        let path_a = task_images_dir.join("kf-1.png");
+        let path_b = task_images_dir.join("subj-1.png");
+        assert_eq!(out_a.local_path, path_a.to_string_lossy().into_owned());
+        assert_eq!(out_b.local_path, path_b.to_string_lossy().into_owned());
+        assert_ne!(
+            out_a.local_path, out_b.local_path,
+            "distinct stages must not stack onto one file"
+        );
+        assert!(path_a.is_file(), "keyframe artifact written");
+        assert!(path_b.is_file(), "subject artifact written");
+
+        // Both history lines live in the pipe-level log, each with its own
+        // stable refId pointing at its task-scoped file. The log is shared
+        // across test runs (a temp-tree quirk), so assert on the LAST two
+        // lines this run appended rather than an absolute count.
+        let images_dir = media.join("pipe1").join("images");
+        let history = std::fs::read_to_string(images_dir.join("log.jsonl")).unwrap();
+        let lines: Vec<serde_json::Value> = history
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(
+            lines.len() >= 2,
+            "expected at least two log lines: {history}"
+        );
+        let last = lines.len() - 1;
+        assert_eq!(lines[last - 1]["refId"], "kf-1");
+        assert_eq!(lines[last - 1]["localPath"], out_a.local_path);
+        assert_eq!(lines[last]["refId"], "subj-1");
+        assert_eq!(lines[last]["localPath"], out_b.local_path);
         let _ = std::fs::remove_dir_all(&media);
     }
 
@@ -1517,12 +1749,10 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), Arc::new(StubHttp::new()), [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(true));
         let input = image_input(std::path::Path::new("/unused"));
-        let err = engine.run(
-                &input,
-                &cancel,
-                &|_p| {},
-                &|_line| {},
-            ).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert_eq!(err, "cancelled");
     }
 
@@ -1544,12 +1774,10 @@ mod tests {
             flipper.store(true, Ordering::Release);
         });
         let input = video_input(&media);
-        let err = engine.run(
-                &input,
-                &cancel,
-                &|_p| {},
-                &|_line| {},
-            ).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert_eq!(err, "cancelled");
         let _ = std::fs::remove_dir_all(&media);
     }
@@ -1578,12 +1806,10 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let input = video_input(&media);
 
-        let out = engine.run(
-                &input,
-                &cancel,
-                &|_p| {},
-                &|_line| {},
-            ).await.unwrap();
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap();
         let task_dir = media.join("pipe1").join("task1");
         assert_eq!(
             out.local_path,
@@ -1599,6 +1825,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn poll_transport_error_retries_then_succeeds_and_logs_failure() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-t1" }))))
+                // First two polls drop (network blips), the third completes.
+                .queue_get(Err("connection reset by peer".into()))
+                .queue_get(Err("dns error".into()))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                ))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap();
+        assert!(out.local_path.ends_with("video.mp4"));
+        // Both failed polls were logged for diagnostics before the retry
+        // succeeded.
+        let req_log =
+            std::fs::read_to_string(media.join("pipe1").join("task1").join("request.log")).unwrap();
+        assert_eq!(
+            req_log.matches("video-poll-transport-error").count(),
+            2,
+            "both transport failures logged: {req_log}"
+        );
+        assert!(req_log.contains("connection reset by peer"));
+        assert!(req_log.contains("dns error"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn poll_transport_errors_exhaust_ladder_then_fail_task() {
+        let (db, _media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-t2" }))))
+                .queue_get(Err("net down 1".into()))
+                .queue_get(Err("net down 2".into()))
+                .queue_get(Err("net down 3".into())),
+        );
+        let engine = engine_with(db, temp_media_root(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(std::path::Path::new("/unused"));
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("3x in a row"), "got: {err}");
+        assert!(err.contains("net down 3"), "got: {err}");
+    }
+
+    #[tokio::test]
     async fn non_queue_full_503_is_a_real_failure() {
         let (db, _media) = db_with_slots("sk-image-key", "sk-video-key").await;
         let http =
@@ -1606,12 +1893,10 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), http, [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(false));
         let input = video_input(std::path::Path::new("/unused"));
-        let err = engine.run(
-                &input,
-                &cancel,
-                &|_p| {},
-                &|_line| {},
-            ).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert!(err.contains("maintenance"), "got: {err}");
     }
 
@@ -1621,12 +1906,84 @@ mod tests {
         let engine = engine_with(db, temp_media_root(), Arc::new(StubHttp::new()), [0, 0, 0]);
         let cancel = Arc::new(AtomicBool::new(false));
         let input = image_input(std::path::Path::new("/unused"));
-        let err = engine.run(
-                &input,
-                &cancel,
-                &|_p| {},
-                &|_line| {},
-            ).await.unwrap_err();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
         assert!(err.contains("API key is not set"), "got: {err}");
+    }
+
+    // ── Download diagnostics ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn image_download_failure_is_logged_and_fails_stage() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((
+                    200,
+                    json!({ "data": [{ "url": "https://cdn.test/k1.png" }] }),
+                )))
+                .fail_download(),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = image_input(&media);
+
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("image download"), "got: {err}");
+        assert!(err.contains("HTTP 503"), "status embedded: {err}");
+
+        let req_log =
+            std::fs::read_to_string(media.join("pipe1").join("task1").join("request.log")).unwrap();
+        assert!(
+            req_log.contains("image-download"),
+            "download entry logged: {req_log}"
+        );
+        assert!(
+            req_log.contains("HTTP 503"),
+            "error carried in entry: {req_log}"
+        );
+        // The provider key never leaks through the new entry.
+        assert!(!req_log.contains("sk-image-key"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn video_download_success_is_logged_with_url() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-dl" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                ))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap();
+        assert!(out.local_path.ends_with("video.mp4"));
+
+        let req_log =
+            std::fs::read_to_string(media.join("pipe1").join("task1").join("request.log")).unwrap();
+        assert!(
+            req_log.contains("video-download"),
+            "download entry logged: {req_log}"
+        );
+        assert!(req_log.contains("https://cdn.test/out.mp4"));
+        assert!(!req_log.contains("sk-video-key"));
+        let _ = std::fs::remove_dir_all(&media);
     }
 }

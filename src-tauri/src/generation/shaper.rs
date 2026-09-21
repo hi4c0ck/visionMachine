@@ -262,13 +262,109 @@ fn shape_video_job_frames(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
 
 // ── `video-job-seconds` (agnes-video-2.5-flash, and 2.5 paid later) ───────
 
-fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
-    let mode = ctx.media_mode.as_deref().unwrap_or("keyframes");
-    let mode_wire = match mode {
-        "keyframes" => "keyframe",
-        "reference" => "reference",
-        _ => "text",
+/// Resolve the wire `mode` for seconds-based video models. Model-agnostic:
+/// driven by `spec.media` (modes / max caps / dual), the pipe's `media_mode`
+/// flag, and which upstream media kinds actually carry content.
+///
+/// Rule (catalog "Mode rules" + Q7):
+/// 1. Flag wins when present: `"keyframes"` -> `"keyframe"`,
+///    `"reference"` -> `"reference"`.
+/// 2. Absent / unknown flag -> derive from content: subjects with content ->
+///    `"reference"`; else keyframes with content -> `"keyframe"`; else
+///    `"text"`.
+/// 3. Gate on `spec.media.modes` when it is present and non-empty: an
+///    unsupported preferred mode falls back (reference -> keyframe -> text).
+/// 4. Downgrade when the mode's media kind has no content: before dropping
+///    to `"text"`, cross-fall to the OTHER media kind when it has content
+///    AND the model supports it (keyframe + no frames + settled subjects ->
+///    reference, and vice versa); only then fall to `"text"`. The provider
+///    rejects a keyframe-mode request without frames, and a reference-mode
+///    request without images, but throwing away available content of the
+///    other kind would silently lose the user's settled media.
+fn seconds_mode_wire(spec: &ModelSpecWire, ctx: &StageContext) -> &'static str {
+    let has_keyframes = ctx
+        .upstream
+        .iter()
+        .any(|u| u.kind == "keyframe" && !u.primary.is_empty());
+    let has_subjects = ctx
+        .upstream
+        .iter()
+        .any(|u| u.kind == "subject" && !u.primary.is_empty());
+
+    // 1. Flag wins; 2. content is the fallback.
+    let preferred = match ctx.media_mode.as_deref() {
+        Some("keyframes") => "keyframe",
+        Some("reference") => "reference",
+        _ => {
+            if has_subjects {
+                "reference"
+            } else if has_keyframes {
+                "keyframe"
+            } else {
+                "text"
+            }
+        }
     };
+
+    // 3. Gate on the model's supported modes (frontend names: "keyframes" /
+    //    "reference" / "text").
+    let supported = |wire: &str| {
+        spec.media.as_ref().is_none_or(|m| {
+            m.modes.is_empty() || {
+                m.modes.iter().any(|s| {
+                    (s == "keyframes" && wire == "keyframe")
+                        || (s == "reference" && wire == "reference")
+                        || (s == "text" && wire == "text")
+                })
+            }
+        })
+    };
+    let mut mode = preferred;
+    if !supported(mode) {
+        // reference unsupported -> try keyframe -> text; keyframe
+        // unsupported -> text (keyframe content is not silently re-cast).
+        mode = if supported("keyframe") && preferred == "reference" {
+            "keyframe"
+        } else {
+            "text"
+        };
+    }
+
+    // 4. Downgrade when the mode's media kind has no content — but cross-fall
+    //    to the other kind first when it carries content AND the model
+    //    supports it, so settled media is never silently dropped.
+    if mode == "keyframe" && !has_keyframes {
+        mode = if supported("reference") && has_subjects {
+            "reference"
+        } else {
+            "text"
+        };
+    } else if mode == "reference" && !has_subjects {
+        mode = if supported("keyframe") && has_keyframes {
+            "keyframe"
+        } else {
+            "text"
+        };
+    }
+    mode
+}
+
+/// Cap for a media kind, read from `spec.media` (model-agnostic; defaults
+/// match the catalog: 2 keyframes, 5 refs).
+fn media_cap(spec: &ModelSpecWire, keyframes: bool) -> usize {
+    let m = spec.media.as_ref();
+    if keyframes {
+        m.and_then(|m| m.max_keyframes).unwrap_or(2) as usize
+    } else {
+        m.and_then(|m| m.max_refs).unwrap_or(5) as usize
+    }
+}
+
+fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
+    let mode_wire = seconds_mode_wire(spec, ctx);
+    // Dual mode (paid 2.5 family): keyframe AND reference media are sent
+    // simultaneously; the wire `mode` still comes from the flag/content rule.
+    let dual = spec.media.as_ref().and_then(|m| m.dual).unwrap_or(false);
 
     let mut payload = json!({
         "model": spec.id,
@@ -287,39 +383,40 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
         payload["aspect_ratio"] = json!(ratio);
     }
 
-    // Mode-specific media fields. The `keyframe` mode forbids images/audios/
-    // videos (400 if present); `reference` uses images[]/audios[]; `text`
-    // uses none (catalog mode rules).
-    match mode_wire {
-        "keyframe" => {
-            let kfs: Vec<&String> = ctx
-                .upstream
-                .iter()
-                .filter(|u| !u.primary.is_empty())
-                .map(|u| &u.primary)
-                .take(2) // first_frame / last_frame (maxKeyframes=2)
-                .collect();
-            if !kfs.is_empty() {
-                payload["first_frame"] = json!(kfs[0]);
-            }
-            if kfs.len() > 1 {
-                payload["last_frame"] = json!(kfs[1]);
-            }
+    // Mode-specific media fields (catalog mode rules): `keyframe` ->
+    // first_frame/last_frame from keyframe upstream only (no
+    // images/audios/videos fields — 400 if present); `reference` ->
+    // images[] from subject upstream only (cap maxRefs); `text` -> none.
+    let send_keyframes = matches!(mode_wire, "keyframe") || dual;
+    let send_reference = matches!(mode_wire, "reference") || dual;
+    if send_keyframes {
+        let cap = media_cap(spec, true);
+        let kfs: Vec<&String> = ctx
+            .upstream
+            .iter()
+            .filter(|u| u.kind == "keyframe" && !u.primary.is_empty())
+            .map(|u| &u.primary)
+            .take(cap)
+            .collect();
+        if !kfs.is_empty() {
+            payload["first_frame"] = json!(kfs[0]);
         }
-        "reference" => {
-            let cap = spec.media.as_ref().and_then(|m| m.max_refs).unwrap_or(5) as usize;
-            let imgs: Vec<String> = ctx
-                .upstream
-                .iter()
-                .filter(|u| !u.primary.is_empty())
-                .take(cap)
-                .map(|u| u.primary.clone())
-                .collect();
-            if !imgs.is_empty() {
-                payload["images"] = json!(imgs);
-            }
+        if kfs.len() > 1 {
+            payload["last_frame"] = json!(kfs[1]);
         }
-        _ => {}
+    }
+    if send_reference {
+        let cap = media_cap(spec, false);
+        let imgs: Vec<String> = ctx
+            .upstream
+            .iter()
+            .filter(|u| u.kind == "subject" && !u.primary.is_empty())
+            .take(cap)
+            .map(|u| u.primary.clone())
+            .collect();
+        if !imgs.is_empty() {
+            payload["images"] = json!(imgs);
+        }
     }
 
     if let Some((name, val)) = guidance_value(spec, ctx) {
@@ -609,14 +706,236 @@ mod tests {
 
     #[test]
     fn seconds_text_mode_no_media_fields() {
+        // Flag says keyframes but there is no keyframe content: the shaper
+        // downgrades to text mode (no media fields), not keyframe-without-
+        // frames (catalog: keyframe mode requires >=1 frame).
         let c = ctx(|c| {
             c.media_mode = Some("keyframes".into());
             c.upstream = vec![]; // no media -> text
         });
         let p = shape_request(&seconds_spec(), &c).unwrap();
-        assert_eq!(p["mode"], "keyframe");
+        assert_eq!(p["mode"], "text");
         assert!(p.get("first_frame").is_none());
         assert!(p.get("last_frame").is_none());
+    }
+
+    #[test]
+    fn seconds_reference_flag_with_subjects_emits_images() {
+        // Pipe flag = reference: subjects are the media source; keyframe
+        // upstream (still generated by the image stages) is NOT in images[].
+        let c = ctx(|c| {
+            c.media_mode = Some("reference".into());
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("subject", "s1", "https://a.com/s1.png"),
+                up("subject", "s2", "https://a.com/s2.png"),
+                up("subject", "s3", "https://a.com/s3.png"),
+                up("subject", "s4", "https://a.com/s4.png"),
+                up("subject", "s5", "https://a.com/s5.png"),
+                up("subject", "s6", "https://a.com/s6.png"), // over maxRefs=5
+            ];
+        });
+        let p = shape_request(&seconds_spec(), &c).unwrap();
+        assert_eq!(p["mode"], "reference");
+        let imgs = p["images"].as_array().unwrap();
+        assert_eq!(imgs.len(), 5); // cap maxRefs
+        assert_eq!(imgs[0], "https://a.com/s1.png");
+        assert!(p.get("first_frame").is_none());
+        assert!(p.get("last_frame").is_none());
+    }
+
+    #[test]
+    fn seconds_keyframe_flag_uses_keyframe_upstream_only() {
+        // Pipe flag = keyframes: first/last_frame come from keyframe
+        // upstream only; subjects are inert in keyframes mode.
+        let c = ctx(|c| {
+            c.media_mode = Some("keyframes".into());
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("keyframe", "k2", "https://a.com/k2.png"),
+                up("keyframe", "k3", "https://a.com/k3.png"), // over cap 2
+                up("subject", "s1", "https://a.com/s1.png"),
+            ];
+        });
+        let p = shape_request(&seconds_spec(), &c).unwrap();
+        assert_eq!(p["mode"], "keyframe");
+        assert_eq!(p["first_frame"], "https://a.com/k1.png");
+        assert_eq!(p["last_frame"], "https://a.com/k2.png");
+        assert!(p.get("images").is_none());
+    }
+
+    #[test]
+    fn seconds_flag_absent_derives_mode_from_content() {
+        // No mediaMode flag (legacy pipe / default EngineStage): content is
+        // the fallback — subjects present -> reference mode + images[].
+        let c = ctx(|c| {
+            c.upstream = vec![
+                up("subject", "s1", "https://a.com/s1.png"),
+                up("subject", "s2", "https://a.com/s2.png"),
+            ];
+        });
+        let p = shape_request(&seconds_spec(), &c).unwrap();
+        assert_eq!(p["mode"], "reference");
+        assert_eq!(p["images"].as_array().unwrap().len(), 2);
+
+        // Keyframes only -> keyframe mode.
+        let c2 = ctx(|c| {
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("keyframe", "k2", "https://a.com/k2.png"),
+            ]
+        });
+        let p2 = shape_request(&seconds_spec(), &c2).unwrap();
+        assert_eq!(p2["mode"], "keyframe");
+        assert_eq!(p2["first_frame"], "https://a.com/k1.png");
+        assert_eq!(p2["last_frame"], "https://a.com/k2.png");
+
+        // No content at all -> text.
+        let p3 = shape_request(&seconds_spec(), &ctx(|_| {})).unwrap();
+        assert_eq!(p3["mode"], "text");
+        assert!(p3.get("images").is_none());
+        assert!(p3.get("first_frame").is_none());
+    }
+
+    #[test]
+    fn seconds_flag_reference_downgrades_to_text_without_subjects() {
+        // Flag = reference, keyframe content exists, model supports keyframe:
+        // cross-fall to keyframe mode so the settled keyframes are not
+        // dropped. (Pre-A behavior: blind downgrade to text.)
+        let c = ctx(|c| {
+            c.media_mode = Some("reference".into());
+            c.upstream = vec![up("keyframe", "k1", "https://a.com/k1.png")];
+        });
+        let p = shape_request(&seconds_spec(), &c).unwrap();
+        assert_eq!(p["mode"], "keyframe");
+        assert_eq!(p["first_frame"], "https://a.com/k1.png");
+        assert!(p.get("images").is_none());
+    }
+
+    #[test]
+    fn seconds_flag_keyframes_cross_falls_to_reference_with_settled_subjects() {
+        // The user's exact case: pipe flag = keyframes but no keyframe
+        // content, settled subjects present -> reference mode with images[],
+        // not a silent drop to text.
+        let c = ctx(|c| {
+            c.media_mode = Some("keyframes".into());
+            c.upstream = vec![up("subject", "s1", "https://a.com/s1.png")];
+        });
+        let p = shape_request(&seconds_spec(), &c).unwrap();
+        assert_eq!(p["mode"], "reference");
+        let imgs = p["images"].as_array().unwrap();
+        assert_eq!(imgs, &vec!["https://a.com/s1.png".to_string()]);
+        assert!(p.get("first_frame").is_none());
+        assert!(p.get("last_frame").is_none());
+
+        // Gated: a keyframes-only spec cannot cross-fall to reference —
+        // no content of its own kind, unsupported other kind -> text.
+        let kf_only = spec("video-job-seconds", |m| {
+            m.id = "agnes-video-2.5-flash".into();
+            m.media = Some(ModelSpecMedia {
+                modes: vec!["keyframes".into()],
+                dual: None,
+                shared_array: None,
+                max_keyframes: Some(2),
+                max_refs: None,
+                max_audios: None,
+                max_videos: None,
+            });
+        });
+        let p2 = shape_request(&kf_only, &c).unwrap();
+        assert_eq!(p2["mode"], "text");
+        assert!(p2.get("images").is_none());
+
+        // No content at all -> still text.
+        let c3 = ctx(|c| {
+            c.media_mode = Some("keyframes".into());
+            c.upstream = vec![];
+        });
+        assert_eq!(shape_request(&seconds_spec(), &c3).unwrap()["mode"], "text");
+    }
+
+    #[test]
+    fn seconds_spec_modes_gate_unsupported_mode() {
+        // A spec offering only keyframes: a reference flag falls back to
+        // keyframe when keyframe content exists.
+        let kf_only = spec("video-job-seconds", |m| {
+            m.id = "agnes-video-2.5-flash".into();
+            m.media = Some(ModelSpecMedia {
+                modes: vec!["keyframes".into()],
+                dual: None,
+                shared_array: None,
+                max_keyframes: Some(2),
+                max_refs: None,
+                max_audios: None,
+                max_videos: None,
+            });
+        });
+        let c = ctx(|c| {
+            c.media_mode = Some("reference".into());
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("subject", "s1", "https://a.com/s1.png"),
+            ];
+        });
+        let p = shape_request(&kf_only, &c).unwrap();
+        assert_eq!(p["mode"], "keyframe");
+        assert_eq!(p["first_frame"], "https://a.com/k1.png");
+        assert!(p.get("images").is_none());
+
+        // Same spec, no keyframe content -> text (keyframe content is not
+        // silently re-cast into reference).
+        let c2 = ctx(|c| {
+            c.media_mode = Some("reference".into());
+            c.upstream = vec![up("subject", "s1", "https://a.com/s1.png")];
+        });
+        assert_eq!(shape_request(&kf_only, &c2).unwrap()["mode"], "text");
+    }
+
+    #[test]
+    fn seconds_dual_mode_sends_keyframe_and_reference_media() {
+        // Dual (paid 2.5 family): first/last_frame AND images[] ride the
+        // same request, each capped by its own spec limit.
+        let dual = spec("video-job-seconds", |m| {
+            m.id = "agnes-video-2.5".into();
+            m.media = Some(ModelSpecMedia {
+                modes: vec!["keyframes".into(), "reference".into()],
+                dual: Some(true),
+                shared_array: None,
+                max_keyframes: Some(2),
+                max_refs: Some(8),
+                max_audios: Some(3),
+                max_videos: Some(1),
+            });
+        });
+        let c = ctx(|c| {
+            c.media_mode = Some("keyframes".into());
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("keyframe", "k2", "https://a.com/k2.png"),
+                up("subject", "s1", "https://a.com/s1.png"),
+                up("subject", "s2", "https://a.com/s2.png"),
+            ];
+        });
+        let p = shape_request(&dual, &c).unwrap();
+        assert_eq!(p["mode"], "keyframe");
+        assert_eq!(p["first_frame"], "https://a.com/k1.png");
+        assert_eq!(p["last_frame"], "https://a.com/k2.png");
+        assert_eq!(p["images"].as_array().unwrap().len(), 2);
+
+        // Dual + reference flag -> wire mode reference, still carries both.
+        let c2 = ctx(|c| {
+            c.media_mode = Some("reference".into());
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("keyframe", "k2", "https://a.com/k2.png"),
+                up("subject", "s1", "https://a.com/s1.png"),
+                up("subject", "s2", "https://a.com/s2.png"),
+            ];
+        });
+        let p2 = shape_request(&dual, &c2).unwrap();
+        assert_eq!(p2["mode"], "reference");
+        assert_eq!(p2["first_frame"], "https://a.com/k1.png");
+        assert_eq!(p2["images"].as_array().unwrap().len(), 2);
     }
 
     #[test]

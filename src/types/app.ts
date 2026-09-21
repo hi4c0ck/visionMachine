@@ -312,6 +312,10 @@ export interface GenerationStageView {
   lastEvent?: string | null;
   /** Unix ms timestamp of lastEvent (drives the modal's "last activity" line). */
   lastEventAt?: number | null;
+  /** Unix ms the stage first entered the 503/429 backoff band (video stages);
+   *  cleared when it leaves the band. Drives the modal's "provider load looks
+   *  broken" notice after a long saturation. */
+  saturatedSince?: number | null;
 }
 
 export interface GenerationTaskView {
