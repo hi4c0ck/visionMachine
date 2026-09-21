@@ -90,11 +90,6 @@ pub struct StartGenerationInput {
     pub video_spec: Option<ModelSpecWire>,
 }
 
-#[derive(Deserialize)]
-pub struct TaskIdInput {
-    pub task_id: String,
-}
-
 #[tauri::command]
 pub async fn start_generation(
     input: StartGenerationInput,
@@ -208,17 +203,17 @@ pub async fn start_generation(
 
 #[tauri::command]
 pub async fn get_generation_task(
-    input: TaskIdInput,
+    task_id: String,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    if let Some(view) = state.generation.registry.get(&input.task_id) {
+    if let Some(view) = state.generation.registry.get(&task_id) {
         return Ok(serde_json::to_value(view).map_err(|e| e.to_string())?);
     }
 
     // Terminal fallback: rebuild from the DB row.
     let row = {
         let db = &state.db.lock().await;
-        db.get_generation_task_row(&input.task_id)
+        db.get_generation_task_row(&task_id)
             .await
             .map_err(|e| e.to_string())?
     }
@@ -255,11 +250,8 @@ pub async fn get_generation_task(
 }
 
 #[tauri::command]
-pub async fn cancel_generation(
-    input: TaskIdInput,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    state.generation.registry.cancel(&input.task_id)
+pub async fn cancel_generation(task_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.generation.registry.cancel(&task_id)
 }
 
 #[tauri::command]
