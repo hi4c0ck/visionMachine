@@ -1,11 +1,12 @@
 /**
  * Unit tests for refReadiness.ts — the status dot on keyframe / subject
  * chips (green = settled asset, red = broken, neutral = pending) and the
- * force-regenerate semantics behind it.
+ * queue-for-regenerate semantics behind it (non-destructive: ref data is
+ * kept, a flag drives the next run).
  */
 import { describe, it, expect } from 'vitest';
 import { refDotState, brokenKey, type RefDotSource } from '../../src/lib/refReadiness';
-import { clearRefPreview } from '../../src/lib/composerStore';
+import { queueRefRegen, attachGeneratedImage } from '../../src/lib/composerStore';
 
 function ref(overrides: Partial<RefDotSource> = {}): RefDotSource {
   return {
@@ -70,12 +71,12 @@ describe('refDotState — generated pieces (txt2img / img2img)', () => {
   });
 });
 
-describe('clearRefPreview — force regenerate', () => {
-  it('drops a settled generated preview and resets status to pending', async () => {
-    const { composerStore, hydrateSessions } = await import('../../src/lib/composerStore');
+describe('queueRefRegen — non-destructive regenerate flag', () => {
+  async function seedSettledSession(sessionId: string) {
+    const { hydrateSessions, composerStore } = await import('../../src/lib/composerStore');
     hydrateSessions([
       {
-        id: 's1',
+        id: sessionId,
         name: 'S',
         fps: 24,
         resolution: '720p',
@@ -114,7 +115,6 @@ describe('clearRefPreview — force regenerate', () => {
                 status: 'done',
                 previewRemoteUrl: 'https://cdn.test/s1.png',
                 useFrames: false,
-                visible: true,
               },
             ],
             elements: [],
@@ -122,27 +122,47 @@ describe('clearRefPreview — force regenerate', () => {
         ],
       },
     ]);
+    return composerStore.sessions.get(sessionId)!.pipes[0];
+  }
 
-    // Keyframe: settled preview cleared, generated-type status resets to pending.
-    const rk = await clearRefPreview('s1', 'p1', 'keyframe', 'k1');
+  it('sets the flag without touching the settled preview data', async () => {
+    const pipe = await seedSettledSession('s1');
+    const rk = await queueRefRegen('s1', 'p1', 'keyframe', 'k1');
     expect(rk.errors).toEqual([]);
-    const pipeK = composerStore.sessions.get('s1')!.pipes[0];
-    expect(pipeK.keyframes[0].previewRemoteUrl).toBeUndefined();
-    expect(pipeK.keyframes[0].previewLocalPath).toBeUndefined();
-    expect(pipeK.keyframes[0].status).toBe('pending');
+    // The flag is set; the settled data is INTACT (the asset stays valid).
+    expect(pipe.keyframes[0].forceRegen).toBe(true);
+    expect(pipe.keyframes[0].previewRemoteUrl).toBe('https://cdn.test/k1.png');
+    expect(pipe.keyframes[0].previewLocalPath).toBe('C:/media/k1.png');
+    expect(pipe.keyframes[0].status).toBe('done');
 
-    // Subject: same semantics.
-    const rs = await clearRefPreview('s1', 'p1', 'subject', 's1');
+    const rs = await queueRefRegen('s1', 'p1', 'subject', 's1');
     expect(rs.errors).toEqual([]);
-    expect(pipeK.subjectReferences[0].previewRemoteUrl).toBeUndefined();
-    expect(pipeK.subjectReferences[0].status).toBe('pending');
+    expect(pipe.subjectReferences[0].forceRegen).toBe(true);
+    expect(pipe.subjectReferences[0].previewRemoteUrl).toBe('https://cdn.test/s1.png');
+  });
+
+  it('attachGeneratedImage clears a queued flag (the run satisfied it)', async () => {
+    const pipe = await seedSettledSession('s2');
+    await queueRefRegen('s2', 'p1', 'keyframe', 'k1');
+    expect(pipe.keyframes[0].forceRegen).toBe(true);
+
+    const r = await attachGeneratedImage(
+      's2', 'p1', 'keyframe', 'k1',
+      'C:/media/k1-fresh.png',
+      'https://cdn.test/k1-fresh.png',
+    );
+    expect(r.errors).toEqual([]);
+    // Fresh artifact attached: the queued flag is gone, the preview updated.
+    expect(pipe.keyframes[0].forceRegen).toBeUndefined();
+    expect(pipe.keyframes[0].previewRemoteUrl).toBe('https://cdn.test/k1-fresh.png');
+    expect(pipe.keyframes[0].previewLocalPath).toBe('C:/media/k1-fresh.png');
   });
 
   it('unknown ref ids are a concrete error, not a silent pass', async () => {
     const { hydrateSessions } = await import('../../src/lib/composerStore');
     hydrateSessions([
       {
-        id: 's2',
+        id: 's3',
         name: 'S',
         fps: 24,
         resolution: '720p',
@@ -167,7 +187,7 @@ describe('clearRefPreview — force regenerate', () => {
         ],
       },
     ]);
-    const r = await clearRefPreview('s2', 'p1', 'keyframe', 'nope');
+    const r = await queueRefRegen('s3', 'p1', 'keyframe', 'nope');
     expect(r.errors).toEqual(['Reference not found']);
   });
 });

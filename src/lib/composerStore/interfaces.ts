@@ -153,12 +153,12 @@ export interface GenerationService {
     status: GenerationStatus,
   ): Promise<ServiceResult>;
   /**
-   * Force-regenerate a piece: drop its settled generated preview
-   * (previewRemoteUrl / previewLocalPath) so the registry's Ready-skip no
-   * longer applies and the next run regenerates it. 'url' pieces have no
-   * generated preview to clear — no-op (their readiness is the URL itself).
+   * Queue a piece for regeneration on the next run (status-dot click).
+   * Non-destructive: the settled preview data is kept; the registry's
+   * Ready-skip is overridden while the flag is set, and the flag is
+   * cleared automatically when the fresh artifact is attached.
    */
-  clearRefPreview(
+  queueRefRegen(
     sessionId: string,
     pipeId: string,
     kind: 'keyframe' | 'subject',

@@ -152,8 +152,13 @@ pub struct SubjectReference {
     pub frame_start: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_end: Option<u32>,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub visible: bool,
+    /// Queued for regeneration (UI status-dot click): the next run regenerates
+    /// this piece even when a settled preview_remote_url is present (the
+    /// registry's Ready-skip is overridden). Legacy rows default to false.
+    #[serde(default)]
+    pub force_regen: bool,
 }
 
 fn default_ref_type() -> String {
@@ -165,6 +170,10 @@ fn default_ref_status() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 impl SubjectReference {
@@ -181,6 +190,7 @@ impl SubjectReference {
             frame_start: None,
             frame_end: None,
             visible: true,
+            force_regen: false,
         }
     }
 }
@@ -238,6 +248,11 @@ pub struct Keyframe {
     pub preview_local_path: Option<String>,
     #[serde(default)]
     pub status: String, // pending, generating, done, error
+    /// Queued for regeneration (UI status-dot click): the next run regenerates
+    /// this piece even when a settled preview_remote_url is present. Legacy
+    /// rows default to false.
+    #[serde(default)]
+    pub force_regen: bool,
 }
 
 impl Keyframe {
@@ -253,6 +268,7 @@ impl Keyframe {
             preview_remote_url: None,
             preview_local_path: None,
             status: "pending".to_string(),
+            force_regen: false,
         }
     }
 }
@@ -413,6 +429,7 @@ mod tests {
             frame_start: Some(0),
             frame_end: Some(120),
             visible: true,
+            force_regen: false,
         };
         let value = serde_json::to_value(&ref_).expect("serialize");
         // The wire field is named `type`, not the Rust field `kind`.

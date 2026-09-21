@@ -159,11 +159,13 @@ describe('pipePrechecks — media caps (E4)', () => {
     expect(over.map((c) => c.code)).toContain('media-cap');
   });
 
-  it('sharedArray: hidden subject refs do not count toward the cap', () => {
+  it('sharedArray: every subject ref counts toward the cap (the visible eye-mechanic is obsolete)', () => {
     const spec = framesSpec({
       media: { modes: ['keyframes'], sharedArray: true, maxKeyframes: 3, maxRefs: 3 },
     });
-    // 3 keyframes + 1 hidden subject = 3 total; hidden ref is excluded.
+    // 3 keyframes + 1 subject = 4 > cap 3 → conflict. The legacy `visible`
+    // flag no longer exempts a ref from the cap (the eye toggle was removed;
+    // refs are deleted instead of parked), so any ref in the array counts.
     const c = pipePrechecks(
       pipeWith({
         keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
@@ -175,12 +177,12 @@ describe('pipePrechecks — media caps (E4)', () => {
       null,
       spec,
     );
-    expect(c.map((x) => x.code)).not.toContain('media-cap');
+    expect(c.map((x) => x.code)).toContain('media-cap');
 
-    // 3 keyframes + 1 visible subject = 4 > cap 3 → conflict.
+    // 2 keyframes + 1 subject = 3 ≤ cap 3 → no conflict.
     const c2 = pipePrechecks(
       pipeWith({
-        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        keyframes: [1, 2].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
         subjectReferences: [
           { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
         ],
@@ -189,7 +191,7 @@ describe('pipePrechecks — media caps (E4)', () => {
       null,
       spec,
     );
-    expect(c2.map((x) => x.code)).toContain('media-cap');
+    expect(c2.map((x) => x.code)).not.toContain('media-cap');
   });
 
   it('keyframes mode: caps keyframe count, ignores subjects', () => {

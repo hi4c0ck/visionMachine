@@ -986,7 +986,7 @@
 				status: 'pending',
 				params,
 			})),
-			...(pipe.subjectReferences ?? []).filter((r) => r.visible !== false).map((r): GenerationLogPiece => ({
+			...(pipe.subjectReferences ?? []).map((r): GenerationLogPiece => ({
 				kind: 'subject',
 				refId: r.id,
 				provider: s.providers.image.preset,

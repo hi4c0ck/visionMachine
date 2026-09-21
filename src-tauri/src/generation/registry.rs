@@ -205,24 +205,23 @@ impl TaskRegistry {
             );
             // A settled previewRemoteUrl survives a restart and marks the
             // piece as already-available (the next video run consumes it
-            // without regenerating).
-            if kf
-                .preview_remote_url
-                .as_deref()
-                .filter(|u| !u.is_empty())
-                .is_some()
+            // without regenerating). A queued force-regen (status-dot click)
+            // overrides that so the piece is re-made on the next run.
+            if !kf.force_regen
+                && kf
+                    .preview_remote_url
+                    .as_deref()
+                    .filter(|u| !u.is_empty())
+                    .is_some()
             {
                 stage.status = StageStatus::Ready;
                 stage.progress = 1.0;
             }
             stages.push(stage);
         }
-        // Hidden subject refs (visible = false) are parked — neither rendered
-        // in the composer nor sent to the API, so they produce no stage.
+        // Subject refs (the `visible` eye-mechanic is obsolete — every ref in
+        // the array is rendered and sent; `visible` remains parse-only).
         for (i, sr) in pipe.subject_references.iter().enumerate() {
-            if !sr.visible {
-                continue;
-            }
             let ready = sr.kind == "url";
             let mut stage = stage_image(
                 task_id,
@@ -231,11 +230,14 @@ impl TaskRegistry {
                 &sr.id,
                 ready,
             );
-            if sr
-                .preview_remote_url
-                .as_deref()
-                .filter(|u| !u.is_empty())
-                .is_some()
+            // A settled previewRemoteUrl survives a restart and marks the piece
+            // as already-available; a queued force-regen overrides it.
+            if !sr.force_regen
+                && sr
+                    .preview_remote_url
+                    .as_deref()
+                    .filter(|u| !u.is_empty())
+                    .is_some()
             {
                 stage.status = StageStatus::Ready;
                 stage.progress = 1.0;
@@ -954,9 +956,14 @@ fn build_stage_plan(
                 // Pre-seed already-available pieces: the user's remote URL for
                 // `url` keyframes, or a settled previewRemoteUrl for generated
                 // ones (skipped from regeneration by build_stages). Either way
-                // the video stage consumes the fetchable source directly.
+                // the video stage consumes the fetchable source directly. A
+                // queued force-regen defers the pre-seed so the freshly
+                // generated output (record_upstream) is what feeds the video.
                 upstream.push(
                     kf.filter(|k| {
+                        if k.force_regen {
+                            return false;
+                        }
                         let has_url =
                             (k.kind.is_empty() || k.kind == "url") && k.image_src.is_some();
                         let has_preview = k
@@ -1013,9 +1020,13 @@ fn build_stage_plan(
                 }));
                 // Pre-seed already-available subjects: the user's remote URL
                 // for `url` refs, or a settled previewRemoteUrl for generated
-                // ones (skipped from regeneration by build_stages).
+                // ones (skipped from regeneration by build_stages). A queued
+                // force-regen defers the pre-seed so the fresh output is used.
                 upstream.push(
                     sr.filter(|s| {
+                        if s.force_regen {
+                            return false;
+                        }
                         let has_url =
                             (s.kind.is_empty() || s.kind == "url") && !s.image_url.is_empty();
                         let has_preview = s
@@ -1158,6 +1169,7 @@ mod tests {
             preview_remote_url: None,
             preview_local_path: None,
             status: "pending".into(),
+            force_regen: false,
         }
     }
 
@@ -1174,6 +1186,7 @@ mod tests {
             frame_start: None,
             frame_end: None,
             visible: true,
+            force_regen: false,
         }
     }
 

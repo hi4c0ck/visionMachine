@@ -26,8 +26,8 @@
 		aspect?: string;
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
-		/** Force-regenerate a settled keyframe: clears its preview so the next
-		 *  run produces a fresh image. Fired by the status dot. */
+		/** Queue a keyframe for regeneration on the next run (non-destructive:
+		 *  the settled preview data stays). Fired by the status dot. */
 		onRegenerate?: (kfId: string) => void;
 	}>();
 
@@ -123,7 +123,10 @@
 		return KF_TYPE_LABEL[kf.type] ?? kf.type;
 	}
 
-	function kfDotTitleFor(state: RefDotState): string {
+	function kfDotTitleFor(kf: PipeKeyframe, state: RefDotState): string {
+		if (kf.forceRegen === true) {
+			return 'Will regenerate on next run — click to queue a fresh asset';
+		}
 		return state === 'ready'
 			? 'Asset ready — click to regenerate'
 			: state === 'broken'
@@ -151,6 +154,7 @@
 				status: kf.status,
 				previewRemoteUrl: kf.previewRemoteUrl,
 				previewLocalPath: kf.previewLocalPath,
+				forceRegen: kf.forceRegen,
 			},
 			brokenSet,
 		);
@@ -214,9 +218,10 @@
 							class="kf-status"
 							class:kf-status-ready={dot === 'ready'}
 							class:kf-status-broken={dot === 'broken'}
+							class:kf-status-queued={kf.forceRegen === true}
 							onclick={(e) => { e.stopPropagation(); onRegenerate?.(kf.id); }}
-							title={kfDotTitleFor(dot)}
-							aria-label={kfDotTitleFor(dot)}
+							title={kfDotTitleFor(kf, dot)}
+							aria-label={kfDotTitleFor(kf, dot)}
 						></button>
 					</div>
 						<span class="kf-meta">
@@ -334,6 +339,22 @@
 
 	.kf-status-broken {
 		background: #ef4444;
+	}
+
+	/* Queued-for-regeneration cue: a pulsing ring around the badge so the
+	   user sees a fresh asset is requested for the next run (the asset data
+	   itself stays valid until then). */
+	.kf-status-queued {
+		animation: kf-status-pulse 1.4s ease-in-out infinite;
+	}
+
+	@keyframes kf-status-pulse {
+		0%, 100% {
+			box-shadow: 0 0 0 0 color-mix(in srgb, #22c55e 55%, transparent);
+		}
+		50% {
+			box-shadow: 0 0 0 5px color-mix(in srgb, #22c55e 0%, transparent);
+		}
 	}
 
 	.kf-status:hover {

@@ -12,6 +12,10 @@
 // The D5 broken set is passed in pre-computed (Workspace owns the
 // re-validation flow); this helper only maps ref fields + that set to a
 // dot state.
+//
+// `forceRegen` is a separate, orthogonal signal: the asset may be fully
+// valid AND a regeneration is queued for the next run. The dot keeps its
+// readiness color but the component adds a "queued" cue (ring + tooltip).
 
 import type { GenerationStatus, KeyframeType } from '$types';
 
@@ -27,6 +31,9 @@ export interface RefDotSource {
   /** Settled generated-preview pair — either side counts as settled. */
   previewRemoteUrl?: string;
   previewLocalPath?: string;
+  /** A regeneration of this piece is queued for the next run (non-destructive:
+   *  the settled data stays, the registry's Ready-skip is just overridden). */
+  forceRegen?: boolean;
 }
 
 /** D5 broken-state key: `${pipeId}:${refId}`. */

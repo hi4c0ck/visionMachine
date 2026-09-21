@@ -78,6 +78,7 @@ export class SessionServiceImpl implements SessionService {
         previewRemoteUrl: kf.previewRemoteUrl,
         previewLocalPath: kf.previewLocalPath,
         status: kf.status || 'pending',
+        forceRegen: kf.forceRegen === true,
       })),
       subjectReferences: (p.subjectReferences || []).map((r: any) => {
         const useFrames = r.useFrames === true;
@@ -90,6 +91,7 @@ export class SessionServiceImpl implements SessionService {
           previewRemoteUrl: r.previewRemoteUrl,
           previewLocalPath: r.previewLocalPath,
           status: r.status ?? 'pending',
+          forceRegen: r.forceRegen === true,
           ...(useFrames && (r.frameStart !== undefined || r.frameEnd !== undefined) ? {
             frameStart: r.frameStart ?? 0,
             frameEnd: r.frameEnd ?? 240,

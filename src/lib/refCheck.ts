@@ -39,7 +39,6 @@ export function collectRemoteUrls(pipe: PipeRow, videoMedia?: { sharedArray?: bo
   const mode = pipe.mediaMode ?? 'keyframes';
   if (videoMedia?.sharedArray || mode === 'reference') {
     for (const sr of pipe.subjectReferences ?? []) {
-      if (sr.visible === false) continue; // hidden refs are inert — neither checked nor counted
       const ty = sr.type ?? 'url';
       if (ty === 'url' || ty === 'img2img') push('subject', sr.id, sr.imageUrl);
     }

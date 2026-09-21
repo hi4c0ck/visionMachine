@@ -36,12 +36,11 @@
 		resizeTagElement as resizeTagElementAction,
 		updateTagPrompt as updateTagPromptAction,
 		removeSubjectRef as removeSubjectRefAction,
-		toggleSubjectRef as toggleSubjectRefAction,
 		movePipe as movePipeAction,
 		duplicatePipe as duplicatePipeAction,
 		setPipeLength as setPipeLengthAction,
 		setMediaMode as setMediaModeAction,
-		clearRefPreview as clearRefPreviewAction,
+		queueRefRegen as queueRefRegenAction,
 	} from '$lib/composerStore';
 import { flashToast } from '$lib/flashToast';
 
@@ -426,13 +425,6 @@ import { flashToast } from '$lib/flashToast';
 		closeMenus();
 	}
 
-	async function handleToggleSubjectRef(idx: number, refId: string) {
-		const pipe = pipes[idx];
-		if (!pipe || !session?.id) return;
-		const result = await toggleSubjectRefAction(session.id, pipe.id, refId);
-		if (result.errors.length > 0) console.error('[ComposerPanel] toggleSubjectRef:', result.errors);
-	}
-
 	async function handleRemoveSubjectRef(idx: number, refId: string) {
 		const pipe = pipes[idx];
 		if (!pipe || !session?.id) return;
@@ -441,19 +433,19 @@ import { flashToast } from '$lib/flashToast';
 	}
 
 	/**
-	 * Force-regenerate a settled piece (fired by its status dot): clear the
-	 * generated preview so the next run's stage starts `pending` again
-	 * instead of skipping as `Ready`. 'url' pieces have nothing to clear —
-	 * the dot there just signals URL validity, so the no-op is harmless.
+	 * Queue a piece for regeneration on the next run (fired by its status
+	 * dot). Non-destructive: the settled preview data stays valid (the dot
+	 * keeps its color); the registry just overrides the Ready-skip while
+	 * the flag is set. A pulsing ring + tooltip show the queued state.
 	 */
-	async function handleForceRegenerate(pipe: PipeRow, kind: 'keyframe' | 'subject', refId: string) {
+	async function handleQueueRegen(pipe: PipeRow, kind: 'keyframe' | 'subject', refId: string) {
 		if (!session?.id) return;
-		const result = await clearRefPreviewAction(session.id, pipe.id, kind, refId);
+		const result = await queueRefRegenAction(session.id, pipe.id, kind, refId);
 		if (result.errors.length > 0) {
-			flashToast(`Regenerate request failed: ${result.errors.join(', ')}`, 'error');
+			flashToast(`Regeneration request failed: ${result.errors.join(', ')}`, 'error');
 			return;
 		}
-		flashToast('Queued for regeneration — the next run will produce a fresh asset', 'info');
+		flashToast('Queued — a fresh asset will be made on the next generation run', 'info');
 	}
 
 	// ── Track add menu ──────────────────────────────────────────────────────
@@ -795,7 +787,7 @@ import { flashToast } from '$lib/flashToast';
 					aspect={sceneAspect}
 					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
 					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
-					onRegenerate={(kfId) => handleForceRegenerate(pipe, 'keyframe', kfId)}
+					onRegenerate={(kfId) => handleQueueRegen(pipe, 'keyframe', kfId)}
 					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}
@@ -806,11 +798,10 @@ import { flashToast } from '$lib/flashToast';
 					{pipe}
 					maxSubjectRefs={MAX_SUBJECT_REFS}
 					aspect={sceneAspect}
-					onToggle={(refId) => handleToggleSubjectRef(pipeIdx, refId)}
 					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
 					onAdd={() => openSubjectRefModal(pipeIdx)}
 					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
-					onRegenerate={(refId) => handleForceRegenerate(pipe, 'subject', refId)}
+					onRegenerate={(refId) => handleQueueRegen(pipe, 'subject', refId)}
 					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}

@@ -211,6 +211,14 @@ export interface PipeKeyframe {
   previewRemoteUrl?: string;
   previewLocalPath?: string;
   status: GenerationStatus;
+  /**
+   * Queued for regeneration: the user asked the dot to re-make this asset on
+   * the next generation run. The settled preview data is kept (the asset
+   * stays "valid"); only the Ready-skip in the registry is overridden so the
+   * piece regenerates. Cleared automatically when the fresh artifact is
+   * attached (attachGeneratedImage).
+   */
+  forceRegen?: boolean;
 }
 
 export interface SubjectReference {
@@ -242,8 +250,16 @@ export interface SubjectReference {
   frameStart?: number;
   /** End frame (multiple of 8) — only used when useFrames=true */
   frameEnd?: number;
-  /** Visible toggle */
-  visible: boolean;
+  /** Visible toggle (OBSOLETE — the eye mechanic was removed; the field is
+   *  kept only so legacy data still parses. No UI affordance, no effect on
+   *  counts or generation. Do not re-use. */
+  visible?: boolean;
+  /**
+   * Queued for regeneration (see PipeKeyframe.forceRegen). Clicking the
+   * status dot sets this; the next run regenerates the piece while the
+   * settled preview data is kept. Cleared by attachGeneratedImage.
+   */
+  forceRegen?: boolean;
 }
 
 /**

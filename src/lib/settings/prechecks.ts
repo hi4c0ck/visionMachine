@@ -81,10 +81,9 @@ export function pipePrechecks(
   if (video && !video.pending && video.media) {
     const media = video.media;
     const kfs = pipe.keyframes?.length ?? 0;
-    // Hidden subject refs are inert — neither rendered nor sent to the API.
-    // Counting them would let a parked ref silently block generation when the
-    // sharedArray cap is tight.
-    const subs = (pipe.subjectReferences ?? []).filter((s) => s.visible !== false).length;
+    // The `visible` eye-mechanic is obsolete — every subject ref in the pipe
+    // counts toward the caps (there is no hidden state anymore).
+    const subs = (pipe.subjectReferences ?? []).length;
     if (media.sharedArray) {
       const cap = media.maxKeyframes ?? media.maxRefs ?? 3;
       if (kfs + subs > cap) {
@@ -108,7 +107,6 @@ export function pipePrechecks(
       // Reference-mode subjects are the primary input: an empty imageUrl
       // on a url/img2img subject will silently produce a broken image slot.
       for (const sr of pipe.subjectReferences ?? []) {
-        if (sr.visible === false) continue;
         const ty = sr.type ?? 'url';
         if ((ty === 'url' || ty === 'img2img') && !(sr.imageUrl?.trim())) {
           out.push({
@@ -132,7 +130,6 @@ export function pipePrechecks(
   // In plain keyframe mode, subjects are inert metadata — skip the check.
   if (mediaMode === 'reference' || videoShared) {
     for (const sr of pipe.subjectReferences ?? []) {
-      if (sr.visible === false) continue;
       if ((sr.type ?? 'url') === 'txt2img' && !(sr.prompt?.trim())) {
         out.push({ code: 'txt2img-no-prompt', message: `subject ${sr.id} (txt2img) needs a prompt` });
       }

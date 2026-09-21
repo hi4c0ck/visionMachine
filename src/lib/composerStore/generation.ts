@@ -80,17 +80,20 @@ export class GenerationServiceImpl implements GenerationService {
     const tgt = target as PipeKeyframe | SubjectReference;
     if (localPath && localPath.trim()) tgt.previewLocalPath = localPath;
     if (remoteUrl && remoteUrl.trim()) tgt.previewRemoteUrl = remoteUrl;
+    // A fresh artifact just arrived: any queued force-regen for this piece
+    // is satisfied — clear the flag so the next run skips the stage as
+    // `Ready` again and the dot's "queued" cue disappears.
+    delete tgt.forceRegen;
     return { errors: [] };
   }
 
   /**
-   * Force-regenerate: drop the settled generated preview so the next run
-   * regenerates the piece instead of skipping its stage as `Ready`.
-   * Also flips the generated-type status back to 'pending' so the chip dot
-   * reads "not generated" until the run settles it again. 'url' pieces
-   * carry no generated preview — a plain no-op for them.
+   * Queue a piece for regeneration on the next generation run (status-dot
+   * click). Non-destructive by design: the settled preview data stays put,
+   * so the asset keeps its "valid" readiness until the run re-makes it.
+   * The registry overrides the stage's Ready-skip while the flag is set.
    */
-  async clearRefPreview(
+  async queueRefRegen(
     _sessionId: string,
     pipeId: string,
     kind: 'keyframe' | 'subject',
@@ -103,11 +106,7 @@ export class GenerationServiceImpl implements GenerationService {
         ? pipe.keyframes.find((k) => k.id === refId)
         : (pipe.subjectReferences ?? []).find((r) => r.id === refId);
     if (!target) return { errors: ['Reference not found'] };
-    const tgt = target as PipeKeyframe | SubjectReference;
-    delete tgt.previewRemoteUrl;
-    delete tgt.previewLocalPath;
-    const ty = (tgt as SubjectReference).type ?? 'url';
-    if (ty !== 'url') tgt.status = 'pending';
+    (target as PipeKeyframe | SubjectReference).forceRegen = true;
     return { errors: [] };
   }
 }

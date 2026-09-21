@@ -462,17 +462,17 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
-  /** Force-regenerate a piece: clear its settled preview (see
-   *  GenerationService.clearRefPreview). The next run's stage starts
-   *  `pending` again instead of skipping as `Ready`. */
-  async clearRefPreview(
+  /** Queue a piece for regeneration on the next run (see
+   *  GenerationService.queueRefRegen). Non-destructive: the settled preview
+   *  data is kept; the registry's Ready-skip is overridden while queued. */
+  async queueRefRegen(
     sessionId: string,
     pipeId: string,
     kind: 'keyframe' | 'subject',
     refId: string,
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
-    const result = await s.generation.clearRefPreview(sessionId, pipeId, kind, refId);
+    const result = await s.generation.queueRefRegen(sessionId, pipeId, kind, refId);
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }
@@ -568,6 +568,7 @@ class ComposerStoreImpl implements ComposerStore {
               previewRemoteUrl: ref.previewRemoteUrl ?? undefined,
               previewLocalPath: ref.previewLocalPath ?? undefined,
               status: ref.status ?? 'pending',
+              forceRegen: ref.forceRegen === true,
             })),
             elements: pipe.elements.map((el: any) => {
               if ('segments' in el) {
@@ -679,7 +680,7 @@ export const updateSubjectRef = composerStore.updateSubjectRef.bind(composerStor
 export const attachLastGeneration = composerStore.attachLastGeneration.bind(composerStore);
 export const markRefStatus = composerStore.markRefStatus.bind(composerStore);
 export const attachGeneratedImage = composerStore.attachGeneratedImage.bind(composerStore);
-export const clearRefPreview = composerStore.clearRefPreview.bind(composerStore);
+export const queueRefRegen = composerStore.queueRefRegen.bind(composerStore);
 export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
 export const updateOrientation = composerStore.updateOrientation.bind(composerStore);

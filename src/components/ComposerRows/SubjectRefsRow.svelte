@@ -10,7 +10,6 @@
 	let {
 		pipe,
 		maxSubjectRefs,
-		onToggle,
 		onRemove,
 		onAdd,
 		onEdit,
@@ -20,7 +19,6 @@
 	} = $props<{
 		pipe: PipeRow;
 		maxSubjectRefs: number;
-		onToggle: (refId: string) => void;
 		onRemove: (refId: string) => void;
 		onAdd: () => void;
 		/** Open the subject-ref modal in EDIT mode for an existing ref. */
@@ -31,20 +29,17 @@
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
 		/**
-		 * Force-regenerate a settled piece: clears its preview so the next
-		 * generation run produces a fresh image for it. Fired by the
-		 * status dot when it's not a neutral 'pending' with nothing to do.
+		 * Queue a piece for regeneration on the next run (non-destructive:
+		 * the settled preview data stays). Fired by the status dot badge.
 		 */
 		onRegenerate?: (refId: string) => void;
 	}>();
 
 	// Store mutations replace pipe arrays, so the counts must stay derived.
 	const refs = $derived(pipe.subjectReferences ?? []);
-	const visibleCount = $derived(refs.filter((r: SubjectReference) => r.visible !== false).length);
-	// Add-button numbering + gate key off the VISIBLE refs only: a toggled-off
-	// (eye-closed) subject still occupies an array slot and would otherwise
-	// silently eat into the 5-ref cap the user can't see.
-	const refNumber = $derived(visibleCount);
+	// The `visible` eye-mechanic is obsolete: every ref in the pipe renders and
+	// counts. Numbering + the add-button gate key off the total count.
+	const refNumber = $derived(refs.length);
 
 	// Human-readable subject type (url / txt2img / img2img); legacy refs
 	// without a preset read as 'url'.
@@ -117,13 +112,6 @@
 		failedSrSources = new Set([...failedSrSources, sr.id]);
 	}
 
-	function dotTitleFor(state: RefDotState): string {
-		return state === 'ready'
-			? 'Asset ready — click to regenerate'
-			: state === 'broken'
-				? 'Asset missing or failed — click to regenerate'
-				: 'Not generated yet — click to force generate';
-	}
 	function srDot(sr: SubjectReference): RefDotState {
 		const ty = (sr.type ?? 'url') as KeyframeType;
 		return refDotState(
@@ -138,9 +126,24 @@
 				status: sr.status,
 				previewRemoteUrl: sr.previewRemoteUrl,
 				previewLocalPath: sr.previewLocalPath,
+				forceRegen: sr.forceRegen,
 			},
 			brokenSet,
 		);
+	}
+
+	// Queued-for-regeneration cue: the dot keeps its readiness color; a
+	// pulsing ring + the tooltip say a fresh asset will be made on the
+	// next run. Non-destructive — the settled data is untouched.
+	function dotTitleFor(sr: SubjectReference, state: RefDotState): string {
+		if (sr.forceRegen === true) {
+			return 'Will regenerate on next run — click to queue a fresh asset';
+		}
+		return state === 'ready'
+			? 'Asset ready — click to regenerate'
+			: state === 'broken'
+				? 'Asset missing or failed — click to regenerate'
+				: 'Not generated yet — click to force generate';
 	}
 
 	// Derive the D5 broken set for this pipe's refs from containsBroken.
@@ -148,7 +151,7 @@
 		if (!containsBroken) return undefined;
 		return new Set(
 			(refs as SubjectReference[])
-				.filter((r: SubjectReference) => r.visible !== false && containsBroken(r.id))
+				.filter((r: SubjectReference) => containsBroken(r.id))
 				.map((r: SubjectReference) => `${pipe.id}:${r.id}`),
 		);
 	});
@@ -157,63 +160,53 @@
 	<div class="row-group">
 	<div class="row-header">
 		<span class="row-label">SUBJECT REFS</span>
-		<span class="row-count">{visibleCount}/{maxSubjectRefs}</span>
+		<span class="row-count">{refNumber}/{maxSubjectRefs}</span>
 	</div>
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
 			{@const broken = containsBroken?.(sr.id) ?? false}
 			{@const dot = srDot(sr)}
 			{@const srSrcResolved = srSrc(sr)}
-			{#if sr.visible !== false}
-				<div
-					class="sr-chip"
-					class:sr-broken={broken}
-					onclick={() => onEdit?.(sr.id)}
-					onkeydown={(e) => e.key === 'Enter' && onEdit?.(sr.id)}
-					role="button"
-					tabindex={onEdit ? 0 : undefined}
-					title={broken
-						? `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · URL not accessible · Click to fix`
-						: `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · Click to edit`}
-					>
+			<div
+				class="sr-chip"
+				class:sr-broken={broken}
+				onclick={() => onEdit?.(sr.id)}
+				onkeydown={(e) => e.key === 'Enter' && onEdit?.(sr.id)}
+				role="button"
+				tabindex={onEdit ? 0 : undefined}
+				title={broken
+					? `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · URL not accessible · Click to fix`
+					: `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · Click to edit`}
+				> 
 					{#if broken}
 						<span class="sr-broken-mark" aria-hidden="true">⚠</span>
 					{/if}
+					<!-- Media box: thumbnail when a source resolves, dashed
+						 placeholder when not. The small status dot badge overlays
+						 the box corner ALWAYS, so readiness is visible whether or
+						 not a thumbnail is present (the dot the user asked for). -->
+					<div class="sr-media">
+						{#if srSrcResolved}
+							<img
+								src={srSrcResolved}
+								class="sr-img"
+								style={aspect ? `aspect-ratio: ${aspect};` : ''}
+								alt="subject ref"
+								onerror={() => markSrImageFailed(sr)}
+							/>
+						{:else}
+							<span class="sr-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>
+						{/if}
 						<button
-							class="sr-eye"
-							onclick={(e) => { e.stopPropagation(); onToggle(sr.id); }}
-							title={sr.visible === false ? 'Enable reference' : 'Disable reference'}>
-							{#if sr.visible === false}
-								<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.5"/></svg>
-							{:else}
-								<svg width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-							{/if}
-						</button>
-						<!-- Media box: thumbnail when a source resolves, dashed
-							 placeholder when not. The small status dot badge overlays
-							 the box corner ALWAYS, so readiness is visible whether or
-							 not a thumbnail is present (the dot the user asked for). -->
-						<div class="sr-media">
-							{#if srSrcResolved}
-								<img
-									src={srSrcResolved}
-									class="sr-img"
-									style={aspect ? `aspect-ratio: ${aspect};` : ''}
-									alt="subject ref"
-									onerror={() => markSrImageFailed(sr)}
-								/>
-							{:else}
-								<span class="sr-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>
-							{/if}
-							<button
-								class="sr-status"
-								class:sr-status-ready={dot === 'ready'}
-								class:sr-status-broken={dot === 'broken'}
-								onclick={(e) => { e.stopPropagation(); onRegenerate?.(sr.id); }}
-								title={dotTitleFor(dot)}
-								aria-label={dotTitleFor(dot)}
-							></button>
-						</div>
+							class="sr-status"
+							class:sr-status-ready={dot === 'ready'}
+							class:sr-status-broken={dot === 'broken'}
+							class:sr-status-queued={sr.forceRegen === true}
+							onclick={(e) => { e.stopPropagation(); onRegenerate?.(sr.id); }}
+							title={dotTitleFor(sr, dot)}
+							aria-label={dotTitleFor(sr, dot)}
+						></button>
+					</div>
 					<span class="sr-meta">
 						{#if sr.useFrames}
 							<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>
@@ -227,7 +220,6 @@
 						onclick={(e) => { e.stopPropagation(); onRemove(sr.id); }}
 						title="Remove subject reference">×</button>
 				</div>
-			{/if}
 		{/each}
 		{#if refNumber < maxSubjectRefs}
 			<button
@@ -258,21 +250,6 @@
 		border: 1px solid var(--border-color);
 		border-radius: 6px;
 		font-size: 12px;
-	}
-
-	.sr-eye {
-		background: none;
-		border: none;
-		color: var(--text-secondary);
-		cursor: pointer;
-		padding: 2px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.sr-eye:hover {
-		color: var(--text-primary);
 	}
 
 	/* Thumbnail sized to the scene aspect ratio (width fixed, height from
@@ -326,6 +303,22 @@
 
 	.sr-status-broken {
 		background: #ef4444;
+	}
+
+	/* Queued-for-regeneration cue: a pulsing ring around the badge so the
+	   user sees a fresh asset is requested for the next run (the asset data
+	   itself stays valid until then). */
+	.sr-status-queued {
+		animation: sr-status-pulse 1.4s ease-in-out infinite;
+	}
+
+	@keyframes sr-status-pulse {
+		0%, 100% {
+			box-shadow: 0 0 0 0 color-mix(in srgb, #22c55e 55%, transparent);
+		}
+		50% {
+			box-shadow: 0 0 0 5px color-mix(in srgb, #22c55e 0%, transparent);
+		}
 	}
 
 	.sr-status:hover {
