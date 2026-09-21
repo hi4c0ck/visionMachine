@@ -165,6 +165,17 @@ export interface GenerationService {
     refId: string,
   ): Promise<ServiceResult>;
   /**
+   * Cancel a queued regeneration (status-dot re-click while queued).
+   * The settled asset keeps its validity; the flag just no longer overrides
+   * the registry's Ready-skip on the next run.
+   */
+  clearRefRegen(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+  ): Promise<ServiceResult>;
+  /**
    * Link a generated image back to its keyframe / subject: sets previewLocalPath
    * (UI preview + fallback source) and previewRemoteUrl (primary video-API
    * source). Persists via notifyUpdate → saveSession so it survives restarts.

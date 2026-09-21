@@ -41,6 +41,7 @@
 		setPipeLength as setPipeLengthAction,
 		setMediaMode as setMediaModeAction,
 		queueRefRegen as queueRefRegenAction,
+		clearRefRegen as clearRefRegenAction,
 	} from '$lib/composerStore';
 import { flashToast } from '$lib/flashToast';
 
@@ -433,19 +434,32 @@ import { flashToast } from '$lib/flashToast';
 	}
 
 	/**
-	 * Queue a piece for regeneration on the next run (fired by its status
-	 * dot). Non-destructive: the settled preview data stays valid (the dot
-	 * keeps its color); the registry just overrides the Ready-skip while
-	 * the flag is set. A pulsing ring + tooltip show the queued state.
+	 * Toggle a piece's regeneration queue (fired by its status dot).
+	 * Non-destructive either way: the settled preview data stays valid (the
+	 * dot keeps its color), the registry just (un-)overrides the Ready-skip
+	 * on the next run. A pulsing ring + tooltip show the queued state.
 	 */
 	async function handleQueueRegen(pipe: PipeRow, kind: 'keyframe' | 'subject', refId: string) {
 		if (!session?.id) return;
-		const result = await queueRefRegenAction(session.id, pipe.id, kind, refId);
+		const ref =
+			kind === 'keyframe'
+				? pipe.keyframes.find((k) => k.id === refId)
+				: (pipe.subjectReferences ?? []).find((r) => r.id === refId);
+		// Already queued → cancel the queue (back to the Ready-skip on the
+		// next run); otherwise queue it.
+		const result = ref?.forceRegen
+			? await clearRefRegenAction(session.id, pipe.id, kind, refId)
+			: await queueRefRegenAction(session.id, pipe.id, kind, refId);
 		if (result.errors.length > 0) {
 			flashToast(`Regeneration request failed: ${result.errors.join(', ')}`, 'error');
 			return;
 		}
-		flashToast('Queued — a fresh asset will be made on the next generation run', 'info');
+		flashToast(
+			ref?.forceRegen
+				? 'Unqueued — the current asset will be used on the next run'
+				: 'Queued — a fresh asset will be made on the next generation run',
+			'info',
+		);
 	}
 
 	// ── Track add menu ──────────────────────────────────────────────────────

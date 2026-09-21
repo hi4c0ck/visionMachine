@@ -125,7 +125,7 @@
 
 	function kfDotTitleFor(kf: PipeKeyframe, state: RefDotState): string {
 		if (kf.forceRegen === true) {
-			return 'Will regenerate on next run — click to queue a fresh asset';
+			return 'Queued — will regenerate on next run · click to cancel';
 		}
 		return state === 'ready'
 			? 'Asset ready — click to regenerate'

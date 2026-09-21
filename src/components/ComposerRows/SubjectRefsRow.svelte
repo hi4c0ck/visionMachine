@@ -134,10 +134,11 @@
 
 	// Queued-for-regeneration cue: the dot keeps its readiness color; a
 	// pulsing ring + the tooltip say a fresh asset will be made on the
-	// next run. Non-destructive — the settled data is untouched.
+	// next run. Non-destructive — the settled data is untouched. Re-click
+	// cancels the queue (the dot returns to its readiness color at once).
 	function dotTitleFor(sr: SubjectReference, state: RefDotState): string {
 		if (sr.forceRegen === true) {
-			return 'Will regenerate on next run — click to queue a fresh asset';
+			return 'Queued — will regenerate on next run · click to cancel';
 		}
 		return state === 'ready'
 			? 'Asset ready — click to regenerate'

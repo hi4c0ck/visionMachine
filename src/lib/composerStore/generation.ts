@@ -109,4 +109,27 @@ export class GenerationServiceImpl implements GenerationService {
     (target as PipeKeyframe | SubjectReference).forceRegen = true;
     return { errors: [] };
   }
+
+  /**
+   * Cancel a queued regeneration (status-dot re-click while the piece is
+   * already queued). Non-destructive: the settled preview data stays, and
+   * the registry's Ready-skip applies again on the next run — the dot goes
+   * back to its readiness color immediately.
+   */
+  async clearRefRegen(
+    _sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+  ): Promise<ServiceResult> {
+    const pipe = this.getPipe(pipeId);
+    if (!pipe) return { errors: ['Pipe not found'] };
+    const target =
+      kind === 'keyframe'
+        ? pipe.keyframes.find((k) => k.id === refId)
+        : (pipe.subjectReferences ?? []).find((r) => r.id === refId);
+    if (!target) return { errors: ['Reference not found'] };
+    delete (target as PipeKeyframe | SubjectReference).forceRegen;
+    return { errors: [] };
+  }
 }
