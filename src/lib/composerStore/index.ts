@@ -462,6 +462,21 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
+  /** Force-regenerate a piece: clear its settled preview (see
+   *  GenerationService.clearRefPreview). The next run's stage starts
+   *  `pending` again instead of skipping as `Ready`. */
+  async clearRefPreview(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+  ): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.generation.clearRefPreview(sessionId, pipeId, kind, refId);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
   // Session operations.
   // Canonical mutation path: store state mutates, then notifyUpdate() marks
   // the session unsynced and fires the Workspace onUpdate callback, which
@@ -664,6 +679,7 @@ export const updateSubjectRef = composerStore.updateSubjectRef.bind(composerStor
 export const attachLastGeneration = composerStore.attachLastGeneration.bind(composerStore);
 export const markRefStatus = composerStore.markRefStatus.bind(composerStore);
 export const attachGeneratedImage = composerStore.attachGeneratedImage.bind(composerStore);
+export const clearRefPreview = composerStore.clearRefPreview.bind(composerStore);
 export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
 export const updateOrientation = composerStore.updateOrientation.bind(composerStore);

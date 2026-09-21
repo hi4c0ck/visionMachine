@@ -41,6 +41,7 @@
 		duplicatePipe as duplicatePipeAction,
 		setPipeLength as setPipeLengthAction,
 		setMediaMode as setMediaModeAction,
+		clearRefPreview as clearRefPreviewAction,
 	} from '$lib/composerStore';
 import { flashToast } from '$lib/flashToast';
 
@@ -439,6 +440,22 @@ import { flashToast } from '$lib/flashToast';
 		if (result.errors.length > 0) console.error('[ComposerPanel] removeSubjectRef:', result.errors);
 	}
 
+	/**
+	 * Force-regenerate a settled piece (fired by its status dot): clear the
+	 * generated preview so the next run's stage starts `pending` again
+	 * instead of skipping as `Ready`. 'url' pieces have nothing to clear —
+	 * the dot there just signals URL validity, so the no-op is harmless.
+	 */
+	async function handleForceRegenerate(pipe: PipeRow, kind: 'keyframe' | 'subject', refId: string) {
+		if (!session?.id) return;
+		const result = await clearRefPreviewAction(session.id, pipe.id, kind, refId);
+		if (result.errors.length > 0) {
+			flashToast(`Regenerate request failed: ${result.errors.join(', ')}`, 'error');
+			return;
+		}
+		flashToast('Queued for regeneration — the next run will produce a fresh asset', 'info');
+	}
+
 	// ── Track add menu ──────────────────────────────────────────────────────
 
 	function handleToggleAddMenu(pipeIdx: number, e: MouseEvent) {
@@ -778,6 +795,7 @@ import { flashToast } from '$lib/flashToast';
 					aspect={sceneAspect}
 					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
 					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
+					onRegenerate={(kfId) => handleForceRegenerate(pipe, 'keyframe', kfId)}
 					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}
@@ -792,6 +810,7 @@ import { flashToast } from '$lib/flashToast';
 					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
 					onAdd={() => openSubjectRefModal(pipeIdx)}
 					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
+					onRegenerate={(refId) => handleForceRegenerate(pipe, 'subject', refId)}
 					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}

@@ -82,4 +82,32 @@ export class GenerationServiceImpl implements GenerationService {
     if (remoteUrl && remoteUrl.trim()) tgt.previewRemoteUrl = remoteUrl;
     return { errors: [] };
   }
+
+  /**
+   * Force-regenerate: drop the settled generated preview so the next run
+   * regenerates the piece instead of skipping its stage as `Ready`.
+   * Also flips the generated-type status back to 'pending' so the chip dot
+   * reads "not generated" until the run settles it again. 'url' pieces
+   * carry no generated preview — a plain no-op for them.
+   */
+  async clearRefPreview(
+    _sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+  ): Promise<ServiceResult> {
+    const pipe = this.getPipe(pipeId);
+    if (!pipe) return { errors: ['Pipe not found'] };
+    const target =
+      kind === 'keyframe'
+        ? pipe.keyframes.find((k) => k.id === refId)
+        : (pipe.subjectReferences ?? []).find((r) => r.id === refId);
+    if (!target) return { errors: ['Reference not found'] };
+    const tgt = target as PipeKeyframe | SubjectReference;
+    delete tgt.previewRemoteUrl;
+    delete tgt.previewLocalPath;
+    const ty = (tgt as SubjectReference).type ?? 'url';
+    if (ty !== 'url') tgt.status = 'pending';
+    return { errors: [] };
+  }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PipeRow, SubjectReference, KeyframeType } from '$types';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
+	import { refDotState, type RefDotState } from '$lib/refReadiness';
 	import '../composer-row.css';
 
 	// Subject references row — pure chrome. The panel owns the subject-ref
@@ -15,6 +16,7 @@
 		onEdit,
 		aspect,
 		containsBroken,
+		onRegenerate,
 	} = $props<{
 		pipe: PipeRow;
 		maxSubjectRefs: number;
@@ -28,6 +30,12 @@
 		aspect?: string;
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
+		/**
+		 * Force-regenerate a settled piece: clears its preview so the next
+		 * generation run produces a fresh image for it. Fired by the
+		 * status dot when it's not a neutral 'pending' with nothing to do.
+		 */
+		onRegenerate?: (refId: string) => void;
 	}>();
 
 	// Store mutations replace pipe arrays, so the counts must stay derived.
@@ -105,6 +113,42 @@
 		}
 		failedSrSources = new Set([...failedSrSources, sr.id]);
 	}
+
+	/**
+	 * Readiness dot for a subject chip: green = settled asset (generated
+	 * preview present, or a valid url-mode URL), red = broken (url check
+	 * failed / generated piece errored / empty URL), neutral = not yet
+	 * generated. Clicking the dot force-regenerates the piece when a
+	 * regenerate callback is wired.
+	 */
+	function srDot(sr: SubjectReference): RefDotState {
+		const ty = (sr.type ?? 'url') as KeyframeType;
+		return refDotState(
+			pipe.id,
+			sr.id,
+			{
+				type: ty,
+				// Only 'url' pieces carry a direct image source whose presence
+				// defines readiness; img2img's imageUrl is a *reference* (the
+				// dot reflects the generated preview, not the reference).
+				url: ty === 'url' ? sr.imageUrl : undefined,
+				status: sr.status,
+				previewRemoteUrl: sr.previewRemoteUrl,
+				previewLocalPath: sr.previewLocalPath,
+			},
+			brokenSet,
+		);
+	}
+
+	// Derive the D5 broken set for this pipe's refs from containsBroken.
+	const brokenSet = $derived.by((): Set<string> | undefined => {
+		if (!containsBroken) return undefined;
+		return new Set(
+			(refs as SubjectReference[])
+				.filter((r: SubjectReference) => r.visible !== false && containsBroken(r.id))
+				.map((r: SubjectReference) => `${pipe.id}:${r.id}`),
+		);
+	});
 </script>
 
 	<div class="row-group">
@@ -115,6 +159,7 @@
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
 			{@const broken = containsBroken?.(sr.id) ?? false}
+			{@const dot = srDot(sr)}
 			{@const srSrcResolved = srSrc(sr)}
 			{#if sr.visible !== false}
 				<div
@@ -149,9 +194,22 @@
 							alt="subject ref"
 							onerror={() => markSrImageFailed(sr)}
 						/>
-				{:else}
-					<span class="sr-dot" style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}></span>
-				{/if}
+					{:else}
+						{@const dotTitle = dot === 'ready'
+							? 'Asset ready — click to regenerate'
+							: dot === 'broken'
+								? 'Asset missing or failed — click to regenerate'
+								: 'Not generated yet — click to force generate'}
+						<button
+							class="sr-dot"
+							class:sr-dot-ready={dot === 'ready'}
+							class:sr-dot-broken={dot === 'broken'}
+							style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}
+							onclick={(e) => { e.stopPropagation(); onRegenerate?.(sr.id); }}
+							title={dotTitle}
+							aria-label={dotTitle}
+						></button>
+					{/if}
 					<span class="sr-meta">
 						{#if sr.useFrames}
 							<span class="sr-range">{sr.frameStart}–{sr.frameEnd}</span>
@@ -224,13 +282,31 @@
 		flex: 0 0 auto;
 	}
 
-	/* Empty thumbnail placeholder — a dot of the scene's shape. */
+	/* Empty thumbnail placeholder — a status dot of the scene's shape.
+	   Green = settled asset (generated preview / valid url), red = broken,
+	   neutral (default accent) = not generated yet. Clicking force-
+	   regenerates the piece. */
 	.sr-dot {
 		width: 32px;
 		height: 36px;
 		border-radius: 50%;
 		background: var(--accent-color);
 		flex: 0 0 auto;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
+
+	.sr-dot-ready {
+		background: #22c55e;
+	}
+
+	.sr-dot-broken {
+		background: #ef4444;
+	}
+
+	.sr-dot:hover {
+		filter: brightness(1.2);
 	}
 
 	/* Left meta block: frame range on top, type annotation below. */

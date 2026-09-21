@@ -153,6 +153,18 @@ export interface GenerationService {
     status: GenerationStatus,
   ): Promise<ServiceResult>;
   /**
+   * Force-regenerate a piece: drop its settled generated preview
+   * (previewRemoteUrl / previewLocalPath) so the registry's Ready-skip no
+   * longer applies and the next run regenerates it. 'url' pieces have no
+   * generated preview to clear — no-op (their readiness is the URL itself).
+   */
+  clearRefPreview(
+    sessionId: string,
+    pipeId: string,
+    kind: 'keyframe' | 'subject',
+    refId: string,
+  ): Promise<ServiceResult>;
+  /**
    * Link a generated image back to its keyframe / subject: sets previewLocalPath
    * (UI preview + fallback source) and previewRemoteUrl (primary video-API
    * source). Persists via notifyUpdate → saveSession so it survives restarts.

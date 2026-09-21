@@ -1,7 +1,8 @@
 <script lang="ts">
-	import type { PipeRow, PipeKeyframe } from '$types';
+	import type { PipeRow, PipeKeyframe, KeyframeType } from '$types';
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
+	import { refDotState, type RefDotState } from '$lib/refReadiness';
 	import '../composer-row.css';
 
 	// Keyframes row — display slots come from the shared keyframeSlots lib
@@ -14,6 +15,7 @@
 		onRemoveKeyframe,
 		aspect,
 		containsBroken,
+		onRegenerate,
 	} = $props<{
 		pipe: PipeRow;
 		maxKeyframes: number;
@@ -24,6 +26,9 @@
 		aspect?: string;
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
+		/** Force-regenerate a settled keyframe: clears its preview so the next
+		 *  run produces a fresh image. Fired by the status dot. */
+		onRegenerate?: (kfId: string) => void;
 	}>();
 
 	const visibleSlots = () => getVisibleKeyframeSlots(pipe, maxKeyframes);
@@ -117,6 +122,41 @@
 	function kfTypeLabel(kf: PipeKeyframe): string {
 		return KF_TYPE_LABEL[kf.type] ?? kf.type;
 	}
+
+	/**
+	 * Readiness dot for a keyframe chip: green = settled asset (generated
+	 * preview present, or a valid url-mode source), red = broken (url check
+	 * failed / generated piece errored / empty URL), neutral = not yet
+	 * generated. Clicking the dot force-regenerates the piece when a
+	 * regenerate callback is wired.
+	 */
+	function kfDot(kf: PipeKeyframe): RefDotState {
+		return refDotState(
+			pipe.id,
+			kf.id,
+			{
+				type: kf.type,
+				// Only 'url' pieces carry a direct image source whose presence
+				// defines readiness; img2img's referenceUrl is a *reference*
+				// (the dot reflects the generated preview, not the reference).
+				url: kf.type === 'url' ? kf.imageSrc : undefined,
+				status: kf.status,
+				previewRemoteUrl: kf.previewRemoteUrl,
+				previewLocalPath: kf.previewLocalPath,
+			},
+			brokenSet,
+		);
+	}
+
+	// Derive the D5 broken set for this pipe's keyframes from containsBroken.
+	const brokenSet = $derived.by((): Set<string> | undefined => {
+		if (!containsBroken) return undefined;
+		return new Set(
+			(pipe.keyframes ?? [])
+				.filter((k: PipeKeyframe) => containsBroken(k.id))
+				.map((k: PipeKeyframe) => `${pipe.id}:${k.id}`),
+		);
+	});
 </script>
 
 	<div class="row-group">
@@ -129,6 +169,7 @@
 			{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
 				{#if kf}
 					{@const broken = containsBroken?.(kf.id) ?? false}
+					{@const dot = kfDot(kf)}
 					{@const kfSrcResolved = kfSrc(kf)}
 					<div
 						class="kf-chip kf-filled"
@@ -153,9 +194,22 @@
 							alt="keyframe"
 							onerror={() => markKfImageFailed(kf)}
 						/>
-				{:else}
-					<span class="kf-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>
-				{/if}
+					{:else}
+						{@const dotTitle = dot === 'ready'
+							? 'Asset ready — click to regenerate'
+							: dot === 'broken'
+								? 'Asset missing or failed — click to regenerate'
+								: 'Not generated yet — click to force generate'}
+						<button
+							class="kf-dot"
+							class:kf-dot-ready={dot === 'ready'}
+							class:kf-dot-broken={dot === 'broken'}
+							style={aspect ? `aspect-ratio: ${aspect}; border-radius: 4px;` : ''}
+							onclick={(e) => { e.stopPropagation(); onRegenerate?.(kf.id); }}
+							title={dotTitle}
+							aria-label={dotTitle}
+						></button>
+					{/if}
 						<span class="kf-meta">
 							<span class="kf-label">k{kfNum}</span>
 							<span class="kf-type">{kfTypeLabel(kf)}</span>
@@ -239,6 +293,33 @@
 		border: 1px dashed var(--border-color);
 		background: var(--bg-tertiary);
 		flex: 0 0 auto;
+	}
+
+	/* Status dot in place of the thumbnail: green = settled asset (generated
+	   preview / valid url), red = broken (url check failed / generated piece
+	   errored / empty URL), neutral (default accent) = not generated yet.
+	   Clicking force-regenerates the piece. */
+	.kf-dot {
+		width: 48px;
+		height: 40px;
+		border-radius: 50%;
+		background: var(--accent-color);
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		flex: 0 0 auto;
+	}
+
+	.kf-dot-ready {
+		background: #22c55e;
+	}
+
+	.kf-dot-broken {
+		background: #ef4444;
+	}
+
+	.kf-dot:hover {
+		filter: brightness(1.2);
 	}
 	.kf-placeholder-empty {
 		border-color: var(--border-light, var(--border-color));
