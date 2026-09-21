@@ -341,19 +341,19 @@
 		background: #ef4444;
 	}
 
-	/* Queued-for-regeneration cue: a pulsing ring around the badge so the
-	   user sees a fresh asset is requested for the next run (the asset data
-	   itself stays valid until then). */
+	/* Queued-for-regeneration cue: a distinct amber color + pulsing ring so it
+	   reads as "another state" at a glance — not just a green dot with motion. */
 	.kf-status-queued {
+		background: #f59e0b;
 		animation: kf-status-pulse 1.4s ease-in-out infinite;
 	}
 
 	@keyframes kf-status-pulse {
 		0%, 100% {
-			box-shadow: 0 0 0 0 color-mix(in srgb, #22c55e 55%, transparent);
+			box-shadow: 0 0 0 0 color-mix(in srgb, #f59e0b 55%, transparent);
 		}
 		50% {
-			box-shadow: 0 0 0 5px color-mix(in srgb, #22c55e 0%, transparent);
+			box-shadow: 0 0 0 5px color-mix(in srgb, #f59e0b 0%, transparent);
 		}
 	}
 
