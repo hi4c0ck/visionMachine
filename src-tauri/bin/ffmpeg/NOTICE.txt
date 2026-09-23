@@ -1,0 +1,38 @@
+Bundled ffmpeg (Full-variant ship)
+==================================
+
+This tree holds a platform-specific ffmpeg binary so the app can compose
+session videos (splicing per-pipe video.mp4 files) WITHOUT the user
+installing anything. It is populated by `scripts/build/fetch-ffmpeg.mjs`
+during `npm run build:desktop:full` (cargo feature `bundled-ffmpeg`).
+
+Source & license
+----------------
+- Release asset: https://github.com/BtbN/buildffmpeg/releases
+- GPL-licensed build (LGPL core + GPL encoders/libs). We distribute the
+  *binary only* — no source in this repo. The GPL source is available at
+  the URL above for anyone who wants it, and the binary was not modified.
+- Pinned version: see `build-state/ffmpeg-cache/` metadata written at fetch
+  time (re-fetch only on version bump, cached otherwise).
+
+Layout
+------
+    bin/ffmpeg/<platform>/ffmpeg(.exe)
+
+- win64   → Windows x64
+- macos   → macOS universal
+- linux   → Linux x64 (shared build)
+
+The backend resolves this tree first (full variant), then the user-set path
+from Settings → Tools, then the system $PATH. The tiny variant ships NO
+ffmpeg here — its base `tauri.conf.json` has no `bundle.resources` glob, so
+there is nothing to warn about. The full variant attaches the glob via
+`src-tauri/tauri.full.conf.json` (a `--config` deep-merge override that the
+build runner passes only when the `bundled-ffmpeg` cargo feature is on).
+
+How the variants differ
+------------------------
+- `npm run build:desktop`        (tiny)  → base config only, no resources
+- `npm run build:desktop:full`   (full)  → `--config src-tauri/tauri.full.conf.json`
+                                          + `--features bundled-ffmpeg`, stages
+                                          this tree first, then the glob ships it.

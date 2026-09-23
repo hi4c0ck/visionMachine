@@ -40,21 +40,25 @@ impl FfmpegAvailability {
 fn candidate_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
 
-    // 1. Bundled (feature-gated): <bundled_dir>/ffmpeg/<platform>/ffmpeg(.exe).
-    //    Production: the app exports VM_FFMPEG_BUNDLED_DIR pointing at the
-    //    Tauri resource dir before probing (see lib.rs setup). Dev/tests:
-    //    falls back to a workspace-relative tree, so a local checkout can
-    //    stage the binary without installing resources.
+    // 1. Bundled (feature-gated): <resource_dir>/bin/ffmpeg/<platform>/ffmpeg(.exe).
+    //    Tauri's `resources: ["bin/ffmpeg/**"]` ships the tree into the
+    //    resource dir preserving its relative layout. Production: lib.rs setup
+    //    exports VM_FFMPEG_BUNDLED_DIR = resource_dir before the app starts.
+    //    Dev/tests: falls back to the workspace tree so a local checkout can
+    //    stage the binary without the full installer.
     #[cfg(feature = "bundled-ffmpeg")]
     {
         let base = std::env::var("VM_FFMPEG_BUNDLED_DIR")
             .ok()
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ffmpeg-bundled")
-            });
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
         let plat = platform_dir();
-        out.push(base.join("ffmpeg").join(plat).join(ffmpeg_exe_name()));
+        out.push(
+            base.join("bin")
+                .join("ffmpeg")
+                .join(plat)
+                .join(ffmpeg_exe_name()),
+        );
     }
 
     // 2. User-set path: read from the environment variable the app sets

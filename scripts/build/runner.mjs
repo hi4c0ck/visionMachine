@@ -27,6 +27,7 @@ import { ProgressParser } from './progress.mjs';
 import { preflight, freeRamMB } from './health.mjs';
 import { statusHead, statusDetail, fmtMs, fmtGB } from './render.mjs';
 import { buildCommand, spawnBuild, killTree } from './spawn.mjs';
+import { stageFfmpegIfEnabled } from './fetch-ffmpeg.mjs';
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,9 @@ Flags:
   --ram-guard <mb>   abort the build when free system RAM drops below this
                      (default: 1024, 128 with --light; use 0 to disable)
   --stall-warn <ms>  warn after this much output silence (default: 600000)
+  --features <csv>   cargo features to enable (e.g. "bundled-ffmpeg" for the
+                     full-variant ffmpeg ship; forwarded as: tauri build --
+                     --features <csv>
   --detach           start in the background, print tracking commands, exit
   --help             this text
 
@@ -80,6 +84,7 @@ const stallMs = opt('--stall-warn') !== undefined ? Number(opt('--stall-warn')) 
 // profile default (1) to stay warm-cache-friendly.
 const codegenUnits = opt('--codegen-units') !== undefined ? Number(opt('--codegen-units')) : (light ? 8 : undefined);
 const detach = argv.includes('--detach');
+const features = opt('--features');
 
 // ── Pre-flight (fail fast, before any process is spawned) ───────────────────
 
@@ -102,6 +107,20 @@ if (!pf.ok) {
 const jobs = jobsArg !== undefined ? Number(jobsArg) : (light ? 2 : pf.jobs);
 if (light) console.log(`[BUILD] light mode: jobs=${jobsArg ?? 2}, no LTO, Low priority, ${guardMB} MB RAM guard, codegen-units=${codegenUnits}`);
 for (const w of pf.warnings) console.log(`⚠ ${w}`);
+
+// ── Resource staging (full-variant ffmpeg ship) ──────────────────────────────
+// When the `bundled-ffmpeg` cargo feature is requested, stage the platform
+// binary into src-tauri/bin/ffmpeg/<platform>/ BEFORE the build so Tauri's
+// resource glob picks it up. No-op for the tiny variant (feature absent).
+// Wrapped in try/catch: on download/fetch failure the runner writes a
+// failed state record and exits cleanly instead of dying mid-stage.
+try {
+  await stageFfmpegIfEnabled({ root, features });
+} catch (err) {
+  console.error(`✗ ffmpeg staging failed: ${err.message}`);
+  state.write({ ...state.read(), status: 'failed', failReason: `ffmpeg staging: ${err.message}`, finishedAt: Date.now() });
+  process.exit(1);
+}
 
 // ── Log + state slot ─────────────────────────────────────────────────────────
 
@@ -143,13 +162,14 @@ if (detach) {
   mkdirSync(stateDir, { recursive: true });
   const detachScript = path.join(stateDir, 'build-detach.mjs');
   const runnerPath = fileURLToPath(import.meta.url);
+  const featArgs = features ? ['--features', features] : [];
   writeFileSync(
     detachScript,
     [
       "import { spawn } from 'node:child_process';",
       "import { writeFileSync } from 'node:fs';",
       `const runner = ${JSON.stringify(runnerPath)};`,
-      `const args = ${JSON.stringify(['--jobs', String(jobs), ...((noLto ? ['--no-lto'] : [])), ...((codegenUnits ? ['--codegen-units', String(codegenUnits)] : [])), '--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs)])};`,
+      `const args = ${JSON.stringify(['--jobs', String(jobs), ...((noLto ? ['--no-lto'] : [])), ...((codegenUnits ? ['--codegen-units', String(codegenUnits)] : [])), '--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs), ...featArgs])};`,
       'const child = spawn(process.execPath, [runner, ...args], {',
       `  cwd: ${JSON.stringify(root)},`,
       '  detached: true,',
@@ -174,15 +194,22 @@ if (detach) {
 
 // ── Foreground: spawn the build, stream + watch + finalize ──────────────────
 
-console.log(`[BUILD] starting tauri build (jobs=${jobs}${noLto ? ', no-lto' : ''}, priority=${priority}, ram-guard=${guardMB} MB)`);
+console.log(`[BUILD] starting tauri build (jobs=${jobs}${noLto ? ', no-lto' : ''}, priority=${priority}, ram-guard=${guardMB} MB${features ? `, features=${features}` : ''})`);
 
 const stateDir = path.join(root, 'build-state');
+// Full-variant ffmpeg ship: attach the ffmpeg resource glob via a Tauri config
+// override (deep-merged over tauri.conf.json) so the tiny variant's base config
+// stays resource-free and never triggers an empty-glob build warning.
+const bundledFfmpeg = features ? String(features).includes('bundled-ffmpeg') : false;
+const configOverride = bundledFfmpeg ? 'src-tauri/tauri.full.conf.json' : undefined;
 const spec = buildCommand({
   jobs,
   noLto,
   priority,
   stateDir,
   codegenUnits,
+  features,
+  config: configOverride,
 });
 const logStream = createWriteStream(path.join(root, logFile), { flags: 'a' });
 const parser = new ProgressParser();

@@ -95,6 +95,14 @@ so the UI can render the feature state honestly (chips/toolbar), plus
 
 ## B. Carousel mode — frontend (no new deps)
 
+> Status (implemented): `src/lib/frameDecoder.ts` (B1), `src/components/FrameCarousel.svelte`
+> (B2), `Frame.svelte` mode toggle (B3), `Workspace.svelte` wiring (B4) all landed.
+> Tests: `tests/unit/frameCarousel.test.ts` (window math, 8-grid snap, dip scale).
+> The WebCodecs decode pipeline (FrameSource) is implemented but is the one piece
+> that needs a real H.264 blob in a WebView2/Chromium runtime to confirm — it
+> degrades to placeholder neighbor cards when `VideoDecoder`/`EncodedVideoFileSource`
+> are unavailable, so the carousel never hard-fails.
+
 ### B1. Frame fetching: WebCodecs decoder (the decoder does it)
 - `src/lib/frameDecoder.ts` (new, pure frontend module):
   - `openDecoder(url|bytes, { fps, width?, height? }) → FrameSource`:

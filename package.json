@@ -13,6 +13,7 @@
     "tauri": "tauri",
     "build:desktop": "node scripts/build/runner.mjs",
     "build:desktop:light": "node scripts/build/runner.mjs --light",
+    "build:desktop:full": "node scripts/build/runner.mjs --light --features bundled-ffmpeg",
     "build:status": "node scripts/build/ctl.mjs status",
     "build:watch": "node scripts/build/ctl.mjs watch",
     "build:stop": "node scripts/build/ctl.mjs stop",
