@@ -130,6 +130,15 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // Full variant: expose the bundled ffmpeg tree (Tauri resource dir
+            // → <resourceDir>/ffmpeg/<platform>/ffmpeg(.exe)) so the locator
+            // resolves the shipped binary before falling through to user/$PATH.
+            // Tiny variant (feature off): no env var → bundled branch absent.
+            #[cfg(feature = "bundled-ffmpeg")]
+            {
+                let resource_dir = app.path().resource_dir().unwrap_or_default();
+                let _ = std::env::set_var("VM_FFMPEG_BUNDLED_DIR", resource_dir.to_string_lossy());
+            }
             // Wire the generation state machine's event sink to the UI window
             // ("backend owns state, frontend renders"): every meaningful
             // task transition is pushed to `main` on the `gen-task` event so
@@ -173,6 +182,9 @@ pub fn run() {
             commands::settings::log_generation,
             commands::settings::get_generation_log,
             commands::settings::list_generation_logs,
+            commands::settings::probe_ffmpeg,
+            commands::settings::probe_ffmpeg_path,
+            commands::settings::set_ffmpeg_user_path,
             // File management commands
             commands::artifacts::add_project_file,
             commands::artifacts::list_project_files,

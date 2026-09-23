@@ -108,6 +108,15 @@ impl Default for ProviderSlots {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ToolsBlock {
+    /// User-supplied ffmpeg executable path (tiny-variant escape hatch; also
+    /// overrides the bundled binary when set). Probed with `-version` only.
+    #[serde(default)]
+    pub ffmpeg_path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default)]
     pub profile: ProfileBlock,
@@ -115,6 +124,8 @@ pub struct Settings {
     pub generation_defaults: GenerationDefaults,
     #[serde(default)]
     pub providers: ProviderSlots,
+    #[serde(default)]
+    pub tools: ToolsBlock,
 }
 
 /// Field-level sanitize: serde defaults make a blob structurally valid, but
@@ -289,6 +300,73 @@ pub async fn list_generation_logs(
 ) -> Result<Vec<Value>, String> {
     let db = state.db.lock().await;
     db.list_generation_logs(&session_id).await
+}
+
+// ── ffmpeg availability (two-variant ship: bundled / user-path / system) ─────
+
+/// Set the user-supplied ffmpeg path for the locator chain (the frontend
+/// mirrors settings.tools.ffmpegPath here on load + commit). Empty string
+/// clears it so the chain falls through to bundled (full variant) / system.
+/// Pure env write — no exec; the path itself is validated only when the
+/// locator probes it with `-version` (and `probe_ffmpeg_path` allowlists
+/// the basename before probing a user value).
+#[tauri::command]
+pub async fn set_ffmpeg_user_path(path: String) -> Result<(), String> {
+    std::env::set_var("VM_FFMPEG_USER_PATH", path.trim().to_string());
+    Ok(())
+}
+
+/// Probe the ffmpeg locator chain (bundled → user → system) and report the
+/// winner + version line. Pure read; no exec of user paths beyond `-version`.
+#[tauri::command]
+pub async fn probe_ffmpeg() -> Result<crate::generation::FfmpegAvailability, String> {
+    Ok(crate::generation::resolve_ffmpeg())
+}
+
+/// Probe a user-supplied ffmpeg path (Settings "Tools" field). Security: only
+/// executables whose basename is exactly `ffmpeg(.exe)` / `ffprobe(.exe)`
+/// are probed (anti path-traversal / arbitrary-exec), and the probe is the
+/// harmless `-version` run. Returns the availability shape so the UI can
+/// show "path ok (x.y.z)" / "not an ffmpeg executable".
+#[tauri::command]
+pub async fn probe_ffmpeg_path(
+    path: String,
+) -> Result<crate::generation::FfmpegAvailability, String> {
+    use crate::generation::FfmpegAvailability;
+    let p = std::path::PathBuf::from(path.trim());
+    let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
+        return Ok(FfmpegAvailability::none());
+    };
+    let allowed = matches!(
+        basename,
+        "ffmpeg" | "ffmpeg.exe" | "ffprobe" | "ffprobe.exe"
+    );
+    if !allowed || !p.is_file() {
+        return Ok(FfmpegAvailability::none());
+    }
+    match probe_one(&p) {
+        Some(version) => Ok(FfmpegAvailability {
+            source: "user".into(),
+            path: p.to_string_lossy().into_owned(),
+            version_line: version,
+        }),
+        None => Ok(FfmpegAvailability::none()),
+    }
+}
+
+/// Shared probe helper (also used by the locator internals in tests).
+fn probe_one(path: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new(path)
+        .arg("-version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .map(str::to_string)
 }
 
 #[cfg(test)]

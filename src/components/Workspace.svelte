@@ -212,7 +212,7 @@
 	// Settings modal (Phase 3): opened from the profile panel (Defaults tab)
 	// or, in Phase 4, the provider status chip (Providers tab).
 	let showSettings = $state(false);
-	let settingsTab = $state<'defaults' | 'providers'>('defaults');
+	let settingsTab = $state<'defaults' | 'providers' | 'tools'>('defaults');
 
 	const anyTaskActive = $derived(activeTask !== null && !isTerminalTaskStatus(activeTask.status));
 	const generatePipe = $derived.by(() => {

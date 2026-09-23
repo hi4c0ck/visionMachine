@@ -60,7 +60,19 @@ export async function loadSettings(profile: string): Promise<void> {
     }
   }
   current = raw ? normalizeSettings(raw) : clone(DEFAULT_SETTINGS);
+  syncFfmpegUserPath();
   onChange?.();
+}
+
+/**
+ * Mirror the user-set ffmpeg path into the process env the backend locator
+ * reads (VM_FFMPEG_USER_PATH). Must run on load AND on every commit so a
+ * path saved in Settings takes effect without a restart. No-op in browser
+ * dev (no backend, locator is irrelevant).
+ */
+export function syncFfmpegUserPath(): void {
+  if (!isTauri()) return;
+  void invoke('set_ffmpeg_user_path', { path: current.tools.ffmpegPath });
 }
 
 /**
@@ -69,6 +81,7 @@ export async function loadSettings(profile: string): Promise<void> {
  */
 export async function commitSettings(full: Settings): Promise<void> {
   current = normalizeSettings(full);
+  syncFfmpegUserPath();
   onChange?.();
   await saveSettingsNow();
 }

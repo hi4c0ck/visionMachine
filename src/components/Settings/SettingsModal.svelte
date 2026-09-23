@@ -1,13 +1,15 @@
 <script lang="ts">
 	// Settings modal (docs/settings-provider-tasks.md, Phase 3): shell with
-	// two tabs (Defaults | Providers), a local draft, and an explicit Save bar
-	// (dirty indicator — no auto-save for keys/URLs). The provider status
-	// chip (Phase 4) opens this at the Providers tab.
+	// three tabs (Defaults | Providers | Tools), a local draft, and an explicit
+	// Save bar (dirty indicator — no auto-save for keys/URLs). The provider
+	// status chip (Phase 4) opens this at the Providers tab; the Tools tab
+	// hosts the ffmpeg path override (two-variant ship: tiny = user path).
 	import type { ProviderKind, ProviderSlot, Settings } from '$types';
 	import { getSettings, commitSettings } from '$lib/settings/store';
 	import { flashToast } from '$lib/flashToast';
 	import SettingsDefaults from './SettingsDefaults.svelte';
 	import ProviderCard from './ProviderCard.svelte';
+	import ToolsSettings from './ToolsSettings.svelte';
 	import '../composer-modal.css';
 
 	let {
@@ -15,12 +17,12 @@
 		initialTab = 'defaults',
 	} = $props<{
 		open?: boolean;
-		initialTab?: 'defaults' | 'providers';
+		initialTab?: 'defaults' | 'providers' | 'tools';
 	}>();
 
 	const KINDS: ProviderKind[] = ['text', 'image', 'video'];
 
-	let tab = $state<'defaults' | 'providers'>('defaults');
+	let tab = $state<'defaults' | 'providers' | 'tools'>('defaults');
 	let draft = $state<Settings>(getSettings());
 	let saving = $state(false);
 
@@ -91,18 +93,26 @@
 						aria-selected={tab === 'providers'}
 						class:active={tab === 'providers'}
 						onclick={() => (tab = 'providers')}>Providers</button>
+					<button
+						class="tab-btn"
+						role="tab"
+						aria-selected={tab === 'tools'}
+						class:active={tab === 'tools'}
+						onclick={() => (tab = 'tools')}>Tools</button>
 				</div>
 			</div>
 
 			<div class="modal-body settings-body">
 				{#if tab === 'defaults'}
 					<SettingsDefaults {draft} ondraftchange={applyDefaults} />
-				{:else}
+				{:else if tab === 'providers'}
 					<div class="provider-list">
 						{#each KINDS as kind (kind)}
 							<ProviderCard {kind} slot={draft.providers[kind]} onslotchange={(s) => setSlot(kind, s)} />
 						{/each}
 					</div>
+				{:else}
+					<ToolsSettings {draft} ondraftchange={applyDefaults} />
 				{/if}
 			</div>
 
