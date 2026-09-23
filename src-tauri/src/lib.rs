@@ -173,6 +173,7 @@ pub fn run() {
             commands::generation::cancel_generation,
             commands::generation::cancel_all_generation,
             commands::generation::generation_active_task_count,
+            commands::generation::compose_session_video,
             commands::generation::read_media_file,
             commands::generation::reveal_media_folder,
             // Settings & provider system (Phase 1)

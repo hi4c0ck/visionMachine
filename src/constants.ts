@@ -56,6 +56,11 @@ const APP_CONSTANTS = {
     refNotAccessible: 'Reference not accessible',
     generationInProgress: 'Generation already in progress',
     sessionGenRoadmap: 'Session generation (all pipes) is on the roadmap',
+    composeSessionVideo: 'Compose session video',
+    composeSessionVideoHint: 'Splice every generated pipe into one session video',
+    composeSessionNoFfmpeg: 'Compose needs ffmpeg — Full build, a path in Settings → Tools, or a system ffmpeg',
+    composeSessionNoSources: 'No generated pipe videos to compose yet',
+    composeSessionDone: 'Session video ready',
     promptCopied: 'Prompt copied',
     openInPreview: 'Open in preview',
     

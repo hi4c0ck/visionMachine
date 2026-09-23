@@ -985,6 +985,56 @@
 		flashToast(APP_CONSTANTS.strings.sessionGenRoadmap, 'info');
 	}
 
+	// ── Session video composition (A5): splice the pipes' last-gen videos ──
+
+	let composing = $state(false);
+	let ffmpegCapability = $state<{ source: string; path: string } | null>(null);
+
+	onMount(() => {
+		if (!isTauri()) return;
+		const reprobe = () => {
+			void invoke<{ source: string; path: string; versionLine: string }>('probe_ffmpeg')
+				.then((r) => { ffmpegCapability = { source: r.source, path: r.path }; })
+				.catch(() => { ffmpegCapability = null; });
+		};
+		reprobe();
+		// Re-probe when a settings commit lands (a user-set ffmpeg path takes
+		// effect without a restart).
+		setOnSettingsChange(() => {
+			void reprobe();
+		});
+	});
+
+	function composeSessionVideo() {
+		if (!selectedSession || composing) return;
+		const hasSources = selectedSession.pipes?.some((p: any) => p.lastGeneration?.videoPath);
+		if (!hasSources) {
+			flashToast(APP_CONSTANTS.strings.composeSessionNoSources, 'info');
+			return;
+		}
+		if (ffmpegCapability?.source === 'none') {
+			flashToast(APP_CONSTANTS.strings.composeSessionNoFfmpeg, 'error');
+			return;
+		}
+		composing = true;
+		invoke<{ outputPath: string; ffmpegSource: string; sourcePipes: string[] }>(
+			'compose_session_video',
+			{ input: { session_id: selectedSession.id, pipe_ids: null } },
+		)
+		.then((r) => {
+			flashToast(APP_CONSTANTS.strings.composeSessionDone, 'success');
+			// Point the top panel at the composed file (served via read_media_file).
+			previewVideo = null;
+			void toMediaUrl(r.outputPath).then((url) => {
+				if (url) previewVideo = { url, label: `${selectedSession?.name ?? 'Session'} — video` };
+			});
+		})
+		.catch((e) => {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		})
+		.finally(() => { composing = false; });
+	}
+
 	// ── Pipe-level generation flow (D1–D9) ──────────────────────────────────
 
 	function openGenerateModal(pipeId: string) {
@@ -1624,6 +1674,9 @@
 				ongenerate={handleGenerate}
 				ongeneratepipe={openGenerateModal}
 				onopenpreview={openPreview}
+				oncomposesession={composeSessionVideo}
+				ffmpegAvailable={ffmpegCapability ? ffmpegCapability.source !== 'none' : false}
+				composing={composing}
 				pipegenerating={anyTaskActive}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}

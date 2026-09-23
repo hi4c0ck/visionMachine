@@ -7,7 +7,8 @@ use sqlx::Row;
 use tauri::State;
 
 use crate::generation::{
-    EngineInput, GenerationStageView, GenerationTaskView, ModelSpecWire, TaskStatus,
+    EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView, ModelSpecWire,
+    SourceVideo, TaskStatus,
 };
 use crate::AppState;
 
@@ -314,6 +315,153 @@ pub async fn cancel_all_generation(state: State<'_, AppState>) -> Result<usize, 
 /// is live cancels the provider job, so the user is warned first.
 pub async fn generation_active_task_count(state: State<'_, AppState>) -> Result<usize, String> {
     Ok(state.generation.registry.active_task_count())
+}
+
+// ── Session video composition (A5: pipes' last-gen videos → one file) ──────
+
+#[derive(Deserialize)]
+pub struct ComposeSessionVideoInput {
+    pub session_id: String,
+    /// Optional explicit pipe ids in timeline order. None = all pipes with a
+    /// last-gen video, in `order_index` order.
+    #[serde(default)]
+    pub pipe_ids: Option<Vec<String>>,
+}
+
+/// Compose the session video: concatenate the selected pipes' last-gen
+/// `video.mp4` (timeline order) into one file under the session's
+/// `session_generation_dirs` tree, via the ffmpeg locator (bundled → user →
+/// system; the tiny variant still works when a user path or system ffmpeg
+/// resolves). Lossless `-c copy` first, re-encode fallback on mismatch.
+/// Returns `{ outputPath, ffmpegSource }` or a concrete per-clip / ffmpeg
+/// error string (the frontend surfaces it as a toast).
+#[tauri::command]
+pub async fn compose_session_video(
+    input: ComposeSessionVideoInput,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let db = &state.db.lock().await;
+    let composer = db
+        .get_composer(&input.session_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Collect source clips: explicit ids (as given) or all pipes with a
+    // last-gen video, ordered by `order_index` (timeline order).
+    let mut pipes: Vec<&crate::models::composer::Pipe> = composer.pipes.iter().collect();
+    if let Some(ids) = &input.pipe_ids {
+        if ids.is_empty() {
+            return Err("no pipes selected for composition".into());
+        }
+        let set: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+        pipes.retain(|p| set.contains(p.id.as_str()));
+        // Keep the requested order, stable by order_index otherwise.
+        let ord: Vec<&crate::models::composer::Pipe> = ids
+            .iter()
+            .filter_map(|id| composer.pipes.iter().find(|p| p.id == *id))
+            .collect();
+        pipes = if ord.len() == ids.len() { ord } else { pipes };
+    } else {
+        pipes.sort_by_key(|p| p.order_index);
+    }
+
+    let ffmpeg: FfmpegAvailability = crate::generation::resolve_ffmpeg();
+    if ffmpeg.source == "none" {
+        // Concrete guidance instead of a bare failure (tiny variant).
+        return Err("No ffmpeg available — compose needs a bundled binary (Full build), a user path in Settings → Tools, or a system ffmpeg on PATH".into());
+    }
+
+    let sources: Vec<SourceVideo> = pipes
+        .iter()
+        .filter_map(|p| {
+            p.last_generation.as_ref().and_then(|lg| {
+                let path = lg.video_path.trim();
+                if path.is_empty() {
+                    None
+                } else {
+                    Some(SourceVideo {
+                        label: p.name.clone(),
+                        path: path.to_string(),
+                    })
+                }
+            })
+        })
+        .collect();
+    let missing: Vec<String> = pipes
+        .iter()
+        .filter(|p| {
+            p.last_generation
+                .as_ref()
+                .map(|lg| lg.video_path.trim().is_empty())
+                .unwrap_or(true)
+        })
+        .map(|p| p.name.clone())
+        .collect();
+    if sources.is_empty() {
+        return Err(format!(
+            "No pipes with a generated video to compose: {} of {} pipes lack a last-gen video",
+            missing.len(),
+            pipes.len()
+        ));
+    }
+    // Some but not all: still compose with what we have, but note it.
+    if !missing.is_empty() {
+        log::warn!(
+            "[Compose] session {}: {} pipe(s) lack a last-gen video: {}",
+            input.session_id,
+            missing.len(),
+            missing.join(", ")
+        );
+    }
+
+    // Output dir: the session-level generation tree under the session root
+    // (same precedence as the provider engine: session dir → project dir →
+    // default app-data tree, then the session-name folder).
+    let session_name = composer.name.clone();
+    let media_root = resolve_media_root(db, &input.session_id).await;
+    let session_root = match media_root.clone().filter(|r| !r.trim().is_empty()) {
+        Some(r) => std::path::Path::new(r.trim()).join(safe_session_name(&session_name)),
+        None => {
+            let base = dirs::data_local_dir()
+                .map(|d| d.join("com.visionmachine.desktop").join("media"))
+                .unwrap_or_else(std::env::temp_dir);
+            base.join(safe_session_name(&session_name))
+        }
+    };
+    let out_path = session_root.join("session-video").join("session.mp4");
+    let out_dir = session_root.join("session-video");
+    let out_dir_str = out_dir.to_string_lossy().into_owned();
+
+    let manifest_entries: Vec<serde_json::Value> = sources
+        .iter()
+        .map(|s| serde_json::json!({ "label": s.label, "videoPath": s.path }))
+        .collect();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let manifest_dir = std::path::Path::new(&out_dir_str);
+        crate::generation::compose_session_video(&ffmpeg, &sources, &out_path, manifest_dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    // output.json mirrors the provider convention so the backfill / log
+    // paths can treat a session video like any generated artifact.
+    let _ = crate::generation::write_json(
+        &out_dir.join("output.json"),
+        &serde_json::json!({
+            "kind": "session",
+            "videoPath": result.output_path,
+            "ffmpegSource": result.ffmpeg_source,
+            "sourcePipes": manifest_entries,
+        }),
+    );
+
+    Ok(serde_json::json!({
+        "outputPath": result.output_path,
+        "ffmpegSource": result.ffmpeg_source,
+        "sourcePipes": manifest_entries.iter().map(|v| v["label"].clone()).collect::<Vec<_>>(),
+    }))
 }
 
 /// Open the media folder for a session (or its owning project) in the OS file
