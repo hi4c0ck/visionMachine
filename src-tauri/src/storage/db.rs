@@ -57,8 +57,20 @@ impl Database {
         self.execute_migration_sql(include_str!("../../migrations/0006_settings_and_logs.sql"))
             .await?;
         self.run_additive_task_columns().await?;
+        self.run_additive_session_columns().await?;
 
         log::info!("[DB] All migrations completed");
+        Ok(())
+    }
+
+    /// Additive session columns (0009): a bare `ALTER TABLE ADD COLUMN` in a
+    /// migration file hard-fails on databases that already ran it, so apply
+    /// it tolerantly like the other additive columns (duplicate-column
+    /// errors ignored).
+    async fn run_additive_session_columns(&self) -> Result<(), String> {
+        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN directory_path TEXT")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -486,9 +498,86 @@ impl Database {
         Ok(id)
     }
 
+    /// Duplicate a session: copy its copyable fields into a brand-new session
+    /// row under the same project, with a fresh id + optional new name. The
+    /// copy is fully independent — no shared rows.
+    pub async fn duplicate_session(
+        &self,
+        source_session_id: &str,
+        new_name: Option<&str>,
+    ) -> Result<String, String> {
+        let src = sqlx::query(
+            "SELECT project_id, name, fps, resolution, orientation, files_metadata \
+             FROM sessions WHERE id = ?",
+        )
+        .bind(source_session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Source session not found: {source_session_id}"))?;
+
+        let project_id: String = src.get(0);
+        let source_name: String = src.get(1);
+        // fps / resolution / orientation can be NULL on legacy rows
+        // (pre-migration-0003) — read them tolerantly and fall back to the
+        // schema defaults so a NULL column can never fail the whole copy.
+        let fps: i64 = src
+            .try_get::<Option<i64>, _>(2)
+            .ok()
+            .flatten()
+            .unwrap_or(24);
+        let resolution: String = src
+            .try_get::<Option<String>, _>(3)
+            .ok()
+            .flatten()
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or_else(|| "720p".to_string());
+        let orientation: String = src
+            .try_get::<Option<String>, _>(4)
+            .ok()
+            .flatten()
+            .filter(|o| !o.trim().is_empty())
+            .unwrap_or_else(|| "horizontal".to_string());
+        let files_metadata: Option<String> = src
+            .try_get::<Option<String>, _>(5)
+            .ok()
+            .flatten()
+            .filter(|m| !m.trim().is_empty());
+
+        let new_id = Uuid::new_v4().to_string();
+        let target_name: String = match new_name {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => format!("{source_name} (copy)"),
+        };
+
+        // A copy's pipes live in its OWN composer row, re-keyed by the caller
+        // (Pipe::rekeyed mints fresh ids so the copy never shares Svelte
+        // `each` keys with the source). The legacy sessions.pipes_json column
+        // must therefore stay NULL: copying the source's blob here would leave
+        // stale, id-colliding pipe ids in the copy's session row.
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, name, fps, resolution, orientation, pipes_json, files_metadata, directory_path) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&new_id)
+        .bind(&project_id)
+        .bind(&target_name)
+        .bind(&fps)
+        .bind(&resolution)
+        .bind(&orientation)
+        .bind(Option::<String>::None)
+        .bind(&files_metadata)
+        .bind(Option::<String>::None) // a copy starts with no session-specific dir
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        Ok(new_id)
+    }
+
     pub async fn list_sessions(&self, project_id: &str) -> Result<Vec<serde_json::Value>, String> {
         let rows = sqlx::query(
-            "SELECT s.id, s.project_id, s.name, s.fps, s.resolution, s.orientation, s.pipes_json, s.total_generated_frames, s.created_at, p.directory_path \
+            "SELECT s.id, s.project_id, s.name, s.fps, s.resolution, s.orientation, s.pipes_json, s.total_generated_frames, s.created_at, s.directory_path, p.directory_path \
              FROM sessions s LEFT JOIN projects p ON p.id = s.project_id \
              WHERE s.project_id = ? ORDER BY s.created_at DESC",
         )
@@ -511,6 +600,7 @@ impl Database {
                     "total_generated_frames": row.get::<i64, usize>(7),
                     "created_at": row.get::<String, usize>(8),
                     "directory_path": row.get::<Option<String>, usize>(9).unwrap_or_default(),
+                    "project_directory_path": row.get::<Option<String>, usize>(10).unwrap_or_default(),
                 })
             })
             .collect();
@@ -552,6 +642,11 @@ impl Database {
             .and_then(|v| v.as_i64())
         {
             sets.push(("total_generated_frames", total_frames.to_string()));
+        }
+        // 0009: the session's own media directory (the "open folder" action).
+        // An empty string clears it (the engine then falls back to the project dir).
+        if let Some(dir) = updates.get("directory_path").and_then(|v| v.as_str()) {
+            sets.push(("directory_path", dir.to_string()));
         }
 
         if sets.is_empty() {

@@ -25,13 +25,13 @@ pub fn session_media_root(
     default_root.map(|p| p.to_path_buf())
 }
 
-/// Per-pipe tree under the session root:
+/// Per-pipe tree under the session root (name-consistent layout):
 ///
 /// ```text
-/// <sessionRoot>/<pipe_id>/
+/// <sessionRoot>/<pipe-name>/
 ///   images/
 ///     log.jsonl         # append-only artifact history (task-scoped files below)
-///   <task_id>/
+///   <task_id>/          # task_id = uuid (generation hash), the per-run dir
 ///     images/
 ///       <refName>.png   # generated keyframe/subject bitmaps, one per task
 ///                       # (task-scoped + unique ref name, so no two artifacts
@@ -41,16 +41,20 @@ pub fn session_media_root(
 ///     request.log
 /// ```
 ///
+/// `pipe_name` is the pipe's human name (e.g. "Pipe 1"), sanitized for the
+/// filesystem; the task dir stays the raw generation hash (uuid) so
+/// consecutive runs of the same pipe never collide.
+///
 /// Returns `(pipe-level images dir, task dir, task-scoped artifact images
 /// dir)`. All three are created; the pipe-level dir holds the append-only
 /// `log.jsonl`, the task-scoped dir holds each generation's own bitmaps so
 /// consecutive tasks never stack artifacts on one file.
 pub fn pipe_media_dirs(
     session_root: &std::path::Path,
-    pipe_id: &str,
+    pipe_name: &str,
     task_id: &str,
 ) -> Result<(PathBuf, PathBuf, PathBuf), String> {
-    let safe_pipe = safe_dir_name(pipe_id);
+    let safe_pipe = safe_dir_name(pipe_name);
     let safe_task = safe_dir_name(task_id);
     let images = session_root.join(&safe_pipe).join("images");
     let task = session_root.join(&safe_pipe).join(&safe_task);
@@ -60,6 +64,29 @@ pub fn pipe_media_dirs(
     fs::create_dir_all(&task_images)
         .map_err(|e| format!("create {}: {e}", task_images.display()))?;
     Ok((images, task, task_images))
+}
+
+/// Session-level generation tree under the session root (full-session
+/// artifacts — the session's own generation log, shared across pipes):
+///
+/// ```text
+/// <sessionRoot>/<task_id>/   # task_id = session generation hash
+///   output.json
+///   request.log
+/// ```
+///
+/// Returns `(task dir, task-scoped images dir)`. Both are created.
+pub fn session_generation_dirs(
+    session_root: &std::path::Path,
+    task_id: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let safe_task = safe_dir_name(task_id);
+    let task = session_root.join(&safe_task);
+    let task_images = task.join("images");
+    fs::create_dir_all(&task).map_err(|e| format!("create {}: {e}", task.display()))?;
+    fs::create_dir_all(&task_images)
+        .map_err(|e| format!("create {}: {e}", task_images.display()))?;
+    Ok((task, task_images))
 }
 /// Reject path-traversal characters in ref/task ids so a crafted id can
 /// never escape the media tree.

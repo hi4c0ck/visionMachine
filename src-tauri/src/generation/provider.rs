@@ -429,7 +429,12 @@ impl ProviderEngine {
         // (URL, method, redacted headers, payload, status, full body).
         let media = self.media_root_for(input);
         if let Some(root) = &media {
-            if let Ok((_, task_dir, _)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
+            let pipe_dir = input
+                .pipe_name
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or(&input.pipe_id);
+            if let Ok((_, task_dir, _)) = pipe_media_dirs(root, pipe_dir, &input.task_id) {
                 let entry = json!({
                     "stage": "image",
                     "model": spec.id,
@@ -506,7 +511,12 @@ impl ProviderEngine {
         // id) and `localPath` points at the task-scoped artifact, so the
         // frontend can link the latest generation onto its piece.
         if let Some(root) = &media {
-            if let Ok((images_dir, _, _)) = pipe_media_dirs(root, &input.pipe_id, &input.task_id) {
+            let pipe_dir = input
+                .pipe_name
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or(&input.pipe_id);
+            if let Ok((images_dir, _, _)) = pipe_media_dirs(root, pipe_dir, &input.task_id) {
                 let ref_id = stage
                     .ref_id
                     .clone()
@@ -592,7 +602,7 @@ impl ProviderEngine {
         &self,
         remote_url: Option<String>,
         b64: Option<String>,
-        pipe_id: &str,
+        _pipe_id: &str,
         task_id: &str,
         stage: &EngineStage,
         input: &EngineInput,
@@ -609,8 +619,13 @@ impl ProviderEngine {
                 }
             },
         };
+        let pipe_dir = input
+            .pipe_name
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or(input.pipe_id.as_str());
         let (_, _, task_images_dir) =
-            pipe_media_dirs(&root, pipe_id, task_id).map_err(EngineError::Failure)?;
+            pipe_media_dirs(&root, pipe_dir, task_id).map_err(EngineError::Failure)?;
         let ref_id = stage
             .ref_id
             .clone()
@@ -1107,8 +1122,13 @@ impl ProviderEngine {
         let media = self.media_root_for(input);
         let local = match &media {
             Some(root) => {
+                let pipe_dir = input
+                    .pipe_name
+                    .as_deref()
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or(input.pipe_id.as_str());
                 let (_images_dir, task_dir, _task_images_dir) =
-                    pipe_media_dirs(root, &input.pipe_id, &input.task_id)
+                    pipe_media_dirs(root, pipe_dir, &input.task_id)
                         .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
                 match self.http.download(&video_url, &dest).await {
@@ -1174,8 +1194,13 @@ impl ProviderEngine {
         let Some(root) = self.media_root_for(input) else {
             return;
         };
+        let pipe_dir = input
+            .pipe_name
+            .as_deref()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or(input.pipe_id.as_str());
         if let Ok((_images_dir, task_dir, _task_images_dir)) =
-            pipe_media_dirs(&root, &input.pipe_id, &input.task_id)
+            pipe_media_dirs(&root, pipe_dir, &input.task_id)
         {
             let _ = append_request_log(&task_dir.join("request.log"), entry, secrets);
         }
@@ -1462,6 +1487,7 @@ mod tests {
             task_id: "task1".into(),
             prompt: "prompt".into(),
             pipe_id: "pipe1".into(),
+            pipe_name: None,
             fps: 24,
             resolution: "720p".into(),
             orientation: "horizontal".into(),

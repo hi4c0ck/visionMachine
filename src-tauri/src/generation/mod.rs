@@ -15,7 +15,7 @@ mod types;
 pub use engine::{EngineInput, EngineStage, GenerationEngine};
 pub use media::{
     append_jsonl, append_request_log, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
-    session_media_root, write_json,
+    session_generation_dirs, session_media_root, write_json,
 };
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};

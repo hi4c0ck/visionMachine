@@ -11,6 +11,7 @@
     "core:window:allow-close",
     "core:app:default",
     "core:app:allow-set-app-theme",
+    "dialog:default",
     "log:default"
   ]
 }

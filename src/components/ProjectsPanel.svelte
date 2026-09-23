@@ -2,7 +2,7 @@
   import type { ProjectData, SessionData } from '$types';
   import { APP_CONSTANTS } from '$constants';
 
-  let { 
+  let {
     projects, 
     selectedProjectId, 
     selectedSessionId,
@@ -12,7 +12,10 @@
     ondeleteproject,
     oncreatesession,
     onrenamesession,
-    ondeletesession
+    ondeletesession,
+    onopenprojectfolder,
+    onopensessionfolder,
+    oncopysession,
   } = $props<{
     projects: ProjectData[];
     selectedProjectId: string | null;
@@ -24,6 +27,12 @@
     oncreatesession: (projectId: string) => void;
     onrenamesession: (sessionId: string, newName: string) => void;
     ondeletesession: (projectId: string, sessionId: string) => void;
+    /** Open a folder picker and set the project's directory_path. */
+    onopenprojectfolder?: (projectId: string) => void;
+    /** Open a folder picker and set the session's directory_path. */
+    onopensessionfolder?: (sessionId: string) => void;
+    /** Duplicate the session (full copy, new name + id). */
+    oncopysession?: (sessionId: string) => void;
   }>();
 
   // Modal state
@@ -71,6 +80,18 @@
     ondeleteproject(projectId);
   }
 
+  function handleOpenProjectFolder(projectId: string) {
+    onopenprojectfolder?.(projectId);
+  }
+
+  function handleOpenSessionFolder(sessionId: string) {
+    onopensessionfolder?.(sessionId);
+  }
+
+  function handleCopySession(sessionId: string) {
+    oncopysession?.(sessionId);
+  }
+
   function handleAddSession(projectId: string) {
     oncreatesession(projectId);
   }
@@ -110,6 +131,13 @@
           <span class="project-icon">📁</span>
           <span class="project-name">{project.name}</span>
           <span class="session-count">{project.sessions.length}</span>
+          {#if onopenprojectfolder}
+            <button
+              class="project-action-btn"
+              onclick={(e) => { e.stopPropagation(); handleOpenProjectFolder(project.id); }}
+              title="Open folder">
+              📂</button>
+          {/if}
           <button 
             class="delete-project-btn"
             onclick={(e) => { e.stopPropagation(); handleDeleteProject(project.id); }}
@@ -135,10 +163,24 @@
                   oninput={(e) => handleRenameSession(session.id, e.currentTarget.value)}
                   placeholder="Session name"
                 />
-                <button 
-                  class="delete-session-btn"
-                  onclick={(e) => { e.stopPropagation(); handleDeleteSession(project.id, session.id); }}
-                  title="Delete Session">×</button>
+                <span class="session-action-cluster">
+                  {#if onopensessionfolder}
+                    <button 
+                      class="session-action-btn"
+                      onclick={(e) => { e.stopPropagation(); handleOpenSessionFolder(session.id); }}
+                      title="Open folder">📂</button>
+                  {/if}
+                  {#if oncopysession}
+                    <button 
+                      class="session-action-btn"
+                      onclick={(e) => { e.stopPropagation(); handleCopySession(session.id); }}
+                      title="Copy session">⧉</button>
+                  {/if}
+                  <button 
+                    class="delete-session-btn"
+                    onclick={(e) => { e.stopPropagation(); handleDeleteSession(project.id, session.id); }}
+                    title="Delete Session">×</button>
+                </span>
               </div>
             {/each}
             
@@ -329,6 +371,26 @@
     color: #ff6b6b;
   }
 
+  .project-action-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 3px;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+    line-height: 1;
+  }
+
+  .project-item:hover .project-action-btn {
+    opacity: 1;
+  }
+
+  .project-action-btn:hover {
+    background: var(--bg-tertiary);
+  }
+
   /* Sessions Container */
   .sessions-container {
     margin-left: 12px;
@@ -365,6 +427,7 @@
 
   .session-name-input {
     flex: 1;
+    min-width: 0; /* let long names ellipsize instead of pushing the action cluster off-screen */
     font-size: 11px;
     color: var(--text-primary);
     background: transparent;
@@ -372,6 +435,9 @@
     outline: none;
     padding: 2px 4px;
     font-family: inherit;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .session-name-input:focus {
@@ -379,26 +445,43 @@
     border-radius: 3px;
   }
 
+
+
+  /* Action cluster (open-folder / copy / delete): compact, theme-aware color
+     so it's legible on both dark and light backgrounds, and never pushes the
+     name input off the row. */
+  .session-action-cluster {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    flex-shrink: 0;
+  }
+
+  .session-action-btn,
   .delete-session-btn {
+    flex-shrink: 0;
     background: none;
     border: none;
-    color: var(--text-muted);
     cursor: pointer;
     font-size: 11px;
     padding: 1px 3px;
     border-radius: 2px;
-    opacity: 0;
-    transition: opacity var(--transition-fast);
+    color: var(--text-secondary);
+    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
     line-height: 1;
+    opacity: 0.55;
   }
 
-  .session-item:hover .delete-session-btn {
-    opacity: 1;
+  .session-item:hover .session-action-btn,
+  .session-item.selected .session-action-btn,
+  .session-item:hover .delete-session-btn,
+  .session-item.selected .delete-session-btn {
+    opacity: 0.95;
   }
 
-  .delete-session-btn:hover {
-    background: rgba(220, 38, 38, 0.2);
-    color: #ff6b6b;
+  .session-action-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
   }
 
   .add-session-btn {

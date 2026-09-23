@@ -24,6 +24,10 @@ pub struct EngineInput {
     /// The final prompt string (built by the frontend prompt engine).
     pub prompt: String,
     pub pipe_id: String,
+    /// Pipe's human name (e.g. "Pipe 1") — drives the name-consistent media
+    /// layout `<sessionRoot>/<pipe-name>/<gen-hash>`. None for legacy callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe_name: Option<String>,
     pub fps: u32,
     pub resolution: String,
     pub orientation: String,

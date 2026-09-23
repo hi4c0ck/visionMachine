@@ -11,6 +11,22 @@ use crate::generation::{
 };
 use crate::AppState;
 
+/// Sanitize a human-readable session/pipe name for use as a directory
+/// component (the name-consistent media layout). Rejects path-traversal
+/// characters and empty names; falls back to "unnamed".
+pub fn safe_session_name(name: &str) -> String {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let trimmed = base.trim();
+    if trimmed.is_empty() {
+        "unnamed".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Unix ms since the epoch (0 on error, which the frontend treats as
 /// "no timer" — pre-started_at DB rows carry 0 / NULL).
 fn now_unix_ms() -> i64 {
@@ -20,10 +36,27 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Resolve the session media root (E3/O6 resolution order) for the provider
-/// engine: the owning project's `directory_path` when set, else the default
-/// media tree under the app-data dir (created lazily by the engine).
+/// Resolve the session media root for the provider engine. Precedence:
+/// 1. the session's own `directory_path` (the "open folder" action, 0009),
+/// 2. the owning project's `directory_path`,
+/// 3. the default media tree under the app-data dir (created lazily).
 async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str) -> Option<String> {
+    // 1. session's own directory (0009).
+    let session_dir = sqlx::query("SELECT directory_path FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(&db.pool)
+        .await
+        .ok()?
+        .map(|r| r.try_get::<Option<String>, _>(0).ok())
+        .flatten()
+        .flatten();
+    if let Some(dir) = session_dir {
+        let trimmed = dir.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    // 2. owning project's directory_path.
     let row = sqlx::query(
         "SELECT p.directory_path FROM sessions s \
                   JOIN projects p ON p.id = s.project_id WHERE s.id = ?",
@@ -41,7 +74,7 @@ async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str)
             return Some(trimmed);
         }
     }
-    // Default: <appData>/com.visionmachine.desktop/media/<session_id>.
+    // 3. Default: <appData>/com.visionmachine.desktop/media/<session_id>.
     if let Some(d) = dirs::data_local_dir() {
         return Some(
             d.join("com.visionmachine.desktop")
@@ -117,11 +150,28 @@ pub async fn start_generation(
             );
             "Pipe not found".to_string()
         })?;
+    // Name-consistent layout: <projectDir>/<session-name>/<pipe-name>/<gen-hash>.
+    // composer.name is the session's name; pipe.name is the pipe's name.
+    let session_name = composer.name.clone();
+    let pipe_name = pipe.name.clone();
 
     let task_id = uuid::Uuid::new_v4().to_string();
+    // The media root already resolves in precedence: session's own dir (0009)
+    // → project dir → default app-data tree. That root is the session root —
+    // append the session name so the layout is <root>/<session-name>/...
+    // even when the root is a project dir.
     let media_root = {
         let db = &state.db.lock().await;
         resolve_media_root(db, &input.session_id).await
+    };
+    let session_root = match media_root.clone().filter(|r| !r.trim().is_empty()) {
+        Some(r) => std::path::Path::new(r.trim()).join(safe_session_name(&session_name)),
+        None => {
+            let base = dirs::data_local_dir()
+                .map(|d| d.join("com.visionmachine.desktop").join("media"))
+                .unwrap_or_else(std::env::temp_dir);
+            base.join(safe_session_name(&session_name))
+        }
     };
     let mut view = GenerationTaskView {
         task_id: task_id.clone(),
@@ -140,21 +190,18 @@ pub async fn start_generation(
     // expander is usable from the moment it opens, before any stage has
     // written to the file. Build it through `pipe_media_dirs` — the same
     // helper the engine uses to write the file — so the path matches the
-    // on-disk layout exactly (`<root>/<pipe>/<task>/request.log`).
-    if let Some(root) = media_root.as_deref().filter(|r| !r.trim().is_empty()) {
-        if let Ok((_, task_dir, _task_images_dir)) = crate::generation::pipe_media_dirs(
-            std::path::Path::new(root.trim()),
-            &view.pipe_id,
-            &view.task_id,
-        ) {
-            view.request_log = Some(task_dir.join("request.log").to_string_lossy().into_owned());
-        }
+    // on-disk layout exactly (`<sessionRoot>/<pipe-name>/<task>/request.log`).
+    if let Ok((_, task_dir, _task_images_dir)) =
+        crate::generation::pipe_media_dirs(&session_root, &pipe_name, &view.task_id)
+    {
+        view.request_log = Some(task_dir.join("request.log").to_string_lossy().into_owned());
     }
     let engine_input = EngineInput {
         task_id: task_id.clone(),
-        media_root,
+        media_root: Some(session_root.to_string_lossy().into_owned()),
         prompt: input.prompt,
         pipe_id: input.pipe_id.clone(),
+        pipe_name: Some(pipe_name.clone()),
         fps: composer.fps,
         resolution: composer.resolution.clone(),
         orientation: composer.orientation.clone(),
@@ -201,7 +248,7 @@ pub async fn start_generation(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_generation_task(
     task_id: String,
     state: State<'_, AppState>,
@@ -249,7 +296,7 @@ pub async fn get_generation_task(
     Ok(serde_json::to_value(view).map_err(|e| e.to_string())?)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn cancel_generation(task_id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.generation.registry.cancel(&task_id)
 }
@@ -261,12 +308,101 @@ pub async fn cancel_all_generation(state: State<'_, AppState>) -> Result<usize, 
     Ok(state.generation.registry.cancel_all())
 }
 
+#[tauri::command]
 /// Number of generation tasks that are not yet terminal (queued + running).
 /// The frontend's close-app guard queries this: closing the app while a task
 /// is live cancels the provider job, so the user is warned first.
-#[tauri::command]
 pub async fn generation_active_task_count(state: State<'_, AppState>) -> Result<usize, String> {
     Ok(state.generation.registry.active_task_count())
+}
+
+/// Open the media folder for a session (or its owning project) in the OS file
+/// explorer (Windows Explorer / Finder / xdg-open). The backend owns the
+/// media-root resolution (session directory_path → project directory_path →
+/// default app-data tree) so the UI just names the scope. Missing folders are
+/// created first so the explorer always lands somewhere real.
+#[tauri::command]
+pub async fn reveal_media_folder(
+    scope: String,
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let dir = match scope.as_str() {
+        "project" => {
+            let row = sqlx::query("SELECT directory_path FROM projects WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&state.db.lock().await.pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            match row
+                .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+                .flatten()
+            {
+                Some(dir) => {
+                    let trimmed = dir.trim();
+                    if trimmed.is_empty() {
+                        return Err("project has no media folder set yet".to_string());
+                    }
+                    trimmed.to_string()
+                }
+                None => return Err("project not found".to_string()),
+            }
+        }
+        "session" => {
+            // Mirror start_generation exactly: resolve the base root
+            // (session dir → project dir → app-data tree), then append the
+            // session name — that is where the engine writes media.
+            let db = state.db.lock().await;
+            let session_name = db
+                .get_composer(&id)
+                .await
+                .map(|c| c.name)
+                .unwrap_or_default();
+            let base = resolve_media_root(&db, &id).await;
+            let root = match base.filter(|r| !r.trim().is_empty()) {
+                Some(r) => std::path::Path::new(r.trim()).to_path_buf(),
+                None => dirs::data_local_dir()
+                    .map(|d| d.join("com.visionmachine.desktop").join("media"))
+                    .unwrap_or_else(std::env::temp_dir),
+            };
+            root.join(safe_session_name(&session_name))
+                .to_string_lossy()
+                .into_owned()
+        }
+        _ => return Err(format!("unknown media scope: {scope}")),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {dir}: {e}"))?;
+    reveal_dir_in_explorer(&dir)
+}
+
+/// Open `dir` in the OS file explorer, revealing the folder itself.
+/// Windows: `explorer /select` (falls back to plain explorer); macOS:
+/// `open -R`; Linux: `xdg-open`. *nix builds need no code changes.
+fn reveal_dir_in_explorer(dir: &str) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.arg(dir)
+            .spawn()
+            .map_err(|e| format!("failed to open explorer: {e}"))?;
+        Ok(dir.to_string())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        cmd.args(["-R", dir])
+            .spawn()
+            .map_err(|e| format!("failed to open Finder: {e}"))?;
+        Ok(dir.to_string())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(dir)
+            .spawn()
+            .map_err(|e| format!("failed to open file manager: {e}"))?;
+        Ok(dir.to_string())
+    }
 }
 
 #[derive(Deserialize)]

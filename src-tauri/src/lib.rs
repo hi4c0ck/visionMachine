@@ -111,6 +111,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(db))
         .on_window_event(|window, event| {
             // Close guard: closing the app while a generation task is live
@@ -155,6 +156,7 @@ pub fn run() {
             commands::sessions::list_sessions,
             commands::sessions::update_session,
             commands::sessions::delete_session,
+            commands::sessions::duplicate_session,
             commands::composer::get_composer,
             commands::composer::save_composer,
             commands::generation::start_generation,
@@ -163,6 +165,7 @@ pub fn run() {
             commands::generation::cancel_all_generation,
             commands::generation::generation_active_task_count,
             commands::generation::read_media_file,
+            commands::generation::reveal_media_folder,
             // Settings & provider system (Phase 1)
             commands::settings::get_settings,
             commands::settings::save_settings,

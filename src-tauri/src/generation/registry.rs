@@ -297,6 +297,9 @@ impl TaskRegistry {
                 .find(|p| p.id == view.pipe_id)
                 .cloned()
                 .unwrap_or_else(|| crate::models::composer::Pipe::new("unknown", 121));
+            // Thread the pipe's human name into the engine input so the media
+            // tree uses the name-consistent layout <session>/<pipe-name>/<task>.
+            input.pipe_name = Some(pipe.name.clone());
             input.task_id = view.task_id.clone();
             build_stage_plan(&pipe, &view.stages)
         };
@@ -324,9 +327,14 @@ impl TaskRegistry {
         // to write the file — so the pre-computed path is guaranteed to
         // match the on-disk layout (`<root>/<pipe>/<task>/request.log`).
         if let Some(root) = input.media_root.as_deref().filter(|r| !r.trim().is_empty()) {
+            let pipe_dir = input
+                .pipe_name
+                .as_deref()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or(&view.pipe_id);
             if let Ok((_, task_dir, _task_images_dir)) = crate::generation::pipe_media_dirs(
                 std::path::Path::new(root.trim()),
-                &view.pipe_id,
+                pipe_dir,
                 &view.task_id,
             ) {
                 view.request_log =
@@ -1233,6 +1241,7 @@ mod tests {
             media_root: None,
             prompt: "<heuristics>...</heuristics>".into(),
             pipe_id: "p1".into(),
+            pipe_name: None,
             fps: 24,
             resolution: "720p".into(),
             orientation: "horizontal".into(),

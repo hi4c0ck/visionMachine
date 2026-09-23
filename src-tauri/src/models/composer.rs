@@ -343,6 +343,119 @@ impl Pipe {
             media_mode: default_media_mode(),
         }
     }
+
+    /// Clone this pipe with brand-new ids for every level (pipe, keyframes,
+    /// subject refs, elements, segments, tags) while carrying forward the
+    /// source's LAST generation state (pipe.last_generation + keyframe /
+    /// subject previews), re-rooted to the destination session media dir
+    /// via `remap`. The id remint is what prevents Svelte 5
+    /// each_key_duplicate when the two sessions later diverge; the carried
+    /// artifacts are what make the copy feel like a true fork of the source
+    /// instead of a blank skeleton.
+    pub fn rekeyed(&self, remap: &dyn Fn(&str) -> String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: self.name.clone(),
+            length_frames: self.length_frames,
+            q_value: self.q_value,
+            c_value: self.c_value,
+            keyframes: self
+                .keyframes
+                .iter()
+                .map(|kf| Keyframe {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    frame: kf.frame,
+                    slot_index: kf.slot_index,
+                    kind: kf.kind.clone(),
+                    image_src: kf.image_src.clone(),
+                    prompt: kf.prompt.clone(),
+                    reference_url: kf.reference_url.clone(),
+                    // Carry the source's settled preview into the copy, but
+                    // point the local path at the NEW session media dir so
+                    // the copy's chips render after a media-tree copy. The
+                    // remote URL is provider-cached — it stays valid as-is.
+                    preview_remote_url: kf.preview_remote_url.clone(),
+                    preview_local_path: kf.preview_local_path.as_ref().map(|p| remap(p)),
+                    status: kf.status.clone(),
+                    force_regen: false,
+                })
+                .collect(),
+            subject_references: self
+                .subject_references
+                .iter()
+                .map(|ref_| SubjectReference {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    image_url: ref_.image_url.clone(),
+                    kind: ref_.kind.clone(),
+                    prompt: ref_.prompt.clone(),
+                    preview_remote_url: ref_.preview_remote_url.clone(),
+                    preview_local_path: ref_.preview_local_path.as_ref().map(|p| remap(p)),
+                    status: ref_.status.clone(),
+                    use_frames: ref_.use_frames,
+                    frame_start: ref_.frame_start,
+                    frame_end: ref_.frame_end,
+                    visible: ref_.visible,
+                    force_regen: false,
+                })
+                .collect(),
+            elements: self
+                .elements
+                .iter()
+                .map(|el| match el {
+                    PipeElement::Global(g) => PipeElement::Global(GlobalElement {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        frame_start: g.frame_start,
+                        frame_end: g.frame_end,
+                        enabled: g.enabled,
+                        prompt: g.prompt.clone(),
+                    }),
+                    PipeElement::Sound(s) => PipeElement::Sound(SoundElement {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        frame_start: s.frame_start,
+                        frame_end: s.frame_end,
+                        enabled: s.enabled,
+                        prompt: s.prompt.clone(),
+                    }),
+                    PipeElement::Timeline(t) => PipeElement::Timeline(TimelineElement {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        segments: t
+                            .segments
+                            .iter()
+                            .map(|seg| Segment {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                frame_start: seg.frame_start,
+                                frame_end: seg.frame_end,
+                                tags: seg
+                                    .tags
+                                    .iter()
+                                    .map(|tag| TagElement {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        tag: tag.tag.clone(),
+                                        frame_start: tag.frame_start,
+                                        frame_end: tag.frame_end,
+                                        value: tag.value,
+                                        prompt: tag.prompt.clone(),
+                                        spec: tag.spec.clone(),
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                    }),
+                })
+                .collect(),
+            order_index: self.order_index,
+            // Carry the source's last video artifact (remapped to the new
+            // media dir) so the copy's preview strip + tools panel show the
+            // same last generation instead of a blank state.
+            last_generation: self.last_generation.as_ref().map(|lg| LastGeneration {
+                task_id: lg.task_id.clone(),
+                video_path: remap(&lg.video_path),
+                generated_at: lg.generated_at,
+                status: lg.status.clone(),
+            }),
+            media_mode: self.media_mode.clone(),
+        }
+    }
 }
 
 /// Session composer config - JSON blob stored in database
@@ -538,6 +651,118 @@ mod tests {
                 generated_at: 1_234_567_890,
                 status: "done".into(),
             })
+        );
+    }
+
+    /// Session duplication must re-mint every piece id so the copy's composer
+    /// never shares keys with the source (Svelte 5 each_key_duplicate), while
+    /// carrying the layout/params forward AND the last-generation state
+    /// (re-rooted via the remap so the copy's previews point at its own media
+    /// tree after the media copy).
+    #[test]
+    fn pipe_rekeyed_mints_new_ids_and_drops_artifacts() {
+        let pipe = Pipe {
+            id: "p1".into(),
+            name: "Pipe 1".into(),
+            length_frames: 241,
+            q_value: 19,
+            c_value: 8.0,
+            keyframes: vec![Keyframe {
+                id: "k1".into(),
+                frame: 16,
+                slot_index: 1,
+                kind: "txt2img".into(),
+                image_src: None,
+                prompt: Some("a dragon".into()),
+                reference_url: None,
+                preview_remote_url: Some("https://example.com/dragon.png".into()),
+                preview_local_path: Some("C:/media/dragon.png".into()),
+                status: "done".into(),
+                force_regen: true,
+            }],
+            subject_references: vec![SubjectReference::new(
+                "https://example.com/ref.jpg".into(),
+                true,
+            )],
+            elements: vec![PipeElement::Timeline(TimelineElement {
+                id: "t1".into(),
+                segments: vec![Segment {
+                    id: "s1".into(),
+                    frame_start: 0,
+                    frame_end: 8,
+                    tags: vec![TagElement {
+                        id: "g1".into(),
+                        tag: TagType::Camera,
+                        frame_start: 0,
+                        frame_end: 8,
+                        value: 0.5,
+                        prompt: Some("slow zoom".into()),
+                        spec: None,
+                    }],
+                }],
+            })],
+            order_index: 3,
+            last_generation: Some(LastGeneration {
+                task_id: "t9".into(),
+                video_path: "C:/out/video.mp4".into(),
+                generated_at: 1_234,
+                status: "done".into(),
+            }),
+            media_mode: "reference".into(),
+        };
+        // no remapping (identical path) — ids still minted, artifacts carried.
+        let copy = pipe.rekeyed(&|p: &str| p.to_string());
+        // New ids at every level.
+        assert_ne!(copy.id, "p1");
+        assert_ne!(copy.keyframes[0].id, "k1");
+        // Layout + params carried forward.
+        assert_eq!(copy.name, "Pipe 1");
+        assert_eq!(copy.length_frames, 241);
+        assert_eq!(copy.q_value, 19);
+        assert_eq!(copy.order_index, 3);
+        assert_eq!(copy.media_mode, "reference");
+        assert_eq!(copy.keyframes[0].prompt.as_deref(), Some("a dragon"));
+        assert_eq!(copy.keyframes[0].frame, 16);
+        let tl = copy
+            .elements
+            .iter()
+            .find_map(|el| match el {
+                PipeElement::Timeline(t) => Some(t),
+                _ => None,
+            })
+            .expect("timeline element preserved");
+        assert_ne!(tl.id, "t1");
+        assert_eq!(tl.segments[0].tags[0].prompt.as_deref(), Some("slow zoom"));
+        assert_ne!(tl.segments[0].id, "s1");
+        assert_ne!(tl.segments[0].tags[0].id, "g1");
+        // Last-generation state IS carried, re-rooted via the remap (identity
+        // here), with a fresh piece but the same task reference.
+        let lg = copy.last_generation.as_ref().expect("last gen carried");
+        assert_eq!(lg.task_id, "t9");
+        assert_eq!(lg.status, "done");
+        // Keyframe preview carried + status kept; force_regen always resets.
+        assert_eq!(
+            copy.keyframes[0].preview_remote_url.as_deref(),
+            Some("https://example.com/dragon.png")
+        );
+        assert_eq!(
+            copy.keyframes[0].preview_local_path.as_deref(),
+            Some("C:/media/dragon.png")
+        );
+        assert_eq!(copy.keyframes[0].status, "done");
+        assert!(!copy.keyframes[0].force_regen);
+
+        // A real remap re-roots local paths into the destination session dir.
+        let re = pipe.rekeyed(&|p: &str| p.replace("C:/", "D:/copy/"));
+        let re_lg = re.last_generation.as_ref().unwrap();
+        assert_eq!(re_lg.video_path, "D:/copy/out/video.mp4");
+        assert_eq!(
+            re.keyframes[0].preview_local_path.as_deref(),
+            Some("D:/copy/media/dragon.png")
+        );
+        assert_eq!(
+            re.keyframes[0].preview_local_path.as_deref(),
+            Some("D:/copy/media/dragon.png")
         );
     }
 }

@@ -316,7 +316,9 @@
 						name: s.name,
 						createdAt: s.created_at ? new Date(s.created_at).getTime() : Date.now(),
 						updatedAt: s.updated_at ? new Date(s.updated_at).getTime() : Date.now(),
-						directoryPath: s.directory_path || '',
+						// 0009: the session's own media dir wins; fall back to the
+						// project's dir when the session has none set.
+						directoryPath: s.directory_path || s.project_directory_path || '',
 						pipes: [], // Pipes loaded via get_composer when session is selected
 						fps: s.fps || 24,
 						resolution: s.resolution || '720p',
@@ -873,6 +875,104 @@
 		saveProjects();
 	}
 
+	// ── Open folder (project / session media dir, 0009) ───────────────────────
+
+	async function handleOpenProjectFolder(projectId: string) {
+		if (!isTauri()) return;
+		// Backend resolves the project's media root (or errors when unset) and
+		// reveals it in the OS explorer — not a picker. *nix builds reuse the
+		// same helper (platform-appropriate opener in Rust).
+		try {
+			const dir = await invoke<string>('reveal_media_folder', { scope: 'project', id: projectId });
+			flashToast(`Opened project folder: ${dir}`, 'info');
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
+	}
+
+	async function handleOpenSessionFolder(sessionId: string) {
+		if (!isTauri()) return;
+		try {
+			const dir = await invoke<string>('reveal_media_folder', { scope: 'session', id: sessionId });
+			flashToast(`Opened session folder: ${dir}`, 'info');
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
+	}
+
+	// ── Copy session (full duplicate, new name + id) ──────────────────────────
+
+	// Copy a session: full duplicate (new id + name) with the source's media
+	// tree (last-state images/videos) + last-generation state carried over
+	// (backend does the heavy lift — Pipe::rekeyed re-mints ids, re-roots
+	// artifact paths, and copies the media dir). The name suffixes "(copy)"
+	// until it is unique among the project's sessions, and a lightweight
+	// busy guard (reuses the project `loading` flag) covers the media copy,
+	// which can take a moment for a dozen+ MB of artifacts.
+	async function handleCopySession(sessionId: string) {
+		if (!isTauri()) return;
+		const src = (projects || []).flatMap((p: any) => p.sessions || []).find((s: any) => s.id === sessionId);
+		const projectId = (projects || []).find((p: any) =>
+			(p.sessions || []).some((s: any) => s.id === sessionId)
+		)?.id;
+		if (!src || !projectId) return;
+		const baseName = src.name || 'Session';
+
+		// "(copy)" → "(copy copy)" → … until unique within the project.
+		const siblingNames = new Set(
+			(projects || []).find((p: any) => p.id === projectId)?.sessions?.map((s: any) => s.name) ?? []
+		);
+		let newName = `${baseName} (copy)`;
+		while (siblingNames.has(newName)) {
+			newName = `${newName} (copy)`;
+		}
+
+		loading = true;
+		try {
+			const newId = await invoke<string>('duplicate_session', {
+				input: { session_id: sessionId, new_name: newName },
+			});
+			if (!newId) return;
+
+			// Deep-clone the pipes so the copy's in-memory snapshot is fully
+			// independent of the source (no shared array refs). The backend
+			// re-minted the piece ids + re-rooted the last-gen paths; `loadSession`
+			// below pulls that authoritative copy into the store.
+			const clonePipe = (p: any) => JSON.parse(JSON.stringify(p));
+			const copySession: any = {
+				...src,
+				id: newId,
+				name: newName,
+				pipes: (src.pipes ?? []).map(clonePipe),
+			};
+			projects = (projects || []).map((p: any) =>
+				p.id === projectId ? { ...p, sessions: [...p.sessions, copySession] } : p
+			);
+			// Select the copy immediately so it opens without a second click, and
+			// load the backend's rekeyed + re-rooted composer.
+			selectedSessionId = newId;
+			selectedProjectId = projectId;
+			const loadResult = await loadSession(newId);
+			if (loadResult.errors.length === 0) {
+				const loaded = sessions.get(newId);
+				if (loaded) {
+					projects = (projects || []).map((p: any) =>
+						p.id === projectId
+							? { ...p, sessions: p.sessions.map((s: any) => s.id === newId ? { ...s, ...loaded } : s) }
+						: p
+					);
+				}
+			}
+			hydrateSessions((projects || []).flatMap((p: any) => p.sessions || []));
+			flashToast(`Copied as "${newName}"`, 'success');
+		} catch (e) {
+			console.error('[Workspace] copy session:', e);
+			flashToast('Failed to copy session', 'error');
+		} finally {
+			loading = false;
+		}
+	}
+
 	// Settings (FPS / resolution / orientation) mutate through the
 	// composerStore (updateFPS / updateResolution / updateOrientation), which
 	// notifies onUpdate → UI re-sync + debounced saveSession() → SQLite.
@@ -1316,34 +1416,11 @@
 			if (closedId) terminalHandled.delete(closedId);
 		}
 
-		/** "Close app" from the progress-modal terminal footer (optional):
-		 *  only valid when the backend confirms 0 active tasks. Waits out the
-		 *  cooperative-cancel settle window (mirrors the close-guard), then
-		 *  re-issues the window close — the backend close-guard (lib.rs) only
-		 *  blocks when a task is still live, so by this point it allows it.
-		 *  The `cancel_generation` invoke error above is tolerated: if the task
-		 *  already settled to a terminal state the registry no longer knows it
-		 *  (that's fine — we only need the active count to hit 0). */
-		async function quitAppAfterCancel() {
-			if (!isTauri()) return;
-			if (closeCancelling) return; // close-guard path already in flight
-			closeCancelling = true;
-			stopWatching();
-			try {
-				const deadline = Date.now() + 30_000;
-				while (Date.now() < deadline) {
-					const active = await invoke<number>('generation_active_task_count');
-					if (active === 0) break;
-					await new Promise((r) => setTimeout(r, 250));
-				}
-			} catch (e) {
-				console.warn('[Workspace] active-count wait on quit failed:', e);
-			}
-			closeCancelling = false;
-			closeBlocked = false;
-			const { getCurrentWindow } = await import('@tauri-apps/api/window');
-			getCurrentWindow().close();
-		}
+	/** "Close app" is NOT offered from the generation progress modal footer —
+	 *  after "Cancel all" the task simply reaches terminal `cancelled` and the
+	 *  user dismisses with OK. The app-close guard modal owns the quit path
+	 *  (its own cancel-all + settle + window close).
+	 */
 
 	/** Minimize the modal (D10): hide the DOM, keep the watcher (poller +
 	 *  event stream) running so the task keeps advancing and the terminal
@@ -1488,6 +1565,9 @@
 					oncreatesession={handleCreateSession}
 					onrenamesession={handleRenameSession}
 					ondeletesession={handleDeleteSession}
+					onopenprojectfolder={handleOpenProjectFolder}
+					onopensessionfolder={handleOpenSessionFolder}
+					oncopysession={handleCopySession}
 				/>
 			{/if}
 
@@ -1570,7 +1650,6 @@
 				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
 				onReset={resetGeneration}
-				onQuit={quitAppAfterCancel}
 			/>
 
 			<!-- D10 persistent pill: visible when the progress modal is minimized
