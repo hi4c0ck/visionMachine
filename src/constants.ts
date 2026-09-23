@@ -61,6 +61,17 @@ const APP_CONSTANTS = {
     composeSessionNoFfmpeg: 'Compose needs ffmpeg — Full build, a path in Settings → Tools, or a system ffmpeg',
     composeSessionNoSources: 'No generated pipe videos to compose yet',
     composeSessionDone: 'Session video ready',
+
+    // Frame carousel (top-panel mode)
+    frameCarousel: 'Frame carousel',
+    frameCarouselHint: 'Browse frames in 8-frame steps — center frame live, neighbors decoded',
+    frameCarouselToPlayback: 'Back to playback',
+    frameLabel: 'Frame',
+    frameThumbnails: 'Frame thumbnails',
+    frameNavPrev: 'Previous frame',
+    frameNavNext: 'Next frame',
+    framePrevDisabled: 'At the first frame',
+    frameNextDisabled: 'At the last frame',
     promptCopied: 'Prompt copied',
     openInPreview: 'Open in preview',
     

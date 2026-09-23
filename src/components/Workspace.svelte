@@ -1580,6 +1580,10 @@
 		{layoutMode}
 		{showWelcome}
 		video={previewVideo}
+		fps={selectedSession?.fps ?? null}
+		totalFrames={totalFrames}
+		carouselFrame={selectedFrame ?? 0}
+		oncarouselSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onlogout={handleLogout}
