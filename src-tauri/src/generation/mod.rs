@@ -7,6 +7,7 @@
 mod compose;
 mod engine;
 mod ffmpeg;
+pub mod group;
 mod media;
 mod provider;
 mod registry;

@@ -249,6 +249,44 @@ pub async fn start_generation(
     }
 }
 
+#[tauri::command]
+pub async fn start_session_generation(
+    input: crate::generation::group::StartSessionGenerationInput,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let (group_id, task_id, view) = state.group.start_group(input).await?;
+    Ok(serde_json::json!({"group_id":group_id,"first_task_id":task_id,"first_view":view}))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_generation_group(
+    group_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if let Some(view) = state.group.view(&group_id) {
+        return Ok(serde_json::to_value(view).map_err(|e| e.to_string())?);
+    }
+    let row = {
+        let db = &state.db.lock().await;
+        db.get_generation_group_row(&group_id)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    .ok_or_else(|| "Generation group not found".to_string())?;
+    Ok(
+        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"startedAt":row.started_at}),
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cancel_generation_group(
+    group_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.group.cancel_group(&group_id);
+    Ok(())
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_generation_task(
     task_id: String,
@@ -518,16 +556,17 @@ pub async fn compose_session_video(
     };
 
     emit_progress("preparing", Some(0.0), "Preparing sources");
-    let (_operation_id, cancel) = state
-        .compose_registry
-        .start(&input.session_id)
-        .map_err(|_| {
-            composition_error(
-                "COMPOSITION_ALREADY_RUNNING",
-                "Session video composition is already running",
-                serde_json::json!({ "sessionId": input.session_id }),
-            )
-        })?;
+    let (_operation_id, cancel) =
+        state
+            .compose_registry
+            .start(&input.session_id)
+            .map_err(|_| {
+                composition_error(
+                    "COMPOSITION_ALREADY_RUNNING",
+                    "Session video composition is already running",
+                    serde_json::json!({ "sessionId": input.session_id }),
+                )
+            })?;
     let worker_cancel = std::sync::Arc::clone(&cancel);
     let result = tokio::task::spawn_blocking(move || {
         let manifest_dir = std::path::Path::new(&out_dir_str);

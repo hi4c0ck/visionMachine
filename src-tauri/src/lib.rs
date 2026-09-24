@@ -17,19 +17,24 @@ pub struct AppState {
     pub preflight_report: Arc<tokio::sync::Mutex<PreflightReport>>,
     pub db: Arc<tokio::sync::Mutex<Database>>,
     pub generation: Arc<generation::GenerationService>,
+    pub group: Arc<generation::group::GroupCoordinator>,
     pub compose_registry: generation::ComposeRegistry,
 }
 
 impl AppState {
     pub fn new(db: Database) -> Self {
         let db_arc = Arc::new(tokio::sync::Mutex::new(db.clone()));
+        let generation = Arc::new(generation::GenerationService::new(db.clone()));
+        let group = Arc::new(generation::group::GroupCoordinator::new(
+            generation.as_ref().clone(),
+            db,
+        ));
         Self {
             username: Arc::new(tokio::sync::Mutex::new(None)),
             preflight_report: Arc::new(tokio::sync::Mutex::new(PreflightReport::new())),
             db: Arc::clone(&db_arc),
-            // The generation service holds the DB handle and wires the provider
-            // engine (docs/provider-engine-tasks.md, Phase D) at construction.
-            generation: Arc::new(generation::GenerationService::new(db)),
+            generation,
+            group,
             compose_registry: generation::ComposeRegistry::default(),
         }
     }
@@ -138,8 +143,16 @@ pub fn run() {
             // the progress modal renders live instead of only via the 1 s poll.
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
+            let group = state.group.clone();
+            let handle2 = handle.clone();
             state.generation.set_event_sink(move |event| {
                 let _ = handle.emit_to("main", "gen-task", &event);
+                if event.kind == "terminal" {
+                    group.on_pipe_terminal(&event);
+                }
+            });
+            state.group.set_event_sink(move |event| {
+                let _ = handle2.emit_to("main", "group-event", &event);
             });
             Ok(())
         })
@@ -162,6 +175,9 @@ pub fn run() {
             commands::composer::get_composer,
             commands::composer::save_composer,
             commands::generation::start_generation,
+            commands::generation::start_session_generation,
+            commands::generation::get_generation_group,
+            commands::generation::cancel_generation_group,
             commands::generation::get_generation_task,
             commands::generation::cancel_generation,
             commands::generation::cancel_all_generation,

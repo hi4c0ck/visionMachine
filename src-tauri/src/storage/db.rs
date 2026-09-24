@@ -56,6 +56,9 @@ impl Database {
         .await?;
         self.execute_migration_sql(include_str!("../../migrations/0006_settings_and_logs.sql"))
             .await?;
+        self.run_additive_generation_group_columns().await?;
+        self.execute_migration_sql(include_str!("../../migrations/0010_generation_groups.sql"))
+            .await?;
         self.run_additive_task_columns().await?;
         self.run_additive_session_columns().await?;
 
@@ -67,6 +70,15 @@ impl Database {
     /// migration file hard-fails on databases that already ran it, so apply
     /// it tolerantly like the other additive columns (duplicate-column
     /// errors ignored).
+    async fn run_additive_generation_group_columns(&self) -> Result<(), String> {
+        // The migration table is created below; this additive column is kept
+        // tolerant so pre-0010 databases upgrade without a hard failure.
+        let _ = sqlx::query("ALTER TABLE generation_logs ADD COLUMN group_id TEXT")
+            .execute(&self.pool)
+            .await;
+        Ok(())
+    }
+
     async fn run_additive_session_columns(&self) -> Result<(), String> {
         let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN directory_path TEXT")
             .execute(&self.pool)
@@ -856,13 +868,15 @@ impl Database {
         }
         // Bind as a JSON string (codebase pattern: composers/sessions store
         // their JSON blobs as TEXT; sqlx SQLite has no native Value bind).
+        let group_id = entry.get("groupId").and_then(|v| v.as_str());
         let entry_json = entry.to_string();
         sqlx::query(
-            "INSERT INTO generation_logs (task_id, session_id, pipe_id, entry_json, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)\n             ON CONFLICT (task_id) DO UPDATE SET session_id = excluded.session_id, pipe_id = excluded.pipe_id, entry_json = excluded.entry_json, updated_at = CURRENT_TIMESTAMP",
+            "INSERT INTO generation_logs (task_id, session_id, pipe_id, group_id, entry_json, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n             ON CONFLICT (task_id) DO UPDATE SET session_id = excluded.session_id, pipe_id = excluded.pipe_id, group_id = excluded.group_id, entry_json = excluded.entry_json, updated_at = CURRENT_TIMESTAMP",
         )
         .bind(&task_id)
         .bind(&session_id)
         .bind(&pipe_id)
+        .bind(group_id)
         .bind(entry_json)
         .execute(&self.pool)
         .await
