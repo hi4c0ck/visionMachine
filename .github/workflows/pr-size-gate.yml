@@ -1,0 +1,58 @@
+name: PR size gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+
+# Keep external PRs small and reviewable.
+# Thresholds: <= 10 changed files AND <= 400 total changed lines.
+# Exceeding either posts a comment, labels the PR `needs-split`, and fails
+# the step — so the check shows red and blocks merge when required.
+
+jobs:
+  size-gate:
+    name: Check PR size
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Compute PR size
+        id: size
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          FILES=10
+          LINES=400
+
+          read -r changed added deleted < <(
+            gh pr view "$PR_NUMBER" --json filesChanged,additions,deletions \
+              --jq '.filesChanged, .additions, .deletions'
+          )
+          TOTAL=$(( added + deleted ))
+
+          echo "PR size: $changed files, $added additions, $deleted deletions (total $TOTAL lines)"
+
+          if [ "$changed" -gt "$FILES" ] || [ "$TOTAL" -gt "$LINES" ]; then
+            echo "oversized=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "oversized=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post oversized notice + fail
+        if: steps.size.outputs.oversized == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --body $'This PR exceeds the review size limit (<= 10 files, <= 400 changed lines).\n\nPlease split this into smaller, focused PRs. One logical change per PR.\nSmall, solid bug fixes are very welcome — large unreviewable dumps are not.'
+          gh pr edit "$PR_NUMBER" --add-label "needs-split"
+          echo "::error::PR exceeds the size gate (<= 10 files / <= 400 lines). Split it into smaller PRs."
+          exit 1
+
+      - name: Pass
+        if: steps.size.outputs.oversized == 'false'
+        run: echo "PR is within the size gate."

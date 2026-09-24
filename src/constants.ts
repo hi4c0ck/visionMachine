@@ -1,9 +1,16 @@
 const APP_VERSION = '0.7.1';
 
+// Footer / attribution copy. The repo lives at hi4c0ck/visionMachine and
+// the copyright holder is @HorizonesMachines (see NOTICE.md / LICENSE).
+const REPO_URL = 'https://github.com/hi4c0ck/visionMachine';
+const COPYRIGHT = '© 2026 @HorizonesMachines. All rights reserved.';
+
 const APP_CONSTANTS = {
   strings: {
     appName: 'VisionMachine',
     version: APP_VERSION,
+    repoUrl: REPO_URL,
+    copyright: COPYRIGHT,
     welcomeTitle: 'Welcome to VisionMachine',
     enterName: 'Enter your name to continue',
     namePlaceholder: 'Your name...',

@@ -2,8 +2,13 @@
   "name": "visionmachine-desktop",
   "version": "0.7.1",
   "description": "AI-powered video generation tool with professional composer interface",
-  "author": "hi4c0ck",
-  "license": "MIT",
+  "author": "@HorizonesMachines <horizonsmachine@gmail.com>",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hi4c0ck/visionMachine.git"
+  },
+  "homepage": "https://github.com/hi4c0ck/visionMachine",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",

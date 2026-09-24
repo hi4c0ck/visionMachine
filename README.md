@@ -21,23 +21,39 @@ AI-powered video generation tool with professional composer interface.
 
 ## Getting Started
 
-### Prerequisites
+Pick your path:
 
-- Node.js 18+
-- Rust toolchain
-- Tauri CLI
+| Goal | Path |
+| --- | --- |
+| **Just use the app** | Download the latest prebuilt MSI from [Releases](../../releases). No compiler needed. |
+| **Modify / recompile / contribute** | Build from source (below). |
 
-### Installation
+> **Note on the MSI:** released builds are **unsigned** (no code-signing
+> certificate is configured), so Windows SmartScreen will show an
+> "unknown publisher" warning on first install. Click **More info →
+> Run anyway**. This is expected until a signing certificate is added.
+
+### Prerequisites (build from source)
+
+- Node.js 18+ (CI uses Node 20)
+- Rust stable toolchain with the **MSVC** target (Tauri links against MSVC on Windows)
+- WebView2 (preinstalled on Windows 10/11)
+- Tauri CLI (`npx tauri` works; or `npm i -g @tauri-apps/cli`)
+
+### Build
 
 ```bash
 # Install dependencies
 npm install
 
-# Run in development mode
+# Run in development mode (desktop app)
 npm run tauri dev
 
-# Build for production
+# Build a local release MSI (output: src-tauri/target/release/bundle/msi/)
 npm run tauri build
+
+# Frontend only, no Tauri (browser dev mode, localStorage persistence)
+npm run dev
 ```
 
 ### Project Structure
@@ -87,24 +103,31 @@ src/
 - [Composer timeline rules (SLA)](docs/composer-timeline-sla.md) — the 8-frame
   engine floor, the ≈1s zone guideline, and the tag composition model
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the branch
+model, and how to submit issues and pull requests.
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- Issue templates: [Bug report](.github/ISSUE_TEMPLATE/bug_report.md),
+  [Feature request](.github/ISSUE_TEMPLATE/feature_request.md)
+- [Pull request template](.github/PULL_REQUEST_TEMPLATE.md)
+
+## Releases
+
+Prebuilt Windows MSI installers are published to [GitHub
+Releases](../../releases) from the `production` branch. A tagged
+release (`vX.Y.Z` on `production`) triggers the build-on-tag workflow in
+`.github/workflows/release.yml`.
+
+To install a released build, download the latest `.msi` from the Releases
+page and run it. No toolchain required.
+
 ## Branch Strategy
 
 - `develop` - Active development branch
 - `production` - Stable releases only
 - Feature branches created from `develop`
-
-## Building
-
-### Debug Build
-```bash
-npm run tauri build -- --debug
-```
-Output: `src-tauri/target/debug/bundle/msi/VisionMachine_*.msi`
-
-### Release Build
-```bash
-npm run tauri build
-```
 
 ## Troubleshooting
 
@@ -124,4 +147,8 @@ Check browser console for errors. Common causes:
 
 ## License
 
-Private - VisionMachine proprietary software
+GPL-3.0-or-later, with an attribution addendum. See [LICENSE](LICENSE)
+and [NOTICE.md](NOTICE.md).
+
+- Full license + addendum: [LICENSE](LICENSE)
+- Copyright / quick guide: [NOTICE.md](NOTICE.md)

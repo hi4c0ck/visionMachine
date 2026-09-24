@@ -1,0 +1,42 @@
+# Dependabot: automated dependency updates.
+#
+# - npm (package.json): checks weekly, opens grouped update PRs.
+# - Cargo (src-tauri/Cargo.toml): checks daily.
+#
+# Note: PRs that land here still pass through the normal PR gate (size
+# check + CI) like any other PR. Bump-and-rebuild the version field in
+# tauri.conf.json / package.json when you ship a version that includes a
+# dependency update.
+
+version: 2
+updates:
+  # JavaScript / TypeScript (npm)
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 10
+    # Group everything into a single PR to keep the diff reviewable.
+    groups:
+      dependencies:
+        patterns:
+          - '*'
+
+  # Rust (Tauri backend)
+  - package-ecosystem: 'cargo'
+    directory: '/src-tauri'
+    schedule:
+      interval: 'daily'
+    open-pull-requests-limit: 10
+    groups:
+      dependencies:
+        patterns:
+          - '*'
+
+  # GitHub Actions (workflows) — optional, but useful to keep the CI
+  # + release pipeline on current, supported action versions.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5

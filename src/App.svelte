@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import Workspace from './components/Workspace.svelte';
+	import Footer from './components/Footer.svelte';
 	import ErrorHandler from './components/ErrorHandler.svelte';
 	import WelcomeAccounts from './components/WelcomeAccounts.svelte';
 	import WelcomeDeleteModal from './components/WelcomeDeleteModal.svelte';
@@ -258,26 +259,28 @@
 			<WelcomeDeleteModal
 				account={deleteTarget}
 				busy={deleting}
-				onConfirm={(deleteAll: boolean) => deleteTarget && performAccountDelete(deleteTarget, deleteAll)}
+				onConfirm={(deleteAll: boolean) => deleteTarget && performAccountDelete(deleteAll, account)}
 				onCancel={() => {
 					if (!deleting) deleteTarget = null;
 				}}
 			/>
+
+			<Footer />
 		</div>
 		{:else}
-		<div id="workspace-container">
-			<Workspace
-				{userName}
-				{selectedTheme}
-				{layoutMode}
-				showWelcome={showWelcome}
-				onlogout={handleLogout}
-				onthemeChange={handleThemeChange}
-				onlayoutChange={handleLayoutChange}
-				onprojectsupdate={handleProjectsUpdate}
-			/>
-		</div>
-	{/if}
+			<div id="workspace-container">
+				<Workspace
+					{userName}
+					{selectedTheme}
+					{layoutMode}
+					showWelcome={showWelcome}
+					onlogout={handleLogout}
+					onthemeChange={handleThemeChange}
+					onlayoutChange={handleLayoutChange}
+					onprojectsupdate={handleProjectsUpdate}
+				/>
+			</div>
+		{/if}
 </ErrorHandler>
 
 <style>

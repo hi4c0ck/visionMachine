@@ -1,0 +1,83 @@
+name: Release (build on tag)
+
+# On every v* tag pushed to the production branch, build the Windows MSI
+# and publish it to a GitHub Release. No signing certificate is configured
+# yet, so the published MSI is unsigned (SmartScreen will show a warning —
+# see the note in README.md).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual runs for testing the pipeline without pushing a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Windows MSI
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build (MSI)
+        # Produces: src-tauri/target/release/bundle/msi/VisionMachine_<ver>_x64_en-US.msi
+        run: npm run tauri build
+
+      - name: Locate built MSI
+        run: |
+          $msi = Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' | Select-Object -First 1
+          if ($null -eq $msi) { throw "No .msi found in src-tauri/target/release/bundle/msi" }
+          Write-Host "Found: $($msi.Name)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: visionmachine-msi
+          path: src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Create / update GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/msi/*.msi
+          generate_release_notes: true
+          body: |
+            Windows MSI installer.
+
+            **Note:** this build is unsigned (no code-signing certificate
+            is configured yet), so Windows SmartScreen will show an
+            "unknown publisher" warning on first install. Click
+            **More info → Run anyway**.
+
+            Install and use it, or build from source — see the README.
+
+      - name: Print release info
+        if: github.event_name == 'push'
+        run: |
+          Write-Host "Published MSI to release ${{ github.ref_name }}"
