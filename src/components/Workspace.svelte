@@ -17,6 +17,7 @@
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
+	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
@@ -90,7 +91,36 @@
 			focus = { level: 'session', id: selectedSession.id };
 		}
 	});
-	// Session preview ruler frame count. The session video is the *result* of
+	// Restore the latest pipe preview after backend hydration. The preview is
+	// scoped per session so switching away and back returns to the SAME pipe
+	// the user last opened here (lastPreviewPipeBySession), not the first
+	// pipe that happens to have a last-gen video.
+	let lastPreviewPipeBySession = new Map<string, string>();
+	async function restoreSelectedPreview(session: SessionData | null) {
+		previewVideo = null;
+		const sid = session?.id;
+		if (!sid || !session) return;
+		const savedPipeId = lastPreviewPipeBySession.get(sid);
+		// Prefer the previously-selected pipe (if it still has a video);
+		// otherwise fall back to the first pipe with a last-gen video.
+		const pipe =
+			(savedPipeId
+				? session.pipes.find((p) => p.id === savedPipeId && p.lastGeneration?.videoPath)
+				: undefined) ??
+			session.pipes.find((p) => p.lastGeneration?.videoPath);
+		if (!pipe?.lastGeneration?.videoPath) return;
+		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
+		if (url) previewVideo = { url, label: pipe.name };
+	}
+
+	$effect(() => {
+		const session = selectedSession;
+		const id = selectedSessionId;
+		void id;
+		void restoreSelectedPreview(session);
+	});
+
+
 	// the generated pieces (its own artifact length) — NOT a mechanical sum of
 	// the pipes. Until that artifact is persisted (session-video entity, not
 	// yet modeled), the placeholder is the longest pipe (answer 1c). Pipes are
@@ -988,9 +1018,27 @@
 	// ── Session video composition (A5): splice the pipes' last-gen videos ──
 
 	let composing = $state(false);
+	let compositionWasCancelled = false;
+	let compositionProgress = $state<{ phase: 'preparing' | 'copy' | 'reencode' | 'finalizing' | 'complete'; progress: number; detail?: string } | null>(null);
+	let compositionUnlisten: (() => void) | null = null;
 	let ffmpegCapability = $state<{ source: string; path: string } | null>(null);
 
+	function compositionLabel(state: typeof compositionProgress): string {
+		if (!state) return 'Composing…';
+		const percent = Math.round(state.progress * 100);
+		if (state.phase === 'preparing') return 'Preparing…';
+		if (state.phase === 'copy') return percent > 0 ? `Copying ${percent}%` : 'Copying…';
+		if (state.phase === 'reencode') return percent > 0 ? `Encoding ${percent}%` : 'Encoding…';
+		if (state.phase === 'finalizing') return 'Finalizing…';
+		return 'Finalizing…';
+	}
+
 	onMount(() => {
+		void subscribeCompositionProgress((event) => {
+			if (composing && event.sessionId === selectedSessionId) {
+				compositionProgress = applyCompositionProgress(compositionProgress, event);
+			}
+		}).then((unlisten) => { compositionUnlisten = unlisten; });
 		if (!isTauri()) return;
 		const reprobe = () => {
 			void invoke<{ source: string; path: string; versionLine: string }>('probe_ffmpeg')
@@ -1005,6 +1053,17 @@
 		});
 	});
 
+	function cancelSessionVideoComposition() {
+		if (!selectedSession || !composing) return;
+		void invoke<boolean>('cancel_session_video_composition', {
+			input: { session_id: selectedSession.id }
+		}).then((cancelled) => {
+			if (cancelled) compositionWasCancelled = true;
+		}).catch((e) => {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		});
+	}
+
 	function composeSessionVideo() {
 		if (!selectedSession || composing) return;
 		const hasSources = selectedSession.pipes?.some((p: any) => p.lastGeneration?.videoPath);
@@ -1017,11 +1076,13 @@
 			return;
 		}
 		composing = true;
+		compositionProgress = { phase: 'preparing', progress: 0, detail: 'Preparing sources' };
 		invoke<{ outputPath: string; ffmpegSource: string; sourcePipes: string[] }>(
 			'compose_session_video',
 			{ input: { session_id: selectedSession.id, pipe_ids: null } },
 		)
 		.then((r) => {
+			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
 			flashToast(APP_CONSTANTS.strings.composeSessionDone, 'success');
 			// Point the top panel at the composed file (served via read_media_file).
 			previewVideo = null;
@@ -1369,12 +1430,22 @@
 			}
 		}
 		if (view.status === 'done' && view.outputPath) {
-			void attachLastGeneration(view.sessionId, view.pipeId, {
+			await attachLastGeneration(view.sessionId, view.pipeId, {
 				taskId: view.taskId,
 				videoPath: view.outputPath,
 				generatedAt: Date.now(),
 				status: 'done',
 			});
+			// The terminal event is the ownership boundary for the artifact.
+			// Persist it before reporting success; the normal update debounce
+			// can otherwise lose the path if the app restarts immediately.
+			if (isTauri()) {
+				const saved = await saveSession(view.sessionId);
+				if (saved.errors.length > 0) {
+					console.error('[Workspace] generated video persistence failed:', saved.errors);
+					flashToast('Generated video was created but could not be saved', 'error');
+				}
+			}
 			flashToast(APP_CONSTANTS.strings.generationComplete, 'success');
 		} else if (view.status === 'cancelled') {
 			flashToast(APP_CONSTANTS.strings.generationCancelled, 'info');
@@ -1491,6 +1562,10 @@
 
 	/** ToolsPanel last-gen thumb → top-panel preview (D9, served via Phase E media command). */
 	function openPreview(pipe: PipeRow) {
+		// Remember which pipe the user opened for THIS session, so a
+		// session switch away + back restores the same preview.
+		const sid = selectedSessionId;
+		if (sid) lastPreviewPipeBySession.set(sid, pipe.id);
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.
@@ -1568,6 +1643,7 @@
 	onDestroy(() => {
 		window.removeEventListener('focus', onWindowFocus);
 		closeBlockedUnlisten?.();
+		compositionUnlisten?.();
 		stopWatching();
 		setOnSettingsChange(null);
 	});
@@ -1584,6 +1660,7 @@
 		totalFrames={totalFrames}
 		carouselFrame={selectedFrame ?? 0}
 		oncarouselSelect={(f) => (selectedFrame = f)}
+		onframeSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onlogout={handleLogout}
@@ -1681,6 +1758,7 @@
 				oncomposesession={composeSessionVideo}
 				ffmpegAvailable={ffmpegCapability ? ffmpegCapability.source !== 'none' : false}
 				composing={composing}
+				compositionLabel={compositionLabel(compositionProgress)}
 				pipegenerating={anyTaskActive}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}

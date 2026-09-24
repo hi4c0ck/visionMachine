@@ -100,6 +100,11 @@ export class SessionServiceImpl implements SessionService {
         };
       }),
       elements: (p.elements || []).map((el: any) => this.mapBackendElement(el)),
+      // Last-gen artifact (D9): round-trips through the DB via the Rust
+      // `Pipe.last_generation` field. Without this the session load silently
+      // drops every pipe's generated video path, so the top-panel preview and
+      // the pipe inspector's last-gen slot are empty after a session switch.
+      lastGeneration: p.lastGeneration ?? null,
     }));
   }
 

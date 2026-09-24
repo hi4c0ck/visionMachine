@@ -60,16 +60,49 @@ export class PipeServiceImpl implements PipeService {
 
   async duplicate(_sessionId: string, pipeId: string): Promise<ServiceResult> {
     const pipe = this.getPipe(this.session, pipeId);
-    if (pipe) {
-      const newPipe: PipeRow = {
-        ...pipe,
+    if (!pipe) return { errors: [] };
+    // Hard copy of ALL nested data with fresh ids (mirrors the session-copy
+    // Pipe::rekeyed pattern): the copy must be fully independent of the
+    // source, so editing keyframes/subject-refs/elements/tags on one pipe
+    // never mutates the other. Pipe-level generated artifacts are
+    // EXCLUDED — a copied pipe starts clean; its video shows up after its
+    // own generation runs (lastGeneration is not carried over).
+    const remintElements = JSON.parse(JSON.stringify(pipe.elements ?? [])).map((el: any) => {
+      el.id = crypto.randomUUID();
+      if (el.segments) {
+        for (const seg of el.segments) {
+          seg.id = crypto.randomUUID();
+          for (const tag of seg.tags ?? []) tag.id = crypto.randomUUID();
+        }
+      }
+      return el;
+    });
+    const newPipe: PipeRow = {
+      ...pipe,
+      id: crypto.randomUUID(),
+      name: `${pipe.name} (copy)`,
+      orderIndex: this.session.pipes.length,
+      keyframes: (pipe.keyframes ?? []).map((kf: any) => ({
+        ...kf,
         id: crypto.randomUUID(),
-        name: `${pipe.name} (copy)`,
-        orderIndex: this.session.pipes.length,
-      };
-      this.session.pipes.push(newPipe);
-      reindexPipes(this.session.pipes);
-    }
+        // A copy's keyframes have NOT been generated for the copy — the
+        // status/forceRegen belong to the source's run, so reset them.
+        status: 'pending',
+        forceRegen: false,
+      })),
+      subjectReferences: (pipe.subjectReferences ?? []).map((r: any) => ({
+        ...r,
+        id: crypto.randomUUID(),
+        status: 'pending',
+        forceRegen: false,
+      })),
+      elements: remintElements,
+      // Pipe-level generated video is NOT part of a copy (user requirement):
+      // the new pipe's last-gen preview stays empty until it generates.
+      lastGeneration: null,
+    };
+    this.session.pipes.push(newPipe);
+    reindexPipes(this.session.pipes);
     return { errors: [] };
   }
 

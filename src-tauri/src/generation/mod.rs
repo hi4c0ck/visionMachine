@@ -14,7 +14,10 @@ mod shaper;
 mod specs;
 mod types;
 
-pub use compose::{compose_session_video, ComposeError, ComposeResult, SourceVideo};
+pub use compose::{
+    compose_session_video, ComposeCancel, ComposeError, ComposeRegistry, ComposeResult,
+    ComposeStartError, SourceVideo,
+};
 pub use engine::{EngineInput, EngineStage, GenerationEngine};
 pub use ffmpeg::{resolve_ffmpeg, FfmpegAvailability};
 pub use media::{

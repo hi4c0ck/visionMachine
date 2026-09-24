@@ -57,6 +57,11 @@ Flags:
   --features <csv>   cargo features to enable (e.g. "bundled-ffmpeg" for the
                      full-variant ffmpeg ship; forwarded as: tauri build --
                      --features <csv>
+  --target <triple>  target triple to stage the ffmpeg sidecar for, when
+                     building a non-host triple (cross-compile e.g.
+                     Windows-from-WSL). Defaults to TARGET_TRIPLE env, then
+                     the host's own triple. Also forwarded to tauri build
+                     as --target when set.
   --detach           start in the background, print tracking commands, exit
   --help             this text
 
@@ -85,6 +90,9 @@ const stallMs = opt('--stall-warn') !== undefined ? Number(opt('--stall-warn')) 
 const codegenUnits = opt('--codegen-units') !== undefined ? Number(opt('--codegen-units')) : (light ? 8 : undefined);
 const detach = argv.includes('--detach');
 const features = opt('--features');
+// Target triple for cross-compilation (stages the correct ffmpeg sidecar)
+// and for forwarding to `tauri build --target`.
+const targetTriple = opt('--target') || process.env.TARGET_TRIPLE;
 
 // ── Pre-flight (fail fast, before any process is spawned) ───────────────────
 
@@ -108,14 +116,15 @@ const jobs = jobsArg !== undefined ? Number(jobsArg) : (light ? 2 : pf.jobs);
 if (light) console.log(`[BUILD] light mode: jobs=${jobsArg ?? 2}, no LTO, Low priority, ${guardMB} MB RAM guard, codegen-units=${codegenUnits}`);
 for (const w of pf.warnings) console.log(`⚠ ${w}`);
 
-// ── Resource staging (full-variant ffmpeg ship) ──────────────────────────────
-// When the `bundled-ffmpeg` cargo feature is requested, stage the platform
-// binary into src-tauri/bin/ffmpeg/<platform>/ BEFORE the build so Tauri's
-// resource glob picks it up. No-op for the tiny variant (feature absent).
-// Wrapped in try/catch: on download/fetch failure the runner writes a
-// failed state record and exits cleanly instead of dying mid-stage.
+// ── Sidecar staging (full-variant ffmpeg ship) ──────────────────────────────
+// When the `bundled-ffmpeg` cargo feature is requested, stage the
+// target-triple sidecar into src-tauri/binaries/ffmpeg-<triple> BEFORE the
+// build so Tauri's `bundle.externalBin` picks it up. No-op for the
+// tiny variant (feature absent). Wrapped in try/catch: on download/fetch
+// failure the runner writes a failed state record and exits cleanly instead
+// of dying mid-stage.
 try {
-  await stageFfmpegIfEnabled({ root, features });
+  await stageFfmpegIfEnabled({ root, features, target: targetTriple });
 } catch (err) {
   console.error(`✗ ffmpeg staging failed: ${err.message}`);
   state.write({ ...state.read(), status: 'failed', failReason: `ffmpeg staging: ${err.message}`, finishedAt: Date.now() });
@@ -169,7 +178,7 @@ if (detach) {
       "import { spawn } from 'node:child_process';",
       "import { writeFileSync } from 'node:fs';",
       `const runner = ${JSON.stringify(runnerPath)};`,
-      `const args = ${JSON.stringify(['--jobs', String(jobs), ...((noLto ? ['--no-lto'] : [])), ...((codegenUnits ? ['--codegen-units', String(codegenUnits)] : [])), '--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs), ...featArgs])};`,
+      `const args = ${JSON.stringify(['--jobs', String(jobs), ...((noLto ? ['--no-lto'] : [])), ...((codegenUnits ? ['--codegen-units', String(codegenUnits)] : [])), '--priority', priority, '--ram-guard', String(guardMB), '--stall-warn', String(stallMs), ...featArgs, ...(targetTriple ? ['--target', targetTriple] : [])])};`,
       'const child = spawn(process.execPath, [runner, ...args], {',
       `  cwd: ${JSON.stringify(root)},`,
       '  detached: true,',
@@ -194,12 +203,13 @@ if (detach) {
 
 // ── Foreground: spawn the build, stream + watch + finalize ──────────────────
 
-console.log(`[BUILD] starting tauri build (jobs=${jobs}${noLto ? ', no-lto' : ''}, priority=${priority}, ram-guard=${guardMB} MB${features ? `, features=${features}` : ''})`);
+console.log(`[BUILD] starting tauri build (jobs=${jobs}${noLto ? ', no-lto' : ''}, priority=${priority}, ram-guard=${guardMB} MB${features ? `, features=${features}` : ''}${targetTriple ? `, target=${targetTriple}` : ''})`);
 
 const stateDir = path.join(root, 'build-state');
-// Full-variant ffmpeg ship: attach the ffmpeg resource glob via a Tauri config
-// override (deep-merged over tauri.conf.json) so the tiny variant's base config
-// stays resource-free and never triggers an empty-glob build warning.
+// Full-variant ffmpeg ship: attach the ffmpeg sidecar declaration via a Tauri
+// config override (deep-merged over tauri.conf.json) so the tiny variant's
+// base config stays sidecar-free (tauri-build hard-fails when an
+// externalBin entry has no staged binary).
 const bundledFfmpeg = features ? String(features).includes('bundled-ffmpeg') : false;
 const configOverride = bundledFfmpeg ? 'src-tauri/tauri.full.conf.json' : undefined;
 const spec = buildCommand({
@@ -209,6 +219,7 @@ const spec = buildCommand({
   stateDir,
   codegenUnits,
   features,
+  target: targetTriple,
   config: configOverride,
 });
 const logStream = createWriteStream(path.join(root, logFile), { flags: 'a' });

@@ -40,20 +40,34 @@ so the UI can render the feature state honestly (chips/toolbar), plus
 ### A3. Two ship variants (build-time, not runtime bloat)
 - Cargo feature in `src-tauri/Cargo.toml`:
   `bundled-ffmpeg` (off by default).
-- `tauri.conf.json` gets `"bundle": { "resources": ["bin/ffmpeg/**"] }` —
-  resources are copied into `resource_dir` at install time; on Windows MSI
-  they land next to the exe (no install of anything else).
+- `tauri.full.conf.json` (deep-merged over `tauri.conf.json` via the runner's
+  `--config` override when the feature is on) gets
+  `"bundle": { "externalBin": ["binaries/ffmpeg"] }` — Tauri's sidecar
+  mechanism: sidecars are filtered + renamed at build time based on the
+  active target triple, so only the matching
+  `src-tauri/binaries/ffmpeg-<target-triple>[.exe]` is packaged. At
+  install time the sidecar lands next to the main exe (triple suffix
+  stripped by tauri-build's copy_binaries). Tiny variant: no sidecar
+  declared → installer stays small.
 - `scripts/build/` gains two npm targets reusing `runner.mjs`:
   - `build:desktop` (existing) → **tiny** variant (feature off; no
-    `bin/ffmpeg` packaged; installer stays small).
+    sidecar staged; installer stays small).
   - `build:desktop:full` → sets `--features bundled-ffmpeg` and stages
-    platform ffmpeg into `src-tauri/bin/ffmpeg/<platform>/` before tauri
-    bundle. Staging: download pinned `Btbn/buildffmpeg` release asset
-    (single-file windows build w/ GPL libs, ~90 MB) in a `scripts/build/fetch-ffmpeg.mjs`
-    (cached in `build-state/ffmpeg-cache` so repeated builds don't re-download).
-- Binary naming: keep the raw executable name `ffmpeg.exe`; Tauri
-  `app.path().resource_dir()` + `resolve_ffmpeg_path()` helper centralizes
-  lookup so feature-on/feature-off never hardcodes.
+    the target ffmpeg into `src-tauri/binaries/ffmpeg-<triple>` before
+    tauri bundle. Staging: download pinned `Btbn/buildffmpeg` release
+    asset (single-file windows build w/ GPL libs, ~90 MB) in a
+    `scripts/build/fetch-ffmpeg.mjs` (cached in `build-state/ffmpeg-cache`
+    so repeated builds don't re-download). The script is target-aware:
+    `node fetch-ffmpeg.mjs <triple>` or `TARGET_TRIPLE=<triple>` selects
+    the destination architecture, so cross-compilation
+    (Windows-from-WSL) stages the right binary.
+- Binary naming: the staged sidecar keeps the triple suffix
+  (`ffmpeg-x86_64-pc-windows-msvc.exe`); tauri-build strips it when
+  copying to the build output, so the shipped binary is plain `ffmpeg.exe`
+  next to the app exe. The backend locator
+  (`src/generation/ffmpeg.rs`) resolves: `<exe_dir>/ffmpeg(.exe)`
+  (shipped) → `src-tauri/binaries/ffmpeg-<triple>[.exe]` (dev/checkout)
+  → user path → system $PATH, so feature-on/feature-off never hardcodes.
 - Feature gating (tiny variant must NOT break): behind
   `#[cfg(feature = "bundled-ffmpeg")]` only the "bundled" branch of the
   locator exists; user-path + PATH branches remain in both variants. Frontend

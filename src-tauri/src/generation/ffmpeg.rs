@@ -1,18 +1,31 @@
-//! ffmpeg binary locator + probe (two-variant ship: bundled / user-path / system).
+//! ffmpeg binary locator + probe (two-variant ship: bundled sidecar / user-path / system).
 //!
 //! Resolution order:
-//! 1. Bundled binary (when compiled with `--features bundled-ffmpeg`):
-//!    `<resource_dir>/ffmpeg/<platform>/ffmpeg(.exe)` — Tauri resource dir,
-//!    populated at install time by the full-variant build script.
+//! 1. Bundled sidecar (when compiled with `--features bundled-ffmpeg`):
+//!    Tauri's `bundle.externalBin` mechanism stages
+//!    `src-tauri/binaries/ffmpeg-<target-triple>[.exe]` at build time and
+//!    copies it (triple suffix stripped, per tauri-build's copy_binaries)
+//!    next to the main executable: `ffmpeg(.exe)`. Production: install dir.
+//!    Dev/tests: the build output dir (where tauri-build places it), then
+//!    the source `binaries/` staging tree with the triple-suffixed name.
 //! 2. User-set path from settings (`tools.ffmpegPath`) — probed via `-version`.
 //! 3. System `$PATH` — last-resort, probed once.
 //!
 //! The tiny variant (feature off) has NO bundled branch; it still supports
-//! user-path + system. This module is pure std (no shell plugin needed).
+//! user-path + system. This module is pure std (no shell plugin needed) —
+//! the sidecar is executed via `std::process::Command` against a path we
+//! resolve ourselves, matching the existing `compose.rs` design.
+//!
+//! Cross-compilation safety: the target triple is baked in at compile time
+//! (via `build.rs` → `cargo:rustc-env=TARGET_TRIPLE`), so a Windows binary
+//! compiled from a WSL/Linux host looks for
+//! `binaries/ffmpeg-x86_64-pc-windows-msvc.exe` in the staging tree
+//! regardless of the host that built it.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// Probed availability of an ffmpeg binary.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
@@ -36,29 +49,65 @@ impl FfmpegAvailability {
     }
 }
 
+/// The target triple this binary was compiled for (set by `build.rs`).
+/// Falls back to a sane guess (host-ish x86_64) if the env var is absent
+/// (e.g. when the crate is compiled outside Tauri's build pipeline).
+fn compile_target_triple() -> &'static str {
+    option_env!("TARGET_TRIPLE").unwrap_or("x86_64-unknown-linux-gnu")
+}
+
+/// The expected *staged* sidecar name inside `src-tauri/binaries/`, e.g.
+/// `ffmpeg-x86_64-pc-windows-msvc.exe` (Windows) or
+/// `ffmpeg-x86_64-unknown-linux-gnu` (Linux). This is the name
+/// `fetch-ffmpeg.mjs` writes and `externalBin` references at build time.
+fn staged_sidecar_name() -> String {
+    let triple = compile_target_triple();
+    if triple.contains("windows") {
+        format!("ffmpeg-{}.exe", triple)
+    } else {
+        format!("ffmpeg-{}", triple)
+    }
+}
+
+/// The runtime on-disk sidecar name *next to the executable*.
+///
+/// tauri-build's `copy_binaries` strips the `-<target-triple>` suffix when it
+/// copies the staged binary into the target dir, and the shell plugin's
+/// `relative_command_path` likewise resolves the bare name (+ `.exe` on
+/// Windows targets). So at runtime the shipped binary is simply
+/// `ffmpeg(.exe)` — no triple suffix.
+fn runtime_sidecar_name() -> &'static str {
+    if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    }
+}
+
+/// Directory the current executable lives in (where tauri-build places the
+/// sidecar in production; in dev this is the `target/<profile>` dir).
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+}
+
 /// Candidate binary paths in resolution order.
 fn candidate_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
 
-    // 1. Bundled (feature-gated): <resource_dir>/bin/ffmpeg/<platform>/ffmpeg(.exe).
-    //    Tauri's `resources: ["bin/ffmpeg/**"]` ships the tree into the
-    //    resource dir preserving its relative layout. Production: lib.rs setup
-    //    exports VM_FFMPEG_BUNDLED_DIR = resource_dir before the app starts.
-    //    Dev/tests: falls back to the workspace tree so a local checkout can
-    //    stage the binary without the full installer.
+    // 1. Bundled sidecar (feature-gated):
+    //    a) Shipped binary next to the executable (production install, or the
+    //       tauri-build output dir in dev): `ffmpeg(.exe)`, triple stripped.
+    //    b) Source staging tree fallback for local checkouts: the
+    //       triple-suffixed name `fetch-ffmpeg.mjs` writes under `binaries/`.
     #[cfg(feature = "bundled-ffmpeg")]
     {
-        let base = std::env::var("VM_FFMPEG_BUNDLED_DIR")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-        let plat = platform_dir();
-        out.push(
-            base.join("bin")
-                .join("ffmpeg")
-                .join(plat)
-                .join(ffmpeg_exe_name()),
-        );
+        if let Some(dir) = exe_dir() {
+            out.push(dir.join(runtime_sidecar_name()));
+        }
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        out.push(manifest.join("binaries").join(staged_sidecar_name()));
     }
 
     // 2. User-set path: read from the environment variable the app sets
@@ -84,30 +133,37 @@ fn ffmpeg_exe_name() -> &'static str {
     }
 }
 
-#[cfg(feature = "bundled-ffmpeg")]
-fn platform_dir() -> &'static str {
-    if cfg!(windows) {
-        "win64"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        "linux"
+/// Probe a single path with a hard timeout. A hung executable must never
+/// block startup, Settings probing, or composition indefinitely.
+pub(crate) fn probe(path: &Path) -> Option<String> {
+    let mut child = Command::new(path)
+        .arg("-version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut stdout = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                return stdout.lines().next().map(str::to_owned);
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(25)),
+        }
     }
-}
-
-/// Probe a single path: run `<path> -version` (5 s timeout) and return
-/// the first line of stdout on success.
-fn probe(path: &Path) -> Option<String> {
-    let out = Command::new(path).arg("-version").output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let first_line = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .next()
-        .unwrap_or("")
-        .to_string();
-    Some(first_line)
 }
 
 /// Resolve ffmpeg: walk candidates in order, return the first that probes.
@@ -145,7 +201,14 @@ fn source_label(path: &Path) -> String {
     }
     #[cfg(feature = "bundled-ffmpeg")]
     {
-        if s.contains("ffmpeg-bundled") || s.contains("/ffmpeg/") || s.contains("\\ffmpeg\\") {
+        // A path is the bundled sidecar when it lives next to the executable
+        // (shipped, triple-stripped name) or in the source `binaries/` staging
+        // tree (triple-suffixed name).
+        let stripped = runtime_sidecar_name();
+        if s.ends_with(stripped) && !s.contains("binaries") {
+            return "bundled".into();
+        }
+        if s.contains("binaries") && s.contains(&format!("ffmpeg-{}", compile_target_triple())) {
             return "bundled".into();
         }
     }
@@ -177,6 +240,48 @@ mod tests {
         match a.source.as_str() {
             "none" => assert!(a.path.is_empty()),
             _ => assert!(!a.path.is_empty()),
+        }
+    }
+
+    #[test]
+    fn sidecar_names_have_target_suffix() {
+        // The *staged* name must embed the compile-time target triple and
+        // carry the .exe extension only on Windows targets.
+        let staged = staged_sidecar_name();
+        assert!(staged.starts_with("ffmpeg-"), "name: {staged}");
+        assert!(
+            staged.contains(compile_target_triple()),
+            "name {staged} does not embed triple {}",
+            compile_target_triple()
+        );
+        if compile_target_triple().contains("windows") {
+            assert!(
+                staged.ends_with(".exe"),
+                "windows staged sidecar must end .exe: {staged}"
+            );
+        } else {
+            assert!(
+                !staged.ends_with(".exe"),
+                "non-windows staged sidecar must not end .exe: {staged}"
+            );
+        }
+        // The *runtime* name (next to the exe, triple stripped by
+        // tauri-build) is bare `ffmpeg(.exe)` — host-extension, no triple.
+        let runtime = runtime_sidecar_name();
+        assert!(
+            !runtime.contains('-'),
+            "runtime name must be triple-free: {runtime}"
+        );
+        if cfg!(windows) {
+            assert!(
+                runtime.ends_with(".exe"),
+                "windows runtime name must end .exe: {runtime}"
+            );
+        } else {
+            assert!(
+                !runtime.ends_with(".exe"),
+                "non-windows runtime name must not end .exe: {runtime}"
+            );
         }
     }
 

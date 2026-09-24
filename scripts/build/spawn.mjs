@@ -20,7 +20,7 @@ import path from 'node:path';
  * attach variant-specific bundle settings (e.g. the ffmpeg resource glob)
  * without mutating the base config or the build command itself.
  */
-export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDir = 'build-state', platform = process.platform, codegenUnits, features, config } = {}) {
+export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDir = 'build-state', platform = process.platform, codegenUnits, features, target, config } = {}) {
   const env = { ...process.env, NO_COLOR: '1' };
   if (jobs) env.CARGO_BUILD_JOBS = String(jobs);
   if (noLto) env.CARGO_PROFILE_RELEASE_LTO = 'false';
@@ -34,6 +34,7 @@ export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDi
   // arg). Both the direct and priority-wrapper paths share this tail.
   const tail = [];
   if (config) tail.push('--config', config);
+  if (target) tail.push('--target', target);
   if (features) tail.push('--', '--features', features);
 
   let cmd = 'npx';
@@ -59,13 +60,13 @@ export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDi
 
 function priorityScript(priority, tail = []) {
   const cls = priority === 'low' ? 'Low' : 'BelowNormal';
-  const extra = tail.length ? tail.join(' ') : '';
+  const extra = tail.length ? ` ${tail.join(' ')}` : '';
   return [
     'try {',
     '  $p = [System.Diagnostics.Process]::GetCurrentProcess()',
     `  $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${cls}`,
     '} catch { } # 32-bit PowerShell cannot set it; fall back to normal',
-    `& npx tauri build ${extra} 2>&1`,
+    `& npx tauri build${extra} 2>&1`,
     'exit $LASTEXITCODE',
     '',
   ].join('\r\n');

@@ -4,11 +4,11 @@
 
 use serde::Deserialize;
 use sqlx::Row;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::generation::{
-    EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView, ModelSpecWire,
-    SourceVideo, TaskStatus,
+    ComposeError, EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView,
+    ModelSpecWire, SourceVideo, TaskStatus,
 };
 use crate::AppState;
 
@@ -328,6 +328,56 @@ pub struct ComposeSessionVideoInput {
     pub pipe_ids: Option<Vec<String>>,
 }
 
+/// Stable error envelope returned as a JSON string because the existing
+/// frontend expects command failures to be strings. New callers can parse
+/// `code`/`details`; old callers can still display `message`.
+fn composition_error(code: &str, message: impl Into<String>, details: serde_json::Value) -> String {
+    serde_json::json!({
+        "code": code,
+        "message": message.into(),
+        "details": details,
+    })
+    .to_string()
+}
+
+fn map_composition_error(error: ComposeError) -> String {
+    match error {
+        ComposeError::NoFfmpeg => composition_error(
+            "COMPOSITION_FFMPEG_UNAVAILABLE",
+            "No ffmpeg available for composition",
+            serde_json::json!({ "hint": "Install a bundled Full build, configure a user path, or add ffmpeg to PATH" }),
+        ),
+        ComposeError::SourceMissing(label) => composition_error(
+            "COMPOSITION_SOURCE_MISSING",
+            "A requested source video is missing",
+            serde_json::json!({ "pipe": label }),
+        ),
+        ComposeError::BothStrategiesFailed {
+            copy_detail,
+            filter_detail,
+        } => composition_error(
+            "COMPOSITION_FFMPEG_FAILED",
+            "FFmpeg could not compose the selected videos",
+            serde_json::json!({ "copy": copy_detail, "filter": filter_detail }),
+        ),
+        ComposeError::Cancelled => composition_error(
+            "COMPOSITION_CANCELLED",
+            "Session video composition cancelled",
+            serde_json::json!({}),
+        ),
+        ComposeError::OutputMissing => composition_error(
+            "COMPOSITION_OUTPUT_MISSING",
+            "FFmpeg completed without producing the output video",
+            serde_json::json!({}),
+        ),
+        ComposeError::OutputInvalid(detail) => composition_error(
+            "COMPOSITION_OUTPUT_INVALID",
+            "The composed video failed output validation",
+            serde_json::json!({ "detail": detail }),
+        ),
+    }
+}
+
 /// Compose the session video: concatenate the selected pipes' last-gen
 /// `video.mp4` (timeline order) into one file under the session's
 /// `session_generation_dirs` tree, via the ffmpeg locator (bundled → user →
@@ -337,6 +387,7 @@ pub struct ComposeSessionVideoInput {
 /// error string (the frontend surfaces it as a toast).
 #[tauri::command]
 pub async fn compose_session_video(
+    app: AppHandle,
     input: ComposeSessionVideoInput,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
@@ -351,7 +402,11 @@ pub async fn compose_session_video(
     let mut pipes: Vec<&crate::models::composer::Pipe> = composer.pipes.iter().collect();
     if let Some(ids) = &input.pipe_ids {
         if ids.is_empty() {
-            return Err("no pipes selected for composition".into());
+            return Err(composition_error(
+                "COMPOSITION_NO_PIPES",
+                "No pipes selected for composition",
+                serde_json::json!({}),
+            ));
         }
         let set: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
         pipes.retain(|p| set.contains(p.id.as_str()));
@@ -368,7 +423,11 @@ pub async fn compose_session_video(
     let ffmpeg: FfmpegAvailability = crate::generation::resolve_ffmpeg();
     if ffmpeg.source == "none" {
         // Concrete guidance instead of a bare failure (tiny variant).
-        return Err("No ffmpeg available — compose needs a bundled binary (Full build), a user path in Settings → Tools, or a system ffmpeg on PATH".into());
+        return Err(composition_error(
+            "COMPOSITION_FFMPEG_UNAVAILABLE",
+            "No ffmpeg available — compose needs a bundled binary (Full build), a user path in Settings → Tools, or a system ffmpeg on PATH",
+            serde_json::json!({ "hint": "Configure a bundled, user, or system ffmpeg binary" }),
+        ));
     }
 
     let sources: Vec<SourceVideo> = pipes
@@ -398,20 +457,27 @@ pub async fn compose_session_video(
         .map(|p| p.name.clone())
         .collect();
     if sources.is_empty() {
-        return Err(format!(
-            "No pipes with a generated video to compose: {} of {} pipes lack a last-gen video",
-            missing.len(),
-            pipes.len()
+        return Err(composition_error(
+            "COMPOSITION_NO_SOURCES",
+            "No pipes with a generated video to compose",
+            serde_json::json!({ "missingPipes": missing.clone(), "pipeCount": pipes.len() }),
         ));
     }
-    // Some but not all: still compose with what we have, but note it.
-    if !missing.is_empty() {
-        log::warn!(
-            "[Compose] session {}: {} pipe(s) lack a last-gen video: {}",
-            input.session_id,
-            missing.len(),
-            missing.join(", ")
-        );
+    // Explicit selection is strict: never silently drop a requested pipe.
+    if input.pipe_ids.is_some() && !missing.is_empty() {
+        return Err(composition_error(
+            "COMPOSITION_MISSING_PIPES",
+            "Cannot compose: selected pipes without a last-gen video",
+            serde_json::json!({ "missingPipes": missing.clone(), "selected": true }),
+        ));
+    }
+    // All-pipe mode is also strict. A partial session artifact is misleading.
+    if input.pipe_ids.is_none() && !missing.is_empty() {
+        return Err(composition_error(
+            "COMPOSITION_MISSING_PIPES",
+            "Cannot compose: some pipes lack a last-gen video",
+            serde_json::json!({ "missingPipes": missing, "selected": false, "pipeCount": pipes.len() }),
+        ));
     }
 
     // Output dir: the session-level generation tree under the session root
@@ -437,14 +503,55 @@ pub async fn compose_session_video(
         .map(|s| serde_json::json!({ "label": s.label, "videoPath": s.path }))
         .collect();
 
+    let session_id = input.session_id.clone();
+    let emit_progress = |phase: &str, progress: Option<f64>, detail: &str| {
+        let _ = app.emit_to(
+            "main",
+            "composition-progress",
+            serde_json::json!({
+                "sessionId": session_id,
+                "phase": phase,
+                "progress": progress,
+                "detail": detail,
+            }),
+        );
+    };
+
+    emit_progress("preparing", Some(0.0), "Preparing sources");
+    let (_operation_id, cancel) = state
+        .compose_registry
+        .start(&input.session_id)
+        .map_err(|_| {
+            composition_error(
+                "COMPOSITION_ALREADY_RUNNING",
+                "Session video composition is already running",
+                serde_json::json!({ "sessionId": input.session_id }),
+            )
+        })?;
+    let worker_cancel = std::sync::Arc::clone(&cancel);
     let result = tokio::task::spawn_blocking(move || {
         let manifest_dir = std::path::Path::new(&out_dir_str);
-        crate::generation::compose_session_video(&ffmpeg, &sources, &out_path, manifest_dir)
+        crate::generation::compose_session_video(
+            &ffmpeg,
+            &sources,
+            &out_path,
+            manifest_dir,
+            &worker_cancel,
+        )
     })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .await;
+    state.compose_registry.finish(&input.session_id);
+    let result = result
+        .map_err(|e| {
+            composition_error(
+                "COMPOSITION_TASK_JOIN_FAILED",
+                "Composition worker could not complete",
+                serde_json::json!({ "error": e.to_string() }),
+            )
+        })?
+        .map_err(map_composition_error)?;
 
+    emit_progress("finalizing", Some(1.0), "Finalizing output");
     // output.json mirrors the provider convention so the backfill / log
     // paths can treat a session video like any generated artifact.
     let _ = crate::generation::write_json(
@@ -462,6 +569,22 @@ pub async fn compose_session_video(
         "ffmpegSource": result.ffmpeg_source,
         "sourcePipes": manifest_entries.iter().map(|v| v["label"].clone()).collect::<Vec<_>>(),
     }))
+}
+
+#[derive(Deserialize)]
+pub struct CancelCompositionInput {
+    pub session_id: String,
+}
+
+/// Request cancellation of the active composition for one session. The
+/// blocking worker observes the flag and terminates the current ffmpeg/ffprobe
+/// child; the original compose command resolves with COMPOSITION_CANCELLED.
+#[tauri::command]
+pub async fn cancel_session_video_composition(
+    input: CancelCompositionInput,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    Ok(state.compose_registry.cancel(&input.session_id))
 }
 
 /// Open the media folder for a session (or its owning project) in the OS file
@@ -612,6 +735,31 @@ async fn media_roots(db: &crate::storage::db::Database) -> Vec<std::path::PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composition_errors_are_stable_json_envelopes() {
+        let error = map_composition_error(ComposeError::BothStrategiesFailed {
+            copy_detail: "copy failed".into(),
+            filter_detail: "filter failed".into(),
+        });
+        let payload: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(payload["code"], "COMPOSITION_FFMPEG_FAILED");
+        assert_eq!(payload["details"]["copy"], "copy failed");
+        assert_eq!(payload["details"]["filter"], "filter failed");
+        assert!(payload["message"].as_str().unwrap().contains("compose"));
+    }
+
+    #[test]
+    fn composition_error_preserves_frontend_string_compatibility() {
+        let error = composition_error(
+            "COMPOSITION_NO_PIPES",
+            "No pipes selected",
+            serde_json::json!({}),
+        );
+        let payload: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(payload["code"], "COMPOSITION_NO_PIPES");
+        assert_eq!(payload["message"], "No pipes selected");
+    }
 
     #[test]
     fn start_generation_input_seed_is_optional() {

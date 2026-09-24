@@ -124,6 +124,12 @@ src-tauri/dist/
 *.dmg
 *.ico
 
+# Staged ffmpeg sidecar binaries are build artifacts. Keep the directory
+# placeholder, but never allow the downloaded executable into Git.
+!src-tauri/binaries/
+!src-tauri/binaries/.gitkeep
+src-tauri/binaries/ffmpeg-*
+
 # Batch scripts in repo root (use build.bat instead)
 build-now.bat
 build_app.bat

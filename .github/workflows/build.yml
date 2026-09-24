@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [develop, main, master]
+    # Release installers: tag v* (e.g. v0.7.1) to build the full-variant
+    # installer set. The CI jobs (frontend / rust) run on tag pushes too,
+    # which is fine — they are cheap compile gates.
+    tags: ['v*']
   pull_request:
     branches: [develop, main, master]
 
@@ -54,3 +58,96 @@ jobs:
 
       - name: Check compilation
         run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Check full variant (bundled-ffmpeg sidecar)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features bundled-ffmpeg
+
+# ── Release installers (full variant: bundled ffmpeg sidecar) ─────────────
+#
+# Each OS runner builds its own platform installer natively (no
+# cross-compilation): the sidecar is staged on-demand by fetch-ffmpeg.mjs
+# for THAT runner's target triple, so the ~155 MB ffmpeg binary is fetched
+# per platform and never lands in git (GitHub's 100 MB cap would block it).
+#
+# macOS is intentionally not in the matrix yet: BtbN/FFmpeg-Builds does not
+# publish darwin assets. To add it back:
+#   1. wire a static macOS ffmpeg source (e.g. a self-built tarball or an
+#      equivalent release) into fetch-ffmpeg.mjs via the
+#      FFMPEG_URL_aarch64_apple_darwin override (or extend assetForTarget),
+#   2. uncomment the macos-14 row below, and
+#   3. add the `linux`/`pkg` system deps the dmg bundler needs on macOS
+#      (none required on the current rows; the macOS row will need
+#      `npm i -g appdmg` only if you switch from the built-in dmg target).
+# Until then the macOS installer must be produced locally:
+#   TARGET_TRIPLE=aarch64-apple-darwin node scripts/build/runner.mjs --light --features bundled-ffmpeg --target aarch64-apple-darwin
+# (with FFMPEG_URL_aarch64_apple_darwin set to your darwin asset).
+  release:
+    name: "Installer (${{ matrix.name }})"
+    needs: [frontend, rust]
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            # Output: src-tauri/target/release/bundle/msi/*.msi
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            # Output: src-tauri/target/release/bundle/appimage/*.AppImage
+          # ── macOS (uncomment once a darwin ffmpeg asset is wired in) ──
+          # - name: macos-arm64
+          #   os: macos-14
+          #   target: aarch64-apple-darwin
+          #   # Output: src-tauri/target/release/bundle/dmg/*.dmg
+          #   # Requires FFMPEG_URL_aarch64_apple_darwin (no BtbN darwin asset).
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + ffmpeg sidecar
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/git/db/
+            src-tauri/target/
+            build-state/ffmpeg-cache/
+          key: ${{ runner.os }}-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev build-essential curl wget file libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Stage THIS runner's ffmpeg sidecar (target-aware; warm cache → no-op).
+      - name: Fetch ffmpeg sidecar for target
+        run: node scripts/build/fetch-ffmpeg.mjs ${{ matrix.target }}
+
+      # Build the full-variant installer. --light keeps the release build
+      # within GitHub's default runner memory; swap for the non-light
+      # build (drop --light) once you move to larger runners.
+      - name: Build full-variant installer
+        run: node scripts/build/runner.mjs --light --features bundled-ffmpeg --target ${{ matrix.target }}
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vision-machine-${{ matrix.name }}
+          path: src-tauri/target/release/bundle/

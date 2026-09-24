@@ -12,6 +12,9 @@ import {
   snapCarouselFrame,
   carouselWindow,
   carouselCardScale,
+  carouselCardScaleF,
+  carouselCardX,
+  carouselCardOpacityF,
 } from '$lib/frameDecoder';
 
 describe('CAROUSEL_STEP', () => {
@@ -80,5 +83,87 @@ describe('carouselCardScale', () => {
     expect(carouselCardScale(3)).toBe(0.55);
     expect(carouselCardScale(-3)).toBe(0.55);
     expect(carouselCardScale(4)).toBe(0);
+  });
+});
+
+describe('carouselCardScaleF (continuous dip, float distance)', () => {
+  const near = (a: number, b: number) => expect(a).toBeCloseTo(b, 5);
+
+  it('matches the discrete dip at the grid stops', () => {
+    near(carouselCardScaleF(0), 1.0);
+    near(carouselCardScaleF(1), 0.85);
+    near(carouselCardScaleF(2), 0.7);
+    near(carouselCardScaleF(3), 0.55);
+    near(carouselCardScaleF(4), 0);
+    near(carouselCardScaleF(-1), 0.85);
+    near(carouselCardScaleF(-4), 0);
+  });
+
+  it('interpolates linearly between stops (the semi-state)', () => {
+    near(carouselCardScaleF(0.5), 0.925);
+    near(carouselCardScaleF(1.5), 0.775);
+    near(carouselCardScaleF(2.5), 0.625);
+    near(carouselCardScaleF(3.5), 0.275);
+    near(carouselCardScaleF(-0.5), 0.925);
+  });
+
+  it('is continuous at every breakpoint (no jumps)', () => {
+    for (const bp of [1, 2, 3]) {
+      // 1e-5 away from the stop reads within ~1e-5 of the stop value.
+      expect(Math.abs(carouselCardScaleF(bp - 0.00001) - carouselCardScaleF(bp))).toBeLessThan(0.0002);
+      expect(Math.abs(carouselCardScaleF(bp + 0.00001) - carouselCardScaleF(bp))).toBeLessThan(0.0002);
+    }
+  });
+
+  it('stays at 0 beyond 4 steps and is symmetric', () => {
+    near(carouselCardScaleF(4.5), 0);
+    near(carouselCardScaleF(-5), 0);
+    for (const d of [0.3, 1.7, 2.2, 3.4]) {
+      near(carouselCardScaleF(d), carouselCardScaleF(-d));
+    }
+  });
+});
+
+describe('carouselCardX (continuous offset, float distance)', () => {
+  const CARD_W = 170;
+  const OVERLAP = 0.55;
+  const near = (a: number, b: number) => expect(a).toBeCloseTo(b, 5);
+
+  it('is centered at 0 and matches the discrete stops', () => {
+    near(carouselCardX(0, CARD_W, OVERLAP), 0);
+    near(carouselCardX(1, CARD_W, OVERLAP), CARD_W); // first neighbor: one full width out
+    near(carouselCardX(-1, CARD_W, OVERLAP), -CARD_W);
+    near(carouselCardX(2, CARD_W, OVERLAP), CARD_W * (1 + 0.45));
+    near(carouselCardX(3, CARD_W, OVERLAP), CARD_W * (1 + 2 * 0.45));
+  });
+
+  it('interpolates linearly toward the center for |d| < 1', () => {
+    near(carouselCardX(0.5, CARD_W, OVERLAP), CARD_W * 0.5);
+    near(carouselCardX(-0.25, CARD_W, OVERLAP), -CARD_W * 0.25);
+  });
+
+  it('is continuous at d = 1 and symmetric', () => {
+    // 1e-5 away from the stop reads within ~1e-3 px of the stop value
+    // (both branches are linear, meeting exactly at CARD_W).
+    expect(Math.abs(carouselCardX(0.99999, CARD_W, OVERLAP) - CARD_W)).toBeLessThan(0.002);
+    expect(Math.abs(carouselCardX(1.00001, CARD_W, OVERLAP) - CARD_W)).toBeLessThan(0.002);
+    near(carouselCardX(1.5, CARD_W, OVERLAP), -carouselCardX(-1.5, CARD_W, OVERLAP));
+  });
+});
+
+describe('carouselCardOpacityF (edge fade, float distance)', () => {
+  const near = (a: number, b: number) => expect(a).toBeCloseTo(b, 5);
+
+  it('holds 1 up to 3 steps, fades to 0 at 4', () => {
+    near(carouselCardOpacityF(0), 1);
+    near(carouselCardOpacityF(1), 1);
+    near(carouselCardOpacityF(3), 1);
+    near(carouselCardOpacityF(3.5), 0.5);
+    near(carouselCardOpacityF(4), 0);
+    near(carouselCardOpacityF(4.5), 0);
+  });
+
+  it('is symmetric', () => {
+    near(carouselCardOpacityF(3.2), carouselCardOpacityF(-3.2));
   });
 });

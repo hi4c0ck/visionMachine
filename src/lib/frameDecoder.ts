@@ -45,6 +45,33 @@ interface LRUEntry {
   t: number;
 }
 
+/** Clone a cached bitmap before exposing it to a canvas action. */
+async function cloneImageBitmap(bitmap: ImageBitmap | null): Promise<ImageBitmap | null> {
+  if (!bitmap) return null;
+  try {
+    return await createImageBitmap(bitmap);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why a frame thumbnail is unavailable — the UI keeps the placeholder but
+ * can show the RIGHT one ("loading…", "out of range", "decoder failed")
+ * instead of a generic ellipsis.
+ */
+export type ThumbDiag =
+  | 'pending' // nothing known yet (source not loaded / decode in flight)
+  | 'unsupported' // WebCodecs absent AND canvas capture unavailable (no <video> in the env)
+  | 'loading' // the capture <video> hasn't finished its first load / metadata
+  | 'out-of-range' // frame index is past the media's actual duration
+  | 'failed' // capture/decode broke (media error, unseekable, drawImage failure)
+  | 'ok'; // a bitmap is available (or a cache hit)
+
+export interface FrameDiag {
+  thumb: ThumbDiag;
+}
+
 /**
  * A decoded-frame source for one media file. `frame(i)` resolves to the
  * 0-based frame index's ImageBitmap (or null). Frame indices are composer
@@ -61,6 +88,11 @@ export class FrameSource {
   // defensively (every WebCodecs call is guarded by isSupported + try).
   private decoder: any = null;
   private readonly inflight = new Map<number, Promise<ImageBitmap | null>>();
+  private captureBroken = false;
+  private decodeBroken = false;
+  /** Last diagnostics for the most-recently-requested frame. The UI reads
+   *  this to pick the right placeholder copy. Updated by resolveFrame. */
+  private diagState: FrameDiag = { thumb: 'pending' };
   /** Frames emitted by the decoder and not yet claimed by a decodeForward
    *  caller, in decode order. Bounded: each pass claims/closes them. */
   private readonly outputQueue: VideoFrame[] = [];
@@ -82,25 +114,257 @@ export class FrameSource {
   }
 
   /**
-   * Decoded ImageBitmap for a 0-based frame index, or null (unsupported,
-   * decode failure, index past end of media, or evicted from the LRU).
+   * Diagnostics for the most-recently-requested frame (see FrameDiag).
+   * The UI polls this to render the correct placeholder copy. Read-only
+   * snapshot; safe to call any time.
+   */
+  get diag(): FrameDiag {
+    return this.diagState;
+  }
+
+  /**
+   * The media's measured duration in frames (null until the capture <video>
+   * has loaded metadata). The UI clamps its frame pool to this so side
+   * cards past the real video end show "out of range", not a forever-
+   * pending placeholder.
+   */
+  get mediaDurationFrames(): number | null {
+    const v = this.captureVideo;
+    if (!v || !isFinite(v.duration) || v.duration <= 0) return null;
+    return Math.floor(v.duration * this.fps);
+  }
+
+  /**
+   * ImageBitmap for a 0-based frame index, or null (index past end of media
+   * or evicted from the LRU). Resolution order per frame:
+   *   1. LRU cache
+   *   2. WebCodecs decode (EncodedVideoFileSource + VideoDecoder) when the
+   *      runtime has the types — the fast path the plan calls out.
+   *   3. Canvas capture off a throwaway <video> element: seek the element to
+   *      `index / fps`, wait for `seeked`, draw to a canvas, toDataURL.
+   *      This is the universal fallback that works in every WebView2/Chromium
+   *      WITHOUT WebCodecs (or when the WebCodecs decode poisons the source),
+   *      so neighbor cards show REAL frames instead of placeholders.
    */
   frame(index: number): Promise<ImageBitmap | null> {
     if (index < 0 || this.closed) return Promise.resolve(null);
     const cached = this.cache.get(index);
     if (cached) {
       cached.t = ++this.lruCounter; // promote to most-recently-used
-      return Promise.resolve(cached.bitmap);
+      // The cache owns this bitmap and may close it during LRU eviction.
+      // Never hand the same resource to Svelte's canvas action: it can then
+      // receive a detached ImageBitmap on the next update and throw.
+      return cloneImageBitmap(cached.bitmap);
     }
-    if (!FrameSource.isSupported) return Promise.resolve(null);
     const pending = this.inflight.get(index);
     if (pending) return pending;
-    const p = this.decodeTo(index).finally(() => this.inflight.delete(index));
+    const raw = this.resolveFrame(index).finally(() => this.inflight.delete(index));
+    // The resolved bitmap is cached by FrameSource and can be closed later;
+    // expose an independent clone to every Svelte action instead.
+    const p = raw.then(cloneImageBitmap);
     this.inflight.set(index, p);
     return p;
   }
 
-  /** Close the decoder and release the thumbnail cache. */
+  /**
+   * Resolve a frame to an ImageBitmap, preferring WebCodecs and falling back
+   * to a <video>-element canvas capture. A WebCodecs failure disposes the
+   * decoder pipeline but does NOT poison the whole source — the canvas
+   * fallback still serves subsequent frames.
+   *
+   * The media-duration clamp: the requested composer frame may exceed the
+   * ACTUAL encoded video's length (totalFrames is the configured composer
+   * length, the generated clip can be shorter). Seeking past the end yields
+   * a `seeked` at the clamped last frame — a duplicate, not a new image. So
+   * when the duration is known, frames past it short-circuit to null with
+   * the "out of range" diagnostic instead of drawing the last frame N times.
+   */
+  private async resolveFrame(index: number): Promise<ImageBitmap | null> {
+    // 1) WebCodecs fast path (only when the decoder pipeline is healthy).
+    if (FrameSource.isSupported && !this.decodeBroken && this.decoder?.state !== 'closed') {
+      const webcodecs = await this.decodeTo(index);
+      if (webcodecs) {
+        this.diagState = { thumb: 'ok' };
+        this.cache.set(index, { bitmap: webcodecs, t: ++this.lruCounter });
+        this.evictLru();
+        return webcodecs;
+      }
+      // decodeTo returned null (past-end or unsupported) — try canvas below.
+      // If the decoder failed for this frame, stop retrying it.
+      if (this.decoder?.state === 'closed') this.decodeBroken = true;
+    }
+    // 2) Duration clamp: past the real end of the media → no bitmap, and the
+    //    UI shows "out of range" (distinct from a decode failure).
+    const durFrames = this.mediaDurationFrames;
+    if (durFrames !== null && index > durFrames) {
+      this.diagState = { thumb: 'out-of-range' };
+      return null;
+    }
+    // 3) Canvas-capture fallback (universal, no WebCodecs required).
+    const captured = await this.captureFrame(index);
+    if (captured) {
+      this.diagState = { thumb: 'ok' };
+      this.cache.set(index, { bitmap: captured, t: ++this.lruCounter });
+      this.evictLru();
+    } else {
+      // captureFrame set the specific reason; surface it.
+      this.diagState = { thumb: this.captureBroken ? 'failed' : this.captureVideo ? 'loading' : 'unsupported' };
+    }
+    return captured;
+  }
+
+  /**
+   * Seek a throwaway <video> element to `index / fps` and capture its current
+   * frame as an ImageBitmap via canvas. Reused element (created lazily, one
+   * per source) so seek is cheap. Resolves null when the element can't load
+   * the media, can't seek in time, or the runtime lacks canvas.captureStream /
+   * drawImage of video. The fallback is best-effort: it must never hard-fail.
+   */
+  private captureVideo?: HTMLVideoElement;
+  /** Set once the capture element's first load (canplay + metadata) settles.
+   *  A seek issued before metadata is available silently no-ops in WebView2
+   *  (no `seeked` event), which is the original "empty side cards" bug. */
+  private captureReady = false;
+  private captureInflight: Promise<ImageBitmap | null> | null = null;
+  private async captureFrame(index: number): Promise<ImageBitmap | null> {
+    if (this.captureBroken) return null;
+    // One seek at a time: a queued capture awaits the in-flight one, then
+    // re-seeks. Concurrent captures would fight over the same element and
+    // draw stale frames.
+    const prev = this.captureInflight ?? Promise.resolve(null);
+    const job = prev.then(async () => {
+      if (this.captureBroken) return null;
+      const videoEl = this.ensureCaptureVideo();
+      if (!videoEl) return null;
+      // Gate every seek on the element being fully loaded. Without this, a
+      // seek before `loadedmetadata` produces no `seeked` event at all and
+      // the caller times out (the root cause of empty side cards).
+      if (!this.captureReady) {
+        const ready = await this.waitCaptureReady(videoEl);
+        if (!ready) {
+          this.captureBroken = true; // media never became seekable
+          return null;
+        }
+      }
+      const targetSec = index / this.fps;
+      try {
+        const seeked = await this.seekVideo(videoEl, targetSec);
+        if (!seeked) {
+          // A non-seekable / errored element would stall every later capture
+          // (each 2s timeout) — mark the fallback broken so it stops.
+          this.captureBroken = true;
+          return null;
+        }
+        const canvas = document.createElement('canvas');
+        // Capture at the element's intrinsic size (capped) to keep memory
+        // bounded: the card is rendered ~170px wide, no need for full res.
+        const cap = 640;
+        let w = videoEl.videoWidth || videoEl.clientWidth || cap;
+        let h = videoEl.videoHeight || videoEl.clientHeight || 360;
+        if (w > cap) { h = Math.round(h * (cap / w)); w = cap; }
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(videoEl, 0, 0, w, h);
+        const bitmap = await createImageBitmap(canvas);
+        return bitmap;
+      } catch {
+        return null; // best-effort: never throw out of the carousel fallback
+      }
+    });
+    this.captureInflight = job;
+    const result = await job;
+    if (this.captureInflight === job) this.captureInflight = null;
+    return result;
+  }
+
+  /**
+   * Resolve when the capture element is loaded far enough to seek: it has
+   * fired `loadeddata` (metadata + first frame available) or `canplay`, and
+   * `videoWidth` is known. Bounded — a media that never loads marks the
+   * fallback broken instead of hanging the carousel.
+   */
+  private waitCaptureReady(el: HTMLVideoElement): Promise<boolean> {
+    if (this.captureReady) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(budget);
+        el.removeEventListener('loadeddata', onReady);
+        el.removeEventListener('canplay', onReady);
+        el.removeEventListener('error', onErr);
+        if (ok) this.captureReady = true;
+        resolve(ok);
+      };
+      const onReady = () => {
+        // loadeddata guarantees videoWidth/videoHeight + duration are set;
+        // a seek from here on will fire `seeked`.
+        if (el.readyState >= 2) finish(true);
+      };
+      const onErr = () => finish(false);
+      const budget = setTimeout(() => finish(false), 10000);
+      el.addEventListener('loadeddata', onReady);
+      el.addEventListener('canplay', onReady);
+      el.addEventListener('error', onErr);
+      // Already loaded (e.g. a second frame() call after the first settled).
+      if (el.readyState >= 2) finish(true);
+    });
+  }
+
+  private ensureCaptureVideo(): HTMLVideoElement | null {
+    if (typeof document === 'undefined') return null;
+    if (!this.captureVideo) {
+      const el = document.createElement('video');
+      el.muted = true;
+      el.playsInline = true;
+      // Do NOT autoplay; we only seek + draw. src is set on first use.
+      el.preload = 'auto';
+      el.crossOrigin = 'anonymous';
+      el.src = this.url;
+      this.captureVideo = el;
+    }
+    return this.captureVideo;
+  }
+
+  /**
+   * Seek a <video> to a timestamp; resolves true when the `seeked` event
+   * fires within a short budget, false otherwise (not seekable / the element
+   * errored). The element is already metadata-ready when this runs (see
+   * waitCaptureReady), so `seeked` is a reliable completion signal. Bounded
+   * so a stuck element can't hang the carousel.
+   */
+  private seekVideo(el: HTMLVideoElement, sec: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(budget);
+        el.removeEventListener('seeked', onSeeked);
+        el.removeEventListener('error', onErr);
+        resolve(ok);
+      };
+      const onSeeked = () => finish(true);
+      const onErr = () => finish(false);
+      const budget = setTimeout(() => finish(false), 3000);
+      el.addEventListener('seeked', onSeeked);
+      el.addEventListener('error', onErr);
+      try {
+        // Clamp to the measured duration: seeking past the end of a finite
+        // clip fires `seeked` at the last frame — the duration check in
+        // resolveFrame already rejects out-of-range frames, this is a guard.
+        const d = isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity;
+        el.currentTime = Math.max(0, Math.min(sec, d - 0.001));
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
+  /** Close the decoder, release the thumbnail cache, and stop the capture video. */
   dispose(): void {
     this.closed = true;
     try {
@@ -115,6 +379,15 @@ export class FrameSource {
       /* ignore */
     }
     this.fileSource = null;
+    if (this.captureVideo) {
+      this.captureVideo.removeAttribute('src');
+      this.captureVideo.load?.();
+      this.captureVideo = undefined;
+    }
+    this.captureReady = false;
+    this.captureBroken = false;
+    this.decodeBroken = false;
+    this.diagState = { thumb: 'pending' };
     for (const e of this.cache.values()) e.bitmap?.close();
     this.cache.clear();
   }
@@ -122,6 +395,7 @@ export class FrameSource {
   // ── internals ─────────────────────────────────────────────────────────────
 
   private async decodeTo(index: number): Promise<ImageBitmap | null> {
+    if (!FrameSource.isSupported) return null;
     try {
       await this.ensureDecoder();
       if (!this.decoder || this.decoder.state === 'closed') return null;
@@ -130,19 +404,21 @@ export class FrameSource {
       // it; decode forward and drop every frame until `index` is emitted.
       const seekMs = Math.max(0, ((index - 1) / this.fps) * 1000);
       await this.seekDecoder(seekMs);
-
-      const bitmap = await this.decodeForward(index);
-      if (bitmap) {
-        this.cache.set(index, { bitmap, t: ++this.lruCounter });
-        this.evictLru();
-      }
-      return bitmap;
+      return await this.decodeForward(index);
+      // NOTE: no caching here — resolveFrame owns the LRU so both the
+      // WebCodecs and canvas-capture paths share one cache.
     } catch (e) {
-      // A decode failure poisons this source (unsupported codec/container):
-      // close the pipeline so later frames don't retry it; callers fall
-      // back to placeholder neighbors.
+      // A WebCodecs failure (unsupported codec/container) closes the decoder
+      // pipeline so we stop retrying it — but we do NOT dispose() the whole
+      // source, because the <video>-canvas fallback can still serve frames.
       console.warn('[frameDecoder] decode failed:', e);
-      this.dispose();
+      try {
+        this.decoder?.close();
+      } catch {
+        /* already closed */
+      }
+      this.decoder = null;
+      this.decodeBroken = true;
       return null;
     }
   }
@@ -353,4 +629,48 @@ export function carouselCardScale(delta: number): number {
     default:
       return 0;
   }
+}
+
+/**
+ * Continuous dip scale for a card `d` steps from the *visual* center, where
+ * `d` is a FLOAT (the semi-state between grid stops — mid-drag, or mid
+ * transition between centers). Piecewise-linear through the same
+ * breakpoints as the discrete dip (0→1.0, 1→0.85, 2→0.7, 3→0.55, 4→0), so
+ * resting positions look identical to `carouselCardScale` but intermediate
+ * positions are smooth: a card 0.5 steps from center reads 0.925, not the
+ * discrete 0.85 or 1.0. Beyond |d| ≥ 4 the card is hidden (0).
+ */
+export function carouselCardScaleF(d: number): number {
+  const a = Math.abs(d);
+  if (a >= 4) return 0;
+  if (a < 1) return 1 - 0.15 * a;
+  if (a < 2) return 0.85 - 0.15 * (a - 1);
+  if (a < 3) return 0.7 - 0.15 * (a - 2);
+  return 0.55 - 0.55 * (a - 3);
+}
+
+/**
+ * Horizontal offset (px, signed: negative = left of the strip center) of a
+ * card `d` steps from the *visual* center (float). Matches the discrete
+ * layout at integer stops — the first neighbor sits one full card-width out,
+ * each further neighbor folds by `OVERLAP` — but interpolates linearly
+ * between stops so mid-transition positions are continuous. At |d| ≥ 4 the
+ * offset keeps the formula (the card is hidden anyway).
+ */
+export function carouselCardX(d: number, cardW: number, overlap: number): number {
+  const a = Math.abs(d);
+  const x = a < 1 ? cardW * a : cardW * (1 + (a - 1) * (1 - overlap));
+  return d < 0 ? -x : x;
+}
+
+/**
+ * Opacity for a card `d` steps from the *visual* center (float): full until
+ * 3 steps out, then fading to 0 by 4 (where the card is already scaled away).
+ * Keeps entering/leaving cards from popping at the strip edges.
+ */
+export function carouselCardOpacityF(d: number): number {
+  const a = Math.abs(d);
+  if (a <= 3) return 1;
+  if (a >= 4) return 0;
+  return 1 - (a - 3);
 }

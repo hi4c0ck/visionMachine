@@ -16,6 +16,7 @@
 		oncomposesession,
 		ffmpegAvailable = false,
 		composing = false,
+		compositionLabel = '',
 		pipegenerating = false,
 		onfpschange,
 		onresolutionchange,
@@ -42,8 +43,9 @@
 		oncomposesession?: () => void;
 		/** ffmpeg present? false → the compose button is disabled w/ hint. */
 		ffmpegAvailable?: boolean;
-		/** Compose is in flight — button shows a spinner label. */
+		/** Compose is in flight — button shows live progress. */
 		composing?: boolean;
+		compositionLabel?: string;
 		/** A generation task is active — the pipe generate button is disabled. */
 		pipegenerating?: boolean;
 		onfpschange?: (fps: number) => void;
@@ -210,7 +212,7 @@
           title={ffmpegAvailable
             ? APP_CONSTANTS.strings.composeSessionVideoHint
             : APP_CONSTANTS.strings.composeSessionNoFfmpeg}>
-          {composing ? '…' : APP_CONSTANTS.strings.composeSessionVideo}
+          {composing ? (compositionLabel || 'Composing…') : APP_CONSTANTS.strings.composeSessionVideo}
         </button>
       {/if}
     </div>
