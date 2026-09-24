@@ -31,6 +31,7 @@ import {
   addKeyframe,
   removeKeyframe,
   migratePipe,
+  duplicatePipe,
   loadSession,
   saveSession,
   updateFPS,
@@ -137,6 +138,89 @@ describe('Composer Integration', () => {
 
       expect(session.pipes[0].orderIndex).toBe(0);
       expect(session.pipes[1].orderIndex).toBe(1);
+    });
+  });
+
+  // ── Pipe Duplicate (hard copy) Tests ───────────────────────────────────
+
+  describe('duplicatePipe', () => {
+    function makeSourcePipe(): PipeRow {
+      return {
+        id: 'src',
+        name: 'Source',
+        lengthFrames: 121,
+        qValue: 18,
+        cValue: 7,
+        orderIndex: 0,
+        keyframes: [
+          { id: 'kf1', frame: 0, slotIndex: 0, type: 'url', imageSrc: 'a.png', status: 'done', forceRegen: true },
+        ],
+        subjectReferences: [
+          { id: 'sr1', imageUrl: 'b.png', useFrames: false, status: 'done', forceRegen: true },
+        ],
+        elements: [
+          {
+            id: 'el1',
+            tag: 'timeline',
+            segments: [{ id: 'seg1', frameStart: 0, frameEnd: 120, tags: [{ id: 'tag1', tag: 'global', frameStart: 0, frameEnd: 120, value: 1 }] }],
+          },
+        ],
+        lastGeneration: { taskId: 'task1', videoPath: 'C:/media/out.mp4', generatedAt: 1, status: 'done' },
+      };
+    }
+
+    it('deep-copies nested data with fresh ids (independent of source)', async () => {
+      const src = makeSourcePipe();
+      const session = createMockSession([src]);
+      sessions.set(session.id, session);
+
+      const result = await duplicatePipe(session.id, 'src');
+      expect(result.errors).toHaveLength(0);
+      expect(session.pipes).toHaveLength(2);
+      const copy = session.pipes[1];
+
+      // Independent copies (no shared references).
+      expect(copy.id).not.toBe(src.id);
+      expect(copy.name).toBe('Source (copy)');
+      expect(copy.keyframes).toHaveLength(1);
+      expect(copy.subjectReferences).toHaveLength(1);
+      expect(copy.elements).toHaveLength(1);
+      // No shared object identity with the source.
+      expect(copy.keyframes[0]).not.toBe(src.keyframes[0]);
+      expect(copy.subjectReferences[0]).not.toBe(src.subjectReferences[0]);
+      expect(copy.elements[0]).not.toBe(src.elements[0]);
+      // All nested ids are re-minted.
+      expect(copy.keyframes[0].id).not.toBe('kf1');
+      expect(copy.subjectReferences[0].id).not.toBe('sr1');
+      expect(copy.elements[0].id).not.toBe('el1');
+      expect(copy.elements[0].segments[0].id).not.toBe('seg1');
+      expect(copy.elements[0].segments[0].tags[0].id).not.toBe('tag1');
+    });
+
+    it('does NOT carry over pipe-level generated video (lastGeneration)', async () => {
+      const session = createMockSession([makeSourcePipe()]);
+      sessions.set(session.id, session);
+
+      await duplicatePipe(session.id, 'src');
+      const copy = session.pipes[1];
+      // The copy starts clean — its video only appears after ITS generation.
+      expect(copy.lastGeneration ?? null).toBeNull();
+      // The source keeps its own artifact.
+      expect(session.pipes[0].lastGeneration?.videoPath).toBe('C:/media/out.mp4');
+    });
+
+    it('resets generation status/forceRegen on copied refs (source run state does not leak)', async () => {
+      const session = createMockSession([makeSourcePipe()]);
+      sessions.set(session.id, session);
+
+      await duplicatePipe(session.id, 'src');
+      const copy = session.pipes[1];
+      expect(copy.keyframes[0].status).toBe('pending');
+      expect(copy.keyframes[0].forceRegen).toBe(false);
+      expect(copy.subjectReferences[0].status).toBe('pending');
+      expect(copy.subjectReferences[0].forceRegen).toBe(false);
+      // Source is untouched.
+      expect(session.pipes[0].keyframes[0].status).toBe('done');
     });
   });
 
