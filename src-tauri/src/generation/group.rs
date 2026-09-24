@@ -2,13 +2,18 @@
 //! remains in TaskRegistry so the existing task lifecycle and terminal sink
 //! ordering stay authoritative.
 use crate::generation::{
-    EngineInput, GenerationService, GenerationTaskView, ModelSpecWire, TaskRegistry, TaskStatus,
+    compose_session_video, ComposeRegistry, EngineInput, GenerationService, GenerationTaskView,
+    ModelSpecWire, SourceVideo, TaskRegistry, TaskStatus,
 };
 use crate::storage::{db::Database, generation_groups_db::GenerationGroupRow};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,17 +94,52 @@ pub struct StartSessionGenerationInput {
 fn yes() -> bool {
     true
 }
+
+fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> Option<SourceVideo> {
+    (event.status == Some(TaskStatus::Done))
+        .then(|| event.view.output_path.as_ref().filter(|p| !p.trim().is_empty()))
+        .flatten()
+        .map(|path| SourceVideo {
+            label: pipe_id.to_string(),
+            path: path.clone(),
+        })
+}
+
+fn compose_output_paths(sources: &[SourceVideo]) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let first = sources.first().ok_or("no completed run pipes to compose")?;
+    let task_dir = Path::new(&first.path).parent().ok_or("completed video has no task directory")?;
+    let pipe_dir = task_dir.parent().ok_or("completed video has no pipe directory")?;
+    let session_root = pipe_dir.parent().ok_or("completed video has no session root")?;
+    let out_dir = session_root.join("session-video");
+    Ok((out_dir.clone(), out_dir.join("session.mp4")))
+}
+
+fn compose_sources(sources: Vec<SourceVideo>, cancel: &Arc<AtomicBool>) -> Result<String, String> {
+    let (out_dir, out_path) = compose_output_paths(&sources)?;
+    let ffmpeg = crate::generation::resolve_ffmpeg();
+    compose_session_video(&ffmpeg, &sources, &out_path, &out_dir, cancel)
+        .map(|r| r.output_path)
+        .map_err(|e| e.to_string())
+}
+
 struct GroupRun {
     session_id: String,
     pipes: Vec<(String, Option<String>, String, f32, Option<String>)>,
     queue: VecDeque<String>,
     current: Option<String>,
     policy: String,
+    auto_compose: bool,
+    completed_sources: Vec<SourceVideo>,
+    compose_state: Option<String>,
+    compose_error: Option<String>,
+    session_video_path: Option<String>,
+    cancel: Arc<AtomicBool>,
     started_at: i64,
 }
 pub struct GroupCoordinator {
     pub generation: GenerationService,
     pub db: Database,
+    pub compose_registry: ComposeRegistry,
     state: Arc<Mutex<HashMap<String, GroupRun>>>,
     index: Arc<Mutex<HashMap<String, String>>>,
     event_sink: Arc<Mutex<Option<Arc<dyn Fn(GroupEvent) + Send + Sync>>>>,
@@ -109,6 +149,7 @@ impl Clone for GroupCoordinator {
         Self {
             generation: self.generation.clone(),
             db: self.db.clone(),
+            compose_registry: self.compose_registry.clone(),
             state: self.state.clone(),
             index: self.index.clone(),
             event_sink: self.event_sink.clone(),
@@ -116,10 +157,11 @@ impl Clone for GroupCoordinator {
     }
 }
 impl GroupCoordinator {
-    pub fn new(generation: GenerationService, db: Database) -> Self {
+    pub fn new(generation: GenerationService, db: Database, compose_registry: ComposeRegistry) -> Self {
         Self {
             generation,
             db,
+            compose_registry,
             state: Arc::new(Mutex::new(HashMap::new())),
             index: Arc::new(Mutex::new(HashMap::new())),
             event_sink: Arc::new(Mutex::new(None)),
@@ -182,6 +224,12 @@ impl GroupCoordinator {
                         "stop"
                     }
                     .into(),
+                    auto_compose: input.auto_compose,
+                    completed_sources: Vec::new(),
+                    compose_state: (!input.auto_compose).then(|| "skipped".into()),
+                    compose_error: None,
+                    session_video_path: None,
+                    cancel: Arc::new(AtomicBool::new(false)),
                     started_at: Self::now(),
                 },
             );
@@ -195,7 +243,7 @@ impl GroupCoordinator {
             failure_policy: input.failure_policy.clone(),
             auto_compose: input.auto_compose,
             session_video_path: None,
-            compose_state: None,
+            compose_state: (!input.auto_compose).then(|| "skipped".into()),
             compose_error: None,
             error: None,
             started_at: Self::now(),
@@ -238,7 +286,7 @@ impl GroupCoordinator {
             .find(|p| p.id == pipe_id)
             .ok_or("Pipe not found")?;
         let tid = uuid::Uuid::new_v4().to_string();
-        let mut view = GenerationTaskView {
+        let view = GenerationTaskView {
             task_id: tid.clone(),
             session_id: input.session_id.clone(),
             pipe_id: pipe_id.into(),
@@ -291,6 +339,9 @@ impl GroupCoordinator {
                     .unwrap_or("done".into());
                 p.3 = event.view.progress;
                 p.4 = event.view.error.clone();
+                if let Some(source) = completed_source(&p.0, event) {
+                    r.completed_sources.push(source);
+                }
             }
             let pipe = p.as_ref().map(|x| x.0.clone());
             let next = r.queue.pop_front();
@@ -351,33 +402,131 @@ impl GroupCoordinator {
                 }
             });
         } else {
-            self.finish_group(
-                &gid,
-                if self
-                    .state
-                    .lock()
-                    .unwrap()
-                    .get(&gid)
-                    .map(|r| r.pipes.iter().any(|p| p.2 == "error"))
-                    .unwrap_or(false)
-                {
-                    GroupStatus::DoneWithErrors
-                } else {
-                    GroupStatus::Done
-                },
-                None,
-            )
+            let status = if self
+                .state
+                .lock()
+                .unwrap()
+                .get(&gid)
+                .map(|r| r.pipes.iter().any(|p| p.2 == "error"))
+                .unwrap_or(false)
+            {
+                GroupStatus::DoneWithErrors
+            } else {
+                GroupStatus::Done
+            };
+            self.compose_and_finish(&gid, status);
         }
     }
-    fn finish_group(&self, gid: &str, status: GroupStatus, error: Option<String>) {
-        let run = {
-            let mut m = self.state.lock().unwrap();
-            m.remove(gid)
+    fn compose_and_finish(&self, gid: &str, status: GroupStatus) {
+        let snapshot = {
+            let m = self.state.lock().unwrap();
+            m.get(gid).map(|r| {
+                (
+                    r.session_id.clone(),
+                    r.auto_compose,
+                    r.cancel.clone(),
+                    r.completed_sources.clone(),
+                )
+            })
         };
-        if let Some(r) = run {
+        let Some((session_id, auto_compose, group_cancel, sources)) = snapshot else {
+            return;
+        };
+        if !auto_compose {
+            self.finish_group(gid, status, None);
+            return;
+        }
+        let this = self.clone();
+        let gid_owned = gid.to_string();
+        tokio::spawn(async move {
+            if group_cancel.load(Ordering::Acquire) {
+                this.finish_group(&gid_owned, GroupStatus::Cancelled, None);
+                return;
+            }
+            {
+                let mut m = this.state.lock().unwrap();
+                if let Some(r) = m.get_mut(&gid_owned) {
+                    r.compose_state = Some("running".into());
+                }
+            }
+            this.emit(GroupEvent {
+                group_id: gid_owned.clone(),
+                kind: "compose-started".into(),
+                pipe_id: None,
+                task_id: None,
+                status: Some("running".into()),
+            });
+            let sources_for_result = sources.clone();
+            let registry = this.compose_registry.clone();
+            let session_for_result = session_id.clone();
+            let worker_group_cancel = Arc::clone(&group_cancel);
+            let result = tokio::task::spawn_blocking(move || {
+                let group_cancel = worker_group_cancel;
+                match registry.start(&session_for_result) {
+                    Ok((_operation_id, cancel)) => {
+                        if group_cancel.load(Ordering::Acquire) {
+                            cancel.store(true, Ordering::Release);
+                        }
+                        let result = compose_sources(sources_for_result, &cancel);
+                        registry.finish(&session_for_result);
+                        result
+                    }
+                    Err(_) => Err("COMPOSITION_ALREADY_RUNNING".to_string()),
+                }
+            })
+            .await;
+            let (compose_state, compose_error, output_path, cancelled): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                bool,
+            ) = match result {
+                Ok(Ok(path)) => (Some("done".into()), None, Some(path), false),
+                Ok(Err(e)) => {
+                    let cancelled = group_cancel.load(Ordering::Acquire) || e == "Cancelled";
+                    (Some(if cancelled { "cancelled".into() } else { "error".into() }), Some(e), None, cancelled)
+                }
+                Err(e) => (Some("error".into()), Some(format!("compose worker join failed: {e}")), None, false),
+            };
+            {
+                let mut m = this.state.lock().unwrap();
+                if let Some(r) = m.get_mut(&gid_owned) {
+                    r.compose_state = compose_state.clone();
+                    r.compose_error = compose_error.clone();
+                    r.session_video_path = output_path.clone();
+                }
+            }
+            this.db
+                .update_generation_group_composition(
+                    &gid_owned,
+                    output_path.as_deref(),
+                    compose_state.as_deref(),
+                    compose_error.as_deref(),
+                )
+                .await
+                .ok();
+            this.emit(GroupEvent {
+                group_id: gid_owned.clone(),
+                kind: "compose-terminal".into(),
+                pipe_id: None,
+                task_id: None,
+                status: compose_state,
+            });
+            this.finish_group(
+                &gid_owned,
+                if cancelled { GroupStatus::Cancelled } else { status },
+                None,
+            );
+        });
+    }
+    fn finish_group(&self, gid: &str, status: GroupStatus, error: Option<String>) {
+        let Some(run) = self.state.lock().unwrap().remove(gid) else {
+            return;
+        };
+        {
             let db = self.db.clone();
             let gid = gid.to_string();
-            let pipes = serde_json::to_string(&r.pipes).unwrap_or_else(|_| "[]".into());
+            let pipes = serde_json::to_string(&run.pipes).unwrap_or_else(|_| "[]".into());
             tokio::spawn(async move {
                 let _ = db
                     .update_generation_group(&gid, status.as_str(), 1.0, &pipes, error.as_deref())
@@ -397,10 +546,20 @@ impl GroupCoordinator {
             let mut m = self.state.lock().unwrap();
             let Some(r) = m.get_mut(gid) else { return };
             r.queue.clear();
+            r.cancel.store(true, Ordering::Release);
             r.current.clone()
         };
         if let Some(t) = current {
             let _ = self.generation.registry.cancel(&t);
+        }
+        let session_id = self
+            .state
+            .lock()
+            .unwrap()
+            .get(gid)
+            .map(|r| r.session_id.clone());
+        if let Some(session_id) = session_id {
+            self.compose_registry.cancel(&session_id);
         }
         self.finish_group(gid, GroupStatus::Cancelled, None);
     }
@@ -422,9 +581,9 @@ impl GroupCoordinator {
                 })
                 .collect(),
             progress: r.pipes.iter().map(|p| p.3).sum::<f32>() / r.pipes.len() as f32,
-            session_video_path: None,
-            compose_state: None,
-            compose_error: None,
+            session_video_path: r.session_video_path.clone(),
+            compose_state: r.compose_state.clone(),
+            compose_error: r.compose_error.clone(),
             started_at: r.started_at,
         })
     }
@@ -438,5 +597,69 @@ mod tests {
     #[test]
     fn statuses_are_wire_compatible() {
         assert_eq!(GroupStatus::DoneWithErrors.as_str(), "done-with-errors");
+    }
+
+    #[test]
+    fn auto_compose_uses_fixed_session_output() {
+        let sources = vec![SourceVideo {
+            label: "done-pipe".into(),
+            path: "C:/media/My Session/Pipe One/task-1/video.mp4".into(),
+        }];
+        let (dir, output) = compose_output_paths(&sources).unwrap();
+        assert_eq!(dir, Path::new("C:/media/My Session/session-video"));
+        assert_eq!(output, Path::new("C:/media/My Session/session-video/session.mp4"));
+    }
+
+    #[test]
+    fn auto_compose_rejects_empty_completed_sources() {
+        let error = compose_output_paths(&[]).unwrap_err();
+        assert!(error.contains("no completed run pipes"));
+    }
+
+    #[test]
+    fn shared_registry_rejects_concurrent_session_compose() {
+        let registry = ComposeRegistry::default();
+        let (_id, _cancel) = registry.start("session-1").unwrap();
+        assert!(registry.start("session-1").is_err());
+        registry.finish("session-1");
+        assert!(registry.start("session-1").is_ok());
+    }
+
+    #[test]
+    fn only_done_terminal_events_become_explicit_sources() {
+        fn view(path: &str) -> GenerationTaskView {
+            GenerationTaskView {
+                task_id: "task-1".into(),
+                session_id: "session-1".into(),
+                pipe_id: "pipe-1".into(),
+                status: TaskStatus::Done,
+                progress: 1.0,
+                stages: vec![],
+                error: None,
+                output_path: Some(path.into()),
+                request_log: None,
+                started_at: 0,
+            }
+        }
+        let done = crate::generation::GenTaskEvent {
+            task_id: "task-1".into(),
+            kind: "terminal".into(),
+            status: Some(TaskStatus::Done),
+            view: view("C:/media/s/p/t/video.mp4"),
+        };
+        assert_eq!(completed_source("pipe-1", &done).unwrap().path, "C:/media/s/p/t/video.mp4");
+        let failed = crate::generation::GenTaskEvent {
+            status: Some(TaskStatus::Error),
+            ..done
+        };
+        assert!(completed_source("pipe-1", &failed).is_none());
+    }
+
+    #[test]
+    fn group_cancellation_flag_is_cooperative() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        assert!(!cancel.load(Ordering::Acquire));
+        cancel.store(true, Ordering::Release);
+        assert!(cancel.load(Ordering::Acquire));
     }
 }

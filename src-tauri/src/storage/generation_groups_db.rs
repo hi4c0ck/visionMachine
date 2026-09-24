@@ -41,6 +41,18 @@ impl Database {
             .execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
+    pub async fn update_generation_group_composition(
+        &self,
+        group_id: &str,
+        session_video_path: Option<&str>,
+        compose_state: Option<&str>,
+        compose_error: Option<&str>,
+    ) -> Result<(), String> {
+        sqlx::query("UPDATE generation_groups SET session_video_path = ?, compose_state = ?, compose_error = ?, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?")
+            .bind(session_video_path).bind(compose_state).bind(compose_error).bind(group_id)
+            .execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
     pub async fn get_generation_group_row(
         &self,
         group_id: &str,

@@ -25,9 +25,11 @@ impl AppState {
     pub fn new(db: Database) -> Self {
         let db_arc = Arc::new(tokio::sync::Mutex::new(db.clone()));
         let generation = Arc::new(generation::GenerationService::new(db.clone()));
+        let compose_registry = generation::ComposeRegistry::default();
         let group = Arc::new(generation::group::GroupCoordinator::new(
             generation.as_ref().clone(),
             db,
+            compose_registry.clone(),
         ));
         Self {
             username: Arc::new(tokio::sync::Mutex::new(None)),
@@ -35,7 +37,7 @@ impl AppState {
             db: Arc::clone(&db_arc),
             generation,
             group,
-            compose_registry: generation::ComposeRegistry::default(),
+            compose_registry,
         }
     }
 }
