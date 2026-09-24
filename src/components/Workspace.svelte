@@ -9,6 +9,7 @@
 	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
 	import SessionGenerateModal from './ComposerModals/SessionGenerateModal.svelte';
+	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece } from '$types';
 	import { getMaxFramesForResolution } from '$types';
@@ -181,7 +182,10 @@
 	let activeGroupId = $state<string | null>(null);
 	let groupUnlisten: (() => void) | null = null;
 	let groupTaskId: string | null = null;
+	let groupPipeTaskIds = $state<Record<string, string>>({});
+	let groupTaskViews = $state<Record<string, GenerationTaskView>>({});
 	const groupActive = $derived(activeGroupId !== null);
+	const groupProgressVisible = $derived(groupActive || Object.keys(groupTaskViews).length > 0);
 
 	// Minimized progress modal (D10): the user hides the modal to keep working
 	// while the task watcher (poller + event stream) stays live. A persistent
@@ -1027,10 +1031,23 @@
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
 			groupTaskId = result.firstTaskId;
+			groupPipeTaskIds = { [result.firstView.pipeId]: result.firstTaskId };
+			groupTaskViews = { [result.firstView.pipeId]: result.firstView };
 			startWatchingTask(result.firstTaskId, result.firstView);
 			groupUnlisten?.();
 			void subscribeGroupEvent(result.groupId, (event) => {
-				if (event.kind === 'pipe-terminal' && event.taskId) void reconcileTerminal(activeTask ?? { ...result.firstView, taskId: event.taskId, pipeId: event.pipeId ?? result.firstView.pipeId, status: (event.status as any) ?? 'done' });
+				if (event.pipeId && event.taskId) {
+					groupPipeTaskIds[event.pipeId] = event.taskId;
+					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; }).catch(() => {});
+				}
+				if (event.kind === 'pipe-started' && event.pipeId && event.taskId) {
+					groupTaskId = event.taskId;
+					activeTaskId = event.taskId;
+					void fetchGenerationTask(event.taskId).then((view) => { activeTask = view; groupTaskViews[event.pipeId!] = view; }).catch(() => {});
+				}
+				if (event.kind === 'pipe-terminal' && event.taskId && event.pipeId) {
+					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; void reconcileTerminal(view); }).catch(() => {});
+				}
 				if (event.kind === 'group-terminal') { groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null; }
 			}).then((unlisten) => { groupUnlisten = unlisten; });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
@@ -1556,6 +1573,8 @@
 			progressMinimized = false;
 			activeTask = null;
 			activeLogEntry = null;
+			groupTaskViews = {};
+			groupPipeTaskIds = {};
 			// No longer watching: drop the cached view too (a fresh task re-seeds it).
 			lastTaskView = null;
 			// The task ended + the user acknowledged it; the dedup record is no
@@ -1808,6 +1827,21 @@
 					onConfirm={confirmGenerate}
 				/>
 			{/if}
+			{#if groupProgressVisible && selectedSession}
+				<CompactPipesProgress
+					bind:open={showProgressModal}
+					pipes={selectedSession.pipes}
+					currentTaskId={activeTaskId}
+					taskViews={Object.fromEntries(selectedSession.pipes.map((p) => [p.id, groupTaskViews[p.id] ?? null]).filter((entry): entry is [string, GenerationTaskView] => !!entry[1]))}
+					taskIds={groupPipeTaskIds}
+					busy={anyTaskActive}
+					onFetch={fetchGenerationTask}
+					onLoaded={(view) => { groupTaskViews[view.pipeId] = view; }}
+					onCancel={cancelSessionGenerationGroup}
+					onClose={closeProgressModal}
+					onMinimize={minimizeProgressModal}
+				/>
+			{:else}
 			<GenerationProgressModal
 				task={activeTask}
 				busy={anyTaskActive}
@@ -1819,6 +1853,7 @@
 				logEntry={activeLogEntry}
 				onReset={resetGeneration}
 			/>
+			{/if}
 
 			<!-- D10 persistent pill: visible when the progress modal is minimized
 			     (or the task just went terminal while it was), so the user can

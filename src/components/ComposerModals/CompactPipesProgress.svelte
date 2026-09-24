@@ -1,0 +1,123 @@
+<script lang="ts">
+  import type { GenerationTaskView, PipeRow } from '$types';
+  import '../composer-modal.css';
+
+  let {
+    open = $bindable(false),
+    pipes,
+    currentTaskId,
+    taskViews,
+    taskIds,
+    busy,
+    onFetch,
+    onLoaded,
+    onCancel,
+    onClose,
+    onMinimize,
+  } = $props<{
+    open: boolean;
+    pipes: PipeRow[];
+    currentTaskId: string | null;
+    taskViews: Record<string, GenerationTaskView>;
+    taskIds: Record<string, string>;
+    busy: boolean;
+    onFetch: (taskId: string) => Promise<GenerationTaskView>;
+    onLoaded?: (view: GenerationTaskView) => void;
+    onCancel: () => void;
+    onClose: () => void;
+    onMinimize?: () => void;
+  }>();
+
+  let expanded = $state<Record<string, boolean>>({});
+  let loading = $state<Record<string, boolean>>({});
+
+  $effect(() => {
+    if (currentTaskId) expanded[currentTaskId] = true;
+  });
+
+  async function toggle(pipe: PipeRow) {
+    const taskId = taskIds[pipe.id] ?? taskViews[pipe.id]?.taskId;
+    if (!taskId) return;
+    const next = !expanded[taskId];
+    expanded[taskId] = next;
+    if (next && !taskViews[pipe.id] && !loading[taskId]) {
+      loading[taskId] = true;
+      try {
+        const view = await onFetch(taskId);
+        onLoaded?.(view);
+      } finally {
+        loading[taskId] = false;
+      }
+    }
+  }
+
+  function viewFor(pipe: PipeRow) {
+    return taskViews[pipe.id] ?? null;
+  }
+  function statusFor(pipe: PipeRow) {
+    const task = viewFor(pipe);
+    if (task) return task.status;
+    return pipe.id === currentTaskId ? 'running' : 'queued';
+  }
+</script>
+
+{#if open}
+  <div class="modal-overlay" role="presentation">
+    <div class="modal gen-group-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <h3>Session generation</h3>
+        <span class="modal-sub">{pipes.length} pipes</span>
+      </div>
+      <div class="modal-body">
+        {#each pipes as pipe (pipe.id)}
+          {@const task = viewFor(pipe)}
+          {@const taskId = taskIds[pipe.id] ?? task?.taskId}
+          {@const isCurrent = taskId === currentTaskId}
+          <section class="compact-pipe" class:current={isCurrent}>
+            <button class="compact-pipe-header" aria-expanded={taskId ? !!expanded[taskId] : false} onclick={() => toggle(pipe)} disabled={!taskId}>
+              <span class="compact-pipe-name">{pipe.name}</span>
+              <span class="compact-pipe-progress"><span style={`width: ${Math.round((task?.progress ?? 0) * 100)}%`}></span></span>
+              <span class="compact-pipe-status">{statusFor(pipe)}</span>
+              <span class="compact-pipe-chevron" aria-hidden="true">{taskId && expanded[taskId] ? '▾' : '▸'}</span>
+            </button>
+            {#if taskId && expanded[taskId]}
+              <div class="compact-pipe-body">
+                {#if loading[taskId] || !task}
+                  <p class="gen-task-pending">Loading pipe stages…</p>
+                {:else}
+                  <div class="gen-progress-bar"><div class="gen-progress-fill" style={`width: ${Math.round(task.progress * 100)}%`}></div></div>
+                  <ul class="gen-stage-list">
+                    {#each task.stages as stage (stage.id + ':' + stage.label)}
+                      <li class="gen-stage" class:done={stage.status === 'done' || stage.status === 'ready'} class:error={stage.status === 'error'} class:cancelled={stage.status === 'cancelled'} class:ratelimited={stage.status === 'rate-limited'}>
+                        <span class="gen-stage-label">{stage.label}</span>
+                        <span class="gen-stage-status">{stage.status}{stage.error ? ` · ${stage.error}` : ''}</span>
+                        {#if stage.lastEvent}<span class="gen-stage-lastevent">{stage.lastEvent}</span>{/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </div>
+            {/if}
+          </section>
+        {/each}
+      </div>
+      <div class="modal-footer">
+        {#if busy}<button class="btn-cancel" onclick={onCancel}>Cancel all</button>{/if}
+        {#if onMinimize && busy}<button class="btn-minimize" onclick={onMinimize}>Minimize</button>{/if}
+        <button class="btn-confirm" onclick={onClose} disabled={busy}>OK</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .compact-pipe { border: 1px solid var(--border-color, #3f3f46); border-radius: 7px; margin-bottom: 8px; overflow: hidden; }
+  .compact-pipe.current { border-color: var(--accent-color, #ff3e00); }
+  .compact-pipe-header { width: 100%; display: grid; grid-template-columns: minmax(90px, 1fr) 120px 72px 18px; align-items: center; gap: 10px; padding: 9px 10px; border: 0; background: transparent; color: var(--text-primary, #fff); text-align: left; cursor: pointer; }
+  .compact-pipe-header:disabled { cursor: default; }
+  .compact-pipe-progress { height: 5px; background: var(--bg-tertiary, #27272a); border-radius: 3px; overflow: hidden; }
+  .compact-pipe-progress span { display: block; height: 100%; background: var(--accent-color, #ff3e00); }
+  .compact-pipe-status { color: var(--text-muted, #a1a1aa); font: 11px 'JetBrains Mono', monospace; text-align: right; }
+  .compact-pipe-chevron { color: var(--text-muted, #a1a1aa); }
+  .compact-pipe-body { border-top: 1px solid var(--border-color, #3f3f46); padding: 9px; }
+</style>
