@@ -6,6 +6,10 @@ export type FailurePolicy = 'stop' | 'continue';
 export interface SessionGenerationInput {
   sessionId: string; imageModel?: string; videoModel?: string; seed?: number | null;
   profileId?: string | null; pipeIds?: string[] | null; failurePolicy: FailurePolicy; autoCompose: boolean;
+  /** Per-pipe final prompt strings (promptEngine output) keyed by pipe id.
+   *  Sent so the group's pipes run with real prompts, matching the per-pipe
+   *  `start_generation` flow. */
+  prompts?: Record<string, string> | null;
 }
 export interface SessionGenerationStart { groupId: string; firstTaskId: string; firstView: GenerationTaskView; }
 export interface GenerationGroupView {
@@ -21,7 +25,7 @@ export interface GroupEvent {
 export function buildSessionGenerationPayload(input: SessionGenerationInput) {
   return { sessionId: input.sessionId, imageModel: input.imageModel, videoModel: input.videoModel,
     seed: input.seed, profileId: input.profileId, pipeIds: input.pipeIds,
-    failurePolicy: input.failurePolicy, autoCompose: input.autoCompose };
+    failurePolicy: input.failurePolicy, autoCompose: input.autoCompose, prompts: input.prompts ?? null };
 }
 export async function startSessionGeneration(input: SessionGenerationInput): Promise<SessionGenerationStart> {
   const raw = await invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }) as any;

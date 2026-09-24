@@ -254,6 +254,18 @@ pub async fn start_session_generation(
     input: crate::generation::group::StartSessionGenerationInput,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    // Resolve the session media root here (command layer — has db access)
+    // and thread it into the group so every pipe starts with a concrete
+    // media tree, exactly like the per-pipe `start_generation` command.
+    let media_root = {
+        let db = &state.db.lock().await;
+        resolve_media_root(db, &input.session_id)
+            .await
+            .map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty())
+    };
+    let mut input = input;
+    input.media_root = media_root;
     let (group_id, task_id, view) = state.group.start_group(input).await?;
     Ok(serde_json::json!({"group_id":group_id,"first_task_id":task_id,"first_view":view}))
 }

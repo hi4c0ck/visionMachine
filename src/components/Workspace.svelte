@@ -1059,7 +1059,12 @@
 	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean) {
 		if (!selectedSession || groupActive) return;
 		try {
-			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id) });
+			// Per-pipe prompts + profile, matching the per-pipe `start_generation`
+			// flow — the group's follow-up pipes must run with real prompt /
+			// media-root / spec, or the engine rejects them with "no resolved spec".
+			const prompts: Record<string, string> = {};
+			for (const p of selectedSession.pipes) prompts[p.id] = summarizePipe(p, { fps: selectedSession?.fps ?? undefined });
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts });
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
 			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);

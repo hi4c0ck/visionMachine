@@ -72,6 +72,15 @@ pub struct GroupEvent {
 #[serde(rename_all = "camelCase")]
 pub struct StartSessionGenerationInput {
     pub session_id: String,
+    /// Per-pipe final prompt strings (the frontend prompt engine's output —
+    /// same as `start_generation`'s `prompt`). Missing pipe = empty prompt,
+    /// which the provider treats as a text-only / media-mode run.
+    #[serde(default)]
+    pub prompts: std::collections::HashMap<String, String>,
+    /// Pre-resolved session media root (session dir → project dir → app-data
+    /// tree + session name), identical to what `start_generation` computes.
+    #[serde(default)]
+    pub media_root: Option<String>,
     #[serde(default)]
     pub image_model: Option<String>,
     #[serde(default)]
@@ -97,7 +106,13 @@ fn yes() -> bool {
 
 fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> Option<SourceVideo> {
     (event.status == Some(TaskStatus::Done))
-        .then(|| event.view.output_path.as_ref().filter(|p| !p.trim().is_empty()))
+        .then(|| {
+            event
+                .view
+                .output_path
+                .as_ref()
+                .filter(|p| !p.trim().is_empty())
+        })
         .flatten()
         .map(|path| SourceVideo {
             label: pipe_id.to_string(),
@@ -105,11 +120,19 @@ fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> O
         })
 }
 
-fn compose_output_paths(sources: &[SourceVideo]) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+fn compose_output_paths(
+    sources: &[SourceVideo],
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let first = sources.first().ok_or("no completed run pipes to compose")?;
-    let task_dir = Path::new(&first.path).parent().ok_or("completed video has no task directory")?;
-    let pipe_dir = task_dir.parent().ok_or("completed video has no pipe directory")?;
-    let session_root = pipe_dir.parent().ok_or("completed video has no session root")?;
+    let task_dir = Path::new(&first.path)
+        .parent()
+        .ok_or("completed video has no task directory")?;
+    let pipe_dir = task_dir
+        .parent()
+        .ok_or("completed video has no pipe directory")?;
+    let session_root = pipe_dir
+        .parent()
+        .ok_or("completed video has no session root")?;
     let out_dir = session_root.join("session-video");
     Ok((out_dir.clone(), out_dir.join("session.mp4")))
 }
@@ -123,12 +146,16 @@ fn compose_sources(sources: Vec<SourceVideo>, cancel: &Arc<AtomicBool>) -> Resul
 }
 
 struct GroupRun {
-    session_id: String,
-    pipes: Vec<(String, Option<String>, String, f32, Option<String>)>,
-    queue: VecDeque<String>,
-    current: Option<String>,
-    policy: String,
-    auto_compose: bool,
+    pub session_id: String,
+    pub pipes: Vec<(String, Option<String>, String, f32, Option<String>)>,
+    pub queue: VecDeque<String>,
+    pub current: Option<String>,
+    pub policy: String,
+    pub auto_compose: bool,
+    /// The group's original run params (models/seed/profile/specs/prompts/
+    /// media root). Follow-up pipe starts clone this so every pipe runs
+    /// with identical settings — not just the first.
+    pub input: StartSessionGenerationInput,
     completed_sources: Vec<SourceVideo>,
     compose_state: Option<String>,
     compose_error: Option<String>,
@@ -157,7 +184,11 @@ impl Clone for GroupCoordinator {
     }
 }
 impl GroupCoordinator {
-    pub fn new(generation: GenerationService, db: Database, compose_registry: ComposeRegistry) -> Self {
+    pub fn new(
+        generation: GenerationService,
+        db: Database,
+        compose_registry: ComposeRegistry,
+    ) -> Self {
         Self {
             generation,
             db,
@@ -225,6 +256,7 @@ impl GroupCoordinator {
                     }
                     .into(),
                     auto_compose: input.auto_compose,
+                    input: input.clone(),
                     completed_sources: Vec::new(),
                     compose_state: (!input.auto_compose).then(|| "skipped".into()),
                     compose_error: None,
@@ -298,10 +330,21 @@ impl GroupCoordinator {
             request_log: None,
             started_at: Self::now(),
         };
+        // The engine REQUIRES a resolved image/video spec (provider.rs
+        // `run_image_stage`/`run_video_stage` fail with "no resolved spec"
+        // otherwise) and writes artifacts under the media root, so thread
+        // both through — exactly as the per-pipe `start_generation` command
+        // does. Follow-up pipes must carry these too, or they fail identically.
+        let media_root = input
+            .media_root
+            .as_ref()
+            .filter(|r| !r.trim().is_empty())
+            .map(std::string::ToString::to_string);
+        let prompt = input.prompts.get(pipe_id).cloned().unwrap_or_default();
         let inpute = EngineInput {
             task_id: tid.clone(),
-            media_root: None,
-            prompt: String::new(),
+            media_root,
+            prompt,
             pipe_id: pipe_id.into(),
             pipe_name: Some(pipe.name.clone()),
             fps: composer.fps,
@@ -324,7 +367,7 @@ impl GroupCoordinator {
     pub fn on_pipe_terminal(&self, event: &crate::generation::GenTaskEvent) {
         let gid = { self.index.lock().unwrap().get(&event.task_id).cloned() };
         let Some(gid) = gid else { return };
-        let (pipe, next, policy, _started_at) = {
+        let (pipe, next, policy, _started_at, run_params) = {
             let mut m = self.state.lock().unwrap();
             let Some(r) = m.get_mut(&gid) else { return };
             r.current = None;
@@ -345,7 +388,13 @@ impl GroupCoordinator {
             }
             let pipe = p.as_ref().map(|x| x.0.clone());
             let next = r.queue.pop_front();
-            (pipe, next, r.policy.clone(), r.started_at)
+            // Follow-up pipes run with the GROUP's original run params
+            // (models/seed/profile/specs + prompts + media root) — the same
+            // values `start_group` used for pipe #1. Without this every
+            // pipe after the first starts spec-less and the engine fails
+            // it with "no resolved spec".
+            let run_params = r.input.clone();
+            (pipe, next, r.policy.clone(), r.started_at, run_params)
         };
         let terminal = event.status.map(|s| s.is_terminal()).unwrap_or(false);
         if !terminal {
@@ -365,7 +414,7 @@ impl GroupCoordinator {
         if let Some(next) = next {
             let this = self.clone();
             let gid2 = gid.clone();
-            let session_id = self
+            let next_session = self
                 .state
                 .lock()
                 .unwrap()
@@ -373,19 +422,27 @@ impl GroupCoordinator {
                 .map(|r| r.session_id.clone())
                 .unwrap_or_default();
             tokio::spawn(async move {
-                let input = StartSessionGenerationInput {
-                    session_id,
-                    image_model: None,
-                    video_model: None,
-                    seed: None,
-                    profile_id: None,
-                    image_spec: None,
-                    video_spec: None,
+                // Rebuild the run params from the group's stored input so
+                // the follow-up pipe gets the same models/seed/profile/
+                // specs/prompts/media root as pipe #1. `auto_compose` is
+                // re-set true here (the follow-up input is only used to
+                // start the pipe; the compose decision already happened
+                // when the group was created).
+                let next_input = StartSessionGenerationInput {
+                    session_id: next_session,
+                    image_model: run_params.image_model.clone(),
+                    video_model: run_params.video_model.clone(),
+                    seed: run_params.seed,
+                    profile_id: run_params.profile_id.clone(),
+                    image_spec: run_params.image_spec.clone(),
+                    video_spec: run_params.video_spec.clone(),
                     pipe_ids: None,
+                    prompts: run_params.prompts.clone(),
+                    media_root: run_params.media_root.clone(),
                     failure_policy: policy.clone(),
                     auto_compose: true,
                 };
-                if let Ok((tid, _)) = this.start_pipe(&input, &next).await {
+                if let Ok((tid, _)) = this.start_pipe(&next_input, &next).await {
                     this.state
                         .lock()
                         .unwrap()
@@ -484,9 +541,23 @@ impl GroupCoordinator {
                 Ok(Ok(path)) => (Some("done".into()), None, Some(path), false),
                 Ok(Err(e)) => {
                     let cancelled = group_cancel.load(Ordering::Acquire) || e == "Cancelled";
-                    (Some(if cancelled { "cancelled".into() } else { "error".into() }), Some(e), None, cancelled)
+                    (
+                        Some(if cancelled {
+                            "cancelled".into()
+                        } else {
+                            "error".into()
+                        }),
+                        Some(e),
+                        None,
+                        cancelled,
+                    )
                 }
-                Err(e) => (Some("error".into()), Some(format!("compose worker join failed: {e}")), None, false),
+                Err(e) => (
+                    Some("error".into()),
+                    Some(format!("compose worker join failed: {e}")),
+                    None,
+                    false,
+                ),
             };
             {
                 let mut m = this.state.lock().unwrap();
@@ -514,7 +585,11 @@ impl GroupCoordinator {
             });
             this.finish_group(
                 &gid_owned,
-                if cancelled { GroupStatus::Cancelled } else { status },
+                if cancelled {
+                    GroupStatus::Cancelled
+                } else {
+                    status
+                },
                 None,
             );
         });
@@ -607,7 +682,10 @@ mod tests {
         }];
         let (dir, output) = compose_output_paths(&sources).unwrap();
         assert_eq!(dir, Path::new("C:/media/My Session/session-video"));
-        assert_eq!(output, Path::new("C:/media/My Session/session-video/session.mp4"));
+        assert_eq!(
+            output,
+            Path::new("C:/media/My Session/session-video/session.mp4")
+        );
     }
 
     #[test]
@@ -647,7 +725,10 @@ mod tests {
             status: Some(TaskStatus::Done),
             view: view("C:/media/s/p/t/video.mp4"),
         };
-        assert_eq!(completed_source("pipe-1", &done).unwrap().path, "C:/media/s/p/t/video.mp4");
+        assert_eq!(
+            completed_source("pipe-1", &done).unwrap().path,
+            "C:/media/s/p/t/video.mp4"
+        );
         let failed = crate::generation::GenTaskEvent {
             status: Some(TaskStatus::Error),
             ..done

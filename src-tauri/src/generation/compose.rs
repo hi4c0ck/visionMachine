@@ -496,10 +496,18 @@ pub fn parse_ffmpeg_decode_progress(text: &str) -> Result<(u64, f64), String> {
 }
 
 fn parse_ffmpeg_stream_metadata(stderr: &str) -> Result<(String, u32, u32), String> {
-    let line = stderr
+    // The INPUT stream line only: ffmpeg also prints an output stream line
+    // (codec `wrapped_avframe` for the null sink) further down, which must
+    // not be read — it would poison the codec/resolution comparison in
+    // `validate_metadata`. The input block starts with `Input #n`.
+    let input_block = stderr
+        .split("Input #")
+        .find(|block| block.starts_with(|c: char| c.is_ascii_digit()))
+        .unwrap_or("");
+    let line = input_block
         .lines()
         .find(|line| line.contains("Video:"))
-        .ok_or_else(|| "ffmpeg returned no video stream metadata".to_string())?;
+        .ok_or_else(|| "ffmpeg returned no input video stream metadata".to_string())?;
     let codec = line
         .split("Video:")
         .nth(1)
@@ -514,7 +522,7 @@ fn parse_ffmpeg_stream_metadata(stderr: &str) -> Result<(String, u32, u32), Stri
             let (w, h) = token.split_once('x')?;
             Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
         })
-        .ok_or_else(|| "ffmpeg returned no video resolution".to_string())?;
+        .ok_or_else(|| "ffmpeg returned no input video resolution".to_string())?;
     Ok((codec, dimensions.0, dimensions.1))
 }
 
@@ -793,8 +801,11 @@ mod tests {
     fn parses_ffmpeg_decode_progress_and_stream_metadata() {
         let progress = "frame=12\nfps=24\nout_time_us=500000\nprogress=end\n";
         assert_eq!(parse_ffmpeg_decode_progress(progress).unwrap(), (12, 0.5));
+        // Real ffmpeg stderr shape: the INPUT block (with its stream line) plus
+        // a later OUTPUT block that must NOT be read (its codec is the null
+        // sink's `wrapped_avframe`, which would poison the comparison).
         let metadata = parse_ffmpeg_stream_metadata(
-            "Stream #0:0: Video: h264 (High), yuv420p, 1920x1080 [SAR 1:1], 24 fps",
+            "Input #0, mov,mp4, from 'in.mp4':\n  Duration: 00:00:02.00\n  Stream #0:0: Video: h264 (High), yuv420p, 1920x1080 [SAR 1:1], 24 fps\nStream mapping:\n  Stream #0:0 -> #0:0 (h264 (native) -> wrapped_avframe (native))\nOutput #0, null:\n  Stream #0:0: Video: wrapped_avframe, 1920x1080\n",
         )
         .unwrap();
         assert_eq!(metadata, ("h264".into(), 1920, 1080));
