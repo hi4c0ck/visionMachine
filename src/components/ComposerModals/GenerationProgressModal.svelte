@@ -288,7 +288,7 @@
 					</button>
 					{#if onMinimize}
 						<button class="btn-minimize" onclick={onMinimize} title="Hide the modal — the task keeps running in the background; click the pill to come back">
-							Minimize
+							<span class="btn-minimize-icon" aria-hidden="true">—</span> Minimize
 						</button>
 					{/if}
 				{:else}
@@ -492,20 +492,43 @@
 	}
 
 	.btn-minimize {
-		background: none;
-		border: 1px solid var(--border-color, #3f3f46);
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		background: var(--bg-tertiary, #1e1e2e);
+		border: 1px solid var(--border-color, #2a2a3a);
 		border-radius: 6px;
-		color: var(--text-muted, #71717a);
-		font-size: 11px;
-		font-family: 'JetBrains Mono', monospace;
-		padding: 5px 10px;
+		color: var(--text-secondary, #a0a0b0);
+		font-size: 12px;
+		font-weight: 500;
+		letter-spacing: 0.2px;
+		padding: 8px 14px;
 		cursor: pointer;
+		transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 	}
 
 	.btn-minimize:hover {
 		color: var(--text-primary, #fff);
-		border-color: var(--text-muted, #71717a);
-		background: rgba(255, 255, 255, 0.08);
+		border-color: var(--accent-color, #59b5ff);
+		background: var(--accent-bg, rgba(89, 181, 255, 0.12));
+		box-shadow: 0 2px 12px var(--accent-glow, rgba(89, 181, 255, 0.35));
+	}
+
+	.btn-minimize:active {
+		transform: translateY(0);
+		box-shadow: none;
+	}
+
+	.btn-minimize:focus-visible {
+		outline: 2px solid var(--accent-color, #59b5ff);
+		outline-offset: 2px;
+	}
+
+	.btn-minimize-icon {
+		font-size: 13px;
+		line-height: 1;
+		color: var(--accent-color, #59b5ff);
+		padding: 0 1px;
 	}
 
 	.gen-log-toggle {
