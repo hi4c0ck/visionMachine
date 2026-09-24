@@ -153,7 +153,10 @@ mod tests {
         let spec: ModelSpecWire = serde_json::from_value(json).unwrap();
         assert!(spec.supports_seed());
         assert_eq!(spec.limits.seconds, Some([4.0, 12.0]));
-        assert_eq!(spec.limits.size_map.as_ref().unwrap().get("720p").unwrap(), "720P");
+        assert_eq!(
+            spec.limits.size_map.as_ref().unwrap().get("720p").unwrap(),
+            "720P"
+        );
         assert_eq!(spec.media.as_ref().unwrap().max_refs, Some(5));
 
         let out = serde_json::to_value(&spec).unwrap();
