@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.7.2';
 
 const APP_CONSTANTS = {
   strings: {
