@@ -1,9 +1,14 @@
 name: Release (build on tag)
 
-# On every v* tag pushed to the production branch, build the Windows MSI
-# and publish it to a GitHub Release. No signing certificate is configured
-# yet, so the published MSI is unsigned (SmartScreen will show a warning —
-# see the note in README.md).
+# Build a Windows MSI when a vX.Y.Z tag is pushed that points at a commit
+# reachable from the `production` branch, and publish it to a GitHub Release.
+#
+# The "production only" guard prevents a stray tag cut on develop or a
+# feature branch from building an untested MSI. A tag whose commit is not
+# reachable from production fails the guard and the job is skipped.
+#
+# No code-signing certificate is configured yet, so the published MSI is
+# unsigned (SmartScreen will show a warning — see the note in README.md).
 
 on:
   push:
@@ -13,11 +18,30 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  check-guard:
+    name: Guard: tag must be on production
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the tag is reachable from production
+        run: |
+          # If the tagged commit is NOT an ancestor-reachable point of
+          # production, abort so no MSI is built from non-stable code.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/production; then
+            echo "::error::Tag $GITHUB_REF_NAME does not point to a commit on production; refusing to build an MSI from unstable code."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME is on production — proceeding."
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+
   build-release:
     name: Build Windows MSI
+    needs: [check-guard]
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -62,7 +86,6 @@ jobs:
           path: src-tauri/target/release/bundle/msi/*.msi
 
       - name: Create / update GitHub Release
-        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           files: src-tauri/target/release/bundle/msi/*.msi
@@ -78,6 +101,5 @@ jobs:
             Install and use it, or build from source — see the README.
 
       - name: Print release info
-        if: github.event_name == 'push'
         run: |
           Write-Host "Published MSI to release ${{ github.ref_name }}"
