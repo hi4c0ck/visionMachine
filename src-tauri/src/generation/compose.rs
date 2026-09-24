@@ -124,19 +124,20 @@ impl std::fmt::Display for ComposeError {
 
 /// Build the ffmpeg concat-demuxer manifest text.
 ///
-/// One `file '<abs path>'` line per source, in timeline order. Windows paths
-/// contain single quotes and backslashes that the ffmpeg concat demuxer
-/// does NOT understand well, so we normalize to forward-slash, double-quote
-/// the value, and escape embedded double-quotes. This is the documented
-/// portable form for Windows.
+/// One `file '<abs path>'` line per source, in timeline order. The ffmpeg
+/// concat demuxer requires SINGLE-quoted values with backslashes escaped —
+/// double-quoted paths are rejected by ffmpeg >= 7 ("Invalid argument"),
+/// verified against the bundled Btbn ffmpeg 9.0 build. Backslashes are
+/// normalized to forward slashes (accepted on Windows) and escaped. This is
+/// the only form the bundled build accepts.
 pub fn build_concat_manifest(sources: &[SourceVideo]) -> String {
     sources
         .iter()
         .map(|s| {
             let p = s.path.replace('\\', "/");
-            // Escape embedded double-quotes (rare in our paths, but safe).
-            let escaped = p.replace('"', "\\'");
-            format!("file \"{}\"", escaped)
+            // Escape embedded single-quotes (rare in our paths, but safe).
+            let escaped = p.replace('\'', "\\'");
+            format!("file '{}'", escaped)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -741,11 +742,15 @@ mod tests {
     }
 
     #[test]
-    fn manifest_uses_forward_slashes_and_quotes() {
+    fn manifest_uses_forward_slashes_and_single_quotes() {
         let m = build_concat_manifest(&srcs());
         let lines: Vec<&str> = m.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("file \"C:/proj/"));
+        // Single-quoted values (the only form ffmpeg >= 7 accepts) +
+        // forward-slash Windows paths.
+        assert!(lines[0].starts_with("file '"), "line: {}", lines[0]);
+        assert!(!lines[0].contains('\\'), "backslash: {}", lines[0]);
+        assert!(lines[0].contains("/"), "no slash: {}", lines[0]);
         assert!(lines[0].contains("/Pipe 1/t1/video.mp4"));
         assert!(lines[1].contains("/Pipe 2/t2/video.mp4"));
         // No backslashes survive.
