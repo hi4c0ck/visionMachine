@@ -228,6 +228,7 @@
 					fps={fps!}
 					frame={carouselFrame}
 					onframeSelect={(f) => oncarouselSelect?.(f)}
+					onexit={toggleMode}
 				/>
 			{:else}
 			<div class="frame-video-wrap">
