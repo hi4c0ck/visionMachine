@@ -19,7 +19,8 @@
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
-	import { startSessionGeneration, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy } from '$lib/composerStore/sessionGeneration';
+	import { isStaleGroup } from '$lib/compactPipes';
+	import { startSessionGeneration, fetchGenerationGroup, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy } from '$lib/composerStore/sessionGeneration';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
@@ -184,8 +185,11 @@
 	let groupTaskId: string | null = null;
 	let groupPipeTaskIds = $state<Record<string, string>>({});
 	let groupTaskViews = $state<Record<string, GenerationTaskView>>({});
-	const groupActive = $derived(activeGroupId !== null);
-	const groupProgressVisible = $derived(groupActive || Object.keys(groupTaskViews).length > 0);
+	let groupStatus = $state<string | null>(null);
+	let groupStale = $state(false);
+	let restoredGroupSessionId = $state<string | null>(null);
+	const groupActive = $derived(activeGroupId !== null && !groupStale);
+	const groupProgressVisible = $derived(groupActive || groupStale || Object.keys(groupTaskViews).length > 0);
 
 	// Minimized progress modal (D10): the user hides the modal to keep working
 	// while the task watcher (poller + event stream) stays live. A persistent
@@ -551,6 +555,34 @@
 		selectedSessionId = null;
 		saveProjects();
 	}
+
+	async function restoreSessionGenerationGroup(sessionId: string) {
+		const key = `visionmachine:generation-group:${sessionId}`;
+		const groupId = localStorage.getItem(key);
+		if (!groupId) return;
+		try {
+			const group = await fetchGenerationGroup(groupId);
+			activeGroupId = group.groupId;
+			groupStatus = group.status;
+			groupStale = isStaleGroup(group.status, group.live);
+			groupTaskId = null;
+			groupPipeTaskIds = Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []));
+			groupTaskViews = {};
+			stopWatching();
+			showProgressModal = groupStale;
+		} catch {
+			localStorage.removeItem(key);
+		} finally {
+			restoredGroupSessionId = sessionId;
+		}
+	}
+
+	$effect(() => {
+		const sessionId = selectedSessionId;
+		if (sessionId && restoredGroupSessionId !== sessionId) {
+			void restoreSessionGenerationGroup(sessionId);
+		}
+	});
 
 	async function handleSessionSelect(sessionId: string) {
 		const foundProject = projects.find(p =>
@@ -1030,9 +1062,21 @@
 			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id) });
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
+			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);
+			restoredGroupSessionId = selectedSession.id;
+			groupStatus = 'running';
+			groupStale = false;
 			groupTaskId = result.firstTaskId;
 			groupPipeTaskIds = { [result.firstView.pipeId]: result.firstTaskId };
 			groupTaskViews = { [result.firstView.pipeId]: result.firstView };
+			const firstPipe = selectedSession.pipes.find((p) => p.id === result.firstView.pipeId);
+			if (firstPipe) {
+				const startedAt = Date.now();
+				const groupLog = buildGenerationLogEntry(result.firstTaskId, selectedSession.id, firstPipe, models, startedAt, seed);
+				groupLog.groupId = result.groupId;
+				activeLogEntry = groupLog;
+				void writeGenerationLogStart(groupLog);
+			}
 			startWatchingTask(result.firstTaskId, result.firstView);
 			groupUnlisten?.();
 			void subscribeGroupEvent(result.groupId, (event) => {
@@ -1043,12 +1087,22 @@
 				if (event.kind === 'pipe-started' && event.pipeId && event.taskId) {
 					groupTaskId = event.taskId;
 					activeTaskId = event.taskId;
+					const startedPipe = selectedSession?.pipes.find((p) => p.id === event.pipeId);
+					if (startedPipe) {
+						const groupLog = buildGenerationLogEntry(event.taskId, selectedSession!.id, startedPipe, models, Date.now(), seed);
+						groupLog.groupId = event.groupId;
+						void writeGenerationLogStart(groupLog);
+					}
 					void fetchGenerationTask(event.taskId).then((view) => { activeTask = view; groupTaskViews[event.pipeId!] = view; }).catch(() => {});
 				}
 				if (event.kind === 'pipe-terminal' && event.taskId && event.pipeId) {
 					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; void reconcileTerminal(view); }).catch(() => {});
 				}
-				if (event.kind === 'group-terminal') { groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null; }
+				if (event.kind === 'group-terminal') {
+					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
+					groupStatus = event.status ?? 'done'; groupStale = false;
+					if (selectedSession) localStorage.removeItem(`visionmachine:generation-group:${selectedSession.id}`);
+				}
 			}).then((unlisten) => { groupUnlisten = unlisten; });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
@@ -1831,6 +1885,7 @@
 				<CompactPipesProgress
 					bind:open={showProgressModal}
 					pipes={selectedSession.pipes}
+					stale={groupStale}
 					currentTaskId={activeTaskId}
 					taskViews={Object.fromEntries(selectedSession.pipes.map((p) => [p.id, groupTaskViews[p.id] ?? null]).filter((entry): entry is [string, GenerationTaskView] => !!entry[1]))}
 					taskIds={groupPipeTaskIds}

@@ -106,6 +106,9 @@ so the UI can render the feature state honestly (chips/toolbar), plus
   carousel (B) has a target for it too.
 - tiny variant: button tooltip "Compose requires ffmpeg — add a path in
   Settings or install the Full build" when `ffmpeg: none`.
+- Session generation group auto-compose exposes the same composed
+  `session.mp4` after all selected pipes finish successfully; it uses the
+  current run's pipe outputs and the same top-panel/carousel media path.
 
 ## B. Carousel mode — frontend (no new deps)
 

@@ -264,7 +264,11 @@ pub async fn get_generation_group(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     if let Some(view) = state.group.view(&group_id) {
-        return Ok(serde_json::to_value(view).map_err(|e| e.to_string())?);
+        let mut value = serde_json::to_value(view).map_err(|e| e.to_string())?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("live".to_string(), serde_json::Value::Bool(true));
+        }
+        return Ok(value);
     }
     let row = {
         let db = &state.db.lock().await;
@@ -274,7 +278,7 @@ pub async fn get_generation_group(
     }
     .ok_or_else(|| "Generation group not found".to_string())?;
     Ok(
-        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"startedAt":row.started_at}),
+        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"startedAt":row.started_at,"live":false}),
     )
 }
 

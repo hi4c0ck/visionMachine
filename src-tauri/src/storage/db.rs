@@ -1093,6 +1093,7 @@ mod settings_logs_tests {
             "taskId": "t1",
             "sessionId": session_id,
             "pipeId": "p1",
+            "groupId": "g1",
             "startedAt": 1,
             "status": "done",
             "pieces": []
@@ -1100,11 +1101,20 @@ mod settings_logs_tests {
         db.add_generation_log(&entry).await.unwrap();
         let got = db.get_generation_log("t1").await.unwrap().unwrap();
         assert_eq!(got["taskId"], "t1");
+        assert_eq!(got["groupId"], "g1");
+        let tagged: (String,) = sqlx::query_as(
+            "SELECT group_id FROM generation_logs WHERE task_id = 't1'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(tagged.0, "g1");
         // Upsert the same task id (terminal-state update)
         let entry2 = serde_json::json!({
             "taskId": "t1",
             "sessionId": session_id,
             "pipeId": "p1",
+            "groupId": "g1",
             "startedAt": 1,
             "finishedAt": 2,
             "status": "done",

@@ -1,10 +1,12 @@
 <script lang="ts">
   import type { GenerationTaskView, PipeRow } from '$types';
+  import { groupStaleUiState } from '$lib/compactPipes';
   import '../composer-modal.css';
 
   let {
     open = $bindable(false),
     pipes,
+    stale = false,
     currentTaskId,
     taskViews,
     taskIds,
@@ -17,6 +19,7 @@
   } = $props<{
     open: boolean;
     pipes: PipeRow[];
+    stale?: boolean;
     currentTaskId: string | null;
     taskViews: Record<string, GenerationTaskView>;
     taskIds: Record<string, string>;
@@ -30,6 +33,7 @@
 
   let expanded = $state<Record<string, boolean>>({});
   let loading = $state<Record<string, boolean>>({});
+  const staleUi = $derived(groupStaleUiState(stale, busy));
 
   $effect(() => {
     if (currentTaskId) expanded[currentTaskId] = true;
@@ -74,7 +78,7 @@
           {@const taskId = taskIds[pipe.id] ?? task?.taskId}
           {@const isCurrent = taskId === currentTaskId}
           <section class="compact-pipe" class:current={isCurrent}>
-            <button class="compact-pipe-header" aria-expanded={taskId ? !!expanded[taskId] : false} onclick={() => toggle(pipe)} disabled={!taskId}>
+            <button class="compact-pipe-header" aria-expanded={taskId ? !!expanded[taskId] : false} onclick={() => toggle(pipe)} disabled={!taskId || staleUi.readOnly}>
               <span class="compact-pipe-name">{pipe.name}</span>
               <span class="compact-pipe-progress"><span style={`width: ${Math.round((task?.progress ?? 0) * 100)}%`}></span></span>
               <span class="compact-pipe-status">{statusFor(pipe)}</span>
@@ -101,8 +105,11 @@
           </section>
         {/each}
       </div>
+      {#if staleUi.stale}
+        <p class="gen-stale-note" role="status">{staleUi.note}</p>
+      {/if}
       <div class="modal-footer">
-        {#if busy}<button class="btn-cancel" onclick={onCancel}>Cancel all</button>{/if}
+        {#if staleUi.showCancel}<button class="btn-cancel" onclick={onCancel}>Cancel all</button>{/if}
         {#if onMinimize && busy}<button class="btn-minimize" onclick={onMinimize}>Minimize</button>{/if}
         <button class="btn-confirm" onclick={onClose} disabled={busy}>OK</button>
       </div>
@@ -120,4 +127,5 @@
   .compact-pipe-status { color: var(--text-muted, #a1a1aa); font: 11px 'JetBrains Mono', monospace; text-align: right; }
   .compact-pipe-chevron { color: var(--text-muted, #a1a1aa); }
   .compact-pipe-body { border-top: 1px solid var(--border-color, #3f3f46); padding: 9px; }
+  .gen-stale-note { margin: 0; padding: 9px 10px; border-top: 1px solid var(--border-color, #3f3f46); color: var(--warning-color, #fbbf24); background: var(--bg-tertiary, #27272a); }
 </style>
