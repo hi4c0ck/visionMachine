@@ -17,6 +17,7 @@
 		totalFrames = null,
 		carouselFrame = 0,
 		oncarouselSelect,
+		onframeSelect,
 		ruler = null,
 		showRuler = false,
 		providers = null,
@@ -41,6 +42,13 @@
 		carouselFrame?: number;
 		/** Advance the shared frame selection from the carousel (snaps to 8). */
 		oncarouselSelect?: (frame: number) => void;
+		/**
+		 * Select a frame that is NOT snapped to the 8-grid (frame-step
+		 * buttons in the top panel): moves the shared selectedFrame exactly,
+		 * so the playback-mode preview and the global ruler can sit on any
+		 * frame, not just carousel stops.
+		 */
+		onframeSelect?: (frame: number) => void;
 		/** Tiny global frame ruler overlaid at the bottom edge of the
 		 *  preview strip (frame ticks + playhead). null = nothing to show. */
 		ruler?: { ticks: number[]; total: number; frame: number } | null;
@@ -102,6 +110,23 @@
 	// The carousel needs the session's fps + frame bounds to be known.
 	let carouselReady = $derived(video !== null && fps !== null && totalFrames !== null);
 
+	// ── Frame stepping (top-panel ‹ 8 / 8 › buttons, plan B4) ────────────
+	// Steps of 8 frames match the carousel grid and the arrow-key handler in
+	// Workspace. These select the frame EXACTLY (no snap) via onframeSelect,
+	// so in playback mode the <video> can park on any frame, not just 8n.
+	const CAROUSEL_FRAME_STEP = 8;
+	const canStepPrev = totalFrames !== null && (carouselFrame ?? 0) >= CAROUSEL_FRAME_STEP;
+	const canStepNext = totalFrames !== null && (carouselFrame ?? 0) < (totalFrames - 1);
+
+	function stepFrames(delta: number) {
+		if (totalFrames === null) return;
+		const next = Math.min(
+			totalFrames - 1,
+			Math.max(0, (carouselFrame ?? 0) + delta * CAROUSEL_FRAME_STEP)
+		);
+		onframeSelect?.(next);
+	}
+
 	function toggleMode() {
 		if (!carouselReady) return;
 		if (mode === 'playback') {
@@ -154,6 +179,29 @@
 		</div>
 
 		<div class="layout-controls">
+			{#if totalFrames !== null && fps !== null}
+				<!-- Frame stepping (B4): moves the shared selectedFrame by ±8.
+					 Lives next to the layout buttons — the top-panel home for
+					 frame navigation, in both playback and carousel modes. -->
+				<span class="frame-step" role="group" aria-label="Frame stepping">
+					<button
+						class="layout-btn frame-step-btn"
+						onclick={() => stepFrames(-1)}
+						disabled={!canStepPrev}
+						title={canStepPrev ? APP_CONSTANTS.strings.frameStepPrev : APP_CONSTANTS.strings.frameStepDisabled}
+					>
+						‹ {CAROUSEL_FRAME_STEP}
+					</button>
+					<button
+						class="layout-btn frame-step-btn"
+						onclick={() => stepFrames(1)}
+						disabled={!canStepNext}
+						title={canStepNext ? APP_CONSTANTS.strings.frameStepNext : APP_CONSTANTS.strings.frameStepDisabled}
+					>
+						{CAROUSEL_FRAME_STEP} ›
+					</button>
+				</span>
+			{/if}
 			{#each layouts as layout}
 				<button
 					class="layout-btn {layoutMode === layout.id ? 'active' : ''}"
@@ -226,6 +274,11 @@
 					</button>
 				{/if}
 				<span class="frame-video-label">{video.label}</span>
+				{#if totalFrames !== null}
+					<!-- Frame position readout (playback mode): the top panel's
+						 frame-step buttons need a visible position to act on. -->
+					<span class="frame-position">{carouselFrame ?? 0} / {totalFrames}</span>
+				{/if}
 			</div>
 			{/if}
 		{:else if previewImage}
@@ -379,6 +432,11 @@
 		cursor: pointer;
 		position: relative;
 		overflow: hidden;
+		/* LMB hold+move on the preview = frame sweep (carousel), not a native
+			grab/drag of the panel content. */
+		user-select: none;
+		-webkit-user-drag: none;
+		touch-action: pan-x;
 	}
 
 	.frame-preview::before {
@@ -406,6 +464,10 @@
 		background: #000;
 		position: relative;
 		z-index: 0;
+		/* Swallow the native media grab: an LMB drag that starts on the video
+			either sweeps frames (carousel) or is inert, never drags the panel. */
+		-webkit-user-drag: none;
+		user-select: none;
 	}
 
 	/* Shown while the blob is still loading — a 0:00 <video> shell is dead
@@ -487,6 +549,42 @@
 	.frame-video-mode.active {
 		border-color: var(--accent-color, #ff3e00);
 		color: var(--accent-color, #ff3e00);
+	}
+
+	/* Frame position readout (playback mode): top-right of the preview strip,
+		 paired with the top-panel ‹8/8› step buttons. */
+	.frame-position {
+		position: absolute;
+		top: 6px;
+		right: 8px;
+		font-size: 0.65rem;
+		font-family: 'JetBrains Mono', monospace;
+		color: var(--text-secondary);
+		background: rgba(0, 0, 0, 0.55);
+		padding: 2px 6px;
+		border-radius: 4px;
+		z-index: 2;
+	}
+
+	/* Frame-step buttons: compact layout-btn variants (‹8 / 8›) that move the
+		 shared selectedFrame by 8. Grouped left of the layout buttons so the
+		 top panel's right side reads "frame controls, then layout controls". */
+	.frame-step {
+		display: flex;
+		gap: 6px;
+		margin-right: 10px;
+	}
+
+	.frame-step-btn {
+		padding: 6px 9px;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.72rem;
+	}
+
+	.frame-step-btn:disabled {
+		opacity: 0.35;
+		cursor: default;
+		pointer-events: none;
 	}
 
 	.frame-video-label {

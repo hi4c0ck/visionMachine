@@ -91,12 +91,23 @@
 			focus = { level: 'session', id: selectedSession.id };
 		}
 	});
-	// Restore the latest pipe preview after backend hydration. This is
-	// intentionally path-based and lazy: it does not add a second video and
-	// does not touch the selected pipe's persisted model.
+	// Restore the latest pipe preview after backend hydration. The preview is
+	// scoped per session so switching away and back returns to the SAME pipe
+	// the user last opened here (lastPreviewPipeBySession), not the first
+	// pipe that happens to have a last-gen video.
+	let lastPreviewPipeBySession = new Map<string, string>();
 	async function restoreSelectedPreview(session: SessionData | null) {
 		previewVideo = null;
-		const pipe = session?.pipes.find((p) => p.lastGeneration?.videoPath);
+		const sid = session?.id;
+		if (!sid || !session) return;
+		const savedPipeId = lastPreviewPipeBySession.get(sid);
+		// Prefer the previously-selected pipe (if it still has a video);
+		// otherwise fall back to the first pipe with a last-gen video.
+		const pipe =
+			(savedPipeId
+				? session.pipes.find((p) => p.id === savedPipeId && p.lastGeneration?.videoPath)
+				: undefined) ??
+			session.pipes.find((p) => p.lastGeneration?.videoPath);
 		if (!pipe?.lastGeneration?.videoPath) return;
 		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
 		if (url) previewVideo = { url, label: pipe.name };
@@ -1551,6 +1562,10 @@
 
 	/** ToolsPanel last-gen thumb → top-panel preview (D9, served via Phase E media command). */
 	function openPreview(pipe: PipeRow) {
+		// Remember which pipe the user opened for THIS session, so a
+		// session switch away + back restores the same preview.
+		const sid = selectedSessionId;
+		if (sid) lastPreviewPipeBySession.set(sid, pipe.id);
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.
@@ -1645,6 +1660,7 @@
 		totalFrames={totalFrames}
 		carouselFrame={selectedFrame ?? 0}
 		oncarouselSelect={(f) => (selectedFrame = f)}
+		onframeSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onlogout={handleLogout}
