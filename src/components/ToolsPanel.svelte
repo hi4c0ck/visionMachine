@@ -18,6 +18,7 @@
 		composing = false,
 		compositionLabel = '',
 		pipegenerating = false,
+		groupActive = false,
 		onfpschange,
 		onresolutionchange,
 		onorientationchange,
@@ -48,6 +49,7 @@
 		compositionLabel?: string;
 		/** A generation task is active — the pipe generate button is disabled. */
 		pipegenerating?: boolean;
+		groupActive?: boolean;
 		onfpschange?: (fps: number) => void;
 		onresolutionchange?: (resolution: string) => void;
 		onorientationchange?: (orientation: string) => void;
@@ -364,7 +366,7 @@
           <button
             class="focus-generate"
             onclick={() => ongeneratepipe?.(focusedPipe.id)}
-            disabled={pipegenerating}
+            disabled={pipegenerating || groupActive}
             title={pipegenerating ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}
           >
             {APP_CONSTANTS.strings.generate}

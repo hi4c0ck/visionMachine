@@ -8,6 +8,7 @@
 	import GenerateModal from './ComposerModals/GenerateModal.svelte';
 	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
+	import SessionGenerateModal from './ComposerModals/SessionGenerateModal.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece } from '$types';
 	import { getMaxFramesForResolution } from '$types';
@@ -17,6 +18,7 @@
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
+	import { startSessionGeneration, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy } from '$lib/composerStore/sessionGeneration';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
@@ -175,6 +177,11 @@
 	// `confirmGenerate`, kept so a "Reset generation" (stop this task + resend)
 	// can replay the exact same run without re-opening the generate modal.
 	let lastGenerateParams = $state<{ pipeId: string; models: ModelSelection; seed: number | null } | null>(null);
+	let showSessionGenerateModal = $state(false);
+	let activeGroupId = $state<string | null>(null);
+	let groupUnlisten: (() => void) | null = null;
+	let groupTaskId: string | null = null;
+	const groupActive = $derived(activeGroupId !== null);
 
 	// Minimized progress modal (D10): the user hides the modal to keep working
 	// while the task watcher (poller + event stream) stays live. A persistent
@@ -1009,10 +1016,29 @@
 	// There is no separate session-persistence path in this component.
 
 	function handleGenerate() {
-		if (!selectedSession || !selectedSession.pipes?.length) return;
-		// Session-level "generate all pipes" is a future task (D3): make the
-		// button honest instead of a silent no-op.
-		flashToast(APP_CONSTANTS.strings.sessionGenRoadmap, 'info');
+		if (!selectedSession || !selectedSession.pipes?.length || groupActive) return;
+		showSessionGenerateModal = true;
+	}
+
+	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean) {
+		if (!selectedSession || groupActive) return;
+		try {
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id) });
+			showSessionGenerateModal = false;
+			activeGroupId = result.groupId;
+			groupTaskId = result.firstTaskId;
+			startWatchingTask(result.firstTaskId, result.firstView);
+			groupUnlisten?.();
+			void subscribeGroupEvent(result.groupId, (event) => {
+				if (event.kind === 'pipe-terminal' && event.taskId) void reconcileTerminal(activeTask ?? { ...result.firstView, taskId: event.taskId, pipeId: event.pipeId ?? result.firstView.pipeId, status: (event.status as any) ?? 'done' });
+				if (event.kind === 'group-terminal') { groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null; }
+			}).then((unlisten) => { groupUnlisten = unlisten; });
+		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
+	}
+
+	async function cancelSessionGenerationGroup() {
+		if (!activeGroupId) return;
+		try { await cancelSessionGeneration(activeGroupId); } catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
 
 	// ── Session video composition (A5): splice the pipes' last-gen videos ──
@@ -1643,8 +1669,11 @@
 	onDestroy(() => {
 		window.removeEventListener('focus', onWindowFocus);
 		closeBlockedUnlisten?.();
-		compositionUnlisten?.();
-		stopWatching();
+			groupUnlisten?.();
+			groupUnlisten = null;
+			activeGroupId = null;
+			groupTaskId = null;
+			stopWatching();
 		setOnSettingsChange(null);
 	});
 </script>
@@ -1760,6 +1789,7 @@
 				composing={composing}
 				compositionLabel={compositionLabel(compositionProgress)}
 				pipegenerating={anyTaskActive}
+				groupActive={groupActive}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}
 				onorientationchange={handleOrientationChange}
@@ -1767,6 +1797,9 @@
 			{/if}
 
 			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
+			{#if showSessionGenerateModal && selectedSession}
+				<SessionGenerateModal bind:open={showSessionGenerateModal} session={selectedSession} pipes={selectedSession.pipes} onConfirm={confirmSessionGenerate} />
+			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
 				<GenerateModal
 					pipe={generatePipe}
@@ -1779,7 +1812,7 @@
 				task={activeTask}
 				busy={anyTaskActive}
 				bind:open={showProgressModal}
-				onCancel={cancelActiveTask}
+				onCancel={groupActive ? cancelSessionGenerationGroup : cancelActiveTask}
 				onClose={closeProgressModal}
 				onMinimize={minimizeProgressModal}
 				onRefresh={refreshActiveTask}
