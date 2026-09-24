@@ -1,6 +1,6 @@
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { GenerationTaskView } from '$types';
+import type { GenerationTaskView, ModelSpec } from '$types';
 
 export type FailurePolicy = 'stop' | 'continue';
 export interface SessionGenerationInput {
@@ -10,6 +10,11 @@ export interface SessionGenerationInput {
    *  Sent so the group's pipes run with real prompts, matching the per-pipe
    *  `start_generation` flow. */
   prompts?: Record<string, string> | null;
+  /** Resolved model specs (frontend catalog → wire mirror), exactly as the
+   *  per-pipe `start_generation` flow sends. The provider engine REQUIRES
+   *  these — without `video_spec` the video stage fails with
+   *  "video stage has no resolved video spec". */
+  imageSpec?: ModelSpec | null; videoSpec?: ModelSpec | null;
 }
 export interface SessionGenerationStart { groupId: string; firstTaskId: string; firstView: GenerationTaskView; }
 export interface GenerationGroupView {
@@ -25,7 +30,10 @@ export interface GroupEvent {
 export function buildSessionGenerationPayload(input: SessionGenerationInput) {
   return { sessionId: input.sessionId, imageModel: input.imageModel, videoModel: input.videoModel,
     seed: input.seed, profileId: input.profileId, pipeIds: input.pipeIds,
-    failurePolicy: input.failurePolicy, autoCompose: input.autoCompose, prompts: input.prompts ?? null };
+    failurePolicy: input.failurePolicy, autoCompose: input.autoCompose, prompts: input.prompts ?? null,
+    // Serde mirror of the frontend catalog spec (Rust `ModelSpecWire`,
+    // camelCase) — the same fields the per-pipe flow sends.
+    imageSpec: input.imageSpec ?? null, videoSpec: input.videoSpec ?? null };
 }
 export async function startSessionGeneration(input: SessionGenerationInput): Promise<SessionGenerationStart> {
   const raw = await invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }) as any;

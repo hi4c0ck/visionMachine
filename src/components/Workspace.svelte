@@ -1059,12 +1059,14 @@
 	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean) {
 		if (!selectedSession || groupActive) return;
 		try {
-			// Per-pipe prompts + profile, matching the per-pipe `start_generation`
-			// flow — the group's follow-up pipes must run with real prompt /
-			// media-root / spec, or the engine rejects them with "no resolved spec".
+			// Per-pipe prompts + profile + resolved specs, matching the per-pipe
+			// `start_generation` flow — the provider engine REQUIRES the
+			// resolved image/video specs, or every pipe's video stage fails
+			// with "video stage has no resolved video spec".
+			const pair = resolveSpecs(models.imageModel, models.videoModel);
 			const prompts: Record<string, string> = {};
 			for (const p of selectedSession.pipes) prompts[p.id] = summarizePipe(p, { fps: selectedSession?.fps ?? undefined });
-			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts });
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null });
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
 			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);
