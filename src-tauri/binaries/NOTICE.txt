@@ -1,0 +1,20 @@
+FFmpeg sidecar provenance
+=========================
+
+The full desktop build may bundle an FFmpeg executable staged by
+scripts/build/fetch-ffmpeg.mjs from:
+
+  BtbN/FFmpeg-Builds
+  https://github.com/BtbN/FFmpeg-Builds
+  asset: ffmpeg-n9.0-latest-win64-gpl-9.0.zip
+
+The staged binary is a GPL-enabled build. It is distributed as an executable
+sidecar only in the full build variant. The tiny variant does not bundle it.
+
+The build script validates the downloaded archive using the SHA-256 digest
+published by the GitHub release API before extraction. The executable is
+validated again for size and native executable magic before it is staged.
+
+This file records provenance and licensing; it is not a substitute for the
+FFmpeg project's full license and source-offer obligations when distributing
+the full installer.

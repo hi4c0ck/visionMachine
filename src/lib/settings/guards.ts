@@ -50,6 +50,11 @@ export const DEFAULT_SETTINGS: Settings = {
     image: defaultSlot('image'),
     video: defaultSlot('video'),
   },
+  tools: {
+    // Local ffmpeg override (tiny-variant escape hatch). Empty by default:
+    // the backend then resolves bundled → system $PATH.
+    ffmpegPath: '',
+  },
 };
 
 // ── Normalization ─────────────────────────────────────────────────────────────
@@ -88,6 +93,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const p = (r.profile ?? {}) as Settings['profile'];
   const g = (r.generationDefaults ?? {}) as Settings['generationDefaults'];
   const prov = (r.providers ?? {}) as Settings['providers'];
+  const t = (r.tools ?? {}) as Partial<Settings['tools']>;
   return {
     profile: {
       displayName: typeof p.displayName === 'string' ? p.displayName : base.profile.displayName,
@@ -108,6 +114,11 @@ export function normalizeSettings(raw: unknown): Settings {
       text: normalizeSlot('text', prov.text),
       image: normalizeSlot('image', prov.image),
       video: normalizeSlot('video', prov.video),
+    },
+    tools: {
+      // Local tooling: free string, but a path that is not obviously a path
+      // (empty/whitespace-only) is dropped so the locator can fall through.
+      ffmpegPath: typeof t.ffmpegPath === 'string' ? t.ffmpegPath.trim() : '',
     },
   };
 }

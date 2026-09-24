@@ -17,6 +17,7 @@
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
+	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
@@ -90,7 +91,25 @@
 			focus = { level: 'session', id: selectedSession.id };
 		}
 	});
-	// Session preview ruler frame count. The session video is the *result* of
+	// Restore the latest pipe preview after backend hydration. This is
+	// intentionally path-based and lazy: it does not add a second video and
+	// does not touch the selected pipe's persisted model.
+	async function restoreSelectedPreview(session: SessionData | null) {
+		previewVideo = null;
+		const pipe = session?.pipes.find((p) => p.lastGeneration?.videoPath);
+		if (!pipe?.lastGeneration?.videoPath) return;
+		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
+		if (url) previewVideo = { url, label: pipe.name };
+	}
+
+	$effect(() => {
+		const session = selectedSession;
+		const id = selectedSessionId;
+		void id;
+		void restoreSelectedPreview(session);
+	});
+
+
 	// the generated pieces (its own artifact length) — NOT a mechanical sum of
 	// the pipes. Until that artifact is persisted (session-video entity, not
 	// yet modeled), the placeholder is the longest pipe (answer 1c). Pipes are
@@ -212,7 +231,7 @@
 	// Settings modal (Phase 3): opened from the profile panel (Defaults tab)
 	// or, in Phase 4, the provider status chip (Providers tab).
 	let showSettings = $state(false);
-	let settingsTab = $state<'defaults' | 'providers'>('defaults');
+	let settingsTab = $state<'defaults' | 'providers' | 'tools'>('defaults');
 
 	const anyTaskActive = $derived(activeTask !== null && !isTerminalTaskStatus(activeTask.status));
 	const generatePipe = $derived.by(() => {
@@ -985,6 +1004,87 @@
 		flashToast(APP_CONSTANTS.strings.sessionGenRoadmap, 'info');
 	}
 
+	// ── Session video composition (A5): splice the pipes' last-gen videos ──
+
+	let composing = $state(false);
+	let compositionWasCancelled = false;
+	let compositionProgress = $state<{ phase: 'preparing' | 'copy' | 'reencode' | 'finalizing' | 'complete'; progress: number; detail?: string } | null>(null);
+	let compositionUnlisten: (() => void) | null = null;
+	let ffmpegCapability = $state<{ source: string; path: string } | null>(null);
+
+	function compositionLabel(state: typeof compositionProgress): string {
+		if (!state) return 'Composing…';
+		const percent = Math.round(state.progress * 100);
+		if (state.phase === 'preparing') return 'Preparing…';
+		if (state.phase === 'copy') return percent > 0 ? `Copying ${percent}%` : 'Copying…';
+		if (state.phase === 'reencode') return percent > 0 ? `Encoding ${percent}%` : 'Encoding…';
+		if (state.phase === 'finalizing') return 'Finalizing…';
+		return 'Finalizing…';
+	}
+
+	onMount(() => {
+		void subscribeCompositionProgress((event) => {
+			if (composing && event.sessionId === selectedSessionId) {
+				compositionProgress = applyCompositionProgress(compositionProgress, event);
+			}
+		}).then((unlisten) => { compositionUnlisten = unlisten; });
+		if (!isTauri()) return;
+		const reprobe = () => {
+			void invoke<{ source: string; path: string; versionLine: string }>('probe_ffmpeg')
+				.then((r) => { ffmpegCapability = { source: r.source, path: r.path }; })
+				.catch(() => { ffmpegCapability = null; });
+		};
+		reprobe();
+		// Re-probe when a settings commit lands (a user-set ffmpeg path takes
+		// effect without a restart).
+		setOnSettingsChange(() => {
+			void reprobe();
+		});
+	});
+
+	function cancelSessionVideoComposition() {
+		if (!selectedSession || !composing) return;
+		void invoke<boolean>('cancel_session_video_composition', {
+			input: { session_id: selectedSession.id }
+		}).then((cancelled) => {
+			if (cancelled) compositionWasCancelled = true;
+		}).catch((e) => {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		});
+	}
+
+	function composeSessionVideo() {
+		if (!selectedSession || composing) return;
+		const hasSources = selectedSession.pipes?.some((p: any) => p.lastGeneration?.videoPath);
+		if (!hasSources) {
+			flashToast(APP_CONSTANTS.strings.composeSessionNoSources, 'info');
+			return;
+		}
+		if (ffmpegCapability?.source === 'none') {
+			flashToast(APP_CONSTANTS.strings.composeSessionNoFfmpeg, 'error');
+			return;
+		}
+		composing = true;
+		compositionProgress = { phase: 'preparing', progress: 0, detail: 'Preparing sources' };
+		invoke<{ outputPath: string; ffmpegSource: string; sourcePipes: string[] }>(
+			'compose_session_video',
+			{ input: { session_id: selectedSession.id, pipe_ids: null } },
+		)
+		.then((r) => {
+			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
+			flashToast(APP_CONSTANTS.strings.composeSessionDone, 'success');
+			// Point the top panel at the composed file (served via read_media_file).
+			previewVideo = null;
+			void toMediaUrl(r.outputPath).then((url) => {
+				if (url) previewVideo = { url, label: `${selectedSession?.name ?? 'Session'} — video` };
+			});
+		})
+		.catch((e) => {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		})
+		.finally(() => { composing = false; });
+	}
+
 	// ── Pipe-level generation flow (D1–D9) ──────────────────────────────────
 
 	function openGenerateModal(pipeId: string) {
@@ -1319,12 +1419,22 @@
 			}
 		}
 		if (view.status === 'done' && view.outputPath) {
-			void attachLastGeneration(view.sessionId, view.pipeId, {
+			await attachLastGeneration(view.sessionId, view.pipeId, {
 				taskId: view.taskId,
 				videoPath: view.outputPath,
 				generatedAt: Date.now(),
 				status: 'done',
 			});
+			// The terminal event is the ownership boundary for the artifact.
+			// Persist it before reporting success; the normal update debounce
+			// can otherwise lose the path if the app restarts immediately.
+			if (isTauri()) {
+				const saved = await saveSession(view.sessionId);
+				if (saved.errors.length > 0) {
+					console.error('[Workspace] generated video persistence failed:', saved.errors);
+					flashToast('Generated video was created but could not be saved', 'error');
+				}
+			}
 			flashToast(APP_CONSTANTS.strings.generationComplete, 'success');
 		} else if (view.status === 'cancelled') {
 			flashToast(APP_CONSTANTS.strings.generationCancelled, 'info');
@@ -1518,6 +1628,7 @@
 	onDestroy(() => {
 		window.removeEventListener('focus', onWindowFocus);
 		closeBlockedUnlisten?.();
+		compositionUnlisten?.();
 		stopWatching();
 		setOnSettingsChange(null);
 	});
@@ -1530,6 +1641,10 @@
 		{layoutMode}
 		{showWelcome}
 		video={previewVideo}
+		fps={selectedSession?.fps ?? null}
+		totalFrames={totalFrames}
+		carouselFrame={selectedFrame ?? 0}
+		oncarouselSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onlogout={handleLogout}
@@ -1624,6 +1739,10 @@
 				ongenerate={handleGenerate}
 				ongeneratepipe={openGenerateModal}
 				onopenpreview={openPreview}
+				oncomposesession={composeSessionVideo}
+				ffmpegAvailable={ffmpegCapability ? ffmpegCapability.source !== 'none' : false}
+				composing={composing}
+				compositionLabel={compositionLabel(compositionProgress)}
 				pipegenerating={anyTaskActive}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}

@@ -17,6 +17,7 @@ pub struct AppState {
     pub preflight_report: Arc<tokio::sync::Mutex<PreflightReport>>,
     pub db: Arc<tokio::sync::Mutex<Database>>,
     pub generation: Arc<generation::GenerationService>,
+    pub compose_registry: generation::ComposeRegistry,
 }
 
 impl AppState {
@@ -29,6 +30,7 @@ impl AppState {
             // The generation service holds the DB handle and wires the provider
             // engine (docs/provider-engine-tasks.md, Phase D) at construction.
             generation: Arc::new(generation::GenerationService::new(db)),
+            compose_registry: generation::ComposeRegistry::default(),
         }
     }
 }
@@ -164,6 +166,8 @@ pub fn run() {
             commands::generation::cancel_generation,
             commands::generation::cancel_all_generation,
             commands::generation::generation_active_task_count,
+            commands::generation::compose_session_video,
+            commands::generation::cancel_session_video_composition,
             commands::generation::read_media_file,
             commands::generation::reveal_media_folder,
             // Settings & provider system (Phase 1)
@@ -173,6 +177,9 @@ pub fn run() {
             commands::settings::log_generation,
             commands::settings::get_generation_log,
             commands::settings::list_generation_logs,
+            commands::settings::probe_ffmpeg,
+            commands::settings::probe_ffmpeg_path,
+            commands::settings::set_ffmpeg_user_path,
             // File management commands
             commands::artifacts::add_project_file,
             commands::artifacts::list_project_files,

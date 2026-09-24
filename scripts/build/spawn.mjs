@@ -11,8 +11,16 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-/** Pure command spec — testable without touching a process. */
-export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDir = 'build-state', platform = process.platform, codegenUnits } = {}) {
+/**
+ * Pure command spec — testable without touching a process.
+ *
+ * `config` is an optional path to a Tauri config override (relative to the
+ * repo root, e.g. `src-tauri/tauri.full.conf.json`). Tauri deep-merges it
+ * over `tauri.conf.json` via JSON Merge Patch (RFC 7396), so it is used to
+ * attach variant-specific bundle settings (e.g. the ffmpeg resource glob)
+ * without mutating the base config or the build command itself.
+ */
+export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDir = 'build-state', platform = process.platform, codegenUnits, features, target, config } = {}) {
   const env = { ...process.env, NO_COLOR: '1' };
   if (jobs) env.CARGO_BUILD_JOBS = String(jobs);
   if (noLto) env.CARGO_PROFILE_RELEASE_LTO = 'false';
@@ -20,8 +28,17 @@ export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDi
   // on the app crate (release profile ships with codegen-units = 1).
   if (codegenUnits) env.CARGO_PROFILE_RELEASE_CODEGEN_UNITS = String(codegenUnits);
 
+  // Everything after `tauri build`: an optional `--config` override, then
+  // the Tauri CLI separator (`--`) forwarding cargo feature args. The
+  // `--config` must come BEFORE `--` (it is a Tauri CLI arg, not a cargo
+  // arg). Both the direct and priority-wrapper paths share this tail.
+  const tail = [];
+  if (config) tail.push('--config', config);
+  if (target) tail.push('--target', target);
+  if (features) tail.push('--', '--features', features);
+
   let cmd = 'npx';
-  let args = ['tauri', 'build'];
+  let args = ['tauri', 'build', ...tail];
   let shell = false;
   if (platform === 'win32') {
     // npx is npx.cmd on Windows → needs a shell when there is no priority
@@ -33,7 +50,7 @@ export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDi
     const scriptDir = path.join(stateDir, 'build-script');
     mkdirSync(scriptDir, { recursive: true });
     const ps1 = path.join(scriptDir, 'build-runner.ps1');
-    writeFileSync(ps1, priorityScript(priority), 'utf8');
+    writeFileSync(ps1, priorityScript(priority, tail), 'utf8');
     cmd = 'powershell';
     args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1];
     shell = false;
@@ -41,14 +58,15 @@ export function buildCommand({ jobs, noLto = false, priority = 'normal', stateDi
   return { cmd, args, env, shell, useShell: shell };
 }
 
-function priorityScript(priority) {
+function priorityScript(priority, tail = []) {
   const cls = priority === 'low' ? 'Low' : 'BelowNormal';
+  const extra = tail.length ? ` ${tail.join(' ')}` : '';
   return [
     'try {',
     '  $p = [System.Diagnostics.Process]::GetCurrentProcess()',
     `  $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::${cls}`,
     '} catch { } # 32-bit PowerShell cannot set it; fall back to normal',
-    '& npx tauri build 2>&1',
+    `& npx tauri build${extra} 2>&1`,
     'exit $LASTEXITCODE',
     '',
   ].join('\r\n');

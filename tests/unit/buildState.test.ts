@@ -99,4 +99,41 @@ describe('buildCommand', () => {
       expect(body).toContain('exit $LASTEXITCODE');
     }
   });
+
+  it('features forwards cargo args after the Tauri CLI separator', () => {
+    const spec = buildCommand({ features: 'bundled-ffmpeg', platform: 'linux', stateDir: dir });
+    expect(spec.args).toEqual(['tauri', 'build', '--', '--features', 'bundled-ffmpeg']);
+  });
+
+  it('config appends a --config override BEFORE the cargo separator', () => {
+    const spec = buildCommand({
+      features: 'bundled-ffmpeg',
+      config: 'src-tauri/tauri.full.conf.json',
+      platform: 'linux',
+      stateDir: dir,
+    });
+    expect(spec.args).toEqual([
+      'tauri', 'build',
+      '--config', 'src-tauri/tauri.full.conf.json',
+      '--', '--features', 'bundled-ffmpeg',
+    ]);
+    // Without features, config alone is a valid tail.
+    const cfgOnly = buildCommand({ config: 'src-tauri/tauri.full.conf.json', platform: 'linux', stateDir: dir });
+    expect(cfgOnly.args).toEqual(['tauri', 'build', '--config', 'src-tauri/tauri.full.conf.json']);
+  });
+
+  it('config override is threaded into the Windows priority wrapper too', () => {
+    const spec = buildCommand({
+      features: 'bundled-ffmpeg',
+      config: 'src-tauri/tauri.full.conf.json',
+      priority: 'below',
+      platform: 'win32',
+      stateDir: dir,
+    });
+    expect(spec.cmd).toBe('powershell');
+    const ps1 = spec.args[spec.args.indexOf('-File') + 1];
+    const body = readFileSync(ps1, 'utf8');
+    // --config comes before `--` (cargo separator) in the wrapper's tauri line.
+    expect(body).toContain('& npx tauri build --config src-tauri/tauri.full.conf.json -- --features bundled-ffmpeg 2>&1');
+  });
 });

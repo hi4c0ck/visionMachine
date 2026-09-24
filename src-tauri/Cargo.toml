@@ -32,6 +32,13 @@ sysinfo = "0.30"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-log = "2"
 
+[features]
+default = []
+# Full-variant ship: stage + bundle a platform-specific ffmpeg binary under
+# the Tauri resource dir; the backend resolves it first in the ffmpeg locator.
+# Off by default (tiny variant = no binary, user-path/system only).
+bundled-ffmpeg = []
+
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winbase"] }
 

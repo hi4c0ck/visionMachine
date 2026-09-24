@@ -2,6 +2,7 @@
 	import { APP_CONSTANTS } from '$constants';
 	import type { Settings } from '$types';
 	import ProviderStatus from './Settings/ProviderStatus.svelte';
+	import FrameCarousel from './FrameCarousel.svelte';
 
 	let {
 		userName,
@@ -12,6 +13,10 @@
 		onthemeChange,
 		onlayoutChange,
 		video = null,
+		fps = null,
+		totalFrames = null,
+		carouselFrame = 0,
+		oncarouselSelect,
 		ruler = null,
 		showRuler = false,
 		providers = null,
@@ -27,6 +32,15 @@
 		/** The video to show in the top-panel preview (D9: native <video> +
 		 *  play button, no ffmpeg). null = the empty placeholder state. */
 		video?: { url: string; label: string } | null;
+		/** Session fps — needed by the frame carousel for frame↔time math.
+		 *  null/undefined = the carousel is disabled. */
+		fps?: number | null;
+		/** Total session frame count (8n+1) — the carousel's frame bounds. */
+		totalFrames?: number | null;
+		/** The shared selectedFrame — the carousel's center frame. */
+		carouselFrame?: number;
+		/** Advance the shared frame selection from the carousel (snaps to 8). */
+		oncarouselSelect?: (frame: number) => void;
 		/** Tiny global frame ruler overlaid at the bottom edge of the
 		 *  preview strip (frame ticks + playhead). null = nothing to show. */
 		ruler?: { ticks: number[]; total: number; frame: number } | null;
@@ -75,6 +89,30 @@
 		videoEl = null; // force a fresh element on the next preview
 		videoPlaying = false;
 		videoLoading = false;
+		// Leaving a dead preview also exits carousel mode — the center card
+		// the carousel keeps parked on a frame no longer exists.
+		mode = 'playback';
+	}
+
+	// ── Top-panel mode: playback ⇄ carousel (plan B3) ───────────────────────
+	// The toggle never reloads the video source: carousel mode parks the SAME
+	// <video> element on the shared selectedFrame (FrameCarousel binds it in
+	// the center card) and adds decoded neighbor cards around it.
+	let mode = $state<'playback' | 'carousel'>('playback');
+	// The carousel needs the session's fps + frame bounds to be known.
+	let carouselReady = $derived(video !== null && fps !== null && totalFrames !== null);
+
+	function toggleMode() {
+		if (!carouselReady) return;
+		if (mode === 'playback') {
+			// Entering carousel: park the live element on the 8-grid so the
+			// center card shows a concrete frame, not a mid-step one.
+			videoEl?.pause();
+			mode = 'carousel';
+			oncarouselSelect?.(Math.min(totalFrames! - 1, Math.round((carouselFrame || 0) / 8) * 8));
+		} else {
+			mode = 'playback';
+		}
 	}
 
 	// `videoLoading` tracks whether the <video> element has finished its first
@@ -131,6 +169,19 @@
 	<!-- Middle section: frame/video preview container -->
 	<div class="frame-preview">
 		{#if video}
+			{#if mode === 'carousel' && carouselReady}
+				<!-- Carousel mode: the SAME <video> element is parked in the
+					 center card (bound by FrameCarousel), with decoded neighbor
+					 cards around it. No source reload on the mode toggle. -->
+				<FrameCarousel
+					video={video}
+					bind:videoEl
+					totalFrames={totalFrames!}
+					fps={fps!}
+					frame={carouselFrame}
+					onframeSelect={(f) => oncarouselSelect?.(f)}
+				/>
+			{:else}
 			<div class="frame-video-wrap">
 				<!-- Spinner overlay while the <video> element is still probing.
 				     The element itself always mounts when video is present so
@@ -161,8 +212,22 @@
 				>
 					{videoPlaying ? '❚❚' : '▶'}
 				</button>
+				{#if carouselReady}
+					<!-- Playback ⇄ carousel toggle (plan B3): sits next to
+						 play/pause, only present when the session's fps +
+						 frame bounds are known. -->
+					<button
+						class="frame-video-mode {mode === 'carousel' ? 'active' : ''}"
+						onclick={toggleMode}
+						title={mode === 'carousel' ? APP_CONSTANTS.strings.frameCarouselToPlayback : APP_CONSTANTS.strings.frameCarouselHint}
+						aria-label={APP_CONSTANTS.strings.frameCarousel}
+					>
+						≣
+					</button>
+				{/if}
 				<span class="frame-video-label">{video.label}</span>
 			</div>
+			{/if}
 		{:else if previewImage}
 			<img src={previewImage} alt="Frame preview" class="preview-img" onclick={handlePreviewClick} />
 		{:else}
@@ -394,6 +459,34 @@
 
 	.frame-video-play:hover {
 		background: var(--bg-hover);
+	}
+
+	/* Carousel toggle: mirrors the play button, one icon to the left of it
+	   (plan B3). The two buttons stack in the same corner. */
+	.frame-video-mode {
+		position: absolute;
+		bottom: 8px;
+		right: 44px;
+		width: 30px;
+		height: 30px;
+		border-radius: 50%;
+		border: 1px solid var(--border);
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+		cursor: pointer;
+		font-size: 0.85rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.frame-video-mode:hover {
+		background: var(--bg-hover);
+	}
+
+	.frame-video-mode.active {
+		border-color: var(--accent-color, #ff3e00);
+		color: var(--accent-color, #ff3e00);
 	}
 
 	.frame-video-label {

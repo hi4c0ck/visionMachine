@@ -4,7 +4,9 @@
 //! image sync POSTs and video create→poll flows against the per-profile
 //! provider slots. The engine slot is wired in `lib.rs` at startup.
 
+mod compose;
 mod engine;
+mod ffmpeg;
 mod media;
 mod provider;
 mod registry;
@@ -12,7 +14,12 @@ mod shaper;
 mod specs;
 mod types;
 
+pub use compose::{
+    compose_session_video, ComposeCancel, ComposeError, ComposeRegistry, ComposeResult,
+    ComposeStartError, SourceVideo,
+};
 pub use engine::{EngineInput, EngineStage, GenerationEngine};
+pub use ffmpeg::{resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
     append_jsonl, append_request_log, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
     session_generation_dirs, session_media_root, write_json,

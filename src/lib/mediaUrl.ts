@@ -13,7 +13,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
  * treating the array as if it were already typed (`arr.buffer` on a plain
  * array is `undefined`) produces silently corrupted media.
  */
-async function readMediaBytes(path: string): Promise<Uint8Array> {
+export async function readMediaBytes(path: string): Promise<Uint8Array> {
   const raw = await invoke('read_media_file', { input: { path } });
   return Array.isArray(raw) ? Uint8Array.from(raw) : (raw as Uint8Array);
 }

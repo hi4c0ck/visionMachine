@@ -13,6 +13,10 @@
 		ongenerate,
 		ongeneratepipe,
 		onopenpreview,
+		oncomposesession,
+		ffmpegAvailable = false,
+		composing = false,
+		compositionLabel = '',
 		pipegenerating = false,
 		onfpschange,
 		onresolutionchange,
@@ -35,6 +39,13 @@
 		ongeneratepipe?: (pipeId: string) => void;
 		/** Hand the pipe's last generated video to the top-panel preview (D9). */
 		onopenpreview?: (pipe: PipeRow) => void;
+		/** Splice the session's pipe videos into one session video (A5). */
+		oncomposesession?: () => void;
+		/** ffmpeg present? false → the compose button is disabled w/ hint. */
+		ffmpegAvailable?: boolean;
+		/** Compose is in flight — button shows live progress. */
+		composing?: boolean;
+		compositionLabel?: string;
 		/** A generation task is active — the pipe generate button is disabled. */
 		pipegenerating?: boolean;
 		onfpschange?: (fps: number) => void;
@@ -193,6 +204,15 @@
       {#if session}
         <button class="btn-generate" onclick={ongenerate} disabled={!session.pipes?.length}>
           {APP_CONSTANTS.strings.generate}
+        </button>
+        <button
+          class="btn-compose"
+          onclick={() => oncomposesession?.()}
+          disabled={!ffmpegAvailable || composing}
+          title={ffmpegAvailable
+            ? APP_CONSTANTS.strings.composeSessionVideoHint
+            : APP_CONSTANTS.strings.composeSessionNoFfmpeg}>
+          {composing ? (compositionLabel || 'Composing…') : APP_CONSTANTS.strings.composeSessionVideo}
         </button>
       {/if}
     </div>
@@ -642,6 +662,30 @@
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+  }
+
+  .btn-compose {
+    padding: 7px 14px;
+    background: var(--bg-tertiary, #27272a);
+    color: var(--text-primary, #fff);
+    border: 1px solid var(--border-color, #3f3f46);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all var(--transition-fast);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  .btn-compose:hover:not(:disabled) {
+    border-color: var(--accent-color, #ff3e00);
+    color: var(--text-primary, #fff);
+  }
+
+  .btn-compose:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* Preview */

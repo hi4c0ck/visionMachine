@@ -143,6 +143,15 @@ export interface Settings {
   };
   generationDefaults: GenerationDefaults;
   providers: Record<ProviderKind, ProviderSlot>;
+  /** Local tooling (Phase: ffmpeg locator). Never in logs (P6). */
+  tools: ToolsBlock;
+}
+
+/** Local tooling overrides. `ffmpegPath` is the tiny-variant escape hatch:
+ *  when set, the backend probes it (with `-version` only) ahead of the
+ *  system $PATH. Absent/empty = not used. */
+export interface ToolsBlock {
+  ffmpegPath: string;
 }
 
 // ── Generation log (portable: NO keys, NO raw local paths — P5) ────────────

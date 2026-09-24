@@ -56,6 +56,22 @@ const APP_CONSTANTS = {
     refNotAccessible: 'Reference not accessible',
     generationInProgress: 'Generation already in progress',
     sessionGenRoadmap: 'Session generation (all pipes) is on the roadmap',
+    composeSessionVideo: 'Compose session video',
+    composeSessionVideoHint: 'Splice every generated pipe into one session video',
+    composeSessionNoFfmpeg: 'Compose needs ffmpeg — Full build, a path in Settings → Tools, or a system ffmpeg',
+    composeSessionNoSources: 'No generated pipe videos to compose yet',
+    composeSessionDone: 'Session video ready',
+
+    // Frame carousel (top-panel mode)
+    frameCarousel: 'Frame carousel',
+    frameCarouselHint: 'Browse frames in 8-frame steps — center frame live, neighbors decoded',
+    frameCarouselToPlayback: 'Back to playback',
+    frameLabel: 'Frame',
+    frameThumbnails: 'Frame thumbnails',
+    frameNavPrev: 'Previous frame',
+    frameNavNext: 'Next frame',
+    framePrevDisabled: 'At the first frame',
+    frameNextDisabled: 'At the last frame',
     promptCopied: 'Prompt copied',
     openInPreview: 'Open in preview',
     
