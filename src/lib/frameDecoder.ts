@@ -45,6 +45,33 @@ interface LRUEntry {
   t: number;
 }
 
+/** Clone a cached bitmap before exposing it to a canvas action. */
+async function cloneImageBitmap(bitmap: ImageBitmap | null): Promise<ImageBitmap | null> {
+  if (!bitmap) return null;
+  try {
+    return await createImageBitmap(bitmap);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why a frame thumbnail is unavailable — the UI keeps the placeholder but
+ * can show the RIGHT one ("loading…", "out of range", "decoder failed")
+ * instead of a generic ellipsis.
+ */
+export type ThumbDiag =
+  | 'pending' // nothing known yet (source not loaded / decode in flight)
+  | 'unsupported' // WebCodecs absent AND canvas capture unavailable (no <video> in the env)
+  | 'loading' // the capture <video> hasn't finished its first load / metadata
+  | 'out-of-range' // frame index is past the media's actual duration
+  | 'failed' // capture/decode broke (media error, unseekable, drawImage failure)
+  | 'ok'; // a bitmap is available (or a cache hit)
+
+export interface FrameDiag {
+  thumb: ThumbDiag;
+}
+
 /**
  * A decoded-frame source for one media file. `frame(i)` resolves to the
  * 0-based frame index's ImageBitmap (or null). Frame indices are composer
@@ -63,6 +90,9 @@ export class FrameSource {
   private readonly inflight = new Map<number, Promise<ImageBitmap | null>>();
   private captureBroken = false;
   private decodeBroken = false;
+  /** Last diagnostics for the most-recently-requested frame. The UI reads
+   *  this to pick the right placeholder copy. Updated by resolveFrame. */
+  private diagState: FrameDiag = { thumb: 'pending' };
   /** Frames emitted by the decoder and not yet claimed by a decodeForward
    *  caller, in decode order. Bounded: each pass claims/closes them. */
   private readonly outputQueue: VideoFrame[] = [];
@@ -84,6 +114,27 @@ export class FrameSource {
   }
 
   /**
+   * Diagnostics for the most-recently-requested frame (see FrameDiag).
+   * The UI polls this to render the correct placeholder copy. Read-only
+   * snapshot; safe to call any time.
+   */
+  get diag(): FrameDiag {
+    return this.diagState;
+  }
+
+  /**
+   * The media's measured duration in frames (null until the capture <video>
+   * has loaded metadata). The UI clamps its frame pool to this so side
+   * cards past the real video end show "out of range", not a forever-
+   * pending placeholder.
+   */
+  get mediaDurationFrames(): number | null {
+    const v = this.captureVideo;
+    if (!v || !isFinite(v.duration) || v.duration <= 0) return null;
+    return Math.floor(v.duration * this.fps);
+  }
+
+  /**
    * ImageBitmap for a 0-based frame index, or null (index past end of media
    * or evicted from the LRU). Resolution order per frame:
    *   1. LRU cache
@@ -100,11 +151,17 @@ export class FrameSource {
     const cached = this.cache.get(index);
     if (cached) {
       cached.t = ++this.lruCounter; // promote to most-recently-used
-      return Promise.resolve(cached.bitmap);
+      // The cache owns this bitmap and may close it during LRU eviction.
+      // Never hand the same resource to Svelte's canvas action: it can then
+      // receive a detached ImageBitmap on the next update and throw.
+      return cloneImageBitmap(cached.bitmap);
     }
     const pending = this.inflight.get(index);
     if (pending) return pending;
-    const p = this.resolveFrame(index).finally(() => this.inflight.delete(index));
+    const raw = this.resolveFrame(index).finally(() => this.inflight.delete(index));
+    // The resolved bitmap is cached by FrameSource and can be closed later;
+    // expose an independent clone to every Svelte action instead.
+    const p = raw.then(cloneImageBitmap);
     this.inflight.set(index, p);
     return p;
   }
@@ -114,12 +171,20 @@ export class FrameSource {
    * to a <video>-element canvas capture. A WebCodecs failure disposes the
    * decoder pipeline but does NOT poison the whole source — the canvas
    * fallback still serves subsequent frames.
+   *
+   * The media-duration clamp: the requested composer frame may exceed the
+   * ACTUAL encoded video's length (totalFrames is the configured composer
+   * length, the generated clip can be shorter). Seeking past the end yields
+   * a `seeked` at the clamped last frame — a duplicate, not a new image. So
+   * when the duration is known, frames past it short-circuit to null with
+   * the "out of range" diagnostic instead of drawing the last frame N times.
    */
   private async resolveFrame(index: number): Promise<ImageBitmap | null> {
     // 1) WebCodecs fast path (only when the decoder pipeline is healthy).
     if (FrameSource.isSupported && !this.decodeBroken && this.decoder?.state !== 'closed') {
       const webcodecs = await this.decodeTo(index);
       if (webcodecs) {
+        this.diagState = { thumb: 'ok' };
         this.cache.set(index, { bitmap: webcodecs, t: ++this.lruCounter });
         this.evictLru();
         return webcodecs;
@@ -128,11 +193,22 @@ export class FrameSource {
       // If the decoder failed for this frame, stop retrying it.
       if (this.decoder?.state === 'closed') this.decodeBroken = true;
     }
-    // 2) Canvas-capture fallback (universal, no WebCodecs required).
+    // 2) Duration clamp: past the real end of the media → no bitmap, and the
+    //    UI shows "out of range" (distinct from a decode failure).
+    const durFrames = this.mediaDurationFrames;
+    if (durFrames !== null && index > durFrames) {
+      this.diagState = { thumb: 'out-of-range' };
+      return null;
+    }
+    // 3) Canvas-capture fallback (universal, no WebCodecs required).
     const captured = await this.captureFrame(index);
     if (captured) {
+      this.diagState = { thumb: 'ok' };
       this.cache.set(index, { bitmap: captured, t: ++this.lruCounter });
       this.evictLru();
+    } else {
+      // captureFrame set the specific reason; surface it.
+      this.diagState = { thumb: this.captureBroken ? 'failed' : this.captureVideo ? 'loading' : 'unsupported' };
     }
     return captured;
   }
@@ -145,6 +221,10 @@ export class FrameSource {
    * drawImage of video. The fallback is best-effort: it must never hard-fail.
    */
   private captureVideo?: HTMLVideoElement;
+  /** Set once the capture element's first load (canplay + metadata) settles.
+   *  A seek issued before metadata is available silently no-ops in WebView2
+   *  (no `seeked` event), which is the original "empty side cards" bug. */
+  private captureReady = false;
   private captureInflight: Promise<ImageBitmap | null> | null = null;
   private async captureFrame(index: number): Promise<ImageBitmap | null> {
     if (this.captureBroken) return null;
@@ -156,6 +236,16 @@ export class FrameSource {
       if (this.captureBroken) return null;
       const videoEl = this.ensureCaptureVideo();
       if (!videoEl) return null;
+      // Gate every seek on the element being fully loaded. Without this, a
+      // seek before `loadedmetadata` produces no `seeked` event at all and
+      // the caller times out (the root cause of empty side cards).
+      if (!this.captureReady) {
+        const ready = await this.waitCaptureReady(videoEl);
+        if (!ready) {
+          this.captureBroken = true; // media never became seekable
+          return null;
+        }
+      }
       const targetSec = index / this.fps;
       try {
         const seeked = await this.seekVideo(videoEl, targetSec);
@@ -189,6 +279,41 @@ export class FrameSource {
     return result;
   }
 
+  /**
+   * Resolve when the capture element is loaded far enough to seek: it has
+   * fired `loadeddata` (metadata + first frame available) or `canplay`, and
+   * `videoWidth` is known. Bounded — a media that never loads marks the
+   * fallback broken instead of hanging the carousel.
+   */
+  private waitCaptureReady(el: HTMLVideoElement): Promise<boolean> {
+    if (this.captureReady) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(budget);
+        el.removeEventListener('loadeddata', onReady);
+        el.removeEventListener('canplay', onReady);
+        el.removeEventListener('error', onErr);
+        if (ok) this.captureReady = true;
+        resolve(ok);
+      };
+      const onReady = () => {
+        // loadeddata guarantees videoWidth/videoHeight + duration are set;
+        // a seek from here on will fire `seeked`.
+        if (el.readyState >= 2) finish(true);
+      };
+      const onErr = () => finish(false);
+      const budget = setTimeout(() => finish(false), 10000);
+      el.addEventListener('loadeddata', onReady);
+      el.addEventListener('canplay', onReady);
+      el.addEventListener('error', onErr);
+      // Already loaded (e.g. a second frame() call after the first settled).
+      if (el.readyState >= 2) finish(true);
+    });
+  }
+
   private ensureCaptureVideo(): HTMLVideoElement | null {
     if (typeof document === 'undefined') return null;
     if (!this.captureVideo) {
@@ -197,6 +322,7 @@ export class FrameSource {
       el.playsInline = true;
       // Do NOT autoplay; we only seek + draw. src is set on first use.
       el.preload = 'auto';
+      el.crossOrigin = 'anonymous';
       el.src = this.url;
       this.captureVideo = el;
     }
@@ -205,9 +331,10 @@ export class FrameSource {
 
   /**
    * Seek a <video> to a timestamp; resolves true when the `seeked` event
-   * fires within a short budget, false otherwise (media still loading / not
-   * seekable / the element errored). Bounded so a stuck element can't hang
-   * the carousel.
+   * fires within a short budget, false otherwise (not seekable / the element
+   * errored). The element is already metadata-ready when this runs (see
+   * waitCaptureReady), so `seeked` is a reliable completion signal. Bounded
+   * so a stuck element can't hang the carousel.
    */
   private seekVideo(el: HTMLVideoElement, sec: number): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
@@ -222,11 +349,15 @@ export class FrameSource {
       };
       const onSeeked = () => finish(true);
       const onErr = () => finish(false);
-      const budget = setTimeout(() => finish(false), 2000);
+      const budget = setTimeout(() => finish(false), 3000);
       el.addEventListener('seeked', onSeeked);
       el.addEventListener('error', onErr);
       try {
-        el.currentTime = sec;
+        // Clamp to the measured duration: seeking past the end of a finite
+        // clip fires `seeked` at the last frame — the duration check in
+        // resolveFrame already rejects out-of-range frames, this is a guard.
+        const d = isFinite(el.duration) && el.duration > 0 ? el.duration : Infinity;
+        el.currentTime = Math.max(0, Math.min(sec, d - 0.001));
       } catch {
         finish(false);
       }
@@ -253,6 +384,10 @@ export class FrameSource {
       this.captureVideo.load?.();
       this.captureVideo = undefined;
     }
+    this.captureReady = false;
+    this.captureBroken = false;
+    this.decodeBroken = false;
+    this.diagState = { thumb: 'pending' };
     for (const e of this.cache.values()) e.bitmap?.close();
     this.cache.clear();
   }

@@ -11,11 +11,11 @@
 	import {
 		FrameSource,
 		CAROUSEL_STEP,
-		carouselWindow,
 		carouselCardScaleF,
 		carouselCardX,
 		carouselCardOpacityF,
-		snapCarouselFrame
+		snapCarouselFrame,
+		type ThumbDiag
 	} from '$lib/frameDecoder';
 
 	let {
@@ -24,15 +24,16 @@
 		totalFrames,
 		fps = 24,
 		frame,
-		onframeSelect
+		onframeSelect,
+		onexit
 	} = $props<{
 		/** The same media shown in the top panel — center card plays it. */
 		video: { url: string; label: string };
 		/**
-	 * The top panel's live <video> element, rendered in the center card
-	 * slot. Keeping it mounted (rather than a second <video>) means the
-	 * mode toggle never reloads the source.
-	 */
+		 * The top panel's live <video> element, rendered in the center card
+		 * slot. Keeping it mounted (rather than a second <video>) means the
+		 * mode toggle never reloads the source.
+		 */
 		videoEl: HTMLVideoElement | null;
 		/** Total frame count of the session (8n+1). */
 		totalFrames: number;
@@ -42,22 +43,34 @@
 		frame: number;
 		/** Advance the shared frame selection (snaps to the 8-grid). */
 		onframeSelect?: (frame: number) => void;
+		/** Exit carousel mode (back to full-screen playback). */
+		onexit?: () => void;
 	}>();
 
 	// Perf lever (plan B1): default 8-frame grid. If 720p+ decode feels
 	// heavy, flip CAROUSEL_STEP to a sub-sample (e.g. 4) in frameDecoder or
 	// narrow SPAN below — the window math adapts.
 	const STEP = CAROUSEL_STEP;
-	// Render the window wide enough (±4 steps) that a card leaving the window
-	// is already scaled away (hidden) and one entering fades in from scale 0
-	// — the wider span exists only so the continuous dip math has room; the
-	// strip's look is unchanged (beyond 3 steps the dip is already near-0).
-	const SPAN = 4;
+	// POOL: 9 card slots, one per STEP, offsets -4..4. The dip is visible to
+	// ±3 (scale > 0); ±4 are the HOT PRELOAD ring — off-screen slots whose
+	// frames are already decoded in the LRU, so stepping 1–2 frames never
+	// waits on a decode. Slots are always mounted; each just re-points to its
+	// frame index as the window slides (no card DOM ever created/destroyed).
+	const HOT = 4; // pool radius in steps
+	const POOL = Array.from({ length: 2 * HOT + 1 }, (_, i) => i - HOT); // offsets -4..4
 
 	// Snap the incoming frame to the carousel grid so the window is stable
 	// even when the shared frame arrives off-grid (free ruler scrubbing).
 	const centerFrame = $derived(snapCarouselFrame(frame, totalFrames, STEP));
-	const windowFrames = $derived(carouselWindow(centerFrame, totalFrames, STEP, SPAN));
+	// Pre-decode frames for the whole pool (center ± HOT steps) so the off-
+	// screen ring is hot: a 1–2 frame move finds the neighbors already in
+	// the LRU instead of waiting on a decode. Clamped to [0, totalFrames).
+	const poolFrames = $derived(
+		POOL.map((i) => {
+			const f = centerFrame + i * STEP;
+			return f >= 0 && f < totalFrames ? f : null;
+		})
+	);
 
 	// ── Continuous strip position (the "semi-state") ───────────────────────
 	// There is no discrete left/center/right state: every card's geometry is
@@ -121,6 +134,10 @@
 	// Neighbor thumbnail bitmaps, keyed by frame index.
 	let thumbs = $state<Record<number, ImageBitmap | null>>({});
 	let source: FrameSource | null = null;
+	// Diagnostic state for the current source — drives the placeholder copy
+	// so the UI distinguishes "loading", "out of range", "decoder failed",
+	// and "unsupported runtime" instead of showing a generic ellipsis.
+	let thumbDiag = $state<ThumbDiag>('pending');
 
 	// (Re)build the decoder source when the media or fps changes.
 	$effect(() => {
@@ -128,42 +145,80 @@
 		const s = new FrameSource(url, fps);
 		source = s;
 		thumbs = {};
+		thumbDiag = 'pending';
 		return () => {
 			s.dispose();
 			if (source === s) source = null;
 		};
 	});
 
-	// Decode every visible window frame (center included — the center card is
-	// now a thumbnail with the <video> cross-fading on top). Each `frame()`
-	// call is LRU-cached in the source, so scrolling back is a cache hit and
-	// the center's thumbnail is almost always a hit: it was a neighbor a
-	// moment ago. null → placeholder card.
-	//
-	// Neighbor frames are decoded in parallel, ordered by distance from the
-	// center (±1 first, ±2 later). The source serializes its decode/capture
-	// pipeline internally, so parallel requests are safe and deduplicated —
-	// we never re-request a frame that is in-flight or already cached.
+	// Track the source's diagnostic state (loading / out-of-range / failed /
+	// unsupported) and reactivity so placeholders render the right copy and
+	// side frames past the real video end stop pretending to load.
+	let mediaDurFrames = $state<number | null>(null);
 	$effect(() => {
-		void windowFrames; // re-run when the window changes
 		const src = source;
 		if (!src) return;
 		let cancelled = false;
-		(async () => {
-			// Distance order: the nearest neighbors (what the user actually sees)
-			// decode before the farther ones.
-			const ordered = [...windowFrames]
-				.sort((a, b) => Math.abs(a - centerFrame) - Math.abs(b - centerFrame));
-			for (const f of ordered) {
-				const b = await src.frame(f);
-				if (cancelled) return;
-				thumbs = { ...thumbs, [f]: b };
-			}
-		})();
+		const poll = () => {
+			if (cancelled) return;
+			thumbDiag = src.diag.thumb;
+			const d = src.mediaDurationFrames;
+			if (d !== null && d !== mediaDurFrames) mediaDurFrames = d;
+			// Keep polling until a bitmap lands; the source settles fast.
+			if (src.diag.thumb !== 'ok') setTimeout(poll, 500);
+		};
+		poll();
+		return () => { cancelled = true; };
+	});
+
+	// Decode the whole pool (center ± HOT), clamped to the media's measured
+	// duration. Each `frame()` call is LRU-cached in the source (or deduped
+	// while in-flight), so re-pointing after a back-scroll is a cache hit.
+	// Decodes run IN PARALLEL — the source serializes its own seek/capture
+	// pipeline, so parallel requests are safe. (Sequential-await + fast-drag
+	// cancellation is what previously starved the far slots.)
+	//
+	// The clamp matters: totalFrames is the CONFIGURED composer length, but
+	// the generated clip can be shorter. Frames past the real video end
+	// would otherwise seek to the last frame (duplicates) or spin — so skip
+	// them and let the UI render "out of range" for those slots.
+	$effect(() => {
+		const frames = poolFrames.filter(
+			(f): f is number => f !== null && (mediaDurFrames === null || f <= mediaDurFrames)
+		);
+		const src = source;
+		if (!src || frames.length === 0) return;
+		let cancelled = false;
+		const settled = (f: number, b: ImageBitmap | null) => {
+			if (cancelled) return;
+			thumbs = { ...thumbs, [f]: b };
+		};
+		for (const f of frames) {
+			void src.frame(f).then((b) => settled(f, b));
+		}
 		return () => {
 			cancelled = true;
 		};
 	});
+
+	// A pool slot shows a diagnostic placeholder when its frame has no bitmap
+	// for a KNOWN reason: out of the media's real duration, the capture broke,
+	// or the runtime can't decode at all. "Pending" (first load / still
+	// decoding) keeps the generic ellipsis.
+	function slotPlaceholder(f: number): string {
+		if (mediaDurFrames !== null && f > mediaDurFrames) return 'out of range';
+		switch (thumbDiag) {
+			case 'failed':
+				return 'decode failed';
+			case 'unsupported':
+				return 'thumbnails unavailable';
+			case 'loading':
+			case 'pending':
+			default:
+				return '…';
+		}
+	}
 
 	// Horizontal-only frame sweep. The pointer drag ONLY moves cards on the
 	// horizontal axis (the "swing scroll" the user wants) — a vertical or
@@ -280,30 +335,36 @@
 		step(event.deltaY > 0 || event.deltaX > 0 ? 1 : -1);
 	}
 
-	// Draw a decoded frame into the card's canvas at the card's display size,
-	// center-cropping the native bitmap to the card's aspect ratio (the same
-	// geometry `object-fit: cover` gives the <video> in the center layer).
-	// Stretching the native video resolution into the fixed card slot would
-	// distort every thumbnail, so scale to fit the slot instead.
+	// Paint a decoded frame into the card's canvas at a FIXED intrinsic size
+	// (THUMB_PX wide, aspect-corrected to the source), independent of the
+	// card's on-screen box. The card is CSS-transformed (transform: scale),
+	// and clientWidth/clientHeight on a child of a scaled element can read
+	// 0 or a stale value in WebView2 — which silently skips the paint. The
+	// canvas is laid out at width:100%/height:100% + object-fit:cover by the
+	// card's CSS, so the browser scales the fixed backing store to fit the
+	// (possibly mid-transition) slot. No layout read needed.
+	const THUMB_PX = 340; // 2× the max card width; crisp enough, memory-bounded
 	function drawThumbnail(node: HTMLCanvasElement, bitmap: ImageBitmap | null | undefined) {
 		const paint = (value: ImageBitmap | null | undefined) => {
 			if (!value) return;
-			const cw = node.clientWidth;
-			const ch = node.clientHeight;
-			if (!cw || !ch) return; // not laid out yet (display:none card)
-			node.width = cw;
-			node.height = ch;
+			// Intrinsic backing store: THUMB_PX wide, source aspect ratio.
+			const w = THUMB_PX;
+			const h = Math.max(1, Math.round(THUMB_PX * (value.height / value.width)));
+			if (node.width !== w) node.width = w;
+			if (node.height !== h) node.height = h;
 			const ctx = node.getContext('2d');
 			if (!ctx) return;
 			ctx.imageSmoothingQuality = 'high';
-			// Cover: scale the bitmap up/down to fill the slot, center-crop.
-			const s = Math.max(cw / value.width, ch / value.height);
-			const dw = value.width * s;
-			const dh = value.height * s;
-			ctx.drawImage(value, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+			try {
+				ctx.drawImage(value, 0, 0, w, h);
+			} catch (e) {
+				// A late Svelte action update can outlive an ImageBitmap close.
+				// Treat that frame as unavailable instead of crashing the UI.
+				console.warn('[FrameCarousel] detached thumbnail ignored:', e);
+			}
 		};
 		paint(bitmap);
-		return { update: paint };
+		return { update: paint, destroy: () => {} };
 	}
 
 	// ── layout math (plan B2) ───────────────────────────────────────────────
@@ -325,8 +386,8 @@
 	 * dip. While a drag is in flight the strip transitions are disabled
 	 * (fc-dragging class) so the pointer owns the position 1:1.
 	 */
-	function cardStyle(f: number): string {
-		const d = f / STEP - visualStep; // signed steps from the visual center
+	/** Geometry from a (float) signed step distance — shared by pool cards. */
+	function cardStyleByDistance(d: number): string {
 		const scale = carouselCardScaleF(d);
 		if (scale <= 0) return 'display:none;';
 		const x = carouselCardX(d, CARD_W, OVERLAP);
@@ -349,16 +410,24 @@
 		ondragstart={(event) => event.preventDefault()}
 		style:cursor={dragActive ? 'grabbing' : 'ew-resize'}
 	>
-		{#each windowFrames as f (f)}
-			<div class="fc-card" class:fc-center={f === centerFrame} style={cardStyle(f)}>
-				<!-- The card is a thumbnail at ALL positions — the live <video>
-					     lives in the fixed layer below, cross-fading over the
-					     center card when the strip is at rest. -->
-				<div class="fc-thumb-placeholder" aria-hidden="true">…</div>
-				{#if thumbs[f]}
+		<!-- Reusable card POOL: 9 slots (offsets -4..4), always mounted.
+			 7 slots hold the visible dip (±3); ±4 are the hot-preload ring —
+			 decoded off-screen so a 1–2 frame move never waits on a decode.
+			 Each slot re-points to its frame index as the window slides (or
+			 null past the media bounds → hidden); no card DOM is ever created
+			 or destroyed during a sweep. A card is a thumbnail at ALL positions;
+			 the live <video> lives in the fixed layer below, cross-fading over
+			 the center slot when the strip is at rest. -->
+		{#each POOL as offset (offset)}
+			{@const f = poolFrames[offset + HOT] ?? null}
+			<div class="fc-card" class:fc-center={f !== null && f === centerFrame} style={f === null ? 'display:none;' : cardStyleByDistance(offset - (visualStep - centerFrame / STEP))}>
+				<div class="fc-thumb-placeholder" class:fc-thumb-placeholder-warn={f !== null && !thumbs[f] && (thumbDiag === 'failed' || thumbDiag === 'unsupported' || (mediaDurFrames !== null && f > mediaDurFrames))} aria-hidden="true">{f !== null ? slotPlaceholder(f) : ''}</div>
+				{#if f !== null && thumbs[f]}
 					<canvas class="fc-thumb" use:drawThumbnail={thumbs[f]} aria-label="{APP_CONSTANTS.strings.frameLabel} {f}"></canvas>
 				{/if}
-				<span class="fc-frame-label">{f} · {(f / fps).toFixed(1)}s</span>
+				{#if f !== null}
+					<span class="fc-frame-label">{f} · {(f / fps).toFixed(1)}s</span>
+				{/if}
 			</div>
 		{/each}
 
@@ -407,6 +476,20 @@
 		aria-label={APP_CONSTANTS.strings.frameNavNext}
 		title={APP_CONSTANTS.strings.frameNextDisabled}
 	>›</button>
+
+	<!-- Exit carousel: the strip owns the top panel while active, so the
+		 toggle back to playback lives HERE — it's unreachable otherwise
+		 (the playback-mode toggle only renders in the other branch). -->
+	<button
+		class="fc-exit"
+		onclick={(e) => { e.stopPropagation(); onexit?.(); }}
+		onpointerdown={(e) => e.stopPropagation()}
+		onpointermove={(e) => e.stopPropagation()}
+		onpointerup={(e) => e.stopPropagation()}
+		onwheel={(e) => e.stopPropagation()}
+		aria-label={APP_CONSTANTS.strings.frameCarouselToPlayback}
+		title={APP_CONSTANTS.strings.frameCarouselToPlayback}
+	>⨯</button>
 </div>
 
 <style>
@@ -499,7 +582,9 @@
 
 	/* The placeholder sits UNDER the thumbnail canvas (which only mounts
 		 once the decode lands) and fills the card while the bitmap is in
-		 flight — so a thumbnail appearing never re-lays-out the card. */
+		 flight — so a thumbnail appearing never re-lays-out the card.
+		 The warn variant marks KNOWN-failure states (out of range / decode
+		 failed / unsupported) so the user isn't left staring at an ellipsis. */
 	.fc-thumb-placeholder {
 		display: flex;
 		align-items: center;
@@ -507,6 +592,13 @@
 		color: var(--text-muted);
 		font-size: 1.4rem;
 		background: var(--bg-tertiary);
+	}
+
+	.fc-thumb-placeholder-warn {
+		font-size: 0.62rem;
+		font-family: 'JetBrains Mono', monospace;
+		color: var(--text-muted);
+		letter-spacing: 0.02em;
 	}
 
 	.fc-frame-label {
@@ -548,5 +640,33 @@
 
 	.fc-nav:hover:not(:disabled) {
 		background: var(--bg-hover);
+	}
+
+	/* Exit-carousel button: top-right of the strip, the only way out while the
+		 carousel owns the top panel. Reads as "close this view", not a frame
+		 control, so it's set apart from the prev/next nav buttons. */
+	.fc-exit {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		width: 26px;
+		height: 26px;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: var(--bg-tertiary);
+		color: var(--text-secondary);
+		font-size: 0.8rem;
+		line-height: 1;
+		cursor: pointer;
+		z-index: 21;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.fc-exit:hover {
+		background: var(--bg-hover);
+		color: var(--text-primary);
+		border-color: var(--accent-color, #ff3e00);
 	}
 </style>
