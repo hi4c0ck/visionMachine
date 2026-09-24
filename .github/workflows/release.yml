@@ -26,17 +26,22 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (full history for the ancestry check)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
       - name: Verify the tag is reachable from production
         run: |
-          # If the tagged commit is NOT an ancestor-reachable point of
-          # production, abort so no MSI is built from non-stable code.
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/production; then
+          git fetch origin production
+          # If the tagged commit is NOT reachable from production's tip,
+          # abort so no MSI is built from non-stable code.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
             echo "::error::Tag $GITHUB_REF_NAME does not point to a commit on production; refusing to build an MSI from unstable code."
             exit 1
           fi
           echo "Tag $GITHUB_REF_NAME is on production — proceeding."
-        env:
-          GITHUB_SHA: ${{ github.sha }}
 
   build-release:
     name: Build Windows MSI
