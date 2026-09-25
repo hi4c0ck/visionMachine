@@ -66,6 +66,36 @@ pub fn pipe_media_dirs(
     Ok((images, task, task_images))
 }
 
+/// Remove the stale artifacts of an earlier session-composition attempt
+/// (`concat.txt` manifest + `session.mp4` output) from the session-video dir.
+///
+/// The output dir is shared between the auto-compose group flow and the
+/// standalone "compose session" button. An earlier partial/failed attempt
+/// can leave a manifest whose source set does NOT match the current one —
+/// clearing both at the start of a new attempt guarantees the ffmpeg run
+/// always sees exactly the current sources and a failed attempt can never
+/// leave a misleading `session.mp4` behind.
+///
+/// `output.json` (written only on success) is left in place: it belongs to
+/// the last *successful* composition and the next successful attempt
+/// overwrites it. Best-effort: IO errors are swallowed (the compose flow
+/// re-creates the manifest either way).
+pub fn clear_session_compose_artifacts(out_dir: &std::path::Path) {
+    if !out_dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(out_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let n = name.to_string_lossy().into_owned();
+        if n == "concat.txt" || n == "session.mp4" {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Session-level generation tree under the session root (full-session
 /// artifacts — the session's own generation log, shared across pipes):
 ///

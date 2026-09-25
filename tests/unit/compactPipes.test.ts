@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupStaleUiState, isStaleGroup, pipeTaskId, togglePipeExpanded } from '../../src/lib/compactPipes';
+import { groupStaleUiState, isStaleGroup, pipeTaskId, togglePipeExpanded, groupComposeUiState } from '../../src/lib/compactPipes';
 
 describe('compact pipe row state', () => {
   it('toggles expansion without mutating the previous state', () => {
@@ -27,5 +27,41 @@ describe('compact pipe row state', () => {
       showCancel: false,
     });
     expect(groupStaleUiState(false, true).showCancel).toBe(true);
+  });
+
+  // Regression: compose failures are persisted on the group but the modal
+  // previously showed only an "OK" button — the error must surface, and a
+  // "done" compose whose session.mp4 is absent is NOT a success.
+  describe('group compose outcome display', () => {
+    it('shows the persisted compose error when composeState is error', () => {
+      const ui = groupComposeUiState(false, 'error', 'ffmpeg output invalid: source Pipe 1 metadata: no input video resolution', null);
+      expect(ui.visible).toBe(true);
+      expect(ui.tone).toBe('error');
+      expect(ui.label).toBe('Session video failed to compose');
+      expect(ui.detail).toBe('ffmpeg output invalid: source Pipe 1 metadata: no input video resolution');
+    });
+    it('does not hide the error while the group is still busy', () => {
+      const ui = groupComposeUiState(true, 'error', 'boom', null);
+      expect(ui.visible).toBe(false);
+    });
+    it('treats a done compose with a session.mp4 path as success', () => {
+      const ui = groupComposeUiState(false, 'done', null, 'C:/session/session-video/session.mp4');
+      expect(ui.visible).toBe(true);
+      expect(ui.tone).toBe('ok');
+      expect(ui.label).toContain('C:/session/session-video/session.mp4');
+    });
+    it('never presents a done compose without session.mp4 as success', () => {
+      const ui = groupComposeUiState(false, 'done', null, null);
+      expect(ui.visible).toBe(true);
+      expect(ui.tone).toBe('error');
+      expect(ui.label).toContain('session.mp4 is missing');
+    });
+    it('shows cancelled and skipped as neutral notes, not errors', () => {
+      expect(groupComposeUiState(false, 'cancelled', null, null).tone).toBe('warning');
+      expect(groupComposeUiState(false, 'skipped', null, null).tone).toBe('info');
+    });
+    it('shows nothing when compose has not been requested yet', () => {
+      expect(groupComposeUiState(false, null, null, null).visible).toBe(false);
+    });
   });
 });

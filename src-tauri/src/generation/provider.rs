@@ -53,13 +53,59 @@ async fn cancel_watcher(cancel: &AtomicBool) {
 /// problem when polled slowly; a tighter-than-10 s cadence only burns quota
 /// and keeps us off the 429 radar.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
-/// 503 `video_queue_full` backoff sequence (catalog hermes note):
-/// 30 s, 60 s, 120 s, then hold at 120 s.
+/// 503 backoff sequence (catalog hermes note): 30 s, 60 s, 120 s, then hold
+/// at 120 s. Applies to ANY transient 503 cause, not just `video_queue_full`
+/// (see `is_transient_503`): provider-side availability outages
+/// (`fail_to_fetch_task` / `no available server` / gateway 503s) are
+/// transient in exactly the same way — the request is fine, the provider
+/// just can't serve it right now.
 const BACKOFF_SECS: [u64; 3] = [30, 60, 120];
 /// Image generation timeout (catalog: 60-360 s; typical ~15-18 s).
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Poll transport timeout (transient network, not the job itself).
 const POLL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether a 503 body describes a TRANSIENT provider-side condition that the
+/// backoff ladder should absorb (retry with the 30/60/120 s schedule).
+///
+/// HTTP 503 by definition means "service unavailable" — the provider could
+/// not serve the request right now. Whether the cause is its own render
+/// queue (`video_queue_full`) or an upstream gateway error surfaced by the
+/// API layer (litellm `ServiceUnavailableError` / `no available server`,
+/// wrapped as code `fail_to_fetch_task`), the correct client behavior is
+/// the same: back off and retry. Only a 503 that explicitly says the
+/// request itself is bad (maintenance-style codes) is terminal.
+///
+/// Matched causes:
+/// - `video_queue_full` — the provider's own queue saturation.
+/// - `fail_to_fetch_task` — the API layer's upstream fetch failure
+///   (wraps the gateway's `no available server` / litellm 503 body).
+/// - bodies whose text mentions `no available server` or `ServiceUnavailable`
+///   (the raw litellm payload the gateway inlines in the `message` field —
+///   match on the human text so a differently-wrapped variant still hits).
+fn is_transient_503(body: &serde_json::Value) -> bool {
+    let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    if code.contains("video_queue_full") || code.contains("fail_to_fetch_task") {
+        return true;
+    }
+    let text = format!("{} {}", code, body.to_string()).to_lowercase();
+    text.contains("no available server")
+        || text.contains("serviceunavailable")
+        || text.contains("service unavailable")
+}
+
+/// A short, user-facing label for a 503 cause (shown in the modal's live
+/// state line; the full body stays in the redacted request log).
+fn transient_503_label(body: &serde_json::Value) -> &'static str {
+    let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    if code.contains("video_queue_full") {
+        "queue full"
+    } else if code.contains("fail_to_fetch_task") {
+        "provider unavailable"
+    } else {
+        "unavailable"
+    }
+}
 
 /// A concrete engine error carrying the concrete-cause rule (E4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,8 +423,13 @@ impl ProviderEngine {
         on_event("image request in flight");
 
         // 429 rate-limited → bounded backoff retry (30/60/120 s ladder), not a
-        // hard failure. After the ladder is exhausted a persistent 429 still
-        // surfaces through the >=400 check below as a concrete error.
+        // hard failure. 503 (any provider cause — queue-full, maintenance,
+        // upstream gateway unavailable) is likewise TRANSIENT by definition:
+        // it means the provider cannot serve the request right now, not that
+        // the request itself is invalid, so it walks the same ladder instead
+        // of killing the stage on the first occurrence. After the ladder is
+        // exhausted a persistent 429/503 still surfaces through the >=400
+        // check below as a concrete error.
         let (status, resp) = {
             let mut backoff_idx = 0usize;
             loop {
@@ -395,7 +446,7 @@ impl ProviderEngine {
                         );
                         EngineError::Failure(format!("transport: {e}"))
                     })?;
-                if st != 429 {
+                if st != 429 && st != 503 {
                     break (st, rs);
                 }
                 let delay = self
@@ -404,14 +455,22 @@ impl ProviderEngine {
                     .copied()
                     .unwrap_or(120);
                 backoff_idx += 1;
+                let label = if st == 429 {
+                    "rate-limited (429)"
+                } else {
+                    "unavailable (503)"
+                };
                 log::warn!(
-                    "[Generation] image task {} rate-limited (429), backing off {} s (consecutive 429 #{})",
-                    input.task_id, delay, backoff_idx
+                    "[Generation] image task {} {}, backing off {} s (consecutive transient #{})",
+                    input.task_id,
+                    label,
+                    delay,
+                    backoff_idx
                 );
-                // Live state line so the modal shows "rate-limited — retry in
-                // N s" instead of a frozen bar (the request/response detail
-                // stays in the redacted log, not here).
-                on_event(&format!("rate-limited — retry in {} s", delay));
+                // Live state line so the modal shows "retrying — N s" instead
+                // of a frozen bar (the request/response detail stays in the
+                // redacted log, not here).
+                on_event(&format!("retrying after {label} — in {} s", delay));
                 if cancel.load(Ordering::Acquire) {
                     return Err(EngineError::Cancelled);
                 }
@@ -734,7 +793,14 @@ impl ProviderEngine {
         let secrets = vec![slot.api_key.trim()];
         on_event("creating video job");
 
-        // 1) Create the job (503 queue-full backs off and retries).
+        // 1) Create the job. ANY transient 503 cause — the provider's own
+        //    queue saturation (`video_queue_full`), an upstream gateway
+        //    unavailability surfaced as `fail_to_fetch_task` (litellm
+        //    `no available server`), or a 503 with no recognisable code —
+        //    backs off and retries on the 30/60/120 s ladder instead of
+        //    failing the stage on the first occurrence. A 503 that is NOT
+        //    transient (e.g. an explicit `maintenance` code) is a real
+        //    failure and stops here with the concrete body.
         let mut backoff_idx = 0usize;
         let create_resp = loop {
             if cancel.load(Ordering::Acquire) {
@@ -753,15 +819,18 @@ impl ProviderEngine {
             if status != 503 {
                 break Ok((status, resp));
             }
-            let code = resp
+            // Transient 503 → walk the backoff ladder and retry. The specific
+            // cause label drives the live modal line; the full body stays in
+            // the redacted request log below.
+            let label = transient_503_label(&resp);
+            let cause_code = resp
                 .get("code")
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
-            // Non-queue-full 503s are a real failure.
-            if !code.contains("video_queue_full") {
+            if !is_transient_503(&resp) {
                 break Err(EngineError::Failure(format!(
-                    "video create HTTP 503 ({code} or unknown): {}",
+                    "video create HTTP 503 ({cause_code} or unknown): {}",
                     resp.to_string()
                 )));
             }
@@ -771,10 +840,10 @@ impl ProviderEngine {
                 .copied()
                 .unwrap_or(120);
             backoff_idx += 1;
-            // Live state line: the modal shows "queue full — retry in N s"
-            // instead of a frozen bar while the provider queue is saturated
+            // Live state line: the modal shows "<cause> — retry in N s"
+            // instead of a frozen bar while the provider is unavailable
             // (the full 503 body stays in the redacted log, not here).
-            on_event(&format!("queue full — retry in {} s", delay));
+            on_event(&format!("{label} — retry in {delay} s"));
             // Publish the in-backoff state so the stage row shows the amber
             // rate-limited hint (0.51 = first rung of the ladder band, the
             // registry maps 0.51–0.53 to `RateLimited`).
@@ -784,6 +853,7 @@ impl ProviderEngine {
                 &secrets,
                 &json!({
                     "stage": "video-create-503",
+                    "cause": label,
                     "backoff": delay,
                     "request": {
                         "method": "POST",
@@ -1950,7 +2020,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_queue_full_503_is_a_real_failure() {
+    async fn non_transient_503_is_a_real_failure() {
         let (db, _media) = db_with_slots("sk-image-key", "sk-video-key").await;
         let http =
             Arc::new(StubHttp::new().queue_post(Ok((503, json!({ "code": "maintenance" })))));
@@ -1962,6 +2032,59 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("maintenance"), "got: {err}");
+    }
+
+    // The user's exact failure mode: the gateway's litellm ServiceUnavailable
+    // ("no available server") wrapped as code `fail_to_fetch_task`. This is a
+    // TRANSIENT upstream condition, NOT a bad request — the engine must back
+    // off and retry, not fail the video stage on the first 503.
+    #[tokio::test]
+    async fn fail_to_fetch_task_503_backs_off_then_succeeds() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let unavailable = json!({
+            "code": "fail_to_fetch_task",
+            "message": "{\"error\":{\"message\":\"litellm.ServiceUnavailableError: no available server\",\"code\":\"503\"}}"
+        });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((503, unavailable.clone())))
+                .queue_post(Ok((503, unavailable.clone())))
+                .queue_post(Ok((200, json!({ "videoId": "vid-503" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                ))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap();
+        let task_dir = media.join("pipe1").join("task1");
+        assert_eq!(
+            out.local_path,
+            task_dir.join("video.mp4").to_string_lossy().into_owned()
+        );
+        // Both transient-503 retries were logged (redacted) before the
+        // successful create — proof the ladder absorbed the provider outage
+        // instead of failing the stage.
+        let req_log = std::fs::read_to_string(task_dir.join("request.log")).unwrap();
+        assert_eq!(
+            req_log.matches("video-create-503").count(),
+            2,
+            "transient 503s logged: {req_log}"
+        );
+        assert!(
+            req_log.contains("fail_to_fetch_task"),
+            "cause recorded: {req_log}"
+        );
+        let _ = std::fs::remove_dir_all(&media);
     }
 
     #[tokio::test]

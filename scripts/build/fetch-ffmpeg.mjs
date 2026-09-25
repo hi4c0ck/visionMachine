@@ -49,9 +49,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const cacheDir = path.join(root, 'build-state', 'ffmpeg-cache');
 // Tauri sidecar convention: sidecars live in src-tauri/binaries/ named
 // `ffmpeg-<target-triple>` (+ `.exe` on Windows targets). Tauri adds the
-// target suffix / extension itself from `bundle.externalBin: ["binaries/ffmpeg"]`;
-// this script just writes the file under the name Tauri will look for.
-const binariesDir = path.join(root, 'src-tauri', 'binaries');
+// target suffix / extension itself from `bundle.externalBin:
+// ["binaries/ffmpeg", "binaries/ffprobe"]`; this script just writes the
+// files under the names Tauri will look for. BOTH executables are staged:
+// composition prefers a real `ffprobe` over the ffmpeg-stderr metadata
+// fallback, and the bundled-ffmpeg variant ships the pair as a unit.
+//
+// Note: `binariesDir` is resolved from this file's location — override the
+// staging directory (tests) via `FFMPEG_STAGING_DIR`.
+const binariesDir =
+  process.env.FFMPEG_STAGING_DIR || path.join(root, 'src-tauri', 'binaries');
 
 // ── Pinned asset table ─────────────────────────────────────────────────────
 // BtbN/FFmpeg-Builds publishes a rolling "latest" release with stable asset
@@ -96,6 +103,21 @@ const PinnedAssetSha256 = {
     '6b4a8a5d850ce690a87122f298ab7a5f6cbb07c8898bf038192e5885f5f15f54',
   'ffmpeg-N-126782-gdc52424419-linuxarm64-gpl.tar.xz':
     'b02da570798ddf4519ee0d68821e113646d20e9aa3d6e4bb4272891768fff68a',
+};
+
+// Per-EXECUTABLE SHA-256 pins, keyed by `<ReleaseTag>/<asset>/<tool>`.
+// The archive-level hash (above) proves the download is intact, but it is
+// not enough for the two executables we extract from it: a tampered or
+// partially-corrupted archive whose inner zip entry was swapped would still
+// match the archive hash. Each staged sidecar is re-hashed and compared
+// against its entry here before it is allowed to ship in a bundle. The BtbN
+// GPL asset ships ffmpeg + ffprobe as one immutable pair per release tag, so
+// both hashes are pinned together with ReleaseTag / PinnedAssetSha256.
+const PinnedExecutableSha256 = {
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-win64-gpl.zip/ffmpeg':
+    '09948d4cdd0650da6ff5a87577469f2a218dc2615ae379f8f734d24c49de0f73',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-win64-gpl.zip/ffprobe':
+    'a6618e99bb58869ded3c6f37b53aa1a8d701c3591dbb7b5b317d47369c112be2',
 };
 
 // Pinned asset URLs per target triple prefix.
@@ -175,9 +197,21 @@ function resolveTarget(explicit) {
   return hostTriple();
 }
 
+function sidecarNames(target) {
+  const base = target;
+  const ext = target.includes('windows') ? '.exe' : '';
+  return [
+    `ffmpeg-${base}${ext}`,
+    `ffprobe-${base}${ext}`,
+  ];
+}
+
 function sidecarName(target) {
-  const base = `ffmpeg-${target}`;
-  return target.includes('windows') ? `${base}.exe` : base;
+  return sidecarNames(target)[0];
+}
+
+function destPaths(target) {
+  return sidecarNames(target).map((name) => path.join(binariesDir, name));
 }
 
 function destPath(target) {
@@ -228,10 +262,17 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
   const cacheMeta = path.join(cacheDir, `${cacheKey}.meta.json`);
   const cachedArchive = path.join(cacheDir, `${cacheKey}${archiveExt}`);
 
-  // 1) Sidecar already staged? Done.
-  if (existsSync(dest)) {
-    console.log(`[fetch-ffmpeg] ${path.relative(root, dest)} already present — using it.`);
+  // 1) Both sidecars already staged? Done.
+  const ffprobeDest = destPaths(target)[1];
+  if (existsSync(dest) && existsSync(ffprobeDest)) {
+    console.log(
+      `[fetch-ffmpeg] ${path.relative(root, dest)} + ${path.relative(root, ffprobeDest)} already present — using them.`,
+    );
     return;
+  }
+  // A half-staged pair from a failed run: remove so re-staging is clean.
+  if (existsSync(dest)) {
+    rmSync(dest, { force: true });
   }
 
   // 2) Need to download. Cache-check the archive.
@@ -261,6 +302,10 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
       JSON.stringify({ ffmpegVersion: PinnedFfmpegVersion, target, url }, null, 2),
     );
   }
+  // The `finally` of a FAILED extract stage dropped the cached archive, but
+  // the download is expensive — keep the verified archive in cache so a
+  // re-stage after a transient extract failure does not re-download 200 MB.
+  // (On success the archive is intentionally dropped, as before.)
 
   // 3) Extract ffmpeg(.exe) out of the archive into a scratch dir, then
   // rename into the target-triple sidecar name.
@@ -281,7 +326,7 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
     } else {
       await extractZip(cachedArchive, outDir);
     }
-    const extracted = findFfmpeg(outDir, target);
+    const extracted = findFfmpegExec(outDir, target, 'ffmpeg');
     if (!extracted) {
       // Diagnostic dump so the next failure is easy to triage.
       let listing = '';
@@ -308,36 +353,59 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
           `asset layout changed? Contents of ${path.relative(root, outDir)}:\n${listing}`,
       );
     }
+    // Stage BOTH sidecars from the same archive: the BtbN GPL asset always
+    // ships ffmpeg AND ffprobe in the same bin/ dir. Composition prefers a
+    // real ffprobe over the ffmpeg-stderr metadata fallback, so the full
+    // variant ships the pair as a unit. Deterministic SHA-256 verification
+    // (pinned below) guards each staged executable against a corrupted or
+    // swapped archive before it ships in a bundle.
+    const ffprobeSource = findFfmpegExec(outDir, target, 'ffprobe');
+    if (!extracted || !ffprobeSource) {
+      throwStageError(
+        `no ${!extracted ? 'ffmpeg' : 'ffprobe'} executable found inside ${url} — ` +
+          `asset layout changed? the full variant requires both ffmpeg and ffprobe sidecars.`,
+      );
+    }
+    const assetName = path.basename(new URL(url).pathname);
     renameSync(extracted, dest);
     assertRealBinary(dest);
-  } finally {
+    assertExecutableSha256(dest, 'ffmpeg', assetName);
+    const ffprobeDest = destPaths(target)[1];
+    renameSync(ffprobeSource, ffprobeDest);
+    assertRealBinary(ffprobeDest);
+    assertExecutableSha256(ffprobeDest, 'ffprobe', assetName);
+    console.log(`[fetch-ffmpeg] staged ffprobe → ${path.relative(root, ffprobeDest)}`);
+  } catch (e) {
+    // Keep the verified cached archive on failure so a re-stage is a no-op
+    // download (only the extract is retried). The old behavior deleted it,
+    // forcing a 200 MB re-download for a transient extract glitch.
     rmSync(outDir, { recursive: true, force: true });
-    // The archive is consumed; the sidecar is staged. Drop the archive so
-    // the cache only ever holds meta + one archive per (version, target)
-    // bump. Re-download on the next build.
-    rmSync(cachedArchive, { force: true });
+    throw e;
   }
   console.log(`[fetch-ffmpeg] staged → ${path.relative(root, dest)}`);
 }
 
-// Recursively find the ffmpeg *executable* inside the extraction dir.
-// The BtbN archive layout is a top-level version folder with a bin/ subdir:
-//   <asset>/bin/ffmpeg(.exe)   ← the real binary
-//   <asset>/doc/*.html         ← ffmpeg docs (ffmpeg-all.html etc. — NOT a binary)
+// Recursively find a named *executable* (ffmpeg or ffprobe) inside the
+// extraction dir. The BtbN archive layout is a top-level version folder with
+// a bin/ subdir:
+//   <asset>/bin/ffmpeg(.exe)   ← the real binaries
+//   <asset>/bin/ffprobe(.exe)
+//   <asset>/doc/*.html         ← docs (NOT binaries)
 //
-// Two passes, BFS depth-first per directory:
-//   1. Exact bare name (ffmpeg.exe on Windows / ffmpeg on unix) — this is
-//      always where BtbN puts the executable.
-//   2. Versioned/suffixed executable only: must end in .exe (Windows)
-//      or have no extension (unix), so HTML/doc files never match.
-function findFfmpeg(dir, target) {
+// Two passes, BFS shallow-first:
+//   1. Exact bare name (ffmpeg.exe / ffprobe.exe on Windows, no extension on
+//      unix) — always where BtbN puts the executable.
+//   2. Versioned/suffixed executable only: must end in .exe (Windows) or
+//      have no extension (unix), so HTML/doc files never match.
+function findFfmpegExec(dir, target, tool = 'ffmpeg') {
   const isWin = target.includes('windows');
-  const wanted = isWin ? 'ffmpeg.exe' : 'ffmpeg';
+  const wanted = isWin ? `${tool}.exe` : tool;
+  const re = new RegExp(`^${tool}([-._][A-Za-z0-9.]+)?(\\.exe)?$`, 'i');
   // Pass-2 name test: an executable, not a doc file.
   const isExecName = (e) =>
     isWin
-      ? /^ffmpeg([-._][A-Za-z0-9.]+)?\.exe$/i.test(e)
-      : /^ffmpeg([-._][A-Za-z0-9.]+)?$/i.test(e) && !e.includes('.');
+      ? new RegExp(`^${tool}([-._][A-Za-z0-9.]+)?\\.exe$`, 'i').test(e)
+      : re.test(e) && !e.includes('.');
   // BFS (queue, not stack) so shallower hits win: bin/ffmpeg.exe at depth 2
   // is preferred over anything buried deeper.
   const queue = [dir];
@@ -379,7 +447,7 @@ function findFfmpeg(dir, target) {
 async function main() {
   const target = resolveTarget(process.argv[2]);
   console.log(
-    `[fetch-ffmpeg] target triple: ${target} (sidecar name: ${sidecarName(target)})`,
+    `[fetch-ffmpeg] target triple: ${target} (sidecar names: ${sidecarNames(target).join(', ')})`,
   );
   await stageForTarget(target, { throwOnNoUrl: false });
 }
@@ -452,6 +520,20 @@ function assertArchiveSha256(filePath, url) {
     rmSync(filePath, { force: true });
     throwStageError(`SHA-256 mismatch for ${url}: expected ${expected}, got ${actual}`);
   }
+}
+
+function assertExecutableSha256(filePath, tool, assetName) {
+  const expected = PinnedExecutableSha256[`${ReleaseTag}/${assetName}/${tool}`];
+  if (!expected) return;
+  const actual = createHash('sha256').update(readFileSync(filePath)).digest('hex');
+  if (actual !== expected) {
+    rmSync(filePath, { force: true });
+    throwStageError(
+      `SHA-256 mismatch for staged ${tool} (${filePath}): ` +
+        `expected ${expected}, got ${actual}. Refusing to ship an unverifiable binary.`,
+    );
+  }
+  console.log(`[fetch-ffmpeg] ${tool} SHA-256 verified (${expected.slice(0, 12)}…)`);
 }
 
 function assertRealBinary(filePath) {
@@ -591,3 +673,15 @@ export async function stageFfmpegIfEnabled({ root, features, target } = {}) {
   // the process on failure.
   await stageForTarget(resolveTarget(target));
 }
+
+// Exported for unit tests: the pure name/dest-path helpers that the full
+// packaging test asserts on (both ffmpeg AND ffprobe sidecars, correct
+// target-triple suffix + extension).
+export const _internal = {
+  sidecarNames,
+  sidecarName,
+  destPaths,
+  destPath,
+  PinnedExecutableSha256,
+  PinnedAssetSha256,
+};

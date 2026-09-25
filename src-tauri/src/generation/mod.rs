@@ -22,8 +22,8 @@ pub use compose::{
 pub use engine::{EngineInput, EngineStage, GenerationEngine};
 pub use ffmpeg::{resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
-    append_jsonl, append_request_log, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
-    session_generation_dirs, session_media_root, write_json,
+    append_jsonl, append_request_log, clear_session_compose_artifacts, pipe_media_dirs, redact,
+    redact_authorization, safe_dir_name, session_generation_dirs, session_media_root, write_json,
 };
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};

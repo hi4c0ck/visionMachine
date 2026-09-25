@@ -28,3 +28,52 @@ export function pipeTaskId(pipeId: string, taskIds: Record<string, string>, task
 export function togglePipeExpanded(state: PipeExpansionState, taskId: string): PipeExpansionState {
   return { ...state, [taskId]: !state[taskId] };
 }
+
+// ── Session-composition outcome UI state ─────────────────────────────
+// A finished group must not be presented as a clean success when its
+// auto-compose step failed (or produced no session.mp4): the persisted
+// composeState/composeError drive an explicit note in the group modal
+// instead of a silent "OK".
+export interface GroupComposeUiState {
+  visible: boolean;
+  tone: 'ok' | 'warning' | 'info' | 'error' | null;
+  label: string;
+  detail: string | null;
+}
+
+export function groupComposeUiState(
+  busy: boolean,
+  composeState: string | null | undefined,
+  composeError: string | null | undefined,
+  sessionVideoPath: string | null | undefined,
+): GroupComposeUiState {
+  // Composition still in flight — the running indicator is enough.
+  if (busy) return { visible: false, tone: null, label: '', detail: null };
+  switch (composeState) {
+    case 'error':
+      return {
+        visible: true,
+        tone: 'error',
+        label: 'Session video failed to compose',
+        detail: composeError ?? null,
+      };
+    case 'cancelled':
+      return { visible: true, tone: 'warning', label: 'Session video composition was cancelled', detail: null };
+    case 'skipped':
+      return { visible: true, tone: 'info', label: 'Session video composition was skipped', detail: null };
+    case 'done':
+      // A "done" without the output file is still a failure — never present
+      // compose completion as success when session.mp4 is absent.
+      if (sessionVideoPath) {
+        return { visible: true, tone: 'ok', label: `Session video ready: ${sessionVideoPath}`, detail: null };
+      }
+      return {
+        visible: true,
+        tone: 'error',
+        label: 'Composition reported success but session.mp4 is missing',
+        detail: null,
+      };
+    default:
+      return { visible: false, tone: null, label: '', detail: null };
+  }
+}

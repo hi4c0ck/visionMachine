@@ -264,9 +264,17 @@ pub struct ExpectedMetadata {
     pub frame_count: u64,
 }
 
-/// Resolve ffprobe beside ffmpeg, falling back to PATH. FFmpeg distributions
-/// generally ship both tools with the same name; a sidecar-only bundle may
-/// omit ffprobe, so PATH is intentionally checked independently.
+/// Resolve ffprobe for composition, in preference order:
+/// 1. A sibling `ffprobe` next to the resolved ffmpeg binary — the FULL
+///    variant ships both as sidecars (`ffmpeg(.exe)` + `ffprobe(.exe)`), so a
+///    bundled build always finds ffprobe in the same directory.
+/// 2. System `ffprobe` on $PATH — the last resort for the TINY variant
+///    (ffmpeg-only), where composition falls back to the ffmpeg-stderr
+///    metadata parser when this misses.
+///
+/// FFmpeg distributions generally ship both tools with the same name; a
+/// sidecar-only bundle may omit ffprobe, so PATH is intentionally checked
+/// independently of the ffmpeg resolution.
 pub fn resolve_ffprobe(ffmpeg: &FfmpegAvailability) -> Option<PathBuf> {
     let exe = if cfg!(windows) {
         "ffprobe.exe"
@@ -496,32 +504,62 @@ pub fn parse_ffmpeg_decode_progress(text: &str) -> Result<(u64, f64), String> {
     Ok((frames, duration))
 }
 
+/// Parse the input-stream codec + resolution from ffmpeg's stderr.
+///
+/// Tolerant of build-dependent line formats (the parser-only fallback used
+/// when no ffprobe sibling ships): real-world ffmpeg builds emit the stream
+/// line with a `Stream #0:0` prefix, the codec token as `h264` (not `H.264`),
+/// and dimensions space- or comma-separated after the codec (often
+/// `1088x832 [SAR 1:1]`), so the first numeric `WxH` token — not just the
+/// token right after the codec — is accepted. `Input #` boundaries guard
+/// against the OUTPUT stream block (codec `wrapped_avframe` for the null
+/// sink), which would poison the codec/resolution comparison.
 fn parse_ffmpeg_stream_metadata(stderr: &str) -> Result<(String, u32, u32), String> {
-    // The INPUT stream line only: ffmpeg also prints an output stream line
-    // (codec `wrapped_avframe` for the null sink) further down, which must
-    // not be read — it would poison the codec/resolution comparison in
-    // `validate_metadata`. The input block starts with `Input #n`.
+    // Split on input-block boundaries: the block after each `Input #` label
+    // starts with its index digit, everything else (incl. the Output block)
+    // is discarded.
     let input_block = stderr
         .split("Input #")
         .find(|block| block.starts_with(|c: char| c.is_ascii_digit()))
         .unwrap_or("");
-    let line = input_block
+    let stream_lines: Vec<&str> = input_block
         .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("Stream #") || line.trim_start().starts_with("Video:")
+        })
+        .collect();
+    let line = stream_lines
+        .iter()
         .find(|line| line.contains("Video:"))
+        .copied()
         .ok_or_else(|| "ffmpeg returned no input video stream metadata".to_string())?;
+    // The codec token is the first token after `Video:` (e.g. `h264`).
+    // Dimension/side-data tokens may follow the codec separated by commas, so
+    // strip a trailing comma before using it as a codec identity.
     let codec = line
         .split("Video:")
         .nth(1)
         .unwrap_or_default()
+        .trim()
         .split_whitespace()
         .next()
         .ok_or_else(|| "ffmpeg returned no video codec".to_string())?
+        .trim_end_matches(',')
         .to_string();
-    let dimensions = line
-        .split_whitespace()
-        .find_map(|token| {
-            let (w, h) = token.split_once('x')?;
-            Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+    // The resolution is the first `WxH` token anywhere on the line — it may be
+    // space-separated (`h264 ... 1088x832`) or comma-separated
+    // (`h264, 1088x832`), and newer builds print it inside the `Stream #` line.
+    let dimensions = stream_lines
+        .iter()
+        .find_map(|line| {
+            line.split(|c: char| c.is_whitespace() || c == ',')
+                .find_map(|token| {
+                    let token = token.trim().trim_end_matches(']');
+                    let (w, h) = token.split_once('x')?;
+                    let w: u32 = w.parse().ok()?;
+                    let h: u32 = h.parse().ok()?;
+                    (w > 0 && h > 0).then_some((w, h))
+                })
         })
         .ok_or_else(|| "ffmpeg returned no input video resolution".to_string())?;
     Ok((codec, dimensions.0, dimensions.1))
@@ -640,9 +678,14 @@ pub fn compose_session_video(
     std::fs::create_dir_all(manifest_dir)
         .map_err(|e| ComposeError::SourceMissing(format!("manifest dir: {e}")))?;
 
+    crate::generation::clear_session_compose_artifacts(manifest_dir);
     let manifest = manifest_dir.join("concat.txt");
     std::fs::write(&manifest, build_concat_manifest(sources))
         .map_err(|e| ComposeError::SourceMissing(format!("manifest write: {e}")))?;
+    // The clear above guarantees no stale manifest/output from an earlier
+    // (possibly failed) attempt survives into this one — the manifest always
+    // matches the current sources, and a failed attempt leaves no orphaned
+    // session.mp4 behind.
 
     // Ensure the output parent dir exists (session_generation_dirs already
     // does this, but be defensive).
@@ -814,6 +857,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(metadata, ("h264".into(), 1920, 1080));
+    }
+
+    // Regression: the fallback parser (no-ffprobe sidecar build) used to fail
+    // on `Stream #0:0`-prefixed lines and comma-separated dimensions, which is
+    // what Gyan/BtbN-era builds print. Each shape below must parse.
+    #[test]
+    fn parses_stream_metadata_with_stream_prefix_and_comma_dimensions() {
+        // `Stream #0:0:` prefix + comma-separated dimensions + SAR bracket.
+        let stderr = "Input #0, mp4, from 'in.mp4':\n  Stream #0:0: Video: h264 (High), yuv420p, 1088x832 [SAR 1:1], 24 fps\nOutput #0, null:\n  Stream #0:0: Video: wrapped_avframe, 1088x832\n";
+        assert_eq!(
+            parse_ffmpeg_stream_metadata(stderr).unwrap(),
+            ("h264".into(), 1088, 832)
+        );
+        // Older builds print the dimensions space-separated right after the
+        // codec token inside an output-less block.
+        let stderr2 = "Input #0, mov:\n  Video: h264, 1280x720\n";
+        assert_eq!(
+            parse_ffmpeg_stream_metadata(stderr2).unwrap(),
+            ("h264".into(), 1280, 720)
+        );
     }
 
     #[test]

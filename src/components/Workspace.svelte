@@ -187,6 +187,13 @@
 	let groupTaskViews = $state<Record<string, GenerationTaskView>>({});
 	let groupStatus = $state<string | null>(null);
 	let groupStale = $state(false);
+	// Session-composition outcome of the LAST finished group for this session.
+	// Set from `fetchGenerationGroup` (restoration + compose-terminal poll) so
+	// the group modal can show a persisted compose error / session video
+	// instead of presenting completion as a silent success.
+	let groupComposeState = $state<string | null>(null);
+	let groupComposeError = $state<string | null>(null);
+	let groupSessionVideoPath = $state<string | null>(null);
 	let restoredGroupSessionId = $state<string | null>(null);
 	const groupActive = $derived(activeGroupId !== null && !groupStale);
 	const groupProgressVisible = $derived(groupActive || groupStale || Object.keys(groupTaskViews).length > 0);
@@ -568,6 +575,9 @@
 			groupTaskId = null;
 			groupPipeTaskIds = Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []));
 			groupTaskViews = {};
+			groupComposeState = group.composeState ?? null;
+			groupComposeError = group.composeError ?? null;
+			groupSessionVideoPath = group.sessionVideoPath ?? null;
 			stopWatching();
 			showProgressModal = groupStale;
 		} catch {
@@ -1085,6 +1095,9 @@
 				void writeGenerationLogStart(groupLog);
 			}
 			startWatchingTask(result.firstTaskId, result.firstView);
+			groupComposeState = null;
+			groupComposeError = null;
+			groupSessionVideoPath = null;
 			groupUnlisten?.();
 			void subscribeGroupEvent(result.groupId, (event) => {
 				if (event.pipeId && event.taskId) {
@@ -1105,9 +1118,42 @@
 				if (event.kind === 'pipe-terminal' && event.taskId && event.pipeId) {
 					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; void reconcileTerminal(view); }).catch(() => {});
 				}
+				if (event.kind === 'compose-terminal') {
+					// Compose finished (or failed) after the pipes went terminal —
+					// refresh the persisted compose outcome so the modal + pill
+					// reflect it (error strings included, not just a silent OK).
+					if (activeGroupId) {
+						void fetchGenerationGroup(activeGroupId).then((g) => {
+							groupComposeState = g.composeState ?? null;
+							groupComposeError = g.composeError ?? null;
+							groupSessionVideoPath = g.sessionVideoPath ?? null;
+							// A failed / cancelled compose is not a clean "done" —
+							// the pill (if minimized) must read as an error.
+							if (progressMinimized) {
+								if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
+								else if (g.composeState === 'done' && g.sessionVideoPath) pillTerminal = 'done';
+							}
+						}).catch(() => {});
+					}
+					return;
+				}
 				if (event.kind === 'group-terminal') {
 					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
 					groupStatus = event.status ?? 'done'; groupStale = false;
+					// The terminal event is dispatched before the compose result
+					// is persisted — refetch once (and once more after a short
+					// delay for the compose-terminal case) so the modal shows the
+					// persisted composeState/composeError/sessionVideoPath instead
+					// of a silent success.
+					const syncCompose = () => {
+						void fetchGenerationGroup(result.groupId).then((g) => {
+							groupComposeState = g.composeState ?? null;
+							groupComposeError = g.composeError ?? null;
+							groupSessionVideoPath = g.sessionVideoPath ?? null;
+						}).catch(() => {});
+					};
+					syncCompose();
+					setTimeout(syncCompose, 1500);
 					if (selectedSession) localStorage.removeItem(`visionmachine:generation-group:${selectedSession.id}`);
 				}
 			}).then((unlisten) => { groupUnlisten = unlisten; });
@@ -1897,6 +1943,9 @@
 					taskViews={Object.fromEntries(selectedSession.pipes.map((p) => [p.id, groupTaskViews[p.id] ?? null]).filter((entry): entry is [string, GenerationTaskView] => !!entry[1]))}
 					taskIds={groupPipeTaskIds}
 					busy={anyTaskActive}
+					composeState={groupComposeState}
+					composeError={groupComposeError}
+					sessionVideoPath={groupSessionVideoPath}
 					onFetch={fetchGenerationTask}
 					onLoaded={(view) => { groupTaskViews[view.pipeId] = view; }}
 					onCancel={cancelSessionGenerationGroup}

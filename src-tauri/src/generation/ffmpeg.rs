@@ -56,31 +56,34 @@ fn compile_target_triple() -> &'static str {
     option_env!("TARGET_TRIPLE").unwrap_or("x86_64-unknown-linux-gnu")
 }
 
-/// The expected *staged* sidecar name inside `src-tauri/binaries/`, e.g.
-/// `ffmpeg-x86_64-pc-windows-msvc.exe` (Windows) or
-/// `ffmpeg-x86_64-unknown-linux-gnu` (Linux). This is the name
-/// `fetch-ffmpeg.mjs` writes and `externalBin` references at build time.
-fn staged_sidecar_name() -> String {
+/// Staged sidecar names for the FULL ffmpeg + ffprobe sidecar set, e.g.
+/// `ffmpeg-x86_64-pc-windows-msvc.exe` + `ffprobe-x86_64-pc-windows-msvc.exe`
+/// (Windows) or `ffmpeg-x86_64-unknown-linux-gnu` + `ffprobe-…` (Linux).
+/// These are the names `fetch-ffmpeg.mjs` writes and `externalBin` references
+/// at build time. The bundled-ffmpeg variant ships BOTH executables: the
+/// BtbN GPL asset always contains the two in the same `bin/` dir, and
+/// composition prefers a real `ffprobe` over the fragile ffmpeg-stderr
+/// metadata fallback.
+fn staged_sidecar_names() -> Vec<String> {
     let triple = compile_target_triple();
-    if triple.contains("windows") {
-        format!("ffmpeg-{}.exe", triple)
-    } else {
-        format!("ffmpeg-{}", triple)
-    }
+    let is_win = triple.contains("windows");
+    let ext = if is_win { ".exe" } else { "" };
+    vec![
+        format!("ffmpeg-{}{ext}", triple),
+        format!("ffprobe-{}{ext}", triple),
+    ]
 }
 
-/// The runtime on-disk sidecar name *next to the executable*.
+/// Runtime on-disk sidecar names for the full set (ffmpeg + ffprobe).
 ///
 /// tauri-build's `copy_binaries` strips the `-<target-triple>` suffix when it
-/// copies the staged binary into the target dir, and the shell plugin's
-/// `relative_command_path` likewise resolves the bare name (+ `.exe` on
-/// Windows targets). So at runtime the shipped binary is simply
-/// `ffmpeg(.exe)` — no triple suffix.
-fn runtime_sidecar_name() -> &'static str {
+/// copies the staged binary into the target dir, so at runtime the shipped
+/// binaries are simply `ffmpeg(.exe)` / `ffprobe(.exe)` — no triple suffix.
+fn runtime_sidecar_names() -> Vec<&'static str> {
     if cfg!(windows) {
-        "ffmpeg.exe"
+        vec!["ffmpeg.exe", "ffprobe.exe"]
     } else {
-        "ffmpeg"
+        vec!["ffmpeg", "ffprobe"]
     }
 }
 
@@ -97,17 +100,22 @@ fn candidate_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
 
     // 1. Bundled sidecar (feature-gated):
-    //    a) Shipped binary next to the executable (production install, or the
-    //       tauri-build output dir in dev): `ffmpeg(.exe)`, triple stripped.
+    //    a) Shipped binaries next to the executable (production install, or
+    //       the tauri-build output dir in dev): `ffmpeg(.exe)` (+ ffprobe),
+    //       triple stripped.
     //    b) Source staging tree fallback for local checkouts: the
-    //       triple-suffixed name `fetch-ffmpeg.mjs` writes under `binaries/`.
+    //       triple-suffixed names `fetch-ffmpeg.mjs` writes under `binaries/`.
     #[cfg(feature = "bundled-ffmpeg")]
     {
         if let Some(dir) = exe_dir() {
-            out.push(dir.join(runtime_sidecar_name()));
+            for name in runtime_sidecar_names() {
+                out.push(dir.join(name));
+            }
         }
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        out.push(manifest.join("binaries").join(staged_sidecar_name()));
+        for name in staged_sidecar_names() {
+            out.push(manifest.join("binaries").join(name));
+        }
     }
 
     // 2. User-set path: read from the environment variable the app sets
@@ -202,13 +210,17 @@ fn source_label(path: &Path) -> String {
     #[cfg(feature = "bundled-ffmpeg")]
     {
         // A path is the bundled sidecar when it lives next to the executable
-        // (shipped, triple-stripped name) or in the source `binaries/` staging
-        // tree (triple-suffixed name).
-        let stripped = runtime_sidecar_name();
-        if s.ends_with(stripped) && !s.contains("binaries") {
+        // (shipped, triple-stripped name — ffmpeg OR ffprobe) or in the source
+        // `binaries/` staging tree (triple-suffixed name).
+        let stripped = runtime_sidecar_names();
+        if stripped.iter().any(|n| s.ends_with(n)) && !s.contains("binaries") {
             return "bundled".into();
         }
-        if s.contains("binaries") && s.contains(&format!("ffmpeg-{}", compile_target_triple())) {
+        let triple = compile_target_triple();
+        if s.contains("binaries")
+            && (s.contains(&format!("ffmpeg-{}", triple))
+                || s.contains(&format!("ffprobe-{}", triple)))
+        {
             return "bundled".into();
         }
     }
@@ -245,44 +257,61 @@ mod tests {
 
     #[test]
     fn sidecar_names_have_target_suffix() {
-        // The *staged* name must embed the compile-time target triple and
-        // carry the .exe extension only on Windows targets.
-        let staged = staged_sidecar_name();
-        assert!(staged.starts_with("ffmpeg-"), "name: {staged}");
-        assert!(
-            staged.contains(compile_target_triple()),
-            "name {staged} does not embed triple {}",
-            compile_target_triple()
-        );
-        if compile_target_triple().contains("windows") {
+        // The *staged* names must embed the compile-time target triple and
+        // carry the .exe extension only on Windows targets. The full set is
+        // ffmpeg + ffprobe (both shipped as sidecars in the bundled variant).
+        let names = staged_sidecar_names();
+        assert_eq!(names.len(), 2, "staged set: {names:?}");
+        let triple = compile_target_triple();
+        for staged in &names {
             assert!(
-                staged.ends_with(".exe"),
-                "windows staged sidecar must end .exe: {staged}"
+                staged.contains(triple),
+                "name {staged} does not embed triple {triple}"
             );
-        } else {
-            assert!(
-                !staged.ends_with(".exe"),
-                "non-windows staged sidecar must not end .exe: {staged}"
-            );
+            if triple.contains("windows") {
+                assert!(
+                    staged.ends_with(".exe"),
+                    "windows staged sidecar must end .exe: {staged}"
+                );
+            } else {
+                assert!(
+                    !staged.ends_with(".exe"),
+                    "non-windows staged sidecar must not end .exe: {staged}"
+                );
+            }
         }
-        // The *runtime* name (next to the exe, triple stripped by
-        // tauri-build) is bare `ffmpeg(.exe)` — host-extension, no triple.
-        let runtime = runtime_sidecar_name();
+        assert!(names[0].starts_with("ffmpeg-"), "ffmpeg name: {}", names[0]);
         assert!(
-            !runtime.contains('-'),
-            "runtime name must be triple-free: {runtime}"
+            names[1].starts_with("ffprobe-"),
+            "ffprobe name: {}",
+            names[1]
         );
-        if cfg!(windows) {
+        // The *runtime* names (next to the exe, triple stripped by
+        // tauri-build) are bare `ffmpeg(.exe)` / `ffprobe(.exe)` —
+        // host-extension, no triple.
+        let runtime = runtime_sidecar_names();
+        assert_eq!(runtime.len(), 2, "runtime set: {runtime:?}");
+        for name in &runtime {
             assert!(
-                runtime.ends_with(".exe"),
-                "windows runtime name must end .exe: {runtime}"
+                !name.contains('-'),
+                "runtime name must be triple-free: {name}"
             );
-        } else {
-            assert!(
-                !runtime.ends_with(".exe"),
-                "non-windows runtime name must not end .exe: {runtime}"
-            );
+            if cfg!(windows) {
+                assert!(name.ends_with(".exe"), "windows runtime name: {name}");
+            } else {
+                assert!(!name.ends_with(".exe"), "unix runtime name: {name}");
+            }
         }
+        assert!(
+            runtime[0].starts_with("ffmpeg"),
+            "ffmpeg runtime: {}",
+            runtime[0]
+        );
+        assert!(
+            runtime[1].starts_with("ffprobe"),
+            "ffprobe runtime: {}",
+            runtime[1]
+        );
     }
 
     #[test]

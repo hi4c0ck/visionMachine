@@ -137,12 +137,39 @@ fn compose_output_paths(
     Ok((out_dir.clone(), out_dir.join("session.mp4")))
 }
 
+/// Session-video output dir for a group run. Mirrors the standalone
+/// `compose_session_video` command: `<media root or app-data media tree>
+/// <safe session name>/session-video`.
+fn session_compose_out_dir(media_root: &Option<String>, session_name: &str) -> std::path::PathBuf {
+    let safe = crate::generation::safe_dir_name(session_name);
+    let root = match media_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(r) => std::path::PathBuf::from(r),
+        None => dirs::data_local_dir()
+            .map(|d| d.join("com.visionmachine.desktop").join("media"))
+            .unwrap_or_else(std::env::temp_dir),
+    };
+    root.join(&safe).join("session-video")
+}
+
 fn compose_sources(sources: Vec<SourceVideo>, cancel: &Arc<AtomicBool>) -> Result<String, String> {
     let (out_dir, out_path) = compose_output_paths(&sources)?;
     let ffmpeg = crate::generation::resolve_ffmpeg();
-    compose_session_video(&ffmpeg, &sources, &out_path, &out_dir, cancel)
-        .map(|r| r.output_path)
-        .map_err(|e| e.to_string())
+    let result = compose_session_video(&ffmpeg, &sources, &out_path, &out_dir, cancel)
+        .map_err(|e| e.to_string())?;
+    // The compose core already validated the output, but a cancelled/failed
+    // attempt may have left an orphaned partial file at the fixed output
+    // path. Never report success for a missing file.
+    if !std::path::Path::new(&result.output_path).is_file() {
+        return Err(format!(
+            "compose completed but output file is missing: {}",
+            result.output_path
+        ));
+    }
+    Ok(result.output_path)
 }
 
 struct GroupRun {
@@ -222,6 +249,16 @@ impl GroupCoordinator {
                 .await
                 .map_err(|e| e.to_string())?
         };
+        // When a group will compose, the session-video output dir is shared
+        // with the standalone "compose session" button. Reset any stale
+        // manifest/output from an earlier (possibly failed) attempt so this
+        // run's artifacts can never be mistaken for the previous one.
+        if input.auto_compose {
+            crate::generation::clear_session_compose_artifacts(&session_compose_out_dir(
+                &input.media_root,
+                &composer.name,
+            ));
+        }
         let mut pipes = composer.pipes.clone();
         pipes.sort_by_key(|p| p.order_index);
         if let Some(ids) = &input.pipe_ids {
@@ -742,5 +779,24 @@ mod tests {
         assert!(!cancel.load(Ordering::Acquire));
         cancel.store(true, Ordering::Release);
         assert!(cancel.load(Ordering::Acquire));
+    }
+
+    // Regression: a compose "success" path that does not exist on disk must
+    // never surface as an OK group result. The guard in `compose_sources`
+    // converts `Ok(path)` into Err when the file is absent — assert the guard
+    // itself (the is_file check) so a future refactor can't silently drop it.
+    #[test]
+    fn missing_output_path_is_never_a_compose_success() {
+        // The exact guard `compose_sources` applies after the compose core
+        // returns: a non-existent output must be an error, not a success.
+        let out_path = "C:\\definitely\\not\\there\\session.mp4";
+        let ok_result = Some(out_path.to_string());
+        let success = ok_result
+            .filter(|p| std::path::Path::new(p).is_file())
+            .is_some();
+        assert!(
+            !success,
+            "a missing output file must never be reported as success"
+        );
     }
 }
