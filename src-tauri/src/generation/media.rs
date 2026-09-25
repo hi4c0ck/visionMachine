@@ -66,6 +66,17 @@ pub fn pipe_media_dirs(
     Ok((images, task, task_images))
 }
 
+/// Filename prefix of the per-pipe clips a group run stages into
+/// `session-video/`: `pipe-<orderIndex>-<safePipeName>.mp4`. Shared so the
+/// staging writer and the stale-clip sweeper can never drift apart.
+pub const STAGED_CLIP_PREFIX: &str = "pipe-";
+
+/// True for the per-pipe staged clips a group run copies into
+/// `session-video/` (`pipe-<orderIndex>-<safePipeName>.mp4`).
+pub fn is_staged_session_clip(name: &str) -> bool {
+    name.starts_with(STAGED_CLIP_PREFIX) && name.ends_with(".mp4")
+}
+
 /// Remove the stale artifacts of an earlier session-composition attempt
 /// (`concat.txt` manifest + `session.mp4` output) from the session-video dir.
 ///
@@ -75,6 +86,14 @@ pub fn pipe_media_dirs(
 /// clearing both at the start of a new attempt guarantees the ffmpeg run
 /// always sees exactly the current sources and a failed attempt can never
 /// leave a misleading `session.mp4` behind.
+///
+/// **Staged per-pipe clips are NEVER touched here.** The compose core calls
+/// this with `manifest_dir` == the same `session-video/` dir the current run
+/// staged its clips into, and the manifest it is about to write references
+/// exactly those files — deleting them here would guarantee every group
+/// auto-compose fails with "source missing". Stale clips from an EARLIER run
+/// are cleared separately by `clear_staged_session_clips`, which only the
+/// group-start path calls (before it stages anything).
 ///
 /// `output.json` (written only on success) is left in place: it belongs to
 /// the last *successful* composition and the next successful attempt
@@ -88,9 +107,29 @@ pub fn clear_session_compose_artifacts(out_dir: &std::path::Path) {
         return;
     };
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let n = name.to_string_lossy().into_owned();
+        let n = entry.file_name().to_string_lossy().into_owned();
         if n == "concat.txt" || n == "session.mp4" {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Remove the `pipe-<n>-<name>.mp4` staged clips a PREVIOUS group run left in
+/// the session-video dir. Called at group start (before this run stages any
+/// clip of its own) so a stale staged set can never be mistaken for the
+/// current run's sources.
+///
+/// Distinct from `clear_session_compose_artifacts`, which runs inside the
+/// compose core and must leave the CURRENT run's staged clips alone.
+pub fn clear_staged_session_clips(out_dir: &std::path::Path) {
+    if !out_dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(out_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if is_staged_session_clip(&entry.file_name().to_string_lossy()) {
             let _ = fs::remove_file(entry.path());
         }
     }

@@ -17,10 +17,19 @@ export interface SessionGenerationInput {
   imageSpec?: ModelSpec | null; videoSpec?: ModelSpec | null;
 }
 export interface SessionGenerationStart { groupId: string; firstTaskId: string; firstView: GenerationTaskView; }
+/** One current-run source record: which pipe's clip fed this run's
+ *  composition, where it came from, where it was staged, and its position in
+ *  the concat order. Persisted with the compose state so a restored group
+ *  can prove which clips produced the session video. */
+export interface GroupSourceRecord {
+  pipeId: string; taskId: string; sourcePath: string; stagedPath: string; orderIndex: number;
+}
 export interface GenerationGroupView {
   groupId: string; sessionId: string; status: string; live: boolean;
   pipes: Array<{ pipeId?: string; taskId?: string | null; status?: string; progress?: number }>;
   progress: number; sessionVideoPath?: string | null; composeState?: string | null; composeError?: string | null;
+  /** This run's source records, in concat (`orderIndex`) order. */
+  sources?: GroupSourceRecord[];
 }
 export interface GroupEvent {
   groupId: string; kind: 'pipe-started' | 'pipe-terminal' | 'compose-started' | 'compose-terminal' | 'group-terminal' | string;
@@ -51,6 +60,7 @@ export async function fetchGenerationGroup(groupId: string): Promise<GenerationG
     sessionVideoPath: raw.sessionVideoPath ?? raw.session_video_path,
     composeState: raw.composeState ?? raw.compose_state,
     composeError: raw.composeError ?? raw.compose_error,
+    sources: raw.sources ?? [],
   };
 }
 export async function cancelSessionGeneration(groupId: string): Promise<void> {

@@ -59,6 +59,12 @@ impl Database {
         self.run_additive_generation_group_columns().await?;
         self.execute_migration_sql(include_str!("../../migrations/0010_generation_groups.sql"))
             .await?;
+        // 0011 adds a plain column, which hard-fails on databases that
+        // already ran it — apply it tolerantly like the other additive columns.
+        // 0011 is a plain column ADD; the file documents the shape, and the
+        // tolerant application below mirrors `run_additive_*` (duplicate-column
+        // errors on already-migrated DBs are ignored).
+        self.run_additive_group_source_column().await?;
         self.run_additive_task_columns().await?;
         self.run_additive_session_columns().await?;
 
@@ -81,6 +87,18 @@ impl Database {
 
     async fn run_additive_session_columns(&self) -> Result<(), String> {
         let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN directory_path TEXT")
+            .execute(&self.pool)
+            .await;
+        Ok(())
+    }
+
+    /// 0011: group-run source records (`[{pipe_id, task_id, source_path,
+    /// order_index}]` as JSON) stored ON the group row so the persisted
+    /// row always describes the exact clips its composition used — a
+    /// crashed run can never leave a group whose row claims more sources
+    /// than it actually staged.
+    async fn run_additive_group_source_column(&self) -> Result<(), String> {
+        let _ = sqlx::query("ALTER TABLE generation_groups ADD COLUMN sources_json TEXT")
             .execute(&self.pool)
             .await;
         Ok(())
@@ -1102,12 +1120,11 @@ mod settings_logs_tests {
         let got = db.get_generation_log("t1").await.unwrap().unwrap();
         assert_eq!(got["taskId"], "t1");
         assert_eq!(got["groupId"], "g1");
-        let tagged: (String,) = sqlx::query_as(
-            "SELECT group_id FROM generation_logs WHERE task_id = 't1'",
-        )
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+        let tagged: (String,) =
+            sqlx::query_as("SELECT group_id FROM generation_logs WHERE task_id = 't1'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(tagged.0, "g1");
         // Upsert the same task id (terminal-state update)
         let entry2 = serde_json::json!({

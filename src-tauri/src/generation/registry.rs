@@ -633,10 +633,20 @@ impl TaskRegistry {
             let mut tasks = self.tasks.lock().unwrap();
             if let Some(entry) = tasks.get_mut(task_id) {
                 entry.view.status = TaskStatus::Done;
+                // A done task IS complete — the last engine progress tick can
+                // land just short of 1.0 (e.g. the video stage's final
+                // 0.9→download tick is followed by Done without a closing
+                // 1.0 on every path), which leaves the terminal view's
+                // averaged progress < 1.0 and the group's last pipe bar
+                // stuck a hair under full. Force every stage to full so a
+                // terminal Done view always reads 100%.
+                for stage in entry.view.stages.iter_mut() {
+                    stage.progress = 1.0;
+                }
+                entry.view.progress = 1.0;
             }
         }
         log::info!("[Generation] task {} done", task_id);
-        self.refresh_progress(task_id);
         self.persist_terminal(task_id).await;
         self.emit_terminal(task_id);
     }

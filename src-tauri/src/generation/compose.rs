@@ -73,6 +73,9 @@ pub struct SourceVideo {
     pub label: String,
     /// Absolute path to the `video.mp4`.
     pub path: String,
+    /// The task that produced this clip (the standalone composer path has no
+    /// task of its own and leaves it empty).
+    pub task_id: String,
 }
 
 /// Output of a successful compose: the written file + the ffmpeg source.
@@ -410,12 +413,11 @@ pub fn plan_expected_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetad
 }
 
 /// Build the re-encode fallback expectation. The concat filter normalizes all
-/// sources to libx264 and DROPS audio (`:a=0`), so the output timeline is
-/// the concatenated VIDEO frames; its exact duration depends on the
-/// encoder's frame pacing (a source with `nb_frames > duration*fps` gets
-/// re-encode longer than its container timeline). `expected_duration`
-/// here is a lower-bound check input, not a strict value — see
-/// `validate_metadata`.
+/// sources to libx264 and DROPS audio (:`a=0`), so the output timeline is the
+/// concatenated VIDEO frames; its exact duration depends on the encoder's
+/// frame pacing (a source with `nb_frames > duration*fps` gets re-encoded
+/// longer than its container timeline). `expected_duration` here is a
+/// lower-bound check input, not a strict value — see `validate_metadata`.
 pub fn plan_filter_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetadata, String> {
     let first = sources
         .first()
@@ -845,10 +847,12 @@ mod tests {
             SourceVideo {
                 label: "Pipe 1".into(),
                 path: "C:\\proj\\Session\\Pipe 1\\t1\\video.mp4".into(),
+                task_id: "t1".into(),
             },
             SourceVideo {
                 label: "Pipe 2".into(),
                 path: "C:\\proj\\Session\\Pipe 2\\t2\\video.mp4".into(),
+                task_id: "t2".into(),
             },
         ]
     }
@@ -1075,6 +1079,7 @@ mod tests {
         let missing = vec![SourceVideo {
             label: "X".into(),
             path: "C:\\definitely\\not\\here.mp4".into(),
+            task_id: String::new(),
         }];
         let cancel = Arc::new(AtomicBool::new(false));
         let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel);

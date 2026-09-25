@@ -104,6 +104,16 @@
 		previewVideo = null;
 		const sid = session?.id;
 		if (!sid || !session) return;
+		// A successfully composed session video (group auto-compose) is the
+		// top-level preview target — the full session timeline, not a single
+		// pipe clip. It takes precedence over any pipe's last-gen video.
+		if (groupSessionVideoPath && groupComposeState === 'done') {
+			const url = await toMediaUrl(groupSessionVideoPath);
+			if (url) {
+				previewVideo = { url, label: `${session.name} — session video` };
+				return;
+			}
+		}
 		const savedPipeId = lastPreviewPipeBySession.get(sid);
 		// Prefer the previously-selected pipe (if it still has a video);
 		// otherwise fall back to the first pipe with a last-gen video.
@@ -578,6 +588,18 @@
 			groupComposeState = group.composeState ?? null;
 			groupComposeError = group.composeError ?? null;
 			groupSessionVideoPath = group.sessionVideoPath ?? null;
+			// A persisted session video is the preview target across app
+			// restarts — attach it so the top panel shows the composed
+			// timeline instead of falling back to a single pipe clip. Read the
+			// session's name from the hydrated store (this function only has
+			// the id, and it can run before the preview recovers on its own).
+			if (group.composeState === 'done' && group.sessionVideoPath) {
+				const name = sessions.get(sessionId)?.name ?? 'Session';
+				const path = group.sessionVideoPath;
+				void toMediaUrl(path).then((url) => {
+					if (url) previewVideo = { url, label: `${name} — session video` };
+				});
+			}
 			stopWatching();
 			showProgressModal = groupStale;
 		} catch {

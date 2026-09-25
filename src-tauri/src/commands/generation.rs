@@ -124,6 +124,103 @@ pub struct StartGenerationInput {
     pub video_spec: Option<ModelSpecWire>,
 }
 
+/// Every per-pipe generation start, whether it comes from the single-pipe
+/// `start_generation` command or the session group coordinator, is built
+/// here. Both callers pass the same params and therefore get identical
+/// prompt/specs/media/task construction — the group flow cannot drift from
+/// the normal one (a divergence here silently misplaces a run's artifacts or
+/// drops its resolved specs, which fails the video stage with "no resolved
+/// spec").
+#[derive(Debug, Clone, Default)]
+pub struct PipeStartParams {
+    pub session_id: String,
+    pub pipe_id: String,
+    /// Final prompt string built by the frontend prompt engine.
+    pub prompt: String,
+    /// Resolved session media ROOT (session dir → project dir → app-data
+    /// tree), as returned by `resolve_media_root`. The session-name folder
+    /// is appended here, exactly as the per-pipe flow has always done.
+    pub media_root: Option<String>,
+    pub image_model: Option<String>,
+    pub video_model: Option<String>,
+    pub seed: Option<i64>,
+    pub profile_id: Option<String>,
+    pub image_spec: Option<ModelSpecWire>,
+    pub video_spec: Option<ModelSpecWire>,
+}
+
+/// Build the initial task view + engine input for one pipe start. Pure: it
+/// performs no IO beyond creating the request-log directory, and does not
+/// register the task (the caller owns the `registry.start` call so it can
+/// keep the group queue authoritative).
+///
+/// Layout: `<mediaRoot>/<safeSessionName>/<safePipeName>/<taskId>/` — the
+/// name-consistent tree the engine writes artifacts into. `request_log` is
+/// precomputed through the same `pipe_media_dirs` helper the engine uses to
+/// write the file, so the INITIAL view the frontend receives already carries
+/// the path.
+pub fn build_pipe_start(
+    composer: &crate::models::ComposerConfig,
+    pipe: &crate::models::composer::Pipe,
+    params: &PipeStartParams,
+) -> (GenerationTaskView, EngineInput) {
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let session_name = composer.name.clone();
+    let pipe_name = pipe.name.clone();
+    let session_root = match params
+        .media_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        Some(r) => std::path::Path::new(r).join(safe_session_name(&session_name)),
+        None => {
+            let base = dirs::data_local_dir()
+                .map(|d| d.join("com.visionmachine.desktop").join("media"))
+                .unwrap_or_else(std::env::temp_dir);
+            base.join(safe_session_name(&session_name))
+        }
+    };
+    let mut view = GenerationTaskView {
+        task_id: task_id.clone(),
+        session_id: params.session_id.clone(),
+        pipe_id: params.pipe_id.clone(),
+        status: TaskStatus::Queued,
+        progress: 0.0,
+        stages: crate::generation::TaskRegistry::build_stages(&task_id, pipe),
+        error: None,
+        output_path: None,
+        request_log: None,
+        started_at: now_unix_ms(),
+    };
+    if let Ok((_, task_dir, _task_images_dir)) =
+        crate::generation::pipe_media_dirs(&session_root, &pipe_name, &view.task_id)
+    {
+        view.request_log = Some(task_dir.join("request.log").to_string_lossy().into_owned());
+    }
+    let engine_input = EngineInput {
+        task_id: task_id.clone(),
+        media_root: Some(session_root.to_string_lossy().into_owned()),
+        prompt: params.prompt.clone(),
+        pipe_id: params.pipe_id.clone(),
+        pipe_name: Some(pipe_name),
+        fps: composer.fps,
+        resolution: composer.resolution.clone(),
+        orientation: composer.orientation.clone(),
+        q_value: pipe.q_value,
+        c_value: pipe.c_value,
+        image_model: params.image_model.clone(),
+        video_model: params.video_model.clone(),
+        seed: params.seed,
+        profile_id: params.profile_id.clone(),
+        image_spec: params.image_spec.clone(),
+        video_spec: params.video_spec.clone(),
+        stage: None,
+        upstream: Vec::new(),
+    };
+    (view, engine_input)
+}
+
 #[tauri::command]
 pub async fn start_generation(
     input: StartGenerationInput,
@@ -150,13 +247,9 @@ pub async fn start_generation(
                 input.session_id
             );
             "Pipe not found".to_string()
-        })?;
-    // Name-consistent layout: <projectDir>/<session-name>/<pipe-name>/<gen-hash>.
-    // composer.name is the session's name; pipe.name is the pipe's name.
-    let session_name = composer.name.clone();
-    let pipe_name = pipe.name.clone();
+        })?
+        .clone();
 
-    let task_id = uuid::Uuid::new_v4().to_string();
     // The media root already resolves in precedence: session's own dir (0009)
     // → project dir → default app-data tree. That root is the session root —
     // append the session name so the layout is <root>/<session-name>/...
@@ -165,58 +258,20 @@ pub async fn start_generation(
         let db = &state.db.lock().await;
         resolve_media_root(db, &input.session_id).await
     };
-    let session_root = match media_root.clone().filter(|r| !r.trim().is_empty()) {
-        Some(r) => std::path::Path::new(r.trim()).join(safe_session_name(&session_name)),
-        None => {
-            let base = dirs::data_local_dir()
-                .map(|d| d.join("com.visionmachine.desktop").join("media"))
-                .unwrap_or_else(std::env::temp_dir);
-            base.join(safe_session_name(&session_name))
-        }
-    };
-    let mut view = GenerationTaskView {
-        task_id: task_id.clone(),
+    let params = PipeStartParams {
         session_id: input.session_id.clone(),
         pipe_id: input.pipe_id.clone(),
-        status: TaskStatus::Queued,
-        progress: 0.0,
-        stages: crate::generation::TaskRegistry::build_stages(&task_id, pipe),
-        error: None,
-        output_path: None,
-        request_log: None,
-        started_at: now_unix_ms(),
-    };
-    // Precompute the redacted request/response log path (E1) so the INITIAL
-    // view the frontend receives already carries it — the progress modal's
-    // expander is usable from the moment it opens, before any stage has
-    // written to the file. Build it through `pipe_media_dirs` — the same
-    // helper the engine uses to write the file — so the path matches the
-    // on-disk layout exactly (`<sessionRoot>/<pipe-name>/<task>/request.log`).
-    if let Ok((_, task_dir, _task_images_dir)) =
-        crate::generation::pipe_media_dirs(&session_root, &pipe_name, &view.task_id)
-    {
-        view.request_log = Some(task_dir.join("request.log").to_string_lossy().into_owned());
-    }
-    let engine_input = EngineInput {
-        task_id: task_id.clone(),
-        media_root: Some(session_root.to_string_lossy().into_owned()),
         prompt: input.prompt,
-        pipe_id: input.pipe_id.clone(),
-        pipe_name: Some(pipe_name.clone()),
-        fps: composer.fps,
-        resolution: composer.resolution.clone(),
-        orientation: composer.orientation.clone(),
-        q_value: pipe.q_value,
-        c_value: pipe.c_value,
+        media_root,
         image_model: input.image_model,
         video_model: input.video_model,
         seed: input.seed,
         profile_id: input.profile_id,
         image_spec: input.image_spec,
         video_spec: input.video_spec,
-        stage: None,
-        upstream: Vec::new(),
     };
+    let (view, engine_input) = build_pipe_start(&composer, &pipe, &params);
+    let task_id = view.task_id.clone();
 
     match state
         .generation
@@ -289,8 +344,16 @@ pub async fn get_generation_group(
             .map_err(|e| e.to_string())?
     }
     .ok_or_else(|| "Generation group not found".to_string())?;
+    // The persisted fallback must report the same source records the live
+    // view does, so a reader that restores a finished group can prove which
+    // clips produced its session video instead of trusting a bare path.
+    let sources: Vec<crate::storage::generation_groups_db::GroupSourceRecord> = row
+        .sources_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
     Ok(
-        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"startedAt":row.started_at,"live":false}),
+        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"sources":sources,"startedAt":row.started_at,"live":false}),
     )
 }
 
@@ -495,6 +558,11 @@ pub async fn compose_session_video(
                     Some(SourceVideo {
                         label: p.name.clone(),
                         path: path.to_string(),
+                        task_id: p
+                            .last_generation
+                            .as_ref()
+                            .map(|l| l.task_id.clone())
+                            .unwrap_or_default(),
                     })
                 }
             })

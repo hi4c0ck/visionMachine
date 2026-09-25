@@ -150,7 +150,10 @@ pub fn run() {
             state.generation.set_event_sink(move |event| {
                 let _ = handle.emit_to("main", "gen-task", &event);
                 if event.kind == "terminal" {
-                    group.on_pipe_terminal(&event);
+                    let group2 = group.clone();
+                    tokio::spawn(async move {
+                        group2.on_pipe_terminal(&event).await;
+                    });
                 }
             });
             state.group.set_event_sink(move |event| {
