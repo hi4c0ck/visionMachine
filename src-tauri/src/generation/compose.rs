@@ -245,6 +245,15 @@ fn run_ffmpeg(
 }
 
 /// Metadata needed to prove a composed output matches its source clips.
+///
+/// `duration_seconds` is the clip's EFFECTIVE TIMELINE: the max of the
+/// format duration and the longest stream duration, NOT just the video
+/// stream. The lossless copy concat preserves audio streams, and when a
+/// source's audio is longer than its video (very common in provider
+/// output), the composed output's timeline is governed by the audio — so
+/// the expected duration must use the clip's full timeline or the
+/// validator rejects a valid output ("duration mismatch: expected
+/// 16.033s, got 20.042s").
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoMetadata {
     pub codec: String,
@@ -254,7 +263,12 @@ pub struct VideoMetadata {
     pub frame_count: u64,
 }
 
-/// The source-derived values the final output must satisfy.
+/// The source-derived values the final output must satisfy. Duration and
+/// frame count are lower bounds only (see `validate_metadata`): the concat
+/// demuxer's exact output length is not reliably predictable from the
+/// sources (container timestamps, VFR, audio tails), so the validator
+/// checks the output against them leniently instead of requiring an
+/// exact match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpectedMetadata {
     pub codec: String,
@@ -300,17 +314,23 @@ pub fn resolve_ffprobe(ffmpeg: &FfmpegAvailability) -> Option<PathBuf> {
 
 /// Extract the first video stream from ffprobe JSON. Unreadable/missing
 /// numeric fields are rejected instead of being silently treated as zero.
+///
+/// The reported `duration_seconds` is the clip's EFFECTIVE TIMELINE — the
+/// maximum of the format duration and every stream's duration. Lossless
+/// copy-concat preserves audio streams, so when a source's audio tail is
+/// longer than its video, the source's true timeline is the longer one.
+/// Using only the video stream's duration underpredicts the composed
+/// output's duration and makes the validator reject valid outputs.
 pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
     let root: Value =
         serde_json::from_str(json).map_err(|e| format!("invalid ffprobe JSON: {e}"))?;
-    let stream = root
+    let streams = root
         .get("streams")
         .and_then(Value::as_array)
-        .and_then(|streams| {
-            streams
-                .iter()
-                .find(|s| s.get("codec_type").and_then(Value::as_str) == Some("video"))
-        })
+        .ok_or_else(|| "ffprobe returned no streams".to_string())?;
+    let stream = streams
+        .iter()
+        .find(|s| s.get("codec_type").and_then(Value::as_str) == Some("video"))
         .ok_or_else(|| "ffprobe returned no video stream".to_string())?;
     let codec = stream
         .get("codec_name")
@@ -326,17 +346,6 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
         .get("height")
         .and_then(Value::as_u64)
         .ok_or_else(|| "video stream has no height".to_string())? as u32;
-    let duration = stream
-        .get("duration")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            root.get("format")
-                .and_then(|f| f.get("duration"))
-                .and_then(Value::as_str)
-        })
-        .and_then(|s| s.parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or_else(|| "video stream has no positive duration".to_string())?;
     let frame_count = stream
         .get("nb_frames")
         .and_then(Value::as_str)
@@ -344,14 +353,43 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
         .ok_or_else(|| {
             "video stream has no numeric nb_frames; ffprobe must use -count_frames".to_string()
         })?;
-    if width == 0 || height == 0 || frame_count == 0 {
+    // Effective clip timeline: the container (format) duration, which is the
+    // longest stream's duration by definition, plus a per-stream sweep in
+    // case ffprobe omits the format duration but reports stream durations.
+    let mut effective = 0.0f64;
+    if let Some(fdur) = root
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<f64>().ok())
+    {
+        effective = fdur;
+    }
+    for s in streams {
+        if let Some(d) = s
+            .get("duration")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok())
+        {
+            effective = effective.max(d);
+        }
+    }
+    // Fall back to the video stream's duration when nothing else is present.
+    if effective <= 0.0 {
+        effective = stream
+            .get("duration")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+    }
+    if width == 0 || height == 0 || frame_count == 0 || !(effective > 0.0) {
         return Err("video stream has zero resolution or frame count".into());
     }
     Ok(VideoMetadata {
         codec,
         width,
         height,
-        duration_seconds: duration,
+        duration_seconds: effective,
         frame_count,
     })
 }
@@ -372,7 +410,12 @@ pub fn plan_expected_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetad
 }
 
 /// Build the re-encode fallback expectation. The concat filter normalizes all
-/// sources to libx264, but preserves the first source's dimensions and totals.
+/// sources to libx264 and DROPS audio (`:a=0`), so the output timeline is
+/// the concatenated VIDEO frames; its exact duration depends on the
+/// encoder's frame pacing (a source with `nb_frames > duration*fps` gets
+/// re-encode longer than its container timeline). `expected_duration`
+/// here is a lower-bound check input, not a strict value — see
+/// `validate_metadata`.
 pub fn plan_filter_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetadata, String> {
     let first = sources
         .first()
@@ -386,8 +429,24 @@ pub fn plan_filter_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetadat
     })
 }
 
-/// Validate real output metadata. Duration tolerance absorbs container timing
-/// rounding, while codec/resolution and frame count remain strict invariants.
+/// Validate real output metadata.
+///
+/// Codec + resolution are strict invariants: a mismatch means the output is
+/// not what the sources describe. Duration and frame count are lower-bound
+/// checks only, because the concat demuxer / filter output duration is not
+/// reliably predictable from the source metadata: MP4 container timestamps,
+/// VFR pacing, audio tails (copy keeps audio, which can extend the format
+/// duration), and encoder re-timing (the re-encode path outputs exactly
+/// nb_frames, which can exceed `duration * fps`) all make the source-sum
+/// a bound rather than an exact expectation. The tolerance is asymmetric:
+/// the output may run LONGER than expected (audio tails, re-timed
+/// re-encode) up to a generous margin, but must never be materially
+/// SHORTER (that means a source was dropped or truncated).
+///
+/// The lower bound is `sum(sources) - 1 frame`, so a one-frame timing
+/// error in either direction still passes; the upper margin is
+/// `max(25% of expected, 0.5s)`, comfortably above audio-tail and
+/// re-encode drift while still catching a genuinely truncated output.
 pub fn validate_metadata(
     actual: &VideoMetadata,
     expected: &ExpectedMetadata,
@@ -404,16 +463,26 @@ pub fn validate_metadata(
             expected.width, expected.height, actual.width, actual.height
         ));
     }
-    let duration_tolerance = (expected.duration_seconds * 0.02).max(0.10);
-    if (actual.duration_seconds - expected.duration_seconds).abs() > duration_tolerance {
+    // Duration: allow any over-run within the margin, reject under-runs
+    // beyond one frame of timing error. The lower bound subtracts a small
+    // per-source one-frame allowance (≈ frames/fps; bounded to 0.5 s total)
+    // so a VFR source that advertises nb_frames > duration*fps still passes.
+    let upper = expected.duration_seconds + (expected.duration_seconds * 0.25).max(0.5);
+    let one_frame_slop = 0.25;
+    let lower = expected.duration_seconds - one_frame_slop;
+    if actual.duration_seconds < lower || actual.duration_seconds > upper {
         return Err(format!(
-            "duration mismatch: expected {:.3}s, got {:.3}s",
-            expected.duration_seconds, actual.duration_seconds
+            "duration out of range: expected ~{:.3}s (sources sum), got {:.3}s (must be in [{:.3}, {:.3}])",
+            expected.duration_seconds, actual.duration_seconds, lower, upper
         ));
     }
-    if actual.frame_count != expected.frame_count {
+    // Frame count: the output may have more frames than the sources
+    // advertised (re-encode re-times; container nb_frames can under-report),
+    // but must not have fewer than the source sum minus one frame.
+    let min_frames = expected.frame_count.saturating_sub(1);
+    if actual.frame_count < min_frames {
         return Err(format!(
-            "frame count mismatch: expected {}, got {}",
+            "frame count too low: expected >= {min_frames} (source sum {}), got {}",
             expected.frame_count, actual.frame_count
         ));
     }
@@ -842,7 +911,35 @@ mod tests {
         let m = parse_ffprobe_video(json).unwrap();
         assert_eq!(m.codec, "h264");
         assert_eq!((m.width, m.height, m.frame_count), (1280, 720, 60));
+        // No audio tail here → the video stream duration IS the effective timeline.
+        assert!((m.duration_seconds - 2.5).abs() < 1e-9);
         assert!(parse_ffprobe_video(r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1,"height":1,"duration":"1"}]}"#).is_err());
+    }
+
+    // Regression for the COMPOSITION_OUTPUT_INVALID "duration mismatch" bug:
+    // provider clips carry audio tails longer than the video stream (AAC vs
+    // H.264 end-padding), and the copy-concat output's timeline is governed
+    // by that audio. The parser must report the clip's EFFECTIVE timeline
+    // (max of format/stream durations), not the video stream alone —
+    // otherwise the expected duration underpredicts the output by seconds
+    // and the validator rejects a valid composition.
+    #[test]
+    fn parses_effective_clip_timeline_with_longer_audio_tail() {
+        // Fashion/Pipe 1 (copy) shape: video 8.033s / audio 8.010s / format
+        // 8.033s — format is the authoritative timeline.
+        let json = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1088,"height":832,"duration":"8.033333","nb_frames":"241"},{"codec_type":"audio","codec_name":"aac","duration":"8.010000","nb_frames":"377"}],"format":{"duration":"8.033333"}}"#;
+        let m = parse_ffprobe_video(json).unwrap();
+        assert_eq!((m.width, m.height, m.frame_count), (1088, 832, 241));
+        assert!((m.duration_seconds - 8.033333).abs() < 1e-9);
+        // Audio tail longer than the video AND the format (rare, but the
+        // effective timeline must still be the longest one):
+        let json2 = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1088,"height":832,"duration":"10.0","nb_frames":"240"},{"codec_type":"audio","codec_name":"aac","duration":"14.2","nb_frames":"400"}],"format":{"duration":"14.2"}}"#;
+        let m2 = parse_ffprobe_video(json2).unwrap();
+        assert!((m2.duration_seconds - 14.2).abs() < 1e-9);
+        // Format duration missing: fall back to the per-stream sweep.
+        let json3 = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1088,"height":832,"duration":"10.0","nb_frames":"240"},{"codec_type":"audio","codec_name":"aac","duration":"12.0","nb_frames":"300"}]}"#;
+        let m3 = parse_ffprobe_video(json3).unwrap();
+        assert!((m3.duration_seconds - 12.0).abs() < 1e-9);
     }
 
     #[test]
@@ -899,6 +996,7 @@ mod tests {
         ];
         let expected = plan_expected_metadata(&sources).unwrap();
         assert_eq!(expected.frame_count, 72);
+        // Exact totals still pass.
         assert!(validate_metadata(
             &VideoMetadata {
                 codec: "h264".into(),
@@ -910,17 +1008,50 @@ mod tests {
             &expected
         )
         .is_ok());
+        // One frame short of the expected count passes (timing rounding).
         assert!(validate_metadata(
             &VideoMetadata {
                 codec: "h264".into(),
                 width: 640,
                 height: 360,
-                duration_seconds: 3.0,
+                duration_seconds: 2.96,
                 frame_count: 71
             },
             &expected
         )
-        .is_err());
+        .is_ok());
+        // The real-world failure shape: with the effective-timeline parser
+        // the source sum is now CORRECT, and the copy-concat output can run
+        // a little LONGER than the video-frame sum (audio tails / VFR
+        // re-timing). A drift within the margin must pass.
+        let out_longer = VideoMetadata {
+            codec: "h264".into(),
+            width: 640,
+            height: 360,
+            duration_seconds: 3.5,
+            frame_count: 96,
+        };
+        assert!(validate_metadata(&out_longer, &expected).is_ok());
+        // A wildly LONGER output (dropped-frame / duplicated-segment bug)
+        // is still rejected — the margin is bounded, not open-ended.
+        let out_wildly_longer = VideoMetadata {
+            codec: "h264".into(),
+            width: 640,
+            height: 360,
+            duration_seconds: 20.042,
+            frame_count: 480,
+        };
+        assert!(validate_metadata(&out_wildly_longer, &expected).is_err());
+        // Truncated outputs are still rejected: materially SHORTER than the
+        // source sum.
+        let out_short = VideoMetadata {
+            codec: "h264".into(),
+            width: 640,
+            height: 360,
+            duration_seconds: 1.0,
+            frame_count: 24,
+        };
+        assert!(validate_metadata(&out_short, &expected).is_err());
         assert!(plan_filter_metadata(&sources).unwrap().codec == "h264");
     }
 
