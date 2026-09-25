@@ -1140,6 +1140,16 @@
 				if (event.kind === 'group-terminal') {
 					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
 					groupStatus = event.status ?? 'done'; groupStale = false;
+					// A successfully composed session video IS the preview target
+					// (the full session timeline, not a single pipe clip) — attach
+					// it to the top-panel preview when the compose succeeded.
+					void fetchGenerationGroup(result.groupId).then((g) => {
+						if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+							void toMediaUrl(g.sessionVideoPath).then((url) => {
+								if (url) previewVideo = { url, label: `${selectedSession.name} — session video` };
+							});
+						}
+					}).catch(() => {});
 					// The terminal event is dispatched before the compose result
 					// is persisted — refetch once (and once more after a short
 					// delay for the compose-terminal case) so the modal shows the

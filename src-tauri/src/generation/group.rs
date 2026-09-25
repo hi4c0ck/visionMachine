@@ -420,6 +420,13 @@ impl GroupCoordinator {
                 p.3 = event.view.progress;
                 p.4 = event.view.error.clone();
                 if let Some(source) = completed_source(&p.0, event) {
+                    // Dedupe: a pipe that regenerated within the same group
+                    // emits terminal for every task, and a group can be
+                    // re-tracked after an app restart — keep only the LATEST
+                    // successful clip per pipe (the same "last-gen" semantics
+                    // the standalone composer path uses), so a stale earlier
+                    // task never shadows the new one in the concat manifest.
+                    r.completed_sources.retain(|s| s.label != p.0);
                     r.completed_sources.push(source);
                 }
             }
