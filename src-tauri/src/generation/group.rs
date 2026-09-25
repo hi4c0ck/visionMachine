@@ -458,6 +458,7 @@ impl GroupCoordinator {
                 .get(&gid)
                 .map(|r| r.session_id.clone())
                 .unwrap_or_default();
+            let session_for_fail_event = next_session.clone();
             tokio::spawn(async move {
                 // Rebuild the run params from the group's stored input so
                 // the follow-up pipe gets the same models/seed/profile/
@@ -479,20 +480,57 @@ impl GroupCoordinator {
                     failure_policy: policy.clone(),
                     auto_compose: true,
                 };
-                if let Ok((tid, _)) = this.start_pipe(&next_input, &next).await {
-                    this.state
-                        .lock()
-                        .unwrap()
-                        .get_mut(&gid2)
-                        .map(|r| r.current = Some(tid.clone()));
-                    this.index.lock().unwrap().insert(tid.clone(), gid2.clone());
-                    this.emit(GroupEvent {
-                        group_id: gid2,
-                        kind: "pipe-started".into(),
-                        pipe_id: Some(next.to_string()),
-                        task_id: Some(tid),
-                        status: Some("running".into()),
-                    });
+                // When the follow-up start FAILS (e.g. "video stage has no
+                // resolved video spec" — the engine rejects the task before it
+                // registers), no pipe-terminal event will ever fire for it, so
+                // the group would hang forever in `running`: no `next` left
+                // in the queue, no compose, no group-terminal. Mark the pipe
+                // as an error and advance the group as if that pipe had just
+                // terminated, so the run reaches a terminal state instead of
+                // stalling (which is exactly the "OK appears but nothing
+                // generated" symptom).
+                match this.start_pipe(&next_input, &next).await {
+                    Ok((tid, _)) => {
+                        this.state
+                            .lock()
+                            .unwrap()
+                            .get_mut(&gid2)
+                            .map(|r| r.current = Some(tid.clone()));
+                        this.index.lock().unwrap().insert(tid.clone(), gid2.clone());
+                        this.emit(GroupEvent {
+                            group_id: gid2.clone(),
+                            kind: "pipe-started".into(),
+                            pipe_id: Some(next.to_string()),
+                            task_id: Some(tid),
+                            status: Some("running".into()),
+                        });
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "[Generation] group {gid2} follow-up pipe {next} failed to start: {e}"
+                        );
+                        // Record the failure on the pipe row + drop the group
+                        // through the same terminal path a failed pipe would
+                        // use (queue is already drained → compose + finish).
+                        let failed_event = crate::generation::GenTaskEvent {
+                            task_id: next.clone(),
+                            kind: "terminal".into(),
+                            status: Some(TaskStatus::Error),
+                            view: crate::generation::GenerationTaskView {
+                                task_id: next.clone(),
+                                session_id: session_for_fail_event,
+                                pipe_id: next.clone(),
+                                status: TaskStatus::Error,
+                                progress: 0.0,
+                                stages: vec![],
+                                error: Some(e.clone()),
+                                output_path: None,
+                                request_log: None,
+                                started_at: 0,
+                            },
+                        };
+                        this.on_pipe_terminal(&failed_event);
+                    }
                 }
             });
         } else {
