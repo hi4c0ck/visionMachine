@@ -1044,7 +1044,16 @@ fn build_stage_plan(
                         ordinal: None,
                         ref_id: Some(sr.id.clone()),
                         image_type: Some(ty.to_string()),
-                        reference_url: None,
+                        // `url` is consumed directly by the video stage;
+                        // `img2img` must carry the subject's image URL to the
+                        // image shaper as extra_body.image. Previously this was
+                        // always None, so subject img2img silently degraded to
+                        // txt2img at the provider.
+                        reference_url: if ty == "img2img" {
+                            Some(sr.image_url.clone())
+                        } else {
+                            None
+                        },
                         image_src: if ty == "url" {
                             Some(sr.image_url.clone())
                         } else {
@@ -1243,6 +1252,21 @@ mod tests {
             last_generation: None,
             media_mode: "keyframes".into(),
         }
+    }
+
+    #[test]
+    fn subject_img2img_plan_carries_reference_url() {
+        let pipe = fixture_pipe();
+        let stages = TaskRegistry::build_stages("t1", &pipe);
+        let (plan, _) = build_stage_plan(&pipe, &stages);
+        let subject = plan
+            .iter()
+            .flatten()
+            .find(|stage| stage.kind == SourceKind::Subject)
+            .expect("subject stage plan");
+        assert_eq!(subject.image_type.as_deref(), Some("img2img"));
+        assert_eq!(subject.reference_url.as_deref(), Some("ref.png"));
+        assert!(subject.image_src.is_none());
     }
 
     fn engine_input() -> EngineInput {
