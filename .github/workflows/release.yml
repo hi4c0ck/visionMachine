@@ -71,35 +71,72 @@ jobs:
             src-tauri/target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Cache ffmpeg sidecar download
+        uses: actions/cache@v4
+        with:
+          # fetch-ffmpeg.mjs is cache-aware (downloads the pinned Btbn archive
+          # into build-state/ffmpeg-cache/, keyed on tag + target) — caching it
+          # here skips the ~155 MB GitHub download on repeat release runs.
+          path: build-state/ffmpeg-cache/
+          key: visionmachine-ffmpeg-${{ runner.os }}-x86_64-pc-windows-msvc
+
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build (MSI)
-        # Produces: src-tauri/target/release/bundle/msi/VisionMachine_<ver>_x64_en-US.msi
-        run: npm run tauri build
+      # ── Variant 1: tiny (no bundled ffmpeg) ──────────────────────────────
+      # The app resolves ffmpeg at runtime: user-set path (Settings → Tools)
+      # → system $PATH. Covers pipe-only generation with no extra setup;
+      # session compose works when the user adds an ffmpeg path.
+      - name: Build tiny-variant MSI (no bundled ffmpeg)
+        run: node scripts/build/runner.mjs --light
 
-      - name: Locate built MSI
+      - name: Capture tiny MSI
+        shell: pwsh
         run: |
-          $msi = Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' | Select-Object -First 1
-          if ($null -eq $msi) { throw "No .msi found in src-tauri/target/release/bundle/msi" }
-          Write-Host "Found: $($msi.Name)"
+          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/tiny.msi
+          Get-ChildItem ./.release-msi | Write-Host
+
+      # ── Variant 2: full (bundled ffmpeg sidecar, ~155 MB) ────────────────
+      # fetch-ffmpeg.mjs downloads the pinned Btbn GPL build for the target
+      # triple and stages it into src-tauri/binaries/ (kept out of git);
+      # the runner adds the bundled-ffmpeg feature so the sidecar ships.
+      - name: Build full-variant MSI (bundled ffmpeg)
+        # The runner stages the pinned Btbn sidecar into src-tauri/binaries/
+        # (cache-aware: build-state/ffmpeg-cache survives the cargo cache above)
+        # and builds with the bundled-ffmpeg feature.
+        run: node scripts/build/runner.mjs --light --features bundled-ffmpeg
+
+      - name: Capture full MSI
+        shell: pwsh
+        run: |
+          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/full.msi
+          Get-ChildItem ./.release-msi | Write-Host
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: visionmachine-msi
-          path: src-tauri/target/release/bundle/msi/*.msi
+          path: ./.release-msi/*.msi
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/bundle/msi/*.msi
+          files: |
+            ./.release-msi/tiny.msi
+            ./.release-msi/full.msi
           generate_release_notes: true
           body: |
-            Windows MSI installer.
+            Two Windows MSI variants:
 
-            **Note:** this build is unsigned (no code-signing certificate
-            is configured yet), so Windows SmartScreen will show an
+            - **`tiny.msi`** — no bundled ffmpeg. Pipe generation works as-is;
+              session compose ("Compose session video") requires an ffmpeg path
+              in Settings → Tools (user system or custom install).
+            - **`full.msi`** — ships a bundled ffmpeg sidecar (~155 MB,
+              Btbn GPL build); session compose works out of the box, user path
+              still takes precedence when set.
+
+            **Note:** both builds are unsigned (no code-signing certificate is
+            configured yet), so Windows SmartScreen will show an
             "unknown publisher" warning on first install. Click
             **More info → Run anyway**.
 
@@ -107,4 +144,4 @@ jobs:
 
       - name: Print release info
         run: |
-          Write-Host "Published MSI to release ${{ github.ref_name }}"
+          Write-Host "Published tiny + full MSIs to release ${{ github.ref_name }}"
