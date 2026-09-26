@@ -101,20 +101,81 @@
 	// the user last opened here (lastPreviewPipeBySession), not the first
 	// pipe that happens to have a last-gen video.
 	let lastPreviewPipeBySession = new Map<string, string>();
+	// True when the top-panel preview shows the composed session video
+	// (all pipes spliced) instead of a single pipe's last-gen clip. Drives
+	// the frame bounds: a composed video spans the SUM of the pipes.
+	let previewIsSessionVideo = $state(false);
+	// Attach a composed session video to the top-panel preview AND mirror it
+	// into the ToolsPanel's Preview section in one step. Returns false when the
+	// media URL could not be resolved (path moved / not under a media root).
+	// Fail fast if the active session changed while the media read was in
+	// flight — a stale result must not clobber the preview the user just
+	// attached on the NEW session (attachSessionVideo is async).
+	async function attachSessionVideo(path: string, label: string): Promise<boolean> {
+		const before = selectedSessionId;
+		const url = await toMediaUrl(path).catch(() => null);
+		if (url && before !== selectedSessionId) {
+			// The user switched sessions mid-flight: only honor the attach when
+			// it still targets the session that was selected at call time.
+			return false;
+		}
+		if (!url) return false;
+		previewIsSessionVideo = true;
+		previewVideo = { url, label };
+		toolsSessionVideo = { url, label };
+		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label };
+		return true;
+	}
+	// Flip the top-panel ownership back off the session video when the user
+	// deliberately picks a per-pipe preview. NOTE: lastComposedSessionVideo
+	// (the record of the last composed session video) is intentionally KEPT —
+	// the tool-panel "Open in preview" button uses it to re-attach the session
+	// video to the top panel on demand.
+	function detachSessionVideo() {
+		previewIsSessionVideo = false;
+	}
+	// Last successfully composed session video, keyed to the session it was
+	// composed for. Persists across top-panel preview switches so the
+	// tool-panel "Open in preview" can re-attach it on demand.
+	let lastComposedSessionVideo = $state<{ sessionId: string; url: string; label: string } | null>(null);
+	// Re-attach the composed session video to the top panel (the tool-panel
+	// "Open in preview" affordance). Restores the full-session frame space
+	// after the user switched the top panel to a single pipe clip. No-op when
+	// the top panel already shows it (avoids a needless blob reload).
+	function openSessionPreview() {
+		if (!lastComposedSessionVideo || lastComposedSessionVideo.sessionId !== selectedSessionId) return;
+		if (previewVideo?.url === lastComposedSessionVideo.url) return;
+		previewIsSessionVideo = true;
+		previewVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+	}
 	async function restoreSelectedPreview(session: SessionData | null) {
-		previewVideo = null;
 		const sid = session?.id;
 		if (!sid || !session) return;
 		// A successfully composed session video (group auto-compose) is the
 		// top-level preview target — the full session timeline, not a single
-		// pipe clip. It takes precedence over any pipe's last-gen video.
+		// pipe clip. It takes precedence over any pipe's last-gen video. The
+		// attach runs through attachSessionVideo so it is also mirrored into
+		// the ToolsPanel preview section (see syncCompose / compose button).
 		if (groupSessionVideoPath && groupComposeState === 'done') {
-			const url = await toMediaUrl(groupSessionVideoPath);
-			if (url) {
-				previewVideo = { url, label: `${session.name} — session video` };
+			// A composed session video owns the top panel even when a pipe
+			// preview was attached earlier — always re-attach (refreshing
+			// the tool-panel mirror too), never early-return.
+			const ok = await attachSessionVideo(groupSessionVideoPath, `${session.name} — session video`);
+			if (!ok) {
+				// Media read failed (file missing / outside the media root):
+				// leave whatever preview is showing rather than blanking it.
 				return;
 			}
+			return;
 		}
+		// Fall back to a single-pipe last-gen video only when nothing is
+		// attached yet; a session video that's already showing wins. Note the
+		// `previewIsSessionVideo` reset: single-pipe previews span only that
+		// pipe's length, so the frame bounds must not stay on the composed sum.
+		if (previewVideo) return;
+		previewVideo = null;
+		previewIsSessionVideo = false;
 		const savedPipeId = lastPreviewPipeBySession.get(sid);
 		// Prefer the previously-selected pipe (if it still has a video);
 		// otherwise fall back to the first pipe with a last-gen video.
@@ -142,15 +203,102 @@
 		void restoreSelectedPreview(session);
 	});
 
-
 	// the generated pieces (its own artifact length) — NOT a mechanical sum of
 	// the pipes. Until that artifact is persisted (session-video entity, not
 	// yet modeled), the placeholder is the longest pipe (answer 1c). Pipes are
 	// 8n+1, so the max stays 8n+1.
-	let totalFrames = $derived(
-		pipes.length > 0 ? Math.max(...pipes.map(p => p?.lengthFrames ?? 0)) : 241
-	);
+	// A composed session video concatenates EVERY pipe, so its length is the
+	// SUM of the pipes' frame counts — not the longest single pipe. When the
+	// session video is the preview target, the carousel/frame bounds must span
+	// the full timeline; otherwise they stay on the longest pipe (composer
+	// editing mode, where the user is still shaping one pipe at a time).
+	let totalFrames = $derived.by(() => {
+		const pipeMax = pipes.length > 0 ? Math.max(...pipes.map(p => p?.lengthFrames ?? 0)) : 241;
+		return previewIsSessionVideo && pipes.length > 0
+			? pipes.reduce((sum, p) => sum + (p?.lengthFrames ?? 0), 0)
+			: pipeMax;
+	});
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
+
+	// ── Session-video frame space ─────────────────────────────────────────────
+	// The composed session video splices every pipe clip back-to-back in
+	// orderIndex order (the Rust compose core's concat order), so its global
+	// frame space is the SUM of the pipes' frame counts. The mapping below is
+	// the inverse of that sum: a global frame belongs to the pipe whose
+	// cumulative range contains it, and every pipe's composer ruler offsets
+	// the global playhead by that pipe's start — the same walk, read two ways.
+	interface SessionVideoLayout {
+		/** Pipe i's first frame in the spliced timeline (0-based), aligned to
+		 *  `pipes` order — so `starts[pipeIdx]` is that pipe's own offset. */
+		starts: number[];
+		/** Session-video frame → the owning pipe's index into the session
+		 *  array (out-of-range clamps to the last pipe). */
+		frameToPipe: (f: number) => number;
+	}
+	const sessionVideoLayout = $derived.by((): SessionVideoLayout | null => {
+		if (!previewIsSessionVideo || pipes.length === 0) return null;
+		// Walk in orderIndex (concat) order to compute each pipe's spliced
+		// start, but store the result ALIGNED to the `pipes` array so
+		// `starts[pipeIdx]` is that pipe's own offset for localFrameForPipe.
+		const order = [...pipes].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+		const starts = new Array<number>(pipes.length).fill(0);
+		let acc = 0;
+		for (const p of order) {
+			starts[pipes.indexOf(p)] = acc;
+			acc += p.lengthFrames ?? 0;
+		}
+		return {
+			starts,
+			frameToPipe: (f: number) => {
+				// Walk once to the owning pipe; clamp above the total to the
+				// last pipe so a rounding-overshoot playhead still lands.
+				let remaining = f;
+				for (const p of order) {
+					const len = p.lengthFrames ?? 0;
+					if (remaining < len || p === order[order.length - 1]) return pipes.indexOf(p);
+					remaining -= len;
+				}
+				return pipes.length - 1;
+			},
+			};
+	});
+
+	// Sliding the session-video carousel (or the top-panel frame step / arrow
+	// keys) moves the GLOBAL playhead. When the spliced video is the preview
+	// target, that move selects the pipe whose segment the frame lands in, so
+	// the composer highlights the owning pipe as the user sweeps.
+	let lastPinnedGlobalFrame = $state<number | null>(null);
+	$effect(() => {
+		if (!previewIsSessionVideo || !sessionVideoLayout) return;
+		const f = selectedFrame;
+		if (lastPinnedGlobalFrame === f) return; // only act on real moves
+		lastPinnedGlobalFrame = f;
+		activePipeIdx = sessionVideoLayout.frameToPipe(f);
+	});
+
+	// A per-pipe ruler renders its own frame space (0..pipe.lengthFrames). In
+	// session-video mode the global playhead is offset by that pipe's start in
+	// the spliced timeline, clamped to the pipe's bounds — so the pin sits at
+	// the right local position on whichever pipe owns the current frame. null
+	// = not in session-video mode (rulers take selectedFrame as-is).
+	const localFrameForPipe = $derived.by(() => {
+		if (!previewIsSessionVideo || !sessionVideoLayout) return null;
+		return (pipeIdx: number): number => {
+			const pipe = pipes[pipeIdx];
+			if (!pipe) return 0;
+			const start = sessionVideoLayout.starts[pipeIdx] ?? 0;
+			return Math.min(Math.max(selectedFrame - start, 0), (pipe.lengthFrames ?? 0) - 1);
+		};
+	});
+
+	// Sibling of the clamp above, WITHOUT it: the raw spliced start of pipe i,
+	// passed to each ruler so a local-frame write-back (ruler click / element
+	// drag) can be converted back to the GLOBAL session-video playhead.
+	// 0 in plain composer mode.
+	const pipeStartForPipe = $derived.by(() => {
+		if (!previewIsSessionVideo || !sessionVideoLayout) return null;
+		return (pipeIdx: number): number => sessionVideoLayout.starts[pipeIdx] ?? 0;
+	});
 
 	// Settings (Phase 2): live object + re-sync on store change. The store
 	// replaces its object on every commit, so a plain reassignment re-renders.
@@ -623,9 +771,7 @@
 			if (group.composeState === 'done' && group.sessionVideoPath) {
 				const name = sessions.get(sessionId)?.name ?? 'Session';
 				const path = group.sessionVideoPath;
-				void toMediaUrl(path).then((url) => {
-					if (url) previewVideo = { url, label: `${name} — session video` };
-				});
+				void attachSessionVideo(path, `${name} — session video`);
 			}
 			stopWatching();
 			showProgressModal = groupStale;
@@ -1170,7 +1316,10 @@
 				if (event.kind === 'compose-terminal') {
 					// Compose finished (or failed) after the pipes went terminal —
 					// refresh the persisted compose outcome so the modal + pill
-					// reflect it (error strings included, not just a silent OK).
+					// reflect it (error strings included, not just a silent OK),
+					// and attach the composed video to the top panel + tool-panel
+					// preview as soon as the path lands (don't wait for the
+					// group-terminal refetch a moment later).
 					if (activeGroupId) {
 						void fetchGenerationGroup(activeGroupId).then((g) => {
 							groupComposeState = g.composeState ?? null;
@@ -1181,6 +1330,9 @@
 							if (progressMinimized) {
 								if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
 								else if (g.composeState === 'done' && g.sessionVideoPath) pillTerminal = 'done';
+							}
+							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+								void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
 							}
 						}).catch(() => {});
 					}
@@ -1203,9 +1355,7 @@
 							groupComposeError = g.composeError ?? null;
 							groupSessionVideoPath = g.sessionVideoPath ?? null;
 							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
-								void toMediaUrl(g.sessionVideoPath).then((url) => {
-									if (url) previewVideo = { url, label: `${selectedSession.name} — session video` };
-								});
+								void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
 							}
 						}).catch(() => {});
 					};
@@ -1216,19 +1366,6 @@
 			}).then((unlisten) => { groupUnlisten = unlisten; });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
-
-	// Group auto-compose lands the session video via syncCompose's refetch loop
-	// (above); mirror that path into the ToolsPanel's Preview section by
-	// re-resolving the media URL each time the persisted path changes.
-	$effect(() => {
-		if (!groupSessionVideoPath || groupComposeState !== 'done') return;
-		void (async () => {
-			const url = await toMediaUrl(groupSessionVideoPath).catch(() => null);
-			if (url && groupSessionVideoPath) {
-				toolsSessionVideo = { url, label: `${selectedSession?.name ?? 'Session'} — session video` };
-			}
-		})();
-	});
 
 	async function cancelSessionGenerationGroup() {
 		if (!activeGroupId) return;
@@ -1305,14 +1442,7 @@
 			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
 			flashToast(APP_CONSTANTS.strings.composeSessionDone, 'success');
 			// Point the top panel at the composed file (served via read_media_file).
-			previewVideo = null;
-			void toMediaUrl(r.outputPath).then((url) => {
-				if (url) {
-					const label = `${selectedSession?.name ?? 'Session'} — video`;
-					previewVideo = { url, label };
-					toolsSessionVideo = { url, label };
-				}
-			});
+			void attachSessionVideo(r.outputPath, `${selectedSession?.name ?? 'Session'} — video`);
 		})
 		.catch((e) => {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
@@ -1795,7 +1925,17 @@
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.
+		// A per-pipe preview hands the top panel back to the pipe's OWN frame
+		// space — detach the session video so totalFrames drops from the
+		// spliced SUM to the pipe's max. The tool-panel mirror is kept in sync
+		// from lastComposedSessionVideo (the record that a session video exists
+		// for this session — the "Open in preview" button re-attaches it).
+		detachSessionVideo();
+		if (lastComposedSessionVideo?.sessionId === selectedSessionId) {
+			toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		}
 		previewVideo = null;
+		previewIsSessionVideo = false;
 		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
 			.then((url) => {
 				if (url) previewVideo = { url, label: pipe.name };
@@ -1953,6 +2093,8 @@
 					bind:activePipeIdx
 					bind:focus
 					onframechange={(f) => selectedFrame = f}
+					localFrameForPipe={localFrameForPipe}
+					pipeStartForPipe={pipeStartForPipe}
 					brokenRefs={brokenRefs}
 					onRefSaved={recheckRef}
 					videoModel={videoModelSpec}
@@ -1984,6 +2126,7 @@
 				ongenerate={handleGenerate}
 				ongeneratepipe={openGenerateModal}
 				onopenpreview={openPreview}
+				onopensessionpreview={openSessionPreview}
 				oncomposesession={composeSessionVideo}
 				ffmpegAvailable={ffmpegCapability ? ffmpegCapability.source !== 'none' : false}
 				composing={composing}

@@ -56,6 +56,8 @@ import { flashToast } from '$lib/flashToast';
 			onRefSaved,
 			videoModel = null,
 			onmediamodechange,
+			localFrameForPipe = null,
+			pipeStartForPipe = null,
 		} = $props<{
 			session?: SessionData;
 			totalFrames?: number;
@@ -75,6 +77,19 @@ import { flashToast } from '$lib/flashToast';
 			videoModel?: ModelSpec | null;
 			/** Persist a pipe media-mode switch (composerStore.setMediaMode). */
 			onmediamodechange?: (pipeId: string, mode: 'keyframes' | 'reference') => void;
+			/**
+			 * Session-video mode: convert the global session-video playhead to a
+			 * pipe's local ruler frame (offset by the pipe's start in the spliced
+			 * timeline). null = plain composer mode — each ruler takes the shared
+			 * selectedFrame as-is.
+			 */
+			localFrameForPipe?: ((pipeIdx: number) => number) | null;
+			/**
+			 * Session-video mode: this pipe's raw spliced start (no clamping),
+			 * so a local-frame write-back (ruler click / element drag) converts
+			 * back to the GLOBAL playhead. 0 in plain composer mode.
+			 */
+			pipeStartForPipe?: ((pipeIdx: number) => number) | null;
 		}>();
 
 	const MAX_KEYFRAMES = 3;
@@ -824,7 +839,8 @@ import { flashToast } from '$lib/flashToast';
 			<TimelineSection
 				{pipe}
 				sessionId={session?.id}
-				{selectedFrame}
+				selectedFrame={localFrameForPipe ? localFrameForPipe(pipeIdx) : selectedFrame}
+				pipeStart={pipeStartForPipe ? pipeStartForPipe(pipeIdx) : 0}
 				fps={session?.fps}
 				onFrameChange={(f) => onframechange?.(f)}
 				onAddTrack={(e) => handleToggleAddMenu(pipeIdx, e)}

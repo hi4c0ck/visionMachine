@@ -27,7 +27,8 @@
 		onqvaluechange,
 		oncvaluechange,
 		unsynced = false,
-		sessionVideo = null
+		sessionVideo = null,
+		onopensessionpreview
 	} = $props<{
 		session: SessionData | null;
 		project: ProjectData | null;
@@ -64,6 +65,9 @@
 		/** Composed session video (group auto-compose or the compose button) to
 		 *  show in the Preview section. null = nothing composed yet. */
 		sessionVideo?: { url: string; label: string } | null;
+		/** Point the top-panel preview back at the session video after the
+		 *  user switched it to a per-pipe clip ("Open in preview" affordance). */
+		onopensessionpreview?: () => void;
 	}>();
 
 	let showModal = $state(false);
@@ -225,15 +229,24 @@
     <div class="preview-area">
       {#if session && sessionVideo}
         <div class="preview-active preview-video-box">
-          <video
-            src={sessionVideo.url}
-            class="preview-video"
-            muted
-            loop
-            autoplay
-            playsinline
-            controls
-          ></video>
+          <div class="preview-video-frame">
+            <video
+              src={sessionVideo.url}
+              class="preview-video"
+              muted
+              loop
+              autoplay
+              playsinline
+              controls
+            ></video>
+            <button
+              class="preview-video-open"
+              onclick={() => onopensessionpreview?.()}
+              title="Show the session video in the top panel"
+            >
+              {APP_CONSTANTS.strings.openInPreview}
+            </button>
+          </div>
           <p class="preview-name">{sessionVideo.label}</p>
         </div>
       {:else if session}
@@ -766,6 +779,32 @@
     object-fit: contain;
     background: #000;
     border-radius: 6px;
+  }
+
+  /* The video + its "Open in preview" button share one anchor: the button
+     sits ON the video (bottom-right corner overlay), not as a sibling that
+     floats away from it. */
+  .preview-video-frame {
+    position: relative;
+    width: 100%;
+  }
+  .preview-video-open {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    padding: 3px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    background: rgba(0, 0, 0, 0.75);
+    color: var(--text-primary);
+    border: 1px solid var(--panel-right-border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  .preview-video-open:hover {
+    border-color: var(--accent-color, #ff3e00);
+    background: rgba(0, 0, 0, 0.9);
   }
 
   .unsynced-badge {
