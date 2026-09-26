@@ -18,11 +18,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   check-guard:
-    name: Guard: tag must be on production
+    name: "Guard: tag must be on production"
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:

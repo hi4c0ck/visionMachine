@@ -86,10 +86,11 @@ const binariesDir =
 // Therefore: use the STATIC variant (no suffix) — it bundles all codec libs
 // internally and ships as a single self-contained binary.
 //
-// PinnedVersions: the ffmpeg version baked into the asset name.
-// "9.0" → assets named ffmpeg-n9.0-latest-<plat>-gpl-9.0.{zip|tar.xz}
-// "8.1" → assets named ffmpeg-n8.1-latest-<plat>-gpl-8.1.{zip|tar.xz}
-// Bump this to re-fetch a different ffmpeg generation.
+// PinnedVersions: the ffmpeg version line baked into the asset's revision
+// tag. The pinned ReleaseTag below ships the master-line build under that
+// revision string (e.g. N-126782-gdc52424419); the 9.0/8.1 versioned assets
+// in the same release are NOT what we pin. Bump PinnedFfmpegVersion +
+// ReleaseTag together to re-fetch a different ffmpeg generation.
 const PinnedFfmpegVersion = '9.0';
 const ReleaseTag = 'autobuild-2026-09-23-14-55'; // immutable FFmpeg build tag
 // SHA-256 published by the GitHub release API for the current pinned asset.
@@ -115,9 +116,21 @@ const PinnedAssetSha256 = {
 // both hashes are pinned together with ReleaseTag / PinnedAssetSha256.
 const PinnedExecutableSha256 = {
   'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-win64-gpl.zip/ffmpeg':
-    '09948d4cdd0650da6ff5a87577469f2a218dc2615ae379f8f734d24c49de0f73',
+    'af7913b7ddc324bf02b8af72fe8612b1471455ef8d9e04e45466510742abcff9',
   'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-win64-gpl.zip/ffprobe':
-    'a6618e99bb58869ded3c6f37b53aa1a8d701c3591dbb7b5b317d47369c112be2',
+    'f9cb4d449a08c9f7189caabddbb2d5fe19415020d5599f42c12a62396a8292c3',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-winarm64-gpl.zip/ffmpeg':
+    '95982b9c18edaec63c38e0d80322a471c818ccbf1947ba2b5bf9706fa4ddb4ce',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-winarm64-gpl.zip/ffprobe':
+    'a15eeab7303755e06cbf13a883930f58441b2549835fd41f81bc49c0798aca97',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-linux64-gpl.tar.xz/ffmpeg':
+    'ee930e8def21a993f4b8c680757df15054da1c8f2698da0fdf87f1f3b15bd633',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-linux64-gpl.tar.xz/ffprobe':
+    'd4bb00f5a2457a4bf17665751a245b295f098cb7e131c46572c65fd13c859093',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-linuxarm64-gpl.tar.xz/ffmpeg':
+    '401be64ab54265c0e7030dc24322642597aee2f2196e66a9f4411b4adb6b6834',
+  'autobuild-2026-09-23-14-55/ffmpeg-N-126782-gdc52424419-linuxarm64-gpl.tar.xz/ffprobe':
+    '456b4cda54eddbd1f874c4ca26bef5c02f64a666a469f985f0da92bedb0efd33',
 };
 
 // Pinned asset URLs per target triple prefix.
@@ -262,17 +275,32 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
   const cacheMeta = path.join(cacheDir, `${cacheKey}.meta.json`);
   const cachedArchive = path.join(cacheDir, `${cacheKey}${archiveExt}`);
 
-  // 1) Both sidecars already staged? Done.
+  // 1) Both sidecars already staged? Verify them against the executable pins
+  // before reusing: an unverified/stale sidecar from an earlier stage (or a
+  // pinned binary someone replaced locally) must not silently re-ship. A
+  // mismatch deletes the files and falls through to the (cached) re-stage,
+  // so this path never trusts files without re-hashing them.
   const ffprobeDest = destPaths(target)[1];
   if (existsSync(dest) && existsSync(ffprobeDest)) {
-    console.log(
-      `[fetch-ffmpeg] ${path.relative(root, dest)} + ${path.relative(root, ffprobeDest)} already present — using them.`,
-    );
-    return;
-  }
-  // A half-staged pair from a failed run: remove so re-staging is clean.
-  if (existsSync(dest)) {
+    let stagedOk = false;
+    try {
+      const assetName = path.basename(new URL(url).pathname);
+      assertExecutableSha256(dest, 'ffmpeg', assetName);
+      assertExecutableSha256(ffprobeDest, 'ffprobe', assetName);
+      stagedOk = true;
+    } catch (e) {
+      console.warn(
+        `[fetch-ffmpeg] existing sidecar failed verification (${e.message}); re-staging.`,
+      );
+    }
+    if (stagedOk) {
+      console.log(
+        `[fetch-ffmpeg] ${path.relative(root, dest)} + ${path.relative(root, ffprobeDest)} already present + verified — using them.`,
+      );
+      return;
+    }
     rmSync(dest, { force: true });
+    rmSync(ffprobeDest, { force: true });
   }
 
   // 2) Need to download. Cache-check the archive.
@@ -374,6 +402,9 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
     renameSync(ffprobeSource, ffprobeDest);
     assertRealBinary(ffprobeDest);
     assertExecutableSha256(ffprobeDest, 'ffprobe', assetName);
+    // Success: drop the scratch tree (it still holds ffplay, docs, etc. we
+    // didn't move). The failure path below keeps it for a re-extract.
+    rmSync(outDir, { recursive: true, force: true });
     console.log(`[fetch-ffmpeg] staged ffprobe → ${path.relative(root, ffprobeDest)}`);
   } catch (e) {
     // Keep the verified cached archive on failure so a re-stage is a no-op
@@ -524,8 +555,25 @@ function assertArchiveSha256(filePath, url) {
 
 function assertExecutableSha256(filePath, tool, assetName) {
   const expected = PinnedExecutableSha256[`${ReleaseTag}/${assetName}/${tool}`];
-  if (!expected) return;
   const actual = createHash('sha256').update(readFileSync(filePath)).digest('hex');
+  if (!expected) {
+    // No executable pin for this asset/tool. For a known pinned asset this
+    // is a regression — never ship an unverifiable binary. For a custom
+    // override (FFMPEG_URL, e.g. a self-built macOS binary) there is no
+    // public pin to compare against: the archive-level check above was a
+    // no-op too, so fall back to the real-binary check and warn.
+    if (PinnedAssetSha256[assetName]) {
+      throwStageError(
+        `no pinned SHA-256 for staged ${tool} (${filePath}) — ` +
+          `add a PinnedExecutableSha256 entry for ${assetName}/${tool} before shipping.`,
+      );
+    }
+    console.warn(
+      `[fetch-ffmpeg] WARNING: staged ${tool} (${filePath}) has no executable SHA-256 pin ` +
+        `(custom/override asset ${assetName}); verified magic + size only.`,
+    );
+    return;
+  }
   if (actual !== expected) {
     rmSync(filePath, { force: true });
     throwStageError(

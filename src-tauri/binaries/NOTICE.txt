@@ -6,14 +6,18 @@ scripts/build/fetch-ffmpeg.mjs from:
 
   BtbN/FFmpeg-Builds
   https://github.com/BtbN/FFmpeg-Builds
-  asset: ffmpeg-n9.0-latest-win64-gpl-9.0.zip
+  release: autobuild-2026-09-23-14-55 (immutable tag)
+  asset:   per-target, e.g. ffmpeg-N-126782-gdc52424419-win64-gpl.zip
 
 The staged binary is a GPL-enabled build. It is distributed as an executable
 sidecar only in the full build variant. The tiny variant does not bundle it.
 
-The build script validates the downloaded archive using the SHA-256 digest
-published by the GitHub release API before extraction. The executable is
-validated again for size and native executable magic before it is staged.
+The build script validates the downloaded archive against a pinned SHA-256
+(archive level) and each staged executable against its own pinned SHA-256
+(executable level, PinnedExecutableSha256 in fetch-ffmpeg.mjs) before it is
+allowed to ship in a bundle. Already-staged sidecars are re-verified on every
+stage before reuse, so a stale or locally-swapped binary is re-staged from
+the pinned archive instead of being shipped silently.
 
 This file records provenance and licensing; it is not a substitute for the
 FFmpeg project's full license and source-offer obligations when distributing
