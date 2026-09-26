@@ -216,6 +216,13 @@
 	const groupActive = $derived(activeGroupId !== null && !groupStale);
 	const groupProgressVisible = $derived(groupActive || groupStale || Object.keys(groupTaskViews).length > 0);
 
+	// The ToolsPanel's Preview section mirrors the top panel's session-video target:
+	// a composed session video (group auto-compose OR the standalone compose button)
+	// takes precedence over any per-pipe last-gen video.
+	let toolsSessionVideo = $state<{ url: string; label: string } | null>(null);
+	// Set by the standalone compose button's success path; the group auto-compose
+	// path flows through groupSessionVideoPath below instead.
+
 	// Minimized progress modal (D10): the user hides the modal to keep working
 	// while the task watcher (poller + event stream) stays live. A persistent
 	// pill in the top panel shows the active task so the user can return to the
@@ -1182,26 +1189,24 @@
 				if (event.kind === 'group-terminal') {
 					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
 					groupStatus = event.status ?? 'done'; groupStale = false;
-					// A successfully composed session video IS the preview target
-					// (the full session timeline, not a single pipe clip) — attach
-					// it to the top-panel preview when the compose succeeded.
-					void fetchGenerationGroup(result.groupId).then((g) => {
-						if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
-							void toMediaUrl(g.sessionVideoPath).then((url) => {
-								if (url) previewVideo = { url, label: `${selectedSession.name} — session video` };
-							});
-						}
-					}).catch(() => {});
 					// The terminal event is dispatched before the compose result
 					// is persisted — refetch once (and once more after a short
 					// delay for the compose-terminal case) so the modal shows the
 					// persisted composeState/composeError/sessionVideoPath instead
-					// of a silent success.
+					// of a silent success. A successfully composed session video
+					// IS the preview target (the full session timeline, not a
+					// single pipe clip) — attach it to the top panel as soon as
+					// the path lands.
 					const syncCompose = () => {
 						void fetchGenerationGroup(result.groupId).then((g) => {
 							groupComposeState = g.composeState ?? null;
 							groupComposeError = g.composeError ?? null;
 							groupSessionVideoPath = g.sessionVideoPath ?? null;
+							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+								void toMediaUrl(g.sessionVideoPath).then((url) => {
+									if (url) previewVideo = { url, label: `${selectedSession.name} — session video` };
+								});
+							}
 						}).catch(() => {});
 					};
 					syncCompose();
@@ -1211,6 +1216,19 @@
 			}).then((unlisten) => { groupUnlisten = unlisten; });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
+
+	// Group auto-compose lands the session video via syncCompose's refetch loop
+	// (above); mirror that path into the ToolsPanel's Preview section by
+	// re-resolving the media URL each time the persisted path changes.
+	$effect(() => {
+		if (!groupSessionVideoPath || groupComposeState !== 'done') return;
+		void (async () => {
+			const url = await toMediaUrl(groupSessionVideoPath).catch(() => null);
+			if (url && groupSessionVideoPath) {
+				toolsSessionVideo = { url, label: `${selectedSession?.name ?? 'Session'} — session video` };
+			}
+		})();
+	});
 
 	async function cancelSessionGenerationGroup() {
 		if (!activeGroupId) return;
@@ -1289,7 +1307,11 @@
 			// Point the top panel at the composed file (served via read_media_file).
 			previewVideo = null;
 			void toMediaUrl(r.outputPath).then((url) => {
-				if (url) previewVideo = { url, label: `${selectedSession?.name ?? 'Session'} — video` };
+				if (url) {
+					const label = `${selectedSession?.name ?? 'Session'} — video`;
+					previewVideo = { url, label };
+					toolsSessionVideo = { url, label };
+				}
 			});
 		})
 		.catch((e) => {
@@ -1971,6 +1993,7 @@
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}
 				onorientationchange={handleOrientationChange}
+				sessionVideo={toolsSessionVideo}
 				/>
 			{/if}
 

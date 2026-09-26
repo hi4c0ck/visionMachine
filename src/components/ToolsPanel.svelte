@@ -26,7 +26,8 @@
 		cValue,
 		onqvaluechange,
 		oncvaluechange,
-		unsynced = false
+		unsynced = false,
+		sessionVideo = null
 	} = $props<{
 		session: SessionData | null;
 		project: ProjectData | null;
@@ -60,6 +61,9 @@
 		onqvaluechange?: (q: number) => void;
 		oncvaluechange?: (c: number) => void;
 		unsynced?: boolean;
+		/** Composed session video (group auto-compose or the compose button) to
+		 *  show in the Preview section. null = nothing composed yet. */
+		sessionVideo?: { url: string; label: string } | null;
 	}>();
 
 	let showModal = $state(false);
@@ -219,7 +223,20 @@
       {/if}
     </div>
     <div class="preview-area">
-      {#if session}
+      {#if session && sessionVideo}
+        <div class="preview-active preview-video-box">
+          <video
+            src={sessionVideo.url}
+            class="preview-video"
+            muted
+            loop
+            autoplay
+            playsinline
+            controls
+          ></video>
+          <p class="preview-name">{sessionVideo.label}</p>
+        </div>
+      {:else if session}
         <div class="preview-active">
           <div class="preview-icon">🎬</div>
           <p class="preview-name">{session.name}</p>
@@ -737,6 +754,20 @@
   }
 
   /* Unsynced badge */
+  .preview-video-box {
+    flex-direction: column;
+    gap: 6px;
+    align-items: stretch;
+  }
+
+  .preview-video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
+    background: #000;
+    border-radius: 6px;
+  }
+
   .unsynced-badge {
     display: inline-block;
     margin-top: 8px;
