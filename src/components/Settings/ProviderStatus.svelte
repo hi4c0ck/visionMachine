@@ -47,16 +47,23 @@
 		'—';
 	const presetLabel = getPreset(video.preset)?.label ?? video.preset;
 
-	// Label: settled state → `Preset · Model`; unset → say which field is
-	// missing so the user knows what to fill (e.g. "Video: key missing").
-	// Label: fully configured → `Preset · Model`. When not, say exactly which
-	// field is missing. A video that only lacks its key (url + model settled)
-	// reads as "Key needed" — distinct from a totally unset slot.
+	// Label: settled state → `Preset · Model`. When NOT, lead with the gap so
+	// the critical part survives the chip's max-width truncation (a
+	// "model-name … key needed" label got cut to just the model name, which a
+	// fresh user read as "ready"). The dot color carries the severity below.
+	const videoGaps = gapsFor('video');
 	const label = videoOk
 		? `${presetLabel} · ${videoModelName}`
-		: gapsFor('video').length === 1 && gapsFor('video')[0] === 'key'
-			? `${presetLabel} · ${videoModelName} — key needed`
-			: `Video: ${gapsFor('video').join(' + ')} missing`;
+		: videoGaps.length === 1 && videoGaps[0] === 'key'
+			? `Key needed · ${presetLabel} · ${videoModelName}`
+			: `Video: ${videoGaps.join(' + ')} missing`;
+
+	// Severity for the dot: a keyless video provider is a HARD block on any
+	// generation (the engine rejects an empty key) → error (red), not
+	// "nearly ready" (amber). Amber is reserved for a partially-filled but
+	// otherwise-usable slot (e.g. url or model missing while a key exists).
+	const videoOnlyKeyGap = !videoOk && videoGaps.length === 1 && videoGaps[0] === 'key';
+	const dotClass = videoOk ? 'ok' : videoOnlyKeyGap ? 'error' : 'warn';
 
 	// Tooltip: one line per unconfigured kind naming the exact gap. A partially
 	// filled key is shown masked so the user sees the key is set-but-broken.
@@ -77,8 +84,10 @@
 
 <button
 	class="provider-chip"
-	class:ok={allOk}
-	class:warn={!videoOk}
+	class:{[dotClass]}={true}
+	class:ok={videoOk}
+	class:warn={!videoOk && !videoOnlyKeyGap}
+	class:error={videoOnlyKeyGap}
 	{title}
 	aria-label="Provider status — {title}"
 	onclick={onopen}>
@@ -124,6 +133,11 @@
 	.provider-chip.warn .chip-dot {
 		background: #f59e0b;
 		box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+	}
+
+	.provider-chip.error .chip-dot {
+		background: #ef4444;
+		box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
 	}
 
 	.chip-label {
