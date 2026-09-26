@@ -1,0 +1,20 @@
+# VisionMachine code owners
+#
+# The first matching pattern wins. The maintainer is the final authority on
+# every merge; the area-specific owners provide domain review.
+
+# Catch-all: everything the maintainer owns.
+*                                        @HorizonesMachines
+
+# Data model / settings / provider catalog — sensitive to generation logic.
+src/lib/settings/                        @HorizonesMachines
+src/types/                               @HorizonesMachines
+src/lib/                                 @HorizonesMachines
+
+# Rust backend (Tauri commands, SQLite persistence, task poller).
+src-tauri/                               @HorizonesMachines
+
+# License / notice: only the maintainer may change licensing terms.
+LICENSE                                @HorizonesMachines
+NOTICE.md                                @HorizonesMachines
+package.json                             @HorizonesMachines

@@ -1,0 +1,110 @@
+name: Release (build on tag)
+
+# Build a Windows MSI when a vX.Y.Z tag is pushed that points at a commit
+# reachable from the `production` branch, and publish it to a GitHub Release.
+#
+# The "production only" guard prevents a stray tag cut on develop or a
+# feature branch from building an untested MSI. A tag whose commit is not
+# reachable from production fails the guard and the job is skipped.
+#
+# No code-signing certificate is configured yet, so the published MSI is
+# unsigned (SmartScreen will show a warning — see the note in README.md).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Allow manual runs for testing the pipeline without pushing a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-guard:
+    name: Guard: tag must be on production
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for the ancestry check)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify the tag is reachable from production
+        run: |
+          git fetch origin production
+          # If the tagged commit is NOT reachable from production's tip,
+          # abort so no MSI is built from non-stable code.
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::Tag $GITHUB_REF_NAME does not point to a commit on production; refusing to build an MSI from unstable code."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME is on production — proceeding."
+
+  build-release:
+    name: Build Windows MSI
+    needs: [check-guard]
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build (MSI)
+        # Produces: src-tauri/target/release/bundle/msi/VisionMachine_<ver>_x64_en-US.msi
+        run: npm run tauri build
+
+      - name: Locate built MSI
+        run: |
+          $msi = Get-ChildItem -Path src-tauri/target/release/bundle/msi -Filter '*.msi' | Select-Object -First 1
+          if ($null -eq $msi) { throw "No .msi found in src-tauri/target/release/bundle/msi" }
+          Write-Host "Found: $($msi.Name)"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: visionmachine-msi
+          path: src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/msi/*.msi
+          generate_release_notes: true
+          body: |
+            Windows MSI installer.
+
+            **Note:** this build is unsigned (no code-signing certificate
+            is configured yet), so Windows SmartScreen will show an
+            "unknown publisher" warning on first install. Click
+            **More info → Run anyway**.
+
+            Install and use it, or build from source — see the README.
+
+      - name: Print release info
+        run: |
+          Write-Host "Published MSI to release ${{ github.ref_name }}"
