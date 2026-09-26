@@ -16,10 +16,10 @@ jobs:
     name: Frontend build + check + tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -41,13 +41,13 @@ jobs:
     name: Rust check
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/
@@ -112,10 +112,10 @@ jobs:
           #   # Requires FFMPEG_URL_aarch64_apple_darwin (no BtbN darwin asset).
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
@@ -124,7 +124,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo + ffmpeg sidecar
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin/
@@ -154,7 +154,7 @@ jobs:
         run: node scripts/build/runner.mjs --light --features bundled-ffmpeg --target ${{ matrix.target }}
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vision-machine-${{ matrix.name }}
           path: src-tauri/target/release/bundle/
