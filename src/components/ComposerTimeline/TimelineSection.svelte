@@ -48,7 +48,13 @@
 		onEditTagPrompt,
 		// Per-pipe [+] visibility (hide when both tracks already exist).
 		showAddTrack = true,
-		fps
+		fps,
+		// Session-video mode: this pipe's FIRST frame in the spliced session-video
+		// timeline (its start offset). The panel passes LOCAL frames as
+		// `selectedFrame` and writes back local frames too, so the ruler adds
+		// this offset on the way out to reach the GLOBAL playhead. 0 = plain
+		// composer mode.
+		pipeStart = 0
 	} = $props<{
 		pipe: PipeRow;
 		sessionId?: string;
@@ -67,10 +73,13 @@
 		onRemoveTag: (segId: string, tagId: string) => void;
 		onEditTagPrompt: (seg: Segment, tag: TagElement) => void;
 		/** Panel hides the [+] button when the pipe already owns both
-		    addable track types (Timeline + Global). */
+		   addable track types (Timeline + Global). */
 		showAddTrack?: boolean;
 		/** Session fps — drives the ruler pin notice seconds readout. */
 		fps?: number;
+		/** This pipe's first frame in the spliced session-video timeline.
+		    0 in plain composer mode (no offset). */
+		pipeStart?: number;
 	}>();
 
 	// Every element inside a pipe lives in THAT pipe's frame-length space
@@ -410,15 +419,17 @@
 			endFrame
 		};
 
-		// The ruler playhead pin follows every thumb/body move LIVE: the
-		// left thumb tracks the moving start edge, the right thumb the end
-	// edge, and a body drag the frame under the cursor.
-		const pinFrame =
-			dragState.handle === 'left'
-				? startFrame
-				: dragState.handle === 'right'
-					? endFrame
-					: pointerFrame;
+			// The local-frame pin follows every thumb/body move LIVE: the left
+			// thumb tracks the moving start edge, the right thumb the end edge,
+			// and a body drag the frame under the cursor. In session-video mode
+			// the panel adds this pipe's spliced start back to reach the global
+			// playhead (plain composer mode: local == global, offset 0).
+			const pinFrame =
+				dragState.handle === 'left'
+					? startFrame
+					: dragState.handle === 'right'
+						? endFrame
+						: pointerFrame;
 		onFrameChange(pinFrame);
 	}
 
@@ -519,11 +530,11 @@
 		<div class="timeline-ruler">
 			<FrameRuler
 				{totalFrames}
-				{selectedFrame}
+				selectedFrame={selectedFrame ?? 0}
 				geometry={rulerGeometry}
 				legend={legend}
 				fps={fps}
-				onframeSelect={(f) => onFrameChange(f)}
+				onframeSelect={(f) => onFrameChange(f + pipeStart)}
 			/>
 		</div>
 

@@ -56,6 +56,15 @@ impl Database {
         .await?;
         self.execute_migration_sql(include_str!("../../migrations/0006_settings_and_logs.sql"))
             .await?;
+        self.run_additive_generation_group_columns().await?;
+        self.execute_migration_sql(include_str!("../../migrations/0010_generation_groups.sql"))
+            .await?;
+        // 0011 adds a plain column, which hard-fails on databases that
+        // already ran it — apply it tolerantly like the other additive columns.
+        // 0011 is a plain column ADD; the file documents the shape, and the
+        // tolerant application below mirrors `run_additive_*` (duplicate-column
+        // errors on already-migrated DBs are ignored).
+        self.run_additive_group_source_column().await?;
         self.run_additive_task_columns().await?;
         self.run_additive_session_columns().await?;
 
@@ -67,8 +76,29 @@ impl Database {
     /// migration file hard-fails on databases that already ran it, so apply
     /// it tolerantly like the other additive columns (duplicate-column
     /// errors ignored).
+    async fn run_additive_generation_group_columns(&self) -> Result<(), String> {
+        // The migration table is created below; this additive column is kept
+        // tolerant so pre-0010 databases upgrade without a hard failure.
+        let _ = sqlx::query("ALTER TABLE generation_logs ADD COLUMN group_id TEXT")
+            .execute(&self.pool)
+            .await;
+        Ok(())
+    }
+
     async fn run_additive_session_columns(&self) -> Result<(), String> {
         let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN directory_path TEXT")
+            .execute(&self.pool)
+            .await;
+        Ok(())
+    }
+
+    /// 0011: group-run source records (`[{pipe_id, task_id, source_path,
+    /// order_index}]` as JSON) stored ON the group row so the persisted
+    /// row always describes the exact clips its composition used — a
+    /// crashed run can never leave a group whose row claims more sources
+    /// than it actually staged.
+    async fn run_additive_group_source_column(&self) -> Result<(), String> {
+        let _ = sqlx::query("ALTER TABLE generation_groups ADD COLUMN sources_json TEXT")
             .execute(&self.pool)
             .await;
         Ok(())
@@ -856,13 +886,15 @@ impl Database {
         }
         // Bind as a JSON string (codebase pattern: composers/sessions store
         // their JSON blobs as TEXT; sqlx SQLite has no native Value bind).
+        let group_id = entry.get("groupId").and_then(|v| v.as_str());
         let entry_json = entry.to_string();
         sqlx::query(
-            "INSERT INTO generation_logs (task_id, session_id, pipe_id, entry_json, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)\n             ON CONFLICT (task_id) DO UPDATE SET session_id = excluded.session_id, pipe_id = excluded.pipe_id, entry_json = excluded.entry_json, updated_at = CURRENT_TIMESTAMP",
+            "INSERT INTO generation_logs (task_id, session_id, pipe_id, group_id, entry_json, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n             ON CONFLICT (task_id) DO UPDATE SET session_id = excluded.session_id, pipe_id = excluded.pipe_id, group_id = excluded.group_id, entry_json = excluded.entry_json, updated_at = CURRENT_TIMESTAMP",
         )
         .bind(&task_id)
         .bind(&session_id)
         .bind(&pipe_id)
+        .bind(group_id)
         .bind(entry_json)
         .execute(&self.pool)
         .await
@@ -1079,6 +1111,7 @@ mod settings_logs_tests {
             "taskId": "t1",
             "sessionId": session_id,
             "pipeId": "p1",
+            "groupId": "g1",
             "startedAt": 1,
             "status": "done",
             "pieces": []
@@ -1086,11 +1119,19 @@ mod settings_logs_tests {
         db.add_generation_log(&entry).await.unwrap();
         let got = db.get_generation_log("t1").await.unwrap().unwrap();
         assert_eq!(got["taskId"], "t1");
+        assert_eq!(got["groupId"], "g1");
+        let tagged: (String,) =
+            sqlx::query_as("SELECT group_id FROM generation_logs WHERE task_id = 't1'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(tagged.0, "g1");
         // Upsert the same task id (terminal-state update)
         let entry2 = serde_json::json!({
             "taskId": "t1",
             "sessionId": session_id,
             "pipeId": "p1",
+            "groupId": "g1",
             "startedAt": 1,
             "finishedAt": 2,
             "status": "done",

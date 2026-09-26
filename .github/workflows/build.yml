@@ -59,6 +59,13 @@ jobs:
       - name: Check compilation
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
+      - name: Unit tests (cargo)
+        # Closes the gap where Rust unit tests only ran locally: the ~140
+        # suite (shaper golden payloads, group/compose/ffmpeg/media/registry,
+        # serde legacy defaults) now gates every PR + push like the frontend
+        # vitest job does.
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Check full variant (bundled-ffmpeg sidecar)
         run: cargo check --manifest-path src-tauri/Cargo.toml --features bundled-ffmpeg
 

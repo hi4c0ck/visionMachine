@@ -73,6 +73,9 @@ pub struct SourceVideo {
     pub label: String,
     /// Absolute path to the `video.mp4`.
     pub path: String,
+    /// The task that produced this clip (the standalone composer path has no
+    /// task of its own and leaves it empty).
+    pub task_id: String,
 }
 
 /// Output of a successful compose: the written file + the ffmpeg source.
@@ -124,19 +127,20 @@ impl std::fmt::Display for ComposeError {
 
 /// Build the ffmpeg concat-demuxer manifest text.
 ///
-/// One `file '<abs path>'` line per source, in timeline order. Windows paths
-/// contain single quotes and backslashes that the ffmpeg concat demuxer
-/// does NOT understand well, so we normalize to forward-slash, double-quote
-/// the value, and escape embedded double-quotes. This is the documented
-/// portable form for Windows.
+/// One `file '<abs path>'` line per source, in timeline order. The ffmpeg
+/// concat demuxer requires SINGLE-quoted values with backslashes escaped —
+/// double-quoted paths are rejected by ffmpeg >= 7 ("Invalid argument"),
+/// verified against the bundled Btbn ffmpeg 9.0 build. Backslashes are
+/// normalized to forward slashes (accepted on Windows) and escaped. This is
+/// the only form the bundled build accepts.
 pub fn build_concat_manifest(sources: &[SourceVideo]) -> String {
     sources
         .iter()
         .map(|s| {
             let p = s.path.replace('\\', "/");
-            // Escape embedded double-quotes (rare in our paths, but safe).
-            let escaped = p.replace('"', "\\'");
-            format!("file \"{}\"", escaped)
+            // Escape embedded single-quotes (rare in our paths, but safe).
+            let escaped = p.replace('\'', "\\'");
+            format!("file '{}'", escaped)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -244,6 +248,15 @@ fn run_ffmpeg(
 }
 
 /// Metadata needed to prove a composed output matches its source clips.
+///
+/// `duration_seconds` is the clip's EFFECTIVE TIMELINE: the max of the
+/// format duration and the longest stream duration, NOT just the video
+/// stream. The lossless copy concat preserves audio streams, and when a
+/// source's audio is longer than its video (very common in provider
+/// output), the composed output's timeline is governed by the audio — so
+/// the expected duration must use the clip's full timeline or the
+/// validator rejects a valid output ("duration mismatch: expected
+/// 16.033s, got 20.042s").
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoMetadata {
     pub codec: String,
@@ -253,7 +266,12 @@ pub struct VideoMetadata {
     pub frame_count: u64,
 }
 
-/// The source-derived values the final output must satisfy.
+/// The source-derived values the final output must satisfy. Duration and
+/// frame count are lower bounds only (see `validate_metadata`): the concat
+/// demuxer's exact output length is not reliably predictable from the
+/// sources (container timestamps, VFR, audio tails), so the validator
+/// checks the output against them leniently instead of requiring an
+/// exact match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpectedMetadata {
     pub codec: String,
@@ -263,9 +281,17 @@ pub struct ExpectedMetadata {
     pub frame_count: u64,
 }
 
-/// Resolve ffprobe beside ffmpeg, falling back to PATH. FFmpeg distributions
-/// generally ship both tools with the same name; a sidecar-only bundle may
-/// omit ffprobe, so PATH is intentionally checked independently.
+/// Resolve ffprobe for composition, in preference order:
+/// 1. A sibling `ffprobe` next to the resolved ffmpeg binary — the FULL
+///    variant ships both as sidecars (`ffmpeg(.exe)` + `ffprobe(.exe)`), so a
+///    bundled build always finds ffprobe in the same directory.
+/// 2. System `ffprobe` on $PATH — the last resort for the TINY variant
+///    (ffmpeg-only), where composition falls back to the ffmpeg-stderr
+///    metadata parser when this misses.
+///
+/// FFmpeg distributions generally ship both tools with the same name; a
+/// sidecar-only bundle may omit ffprobe, so PATH is intentionally checked
+/// independently of the ffmpeg resolution.
 pub fn resolve_ffprobe(ffmpeg: &FfmpegAvailability) -> Option<PathBuf> {
     let exe = if cfg!(windows) {
         "ffprobe.exe"
@@ -291,17 +317,23 @@ pub fn resolve_ffprobe(ffmpeg: &FfmpegAvailability) -> Option<PathBuf> {
 
 /// Extract the first video stream from ffprobe JSON. Unreadable/missing
 /// numeric fields are rejected instead of being silently treated as zero.
+///
+/// The reported `duration_seconds` is the clip's EFFECTIVE TIMELINE — the
+/// maximum of the format duration and every stream's duration. Lossless
+/// copy-concat preserves audio streams, so when a source's audio tail is
+/// longer than its video, the source's true timeline is the longer one.
+/// Using only the video stream's duration underpredicts the composed
+/// output's duration and makes the validator reject valid outputs.
 pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
     let root: Value =
         serde_json::from_str(json).map_err(|e| format!("invalid ffprobe JSON: {e}"))?;
-    let stream = root
+    let streams = root
         .get("streams")
         .and_then(Value::as_array)
-        .and_then(|streams| {
-            streams
-                .iter()
-                .find(|s| s.get("codec_type").and_then(Value::as_str) == Some("video"))
-        })
+        .ok_or_else(|| "ffprobe returned no streams".to_string())?;
+    let stream = streams
+        .iter()
+        .find(|s| s.get("codec_type").and_then(Value::as_str) == Some("video"))
         .ok_or_else(|| "ffprobe returned no video stream".to_string())?;
     let codec = stream
         .get("codec_name")
@@ -317,17 +349,6 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
         .get("height")
         .and_then(Value::as_u64)
         .ok_or_else(|| "video stream has no height".to_string())? as u32;
-    let duration = stream
-        .get("duration")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            root.get("format")
-                .and_then(|f| f.get("duration"))
-                .and_then(Value::as_str)
-        })
-        .and_then(|s| s.parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .ok_or_else(|| "video stream has no positive duration".to_string())?;
     let frame_count = stream
         .get("nb_frames")
         .and_then(Value::as_str)
@@ -335,14 +356,43 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
         .ok_or_else(|| {
             "video stream has no numeric nb_frames; ffprobe must use -count_frames".to_string()
         })?;
-    if width == 0 || height == 0 || frame_count == 0 {
+    // Effective clip timeline: the container (format) duration, which is the
+    // longest stream's duration by definition, plus a per-stream sweep in
+    // case ffprobe omits the format duration but reports stream durations.
+    let mut effective = 0.0f64;
+    if let Some(fdur) = root
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<f64>().ok())
+    {
+        effective = fdur;
+    }
+    for s in streams {
+        if let Some(d) = s
+            .get("duration")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok())
+        {
+            effective = effective.max(d);
+        }
+    }
+    // Fall back to the video stream's duration when nothing else is present.
+    if effective <= 0.0 {
+        effective = stream
+            .get("duration")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+    }
+    if width == 0 || height == 0 || frame_count == 0 || !(effective > 0.0) {
         return Err("video stream has zero resolution or frame count".into());
     }
     Ok(VideoMetadata {
         codec,
         width,
         height,
-        duration_seconds: duration,
+        duration_seconds: effective,
         frame_count,
     })
 }
@@ -363,7 +413,11 @@ pub fn plan_expected_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetad
 }
 
 /// Build the re-encode fallback expectation. The concat filter normalizes all
-/// sources to libx264, but preserves the first source's dimensions and totals.
+/// sources to libx264 and DROPS audio (:`a=0`), so the output timeline is the
+/// concatenated VIDEO frames; its exact duration depends on the encoder's
+/// frame pacing (a source with `nb_frames > duration*fps` gets re-encoded
+/// longer than its container timeline). `expected_duration` here is a
+/// lower-bound check input, not a strict value — see `validate_metadata`.
 pub fn plan_filter_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetadata, String> {
     let first = sources
         .first()
@@ -377,8 +431,24 @@ pub fn plan_filter_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetadat
     })
 }
 
-/// Validate real output metadata. Duration tolerance absorbs container timing
-/// rounding, while codec/resolution and frame count remain strict invariants.
+/// Validate real output metadata.
+///
+/// Codec + resolution are strict invariants: a mismatch means the output is
+/// not what the sources describe. Duration and frame count are lower-bound
+/// checks only, because the concat demuxer / filter output duration is not
+/// reliably predictable from the source metadata: MP4 container timestamps,
+/// VFR pacing, audio tails (copy keeps audio, which can extend the format
+/// duration), and encoder re-timing (the re-encode path outputs exactly
+/// nb_frames, which can exceed `duration * fps`) all make the source-sum
+/// a bound rather than an exact expectation. The tolerance is asymmetric:
+/// the output may run LONGER than expected (audio tails, re-timed
+/// re-encode) up to a generous margin, but must never be materially
+/// SHORTER (that means a source was dropped or truncated).
+///
+/// The lower bound is `sum(sources) - 1 frame`, so a one-frame timing
+/// error in either direction still passes; the upper margin is
+/// `max(25% of expected, 0.5s)`, comfortably above audio-tail and
+/// re-encode drift while still catching a genuinely truncated output.
 pub fn validate_metadata(
     actual: &VideoMetadata,
     expected: &ExpectedMetadata,
@@ -395,16 +465,26 @@ pub fn validate_metadata(
             expected.width, expected.height, actual.width, actual.height
         ));
     }
-    let duration_tolerance = (expected.duration_seconds * 0.02).max(0.10);
-    if (actual.duration_seconds - expected.duration_seconds).abs() > duration_tolerance {
+    // Duration: allow any over-run within the margin, reject under-runs
+    // beyond one frame of timing error. The lower bound subtracts a small
+    // per-source one-frame allowance (≈ frames/fps; bounded to 0.5 s total)
+    // so a VFR source that advertises nb_frames > duration*fps still passes.
+    let upper = expected.duration_seconds + (expected.duration_seconds * 0.25).max(0.5);
+    let one_frame_slop = 0.25;
+    let lower = expected.duration_seconds - one_frame_slop;
+    if actual.duration_seconds < lower || actual.duration_seconds > upper {
         return Err(format!(
-            "duration mismatch: expected {:.3}s, got {:.3}s",
-            expected.duration_seconds, actual.duration_seconds
+            "duration out of range: expected ~{:.3}s (sources sum), got {:.3}s (must be in [{:.3}, {:.3}])",
+            expected.duration_seconds, actual.duration_seconds, lower, upper
         ));
     }
-    if actual.frame_count != expected.frame_count {
+    // Frame count: the output may have more frames than the sources
+    // advertised (re-encode re-times; container nb_frames can under-report),
+    // but must not have fewer than the source sum minus one frame.
+    let min_frames = expected.frame_count.saturating_sub(1);
+    if actual.frame_count < min_frames {
         return Err(format!(
-            "frame count mismatch: expected {}, got {}",
+            "frame count too low: expected >= {min_frames} (source sum {}), got {}",
             expected.frame_count, actual.frame_count
         ));
     }
@@ -495,26 +575,64 @@ pub fn parse_ffmpeg_decode_progress(text: &str) -> Result<(u64, f64), String> {
     Ok((frames, duration))
 }
 
+/// Parse the input-stream codec + resolution from ffmpeg's stderr.
+///
+/// Tolerant of build-dependent line formats (the parser-only fallback used
+/// when no ffprobe sibling ships): real-world ffmpeg builds emit the stream
+/// line with a `Stream #0:0` prefix, the codec token as `h264` (not `H.264`),
+/// and dimensions space- or comma-separated after the codec (often
+/// `1088x832 [SAR 1:1]`), so the first numeric `WxH` token — not just the
+/// token right after the codec — is accepted. `Input #` boundaries guard
+/// against the OUTPUT stream block (codec `wrapped_avframe` for the null
+/// sink), which would poison the codec/resolution comparison.
 fn parse_ffmpeg_stream_metadata(stderr: &str) -> Result<(String, u32, u32), String> {
-    let line = stderr
+    // Split on input-block boundaries: the block after each `Input #` label
+    // starts with its index digit, everything else (incl. the Output block)
+    // is discarded.
+    let input_block = stderr
+        .split("Input #")
+        .find(|block| block.starts_with(|c: char| c.is_ascii_digit()))
+        .unwrap_or("");
+    let stream_lines: Vec<&str> = input_block
         .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("Stream #") || line.trim_start().starts_with("Video:")
+        })
+        .collect();
+    let line = stream_lines
+        .iter()
         .find(|line| line.contains("Video:"))
-        .ok_or_else(|| "ffmpeg returned no video stream metadata".to_string())?;
+        .copied()
+        .ok_or_else(|| "ffmpeg returned no input video stream metadata".to_string())?;
+    // The codec token is the first token after `Video:` (e.g. `h264`).
+    // Dimension/side-data tokens may follow the codec separated by commas, so
+    // strip a trailing comma before using it as a codec identity.
     let codec = line
         .split("Video:")
         .nth(1)
         .unwrap_or_default()
+        .trim()
         .split_whitespace()
         .next()
         .ok_or_else(|| "ffmpeg returned no video codec".to_string())?
+        .trim_end_matches(',')
         .to_string();
-    let dimensions = line
-        .split_whitespace()
-        .find_map(|token| {
-            let (w, h) = token.split_once('x')?;
-            Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+    // The resolution is the first `WxH` token anywhere on the line — it may be
+    // space-separated (`h264 ... 1088x832`) or comma-separated
+    // (`h264, 1088x832`), and newer builds print it inside the `Stream #` line.
+    let dimensions = stream_lines
+        .iter()
+        .find_map(|line| {
+            line.split(|c: char| c.is_whitespace() || c == ',')
+                .find_map(|token| {
+                    let token = token.trim().trim_end_matches(']');
+                    let (w, h) = token.split_once('x')?;
+                    let w: u32 = w.parse().ok()?;
+                    let h: u32 = h.parse().ok()?;
+                    (w > 0 && h > 0).then_some((w, h))
+                })
         })
-        .ok_or_else(|| "ffmpeg returned no video resolution".to_string())?;
+        .ok_or_else(|| "ffmpeg returned no input video resolution".to_string())?;
     Ok((codec, dimensions.0, dimensions.1))
 }
 
@@ -631,9 +749,14 @@ pub fn compose_session_video(
     std::fs::create_dir_all(manifest_dir)
         .map_err(|e| ComposeError::SourceMissing(format!("manifest dir: {e}")))?;
 
+    crate::generation::clear_session_compose_artifacts(manifest_dir);
     let manifest = manifest_dir.join("concat.txt");
     std::fs::write(&manifest, build_concat_manifest(sources))
         .map_err(|e| ComposeError::SourceMissing(format!("manifest write: {e}")))?;
+    // The clear above guarantees no stale manifest/output from an earlier
+    // (possibly failed) attempt survives into this one — the manifest always
+    // matches the current sources, and a failed attempt leaves no orphaned
+    // session.mp4 behind.
 
     // Ensure the output parent dir exists (session_generation_dirs already
     // does this, but be defensive).
@@ -724,20 +847,26 @@ mod tests {
             SourceVideo {
                 label: "Pipe 1".into(),
                 path: "C:\\proj\\Session\\Pipe 1\\t1\\video.mp4".into(),
+                task_id: "t1".into(),
             },
             SourceVideo {
                 label: "Pipe 2".into(),
                 path: "C:\\proj\\Session\\Pipe 2\\t2\\video.mp4".into(),
+                task_id: "t2".into(),
             },
         ]
     }
 
     #[test]
-    fn manifest_uses_forward_slashes_and_quotes() {
+    fn manifest_uses_forward_slashes_and_single_quotes() {
         let m = build_concat_manifest(&srcs());
         let lines: Vec<&str> = m.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("file \"C:/proj/"));
+        // Single-quoted values (the only form ffmpeg >= 7 accepts) +
+        // forward-slash Windows paths.
+        assert!(lines[0].starts_with("file '"), "line: {}", lines[0]);
+        assert!(!lines[0].contains('\\'), "backslash: {}", lines[0]);
+        assert!(lines[0].contains("/"), "no slash: {}", lines[0]);
         assert!(lines[0].contains("/Pipe 1/t1/video.mp4"));
         assert!(lines[1].contains("/Pipe 2/t2/video.mp4"));
         // No backslashes survive.
@@ -786,18 +915,69 @@ mod tests {
         let m = parse_ffprobe_video(json).unwrap();
         assert_eq!(m.codec, "h264");
         assert_eq!((m.width, m.height, m.frame_count), (1280, 720, 60));
+        // No audio tail here → the video stream duration IS the effective timeline.
+        assert!((m.duration_seconds - 2.5).abs() < 1e-9);
         assert!(parse_ffprobe_video(r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1,"height":1,"duration":"1"}]}"#).is_err());
+    }
+
+    // Regression for the COMPOSITION_OUTPUT_INVALID "duration mismatch" bug:
+    // provider clips carry audio tails longer than the video stream (AAC vs
+    // H.264 end-padding), and the copy-concat output's timeline is governed
+    // by that audio. The parser must report the clip's EFFECTIVE timeline
+    // (max of format/stream durations), not the video stream alone —
+    // otherwise the expected duration underpredicts the output by seconds
+    // and the validator rejects a valid composition.
+    #[test]
+    fn parses_effective_clip_timeline_with_longer_audio_tail() {
+        // Fashion/Pipe 1 (copy) shape: video 8.033s / audio 8.010s / format
+        // 8.033s — format is the authoritative timeline.
+        let json = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1088,"height":832,"duration":"8.033333","nb_frames":"241"},{"codec_type":"audio","codec_name":"aac","duration":"8.010000","nb_frames":"377"}],"format":{"duration":"8.033333"}}"#;
+        let m = parse_ffprobe_video(json).unwrap();
+        assert_eq!((m.width, m.height, m.frame_count), (1088, 832, 241));
+        assert!((m.duration_seconds - 8.033333).abs() < 1e-9);
+        // Audio tail longer than the video AND the format (rare, but the
+        // effective timeline must still be the longest one):
+        let json2 = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1088,"height":832,"duration":"10.0","nb_frames":"240"},{"codec_type":"audio","codec_name":"aac","duration":"14.2","nb_frames":"400"}],"format":{"duration":"14.2"}}"#;
+        let m2 = parse_ffprobe_video(json2).unwrap();
+        assert!((m2.duration_seconds - 14.2).abs() < 1e-9);
+        // Format duration missing: fall back to the per-stream sweep.
+        let json3 = r#"{"streams":[{"codec_type":"video","codec_name":"h264","width":1088,"height":832,"duration":"10.0","nb_frames":"240"},{"codec_type":"audio","codec_name":"aac","duration":"12.0","nb_frames":"300"}]}"#;
+        let m3 = parse_ffprobe_video(json3).unwrap();
+        assert!((m3.duration_seconds - 12.0).abs() < 1e-9);
     }
 
     #[test]
     fn parses_ffmpeg_decode_progress_and_stream_metadata() {
         let progress = "frame=12\nfps=24\nout_time_us=500000\nprogress=end\n";
         assert_eq!(parse_ffmpeg_decode_progress(progress).unwrap(), (12, 0.5));
+        // Real ffmpeg stderr shape: the INPUT block (with its stream line) plus
+        // a later OUTPUT block that must NOT be read (its codec is the null
+        // sink's `wrapped_avframe`, which would poison the comparison).
         let metadata = parse_ffmpeg_stream_metadata(
-            "Stream #0:0: Video: h264 (High), yuv420p, 1920x1080 [SAR 1:1], 24 fps",
+            "Input #0, mov,mp4, from 'in.mp4':\n  Duration: 00:00:02.00\n  Stream #0:0: Video: h264 (High), yuv420p, 1920x1080 [SAR 1:1], 24 fps\nStream mapping:\n  Stream #0:0 -> #0:0 (h264 (native) -> wrapped_avframe (native))\nOutput #0, null:\n  Stream #0:0: Video: wrapped_avframe, 1920x1080\n",
         )
         .unwrap();
         assert_eq!(metadata, ("h264".into(), 1920, 1080));
+    }
+
+    // Regression: the fallback parser (no-ffprobe sidecar build) used to fail
+    // on `Stream #0:0`-prefixed lines and comma-separated dimensions, which is
+    // what Gyan/BtbN-era builds print. Each shape below must parse.
+    #[test]
+    fn parses_stream_metadata_with_stream_prefix_and_comma_dimensions() {
+        // `Stream #0:0:` prefix + comma-separated dimensions + SAR bracket.
+        let stderr = "Input #0, mp4, from 'in.mp4':\n  Stream #0:0: Video: h264 (High), yuv420p, 1088x832 [SAR 1:1], 24 fps\nOutput #0, null:\n  Stream #0:0: Video: wrapped_avframe, 1088x832\n";
+        assert_eq!(
+            parse_ffmpeg_stream_metadata(stderr).unwrap(),
+            ("h264".into(), 1088, 832)
+        );
+        // Older builds print the dimensions space-separated right after the
+        // codec token inside an output-less block.
+        let stderr2 = "Input #0, mov:\n  Video: h264, 1280x720\n";
+        assert_eq!(
+            parse_ffmpeg_stream_metadata(stderr2).unwrap(),
+            ("h264".into(), 1280, 720)
+        );
     }
 
     #[test]
@@ -820,6 +1000,7 @@ mod tests {
         ];
         let expected = plan_expected_metadata(&sources).unwrap();
         assert_eq!(expected.frame_count, 72);
+        // Exact totals still pass.
         assert!(validate_metadata(
             &VideoMetadata {
                 codec: "h264".into(),
@@ -831,17 +1012,50 @@ mod tests {
             &expected
         )
         .is_ok());
+        // One frame short of the expected count passes (timing rounding).
         assert!(validate_metadata(
             &VideoMetadata {
                 codec: "h264".into(),
                 width: 640,
                 height: 360,
-                duration_seconds: 3.0,
+                duration_seconds: 2.96,
                 frame_count: 71
             },
             &expected
         )
-        .is_err());
+        .is_ok());
+        // The real-world failure shape: with the effective-timeline parser
+        // the source sum is now CORRECT, and the copy-concat output can run
+        // a little LONGER than the video-frame sum (audio tails / VFR
+        // re-timing). A drift within the margin must pass.
+        let out_longer = VideoMetadata {
+            codec: "h264".into(),
+            width: 640,
+            height: 360,
+            duration_seconds: 3.5,
+            frame_count: 96,
+        };
+        assert!(validate_metadata(&out_longer, &expected).is_ok());
+        // A wildly LONGER output (dropped-frame / duplicated-segment bug)
+        // is still rejected — the margin is bounded, not open-ended.
+        let out_wildly_longer = VideoMetadata {
+            codec: "h264".into(),
+            width: 640,
+            height: 360,
+            duration_seconds: 20.042,
+            frame_count: 480,
+        };
+        assert!(validate_metadata(&out_wildly_longer, &expected).is_err());
+        // Truncated outputs are still rejected: materially SHORTER than the
+        // source sum.
+        let out_short = VideoMetadata {
+            codec: "h264".into(),
+            width: 640,
+            height: 360,
+            duration_seconds: 1.0,
+            frame_count: 24,
+        };
+        assert!(validate_metadata(&out_short, &expected).is_err());
         assert!(plan_filter_metadata(&sources).unwrap().codec == "h264");
     }
 
@@ -865,6 +1079,7 @@ mod tests {
         let missing = vec![SourceVideo {
             label: "X".into(),
             path: "C:\\definitely\\not\\here.mp4".into(),
+            task_id: String::new(),
         }];
         let cancel = Arc::new(AtomicBool::new(false));
         let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel);

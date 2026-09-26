@@ -153,3 +153,105 @@
 	border-color: var(--accent-color);
 	color: var(--accent-color);
 }
+
+/* ── Shared generation-modal anatomy (Generate / SessionGenerate) ──
+   Section headers, model grids, preset chips, and status chips used by
+   every generation-flow modal. Lives here (not scoped) so the modals
+   stay theme-consistent; each modal imports composer-modal.css. */
+
+.gen-section-title {
+	font-size: 0.7rem;
+	font-weight: 600;
+	color: var(--text-muted, #71717a);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+.gen-fieldrow {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+}
+
+.gen-fieldrow label {
+	font-size: 0.72rem;
+	font-weight: 500;
+	color: var(--text-secondary, #a1a1aa);
+}
+
+.gen-fieldrow select,
+.gen-fieldrow input[type="number"] {
+	width: 100%;
+	padding: 9px 11px;
+	font-size: 0.85rem;
+	color: var(--text-primary, #fff);
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	border: 1px solid var(--border-color, #3f3f46);
+	border-radius: 6px;
+}
+
+.gen-fieldrow select:focus,
+.gen-fieldrow input[type="number"]:focus {
+	outline: none;
+	border-color: var(--accent-color, #ff3e00);
+}
+
+/* Side-by-side field grid (model pickers, session stats). */
+.gen-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.gen-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Preset / stat chips (fps, resolution, orientation, Q, C, frames…). */
+.gen-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.gen-chips span {
+	padding: 3px 8px;
+	border: 1px solid var(--border-color, #3f3f46);
+	border-radius: 5px;
+	font-size: 11px;
+	color: var(--text-muted, #71717a);
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	white-space: nowrap;
+}
+
+/* Status chips (per-pipe readiness / terminal states). */
+.gen-status-chip {
+	display: inline-block;
+	padding: 2px 7px;
+	border-radius: 4px;
+	font-size: 11px;
+	font-weight: 500;
+	text-transform: capitalize;
+	border: 1px solid var(--border-color, #3f3f46);
+	color: var(--text-muted, #71717a);
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+}
+
+.gen-status-chip.done { color: var(--success-color, #4ade80); border-color: var(--success-color, #4ade80); }
+.gen-status-chip.error { color: var(--error-color, #f87171); border-color: var(--error-color, #f87171); }
+.gen-status-chip.cancelled,
+.gen-status-chip.rate-limited { color: var(--warning-color, #fbbf24); border-color: var(--warning-color, #fbbf24); }
+.gen-status-chip.running { color: var(--accent-color, #ff3e00); border-color: var(--accent-color, #ff3e00); }
+
+/* Thin progress track shared by pipe rows. */
+.gen-progress-track {
+	height: 5px;
+	background: var(--bg-tertiary, #27272a);
+	border-radius: 3px;
+	overflow: hidden;
+}
+
+.gen-progress-track > * {
+	display: block;
+	height: 100%;
+	background: var(--accent-color, #ff3e00);
+	transition: width 0.25s ease;
+}

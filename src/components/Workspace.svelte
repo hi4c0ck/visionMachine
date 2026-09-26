@@ -8,6 +8,9 @@
 	import GenerateModal from './ComposerModals/GenerateModal.svelte';
 	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
+	import SessionGenerateModal from './ComposerModals/SessionGenerateModal.svelte';
+	import type { SessionGenerateStats } from './ComposerModals/SessionGenerateModal.svelte';
+	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece } from '$types';
 	import { getMaxFramesForResolution } from '$types';
@@ -17,6 +20,8 @@
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
+	import { isStaleGroup } from '$lib/compactPipes';
+	import { startSessionGeneration, fetchGenerationGroup, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
@@ -24,6 +29,7 @@
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
+	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -96,10 +102,81 @@
 	// the user last opened here (lastPreviewPipeBySession), not the first
 	// pipe that happens to have a last-gen video.
 	let lastPreviewPipeBySession = new Map<string, string>();
+	// True when the top-panel preview shows the composed session video
+	// (all pipes spliced) instead of a single pipe's last-gen clip. Drives
+	// the frame bounds: a composed video spans the SUM of the pipes.
+	let previewIsSessionVideo = $state(false);
+	// Attach a composed session video to the top-panel preview AND mirror it
+	// into the ToolsPanel's Preview section in one step. Returns false when the
+	// media URL could not be resolved (path moved / not under a media root).
+	// Fail fast if the active session changed while the media read was in
+	// flight — a stale result must not clobber the preview the user just
+	// attached on the NEW session (attachSessionVideo is async).
+	async function attachSessionVideo(path: string, label: string): Promise<boolean> {
+		const before = selectedSessionId;
+		const url = await toMediaUrl(path).catch(() => null);
+		if (url && before !== selectedSessionId) {
+			// The user switched sessions mid-flight: only honor the attach when
+			// it still targets the session that was selected at call time.
+			return false;
+		}
+		if (!url) return false;
+		previewIsSessionVideo = true;
+		previewVideo = { url, label };
+		toolsSessionVideo = { url, label };
+		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label };
+		return true;
+	}
+	// Flip the top-panel ownership back off the session video when the user
+	// deliberately picks a per-pipe preview. NOTE: lastComposedSessionVideo
+	// (the record of the last composed session video) is intentionally KEPT —
+	// the tool-panel "Open in preview" button uses it to re-attach the session
+	// video to the top panel on demand.
+	function detachSessionVideo() {
+		previewIsSessionVideo = false;
+	}
+	// Last successfully composed session video, keyed to the session it was
+	// composed for. Persists across top-panel preview switches so the
+	// tool-panel "Open in preview" can re-attach it on demand.
+	let lastComposedSessionVideo = $state<{ sessionId: string; url: string; label: string } | null>(null);
+	// Re-attach the composed session video to the top panel (the tool-panel
+	// "Open in preview" affordance). Restores the full-session frame space
+	// after the user switched the top panel to a single pipe clip. No-op when
+	// the top panel already shows it (avoids a needless blob reload).
+	function openSessionPreview() {
+		if (!lastComposedSessionVideo || lastComposedSessionVideo.sessionId !== selectedSessionId) return;
+		if (previewVideo?.url === lastComposedSessionVideo.url) return;
+		previewIsSessionVideo = true;
+		previewVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+	}
 	async function restoreSelectedPreview(session: SessionData | null) {
-		previewVideo = null;
 		const sid = session?.id;
 		if (!sid || !session) return;
+		// A successfully composed session video (group auto-compose) is the
+		// top-level preview target — the full session timeline, not a single
+		// pipe clip. It takes precedence over any pipe's last-gen video. The
+		// attach runs through attachSessionVideo so it is also mirrored into
+		// the ToolsPanel preview section (see syncCompose / compose button).
+		if (groupSessionVideoPath && groupComposeState === 'done') {
+			// A composed session video owns the top panel even when a pipe
+			// preview was attached earlier — always re-attach (refreshing
+			// the tool-panel mirror too), never early-return.
+			const ok = await attachSessionVideo(groupSessionVideoPath, `${session.name} — session video`);
+			if (!ok) {
+				// Media read failed (file missing / outside the media root):
+				// leave whatever preview is showing rather than blanking it.
+				return;
+			}
+			return;
+		}
+		// Fall back to a single-pipe last-gen video only when nothing is
+		// attached yet; a session video that's already showing wins. Note the
+		// `previewIsSessionVideo` reset: single-pipe previews span only that
+		// pipe's length, so the frame bounds must not stay on the composed sum.
+		if (previewVideo) return;
+		previewVideo = null;
+		previewIsSessionVideo = false;
 		const savedPipeId = lastPreviewPipeBySession.get(sid);
 		// Prefer the previously-selected pipe (if it still has a video);
 		// otherwise fall back to the first pipe with a last-gen video.
@@ -114,21 +191,83 @@
 	}
 
 	$effect(() => {
+		// Track both the session AND the compose outcome so the preview
+		// re-renders when a group's auto-compose finishes and persists
+		// session_video_path (the group-terminal event may arrive before
+		// the DB write lands, so the first restore sees null; the second
+		// refetch updates these two and this effect re-runs).
 		const session = selectedSession;
 		const id = selectedSessionId;
 		void id;
+		void groupComposeState; // effect dep: re-run when compose outcome changes
+		void groupSessionVideoPath; // effect dep: re-run when the path lands
 		void restoreSelectedPreview(session);
 	});
-
 
 	// the generated pieces (its own artifact length) — NOT a mechanical sum of
 	// the pipes. Until that artifact is persisted (session-video entity, not
 	// yet modeled), the placeholder is the longest pipe (answer 1c). Pipes are
 	// 8n+1, so the max stays 8n+1.
-	let totalFrames = $derived(
-		pipes.length > 0 ? Math.max(...pipes.map(p => p?.lengthFrames ?? 0)) : 241
-	);
+	// A composed session video concatenates EVERY pipe, so its length is the
+	// SUM of the pipes' frame counts — not the longest single pipe. When the
+	// session video is the preview target, the carousel/frame bounds must span
+	// the full timeline; otherwise they stay on the longest pipe (composer
+	// editing mode, where the user is still shaping one pipe at a time).
+	let totalFrames = $derived.by(() => {
+		const pipeMax = pipes.length > 0 ? Math.max(...pipes.map(p => p?.lengthFrames ?? 0)) : 241;
+		return previewIsSessionVideo && pipes.length > 0
+			? pipes.reduce((sum, p) => sum + (p?.lengthFrames ?? 0), 0)
+			: pipeMax;
+	});
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
+
+	// ── Session-video frame space ─────────────────────────────────────────────
+	// The composed session video splices every pipe clip back-to-back in
+	// orderIndex order (the Rust compose core's concat order), so its global
+	// frame space is the SUM of the pipes' frame counts. The mapping below is
+	// the inverse of that sum: a global frame belongs to the pipe whose
+	// cumulative range contains it, and every pipe's composer ruler offsets
+	// the global playhead by that pipe's start — the same walk, read two ways.
+	// The mapping math (starts / frameToPipe / local clamp / raw start) is
+	// unit-tested in src/lib/sessionVideoLayout.ts; the deriveds below just
+	// thread it through the session-video vs. composer-mode switch.
+	const sessionVideoLayout = $derived.by(() =>
+		previewIsSessionVideo ? computeSessionVideoLayout(pipes) : null
+	);
+
+	// Sliding the session-video carousel (or the top-panel frame step / arrow
+	// keys) moves the GLOBAL playhead. When the spliced video is the preview
+	// target, that move selects the pipe whose segment the frame lands in, so
+	// the composer highlights the owning pipe as the user sweeps.
+	let lastPinnedGlobalFrame = $state<number | null>(null);
+	$effect(() => {
+		if (!previewIsSessionVideo || !sessionVideoLayout) return;
+		const f = selectedFrame;
+		if (lastPinnedGlobalFrame === f) return; // only act on real moves
+		lastPinnedGlobalFrame = f;
+		activePipeIdx = sessionVideoLayout.frameToPipe(f);
+	});
+
+	// A per-pipe ruler renders its own frame space (0..pipe.lengthFrames). In
+	// session-video mode the global playhead is offset by that pipe's start in
+	// the spliced timeline, clamped to the pipe's bounds — so the pin sits at
+	// the right local position on whichever pipe owns the current frame. null
+	// = not in session-video mode (rulers take selectedFrame as-is).
+	const localFrameForPipe = $derived.by(() => {
+		if (!previewIsSessionVideo || !sessionVideoLayout) return null;
+		return (pipeIdx: number): number =>
+			localFrameForPipeLib(sessionVideoLayout, pipes, pipeIdx, selectedFrame);
+	});
+
+	// Sibling of the clamp above, WITHOUT it: the raw spliced start of pipe i,
+	// passed to each ruler so a local-frame write-back (ruler click / element
+	// drag) can be converted back to the GLOBAL session-video playhead.
+	// 0 in plain composer mode.
+	const pipeStartForPipe = $derived.by(() => {
+		if (!previewIsSessionVideo || !sessionVideoLayout) return null;
+		return (pipeIdx: number): number =>
+			pipeStartForPipeLib(sessionVideoLayout, pipes, pipeIdx);
+	});
 
 	// Settings (Phase 2): live object + re-sync on store change. The store
 	// replaces its object on every commit, so a plain reassignment re-renders.
@@ -175,6 +314,31 @@
 	// `confirmGenerate`, kept so a "Reset generation" (stop this task + resend)
 	// can replay the exact same run without re-opening the generate modal.
 	let lastGenerateParams = $state<{ pipeId: string; models: ModelSelection; seed: number | null } | null>(null);
+	let showSessionGenerateModal = $state(false);
+	let activeGroupId = $state<string | null>(null);
+	let groupUnlisten: (() => void) | null = null;
+	let groupTaskId: string | null = null;
+	let groupPipeTaskIds = $state<Record<string, string>>({});
+	let groupTaskViews = $state<Record<string, GenerationTaskView>>({});
+	let groupStatus = $state<string | null>(null);
+	let groupStale = $state(false);
+	// Session-composition outcome of the LAST finished group for this session.
+	// Set from `fetchGenerationGroup` (restoration + compose-terminal poll) so
+	// the group modal can show a persisted compose error / session video
+	// instead of presenting completion as a silent success.
+	let groupComposeState = $state<string | null>(null);
+	let groupComposeError = $state<string | null>(null);
+	let groupSessionVideoPath = $state<string | null>(null);
+	let restoredGroupSessionId = $state<string | null>(null);
+	const groupActive = $derived(activeGroupId !== null && !groupStale);
+	const groupProgressVisible = $derived(groupActive || groupStale || Object.keys(groupTaskViews).length > 0);
+
+	// The ToolsPanel's Preview section mirrors the top panel's session-video target:
+	// a composed session video (group auto-compose OR the standalone compose button)
+	// takes precedence over any per-pipe last-gen video.
+	let toolsSessionVideo = $state<{ url: string; label: string } | null>(null);
+	// Set by the standalone compose button's success path; the group auto-compose
+	// path flows through groupSessionVideoPath below instead.
 
 	// Minimized progress modal (D10): the user hides the modal to keep working
 	// while the task watcher (poller + event stream) stays live. A persistent
@@ -289,6 +453,18 @@
 		if (!selectedSession || !activePipe) return;
 		const r = await updateQ(selectedSession.id, activePipe.id, q);
 		if (r.errors.length > 0) console.error('[Workspace] updateQ:', r.errors);
+	}
+
+	// Per-pipe Q/C edits from the session-generation modal (any pipe, not just
+	// the active one) — same store path as the panel above.
+	async function handlePipeQValueChange(sessionId: string, pipeId: string, q: number) {
+		const r = await updateQ(sessionId, pipeId, q);
+		if (r.errors.length > 0) console.error('[Workspace] updateQ (modal):', r.errors);
+	}
+
+	async function handlePipeCValueChange(sessionId: string, pipeId: string, c: number) {
+		const r = await updateC(sessionId, pipeId, c);
+		if (r.errors.length > 0) console.error('[Workspace] updateC (modal):', r.errors);
 	}
 
 	async function handleCValueChange(c: number) {
@@ -540,6 +716,47 @@
 		selectedSessionId = null;
 		saveProjects();
 	}
+
+	async function restoreSessionGenerationGroup(sessionId: string) {
+		const key = `visionmachine:generation-group:${sessionId}`;
+		const groupId = localStorage.getItem(key);
+		if (!groupId) return;
+		try {
+			const group = await fetchGenerationGroup(groupId);
+			activeGroupId = group.groupId;
+			groupStatus = group.status;
+			groupStale = isStaleGroup(group.status, group.live);
+			groupTaskId = null;
+			groupPipeTaskIds = Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []));
+			groupTaskViews = {};
+			groupComposeState = group.composeState ?? null;
+			groupComposeError = group.composeError ?? null;
+			groupSessionVideoPath = group.sessionVideoPath ?? null;
+			// A persisted session video is the preview target across app
+			// restarts — attach it so the top panel shows the composed
+			// timeline instead of falling back to a single pipe clip. Read the
+			// session's name from the hydrated store (this function only has
+			// the id, and it can run before the preview recovers on its own).
+			if (group.composeState === 'done' && group.sessionVideoPath) {
+				const name = sessions.get(sessionId)?.name ?? 'Session';
+				const path = group.sessionVideoPath;
+				void attachSessionVideo(path, `${name} — session video`);
+			}
+			stopWatching();
+			showProgressModal = groupStale;
+		} catch {
+			localStorage.removeItem(key);
+		} finally {
+			restoredGroupSessionId = sessionId;
+		}
+	}
+
+	$effect(() => {
+		const sessionId = selectedSessionId;
+		if (sessionId && restoredGroupSessionId !== sessionId) {
+			void restoreSessionGenerationGroup(sessionId);
+		}
+	});
 
 	async function handleSessionSelect(sessionId: string) {
 		const foundProject = projects.find(p =>
@@ -1009,10 +1226,119 @@
 	// There is no separate session-persistence path in this component.
 
 	function handleGenerate() {
-		if (!selectedSession || !selectedSession.pipes?.length) return;
-		// Session-level "generate all pipes" is a future task (D3): make the
-		// button honest instead of a silent no-op.
-		flashToast(APP_CONSTANTS.strings.sessionGenRoadmap, 'info');
+		if (!selectedSession || !selectedSession.pipes?.length || groupActive) return;
+		showSessionGenerateModal = true;
+	}
+
+	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null) {
+		if (!selectedSession || groupActive) return;
+		try {
+			// Per-pipe prompts + profile + resolved specs, matching the per-pipe
+			// `start_generation` flow — the provider engine REQUIRES the
+			// resolved image/video specs, or every pipe's video stage fails
+			// with "video stage has no resolved video spec".
+			const pair = resolveSpecs(models.imageModel, models.videoModel);
+			const prompts: Record<string, string> = {};
+			for (const p of selectedSession.pipes) prompts[p.id] = summarizePipe(p, { fps: selectedSession?.fps ?? undefined });
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null, runStats: runStats ?? null, pipeParams: pipeParams ?? null });
+			showSessionGenerateModal = false;
+			activeGroupId = result.groupId;
+			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);
+			restoredGroupSessionId = selectedSession.id;
+			groupStatus = 'running';
+			groupStale = false;
+			groupTaskId = result.firstTaskId;
+			groupPipeTaskIds = { [result.firstView.pipeId]: result.firstTaskId };
+			groupTaskViews = { [result.firstView.pipeId]: result.firstView };
+			const firstPipe = selectedSession.pipes.find((p) => p.id === result.firstView.pipeId);
+			if (firstPipe) {
+				const startedAt = Date.now();
+				const groupLog = buildGenerationLogEntry(result.firstTaskId, selectedSession.id, firstPipe, models, startedAt, seed);
+				groupLog.groupId = result.groupId;
+				activeLogEntry = groupLog;
+				void writeGenerationLogStart(groupLog);
+			}
+			startWatchingTask(result.firstTaskId, result.firstView);
+			groupComposeState = null;
+			groupComposeError = null;
+			groupSessionVideoPath = null;
+			groupUnlisten?.();
+			void subscribeGroupEvent(result.groupId, (event) => {
+				if (event.pipeId && event.taskId) {
+					groupPipeTaskIds[event.pipeId] = event.taskId;
+					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; }).catch(() => {});
+				}
+				if (event.kind === 'pipe-started' && event.pipeId && event.taskId) {
+					groupTaskId = event.taskId;
+					activeTaskId = event.taskId;
+					const startedPipe = selectedSession?.pipes.find((p) => p.id === event.pipeId);
+					if (startedPipe) {
+						const groupLog = buildGenerationLogEntry(event.taskId, selectedSession!.id, startedPipe, models, Date.now(), seed);
+						groupLog.groupId = event.groupId;
+						void writeGenerationLogStart(groupLog);
+					}
+					void fetchGenerationTask(event.taskId).then((view) => { activeTask = view; groupTaskViews[event.pipeId!] = view; }).catch(() => {});
+				}
+				if (event.kind === 'pipe-terminal' && event.taskId && event.pipeId) {
+					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; void reconcileTerminal(view); }).catch(() => {});
+				}
+				if (event.kind === 'compose-terminal') {
+					// Compose finished (or failed) after the pipes went terminal —
+					// refresh the persisted compose outcome so the modal + pill
+					// reflect it (error strings included, not just a silent OK),
+					// and attach the composed video to the top panel + tool-panel
+					// preview as soon as the path lands (don't wait for the
+					// group-terminal refetch a moment later).
+					if (activeGroupId) {
+						void fetchGenerationGroup(activeGroupId).then((g) => {
+							groupComposeState = g.composeState ?? null;
+							groupComposeError = g.composeError ?? null;
+							groupSessionVideoPath = g.sessionVideoPath ?? null;
+							// A failed / cancelled compose is not a clean "done" —
+							// the pill (if minimized) must read as an error.
+							if (progressMinimized) {
+								if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
+								else if (g.composeState === 'done' && g.sessionVideoPath) pillTerminal = 'done';
+							}
+							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+								void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
+							}
+						}).catch(() => {});
+					}
+					return;
+				}
+				if (event.kind === 'group-terminal') {
+					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
+					groupStatus = event.status ?? 'done'; groupStale = false;
+					// The terminal event is dispatched before the compose result
+					// is persisted — refetch once (and once more after a short
+					// delay for the compose-terminal case) so the modal shows the
+					// persisted composeState/composeError/sessionVideoPath instead
+					// of a silent success. A successfully composed session video
+					// IS the preview target (the full session timeline, not a
+					// single pipe clip) — attach it to the top panel as soon as
+					// the path lands.
+					const syncCompose = () => {
+						void fetchGenerationGroup(result.groupId).then((g) => {
+							groupComposeState = g.composeState ?? null;
+							groupComposeError = g.composeError ?? null;
+							groupSessionVideoPath = g.sessionVideoPath ?? null;
+							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+								void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
+							}
+						}).catch(() => {});
+					};
+					syncCompose();
+					setTimeout(syncCompose, 1500);
+					if (selectedSession) localStorage.removeItem(`visionmachine:generation-group:${selectedSession.id}`);
+				}
+			}).then((unlisten) => { groupUnlisten = unlisten; });
+		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
+	}
+
+	async function cancelSessionGenerationGroup() {
+		if (!activeGroupId) return;
+		try { await cancelSessionGeneration(activeGroupId); } catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
 
 	// ── Session video composition (A5): splice the pipes' last-gen videos ──
@@ -1085,10 +1411,7 @@
 			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
 			flashToast(APP_CONSTANTS.strings.composeSessionDone, 'success');
 			// Point the top panel at the composed file (served via read_media_file).
-			previewVideo = null;
-			void toMediaUrl(r.outputPath).then((url) => {
-				if (url) previewVideo = { url, label: `${selectedSession?.name ?? 'Session'} — video` };
-			});
+			void attachSessionVideo(r.outputPath, `${selectedSession?.name ?? 'Session'} — video`);
 		})
 		.catch((e) => {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
@@ -1530,6 +1853,8 @@
 			progressMinimized = false;
 			activeTask = null;
 			activeLogEntry = null;
+			groupTaskViews = {};
+			groupPipeTaskIds = {};
 			// No longer watching: drop the cached view too (a fresh task re-seeds it).
 			lastTaskView = null;
 			// The task ended + the user acknowledged it; the dedup record is no
@@ -1569,7 +1894,17 @@
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.
+		// A per-pipe preview hands the top panel back to the pipe's OWN frame
+		// space — detach the session video so totalFrames drops from the
+		// spliced SUM to the pipe's max. The tool-panel mirror is kept in sync
+		// from lastComposedSessionVideo (the record that a session video exists
+		// for this session — the "Open in preview" button re-attaches it).
+		detachSessionVideo();
+		if (lastComposedSessionVideo?.sessionId === selectedSessionId) {
+			toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		}
 		previewVideo = null;
+		previewIsSessionVideo = false;
 		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
 			.then((url) => {
 				if (url) previewVideo = { url, label: pipe.name };
@@ -1643,8 +1978,11 @@
 	onDestroy(() => {
 		window.removeEventListener('focus', onWindowFocus);
 		closeBlockedUnlisten?.();
-		compositionUnlisten?.();
-		stopWatching();
+			groupUnlisten?.();
+			groupUnlisten = null;
+			activeGroupId = null;
+			groupTaskId = null;
+			stopWatching();
 		setOnSettingsChange(null);
 	});
 </script>
@@ -1724,6 +2062,8 @@
 					bind:activePipeIdx
 					bind:focus
 					onframechange={(f) => selectedFrame = f}
+					localFrameForPipe={localFrameForPipe}
+					pipeStartForPipe={pipeStartForPipe}
 					brokenRefs={brokenRefs}
 					onRefSaved={recheckRef}
 					videoModel={videoModelSpec}
@@ -1755,18 +2095,35 @@
 				ongenerate={handleGenerate}
 				ongeneratepipe={openGenerateModal}
 				onopenpreview={openPreview}
+				onopensessionpreview={openSessionPreview}
 				oncomposesession={composeSessionVideo}
 				ffmpegAvailable={ffmpegCapability ? ffmpegCapability.source !== 'none' : false}
 				composing={composing}
 				compositionLabel={compositionLabel(compositionProgress)}
 				pipegenerating={anyTaskActive}
+				groupActive={groupActive}
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}
 				onorientationchange={handleOrientationChange}
+				sessionVideo={toolsSessionVideo}
 				/>
 			{/if}
 
 			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
+			{#if showSessionGenerateModal && selectedSession}
+				<SessionGenerateModal
+					bind:open={showSessionGenerateModal}
+					session={selectedSession}
+					pipes={selectedSession.pipes}
+					onConfirm={confirmSessionGenerate}
+					onFpsChange={handleFpsChange}
+					onResolutionChange={handleResolutionChange}
+					onOrientationChange={handleOrientationChange}
+					onPipeQChange={(pipeId, q) => handlePipeQValueChange(selectedSession.id, pipeId, q)}
+					onPipeCChange={(pipeId, c) => handlePipeCValueChange(selectedSession.id, pipeId, c)}
+					onSaveAs={() => handleCopySession(selectedSession.id)}
+				/>
+			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
 				<GenerateModal
 					pipe={generatePipe}
@@ -1775,17 +2132,37 @@
 					onConfirm={confirmGenerate}
 				/>
 			{/if}
+			{#if groupProgressVisible && selectedSession}
+				<CompactPipesProgress
+					bind:open={showProgressModal}
+					pipes={selectedSession.pipes}
+					stale={groupStale}
+					currentTaskId={activeTaskId}
+					taskViews={Object.fromEntries(selectedSession.pipes.map((p) => [p.id, groupTaskViews[p.id] ?? null]).filter((entry): entry is [string, GenerationTaskView] => !!entry[1]))}
+					taskIds={groupPipeTaskIds}
+					busy={anyTaskActive}
+					composeState={groupComposeState}
+					composeError={groupComposeError}
+					sessionVideoPath={groupSessionVideoPath}
+					onFetch={fetchGenerationTask}
+					onLoaded={(view) => { groupTaskViews[view.pipeId] = view; }}
+					onCancel={cancelSessionGenerationGroup}
+					onClose={closeProgressModal}
+					onMinimize={minimizeProgressModal}
+				/>
+			{:else}
 			<GenerationProgressModal
 				task={activeTask}
 				busy={anyTaskActive}
 				bind:open={showProgressModal}
-				onCancel={cancelActiveTask}
+				onCancel={groupActive ? cancelSessionGenerationGroup : cancelActiveTask}
 				onClose={closeProgressModal}
 				onMinimize={minimizeProgressModal}
 				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
 				onReset={resetGeneration}
 			/>
+			{/if}
 
 			<!-- D10 persistent pill: visible when the progress modal is minimized
 			     (or the task just went terminal while it was), so the user can

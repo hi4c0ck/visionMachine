@@ -183,6 +183,8 @@ export interface GenerationLogEntry {
   taskId: string;
   sessionId: string;
   pipeId: string;
+  /** Session generation run that started this pipe, when not a manual run. */
+  groupId?: string;
   startedAt: number;
   finishedAt?: number;
   status: LogStatus;

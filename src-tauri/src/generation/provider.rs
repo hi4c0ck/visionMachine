@@ -53,13 +53,59 @@ async fn cancel_watcher(cancel: &AtomicBool) {
 /// problem when polled slowly; a tighter-than-10 s cadence only burns quota
 /// and keeps us off the 429 radar.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
-/// 503 `video_queue_full` backoff sequence (catalog hermes note):
-/// 30 s, 60 s, 120 s, then hold at 120 s.
+/// 503 backoff sequence (catalog hermes note): 30 s, 60 s, 120 s, then hold
+/// at 120 s. Applies to ANY transient 503 cause, not just `video_queue_full`
+/// (see `is_transient_503`): provider-side availability outages
+/// (`fail_to_fetch_task` / `no available server` / gateway 503s) are
+/// transient in exactly the same way — the request is fine, the provider
+/// just can't serve it right now.
 const BACKOFF_SECS: [u64; 3] = [30, 60, 120];
 /// Image generation timeout (catalog: 60-360 s; typical ~15-18 s).
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Poll transport timeout (transient network, not the job itself).
 const POLL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Whether a 503 body describes a TRANSIENT provider-side condition that the
+/// backoff ladder should absorb (retry with the 30/60/120 s schedule).
+///
+/// HTTP 503 by definition means "service unavailable" — the provider could
+/// not serve the request right now. Whether the cause is its own render
+/// queue (`video_queue_full`) or an upstream gateway error surfaced by the
+/// API layer (litellm `ServiceUnavailableError` / `no available server`,
+/// wrapped as code `fail_to_fetch_task`), the correct client behavior is
+/// the same: back off and retry. Only a 503 that explicitly says the
+/// request itself is bad (maintenance-style codes) is terminal.
+///
+/// Matched causes:
+/// - `video_queue_full` — the provider's own queue saturation.
+/// - `fail_to_fetch_task` — the API layer's upstream fetch failure
+///   (wraps the gateway's `no available server` / litellm 503 body).
+/// - bodies whose text mentions `no available server` or `ServiceUnavailable`
+///   (the raw litellm payload the gateway inlines in the `message` field —
+///   match on the human text so a differently-wrapped variant still hits).
+fn is_transient_503(body: &serde_json::Value) -> bool {
+    let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    if code.contains("video_queue_full") || code.contains("fail_to_fetch_task") {
+        return true;
+    }
+    let text = format!("{} {}", code, body.to_string()).to_lowercase();
+    text.contains("no available server")
+        || text.contains("serviceunavailable")
+        || text.contains("service unavailable")
+}
+
+/// A short, user-facing label for a 503 cause (shown in the modal's live
+/// state line; the full body stays in the redacted request log).
+fn transient_503_label(body: &serde_json::Value) -> &'static str {
+    let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    if code.contains("video_queue_full") {
+        "queue full"
+    } else if code.contains("fail_to_fetch_task") {
+        "provider unavailable"
+    } else {
+        "unavailable"
+    }
+}
 
 /// A concrete engine error carrying the concrete-cause rule (E4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,8 +423,13 @@ impl ProviderEngine {
         on_event("image request in flight");
 
         // 429 rate-limited → bounded backoff retry (30/60/120 s ladder), not a
-        // hard failure. After the ladder is exhausted a persistent 429 still
-        // surfaces through the >=400 check below as a concrete error.
+        // hard failure. 503 (any provider cause — queue-full, maintenance,
+        // upstream gateway unavailable) is likewise TRANSIENT by definition:
+        // it means the provider cannot serve the request right now, not that
+        // the request itself is invalid, so it walks the same ladder instead
+        // of killing the stage on the first occurrence. After the ladder is
+        // exhausted a persistent 429/503 still surfaces through the >=400
+        // check below as a concrete error.
         let (status, resp) = {
             let mut backoff_idx = 0usize;
             loop {
@@ -395,7 +446,7 @@ impl ProviderEngine {
                         );
                         EngineError::Failure(format!("transport: {e}"))
                     })?;
-                if st != 429 {
+                if st != 429 && st != 503 {
                     break (st, rs);
                 }
                 let delay = self
@@ -404,14 +455,22 @@ impl ProviderEngine {
                     .copied()
                     .unwrap_or(120);
                 backoff_idx += 1;
+                let label = if st == 429 {
+                    "rate-limited (429)"
+                } else {
+                    "unavailable (503)"
+                };
                 log::warn!(
-                    "[Generation] image task {} rate-limited (429), backing off {} s (consecutive 429 #{})",
-                    input.task_id, delay, backoff_idx
+                    "[Generation] image task {} {}, backing off {} s (consecutive transient #{})",
+                    input.task_id,
+                    label,
+                    delay,
+                    backoff_idx
                 );
-                // Live state line so the modal shows "rate-limited — retry in
-                // N s" instead of a frozen bar (the request/response detail
-                // stays in the redacted log, not here).
-                on_event(&format!("rate-limited — retry in {} s", delay));
+                // Live state line so the modal shows "retrying — N s" instead
+                // of a frozen bar (the request/response detail stays in the
+                // redacted log, not here).
+                on_event(&format!("retrying after {label} — in {} s", delay));
                 if cancel.load(Ordering::Acquire) {
                     return Err(EngineError::Cancelled);
                 }
@@ -734,7 +793,14 @@ impl ProviderEngine {
         let secrets = vec![slot.api_key.trim()];
         on_event("creating video job");
 
-        // 1) Create the job (503 queue-full backs off and retries).
+        // 1) Create the job. ANY transient 503 cause — the provider's own
+        //    queue saturation (`video_queue_full`), an upstream gateway
+        //    unavailability surfaced as `fail_to_fetch_task` (litellm
+        //    `no available server`), or a 503 with no recognisable code —
+        //    backs off and retries on the 30/60/120 s ladder instead of
+        //    failing the stage on the first occurrence. A 503 that is NOT
+        //    transient (e.g. an explicit `maintenance` code) is a real
+        //    failure and stops here with the concrete body.
         let mut backoff_idx = 0usize;
         let create_resp = loop {
             if cancel.load(Ordering::Acquire) {
@@ -753,15 +819,18 @@ impl ProviderEngine {
             if status != 503 {
                 break Ok((status, resp));
             }
-            let code = resp
+            // Transient 503 → walk the backoff ladder and retry. The specific
+            // cause label drives the live modal line; the full body stays in
+            // the redacted request log below.
+            let label = transient_503_label(&resp);
+            let cause_code = resp
                 .get("code")
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .to_string();
-            // Non-queue-full 503s are a real failure.
-            if !code.contains("video_queue_full") {
+            if !is_transient_503(&resp) {
                 break Err(EngineError::Failure(format!(
-                    "video create HTTP 503 ({code} or unknown): {}",
+                    "video create HTTP 503 ({cause_code} or unknown): {}",
                     resp.to_string()
                 )));
             }
@@ -771,10 +840,10 @@ impl ProviderEngine {
                 .copied()
                 .unwrap_or(120);
             backoff_idx += 1;
-            // Live state line: the modal shows "queue full — retry in N s"
-            // instead of a frozen bar while the provider queue is saturated
+            // Live state line: the modal shows "<cause> — retry in N s"
+            // instead of a frozen bar while the provider is unavailable
             // (the full 503 body stays in the redacted log, not here).
-            on_event(&format!("queue full — retry in {} s", delay));
+            on_event(&format!("{label} — retry in {delay} s"));
             // Publish the in-backoff state so the stage row shows the amber
             // rate-limited hint (0.51 = first rung of the ladder band, the
             // registry maps 0.51–0.53 to `RateLimited`).
@@ -784,6 +853,7 @@ impl ProviderEngine {
                 &secrets,
                 &json!({
                     "stage": "video-create-503",
+                    "cause": label,
                     "backoff": delay,
                     "request": {
                         "method": "POST",
@@ -1259,37 +1329,253 @@ impl HttpClient for ReqwestClient {
     }
 
     async fn download(&self, url: &str, dest: &std::path::Path) -> Result<(), String> {
-        // Read the response explicitly instead of `error_for_status()` so a
-        // non-2xx carries its status + body preview in the error string —
-        // that is what makes a failed artifact fetch diagnosable from the
-        // task log (a bare transport error hides the CDN status).
-        let resp = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| format!("GET {url} failed: {e}"))?;
-        let status = resp.status().as_u16();
-        let bytes = if (200..300).contains(&status) {
-            resp.bytes()
-                .await
-                .map_err(|e| format!("GET {url} read failed: {e}"))?
-        } else {
-            let body_preview = resp
-                .text()
-                .await
-                .unwrap_or_default()
-                .chars()
-                .take(500)
-                .collect::<String>();
-            return Err(format!("GET {url} HTTP {status}: {body_preview}"));
-        };
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create {}: {e}", parent.display()))?;
-        }
-        std::fs::write(dest, bytes).map_err(|e| format!("write {}: {e}", dest.display()))
+        let client = self.client.clone();
+        let url_owned = url.to_string();
+        fetch_artifact_to(dest, url, move || {
+            let client = client.clone();
+            let url = url_owned.clone();
+            async move {
+                let resp = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("transport: {e}"))?;
+                let status = resp.status().as_u16();
+                Ok((status, response_body_stream(resp)))
+            }
+        })
+        .await
     }
+}
+
+// ── Hardened artifact download ──────────────────────────────────────────────
+//
+// Provider artifact CDNs (Agnes et al.) routinely drop a body mid-transfer:
+// the connection resets after the 200 + headers, which surfaces as
+// "error decoding response body" from `Response::bytes()`. Retrying the whole
+// GET is the only remedy, so the fetch is bounded-retried, streamed to a
+// task-scoped `.part` file under a size cap, verified, then atomically
+// renamed into place. A failed attempt never leaves a partial or a stale
+// artifact behind.
+
+/// Bounded attempts for one artifact fetch (1 initial + 2 retries).
+const ARTIFACT_FETCH_ATTEMPTS: u32 = 3;
+/// Backoff between artifact attempts. Short: the CDN is usually still
+/// propagating the object, not rate-limiting us.
+const ARTIFACT_RETRY_BACKOFF: Duration = Duration::from_millis(400);
+/// Upper bound on a decoded image artifact. A generated frame is ~1 MB; 64 MB
+/// leaves headroom for lossless stills while bounding a hostile/looping body.
+const ARTIFACT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+/// Leading bytes of every PNG (ISO/IEC 15948 signature).
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// Failure classes for a streaming write. Only `Transient` is worth a retry;
+/// an over-limit body or a non-PNG payload will fail identically every time.
+enum ArtifactWriteError {
+    Transient(String),
+    Fatal(String),
+}
+
+/// Wrap a reqwest response body as a byte-chunk stream. `reqwest::Response`
+/// only exposes incremental reads through `&mut self`, so the response is
+/// threaded as unfold state.
+fn response_body_stream(
+    resp: reqwest::Response,
+) -> impl futures::Stream<Item = Result<Vec<u8>, String>> + Send + Unpin {
+    let stream = futures::stream::unfold(Some(resp), |state| async move {
+        let mut resp = state?;
+        match resp.chunk().await {
+            Ok(Some(bytes)) => Some((Ok(bytes.to_vec()), Some(resp))),
+            Ok(None) => None,
+            Err(e) => Some((Err(format!("body read: {e}")), None)),
+        }
+    });
+    // Boxed so the retry loop can be generic over the stream type (tests
+    // substitute a scripted stream) instead of over reqwest's concrete type.
+    Box::pin(stream)
+}
+
+/// Task-scoped temp path for `dest`: `<name>.part` beside the final file, so
+/// the closing rename stays on one filesystem and is therefore atomic.
+fn artifact_part_path(dest: &std::path::Path) -> std::path::PathBuf {
+    let mut name = dest.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    dest.with_file_name(name)
+}
+
+/// Stream a response body into `dest.part`, enforce the size cap, verify
+/// non-empty + PNG signature, fsync, then atomically rename onto `dest`.
+///
+/// On any error the temp file is removed, so a failed attempt cannot leave a
+/// truncated file that a later stage would treat as a finished artifact.
+async fn write_artifact_atomic<S>(
+    dest: &std::path::Path,
+    body: S,
+) -> Result<u64, ArtifactWriteError>
+where
+    S: futures::Stream<Item = Result<Vec<u8>, String>> + Unpin,
+{
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt as _;
+
+    let part = artifact_part_path(dest);
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ArtifactWriteError::Fatal(format!("create {}: {e}", parent.display())))?;
+    }
+    let mut file = tokio::fs::File::create(&part)
+        .await
+        .map_err(|e| ArtifactWriteError::Fatal(format!("create {}: {e}", part.display())))?;
+
+    let mut written: u64 = 0;
+    let mut head: Vec<u8> = Vec::with_capacity(PNG_SIGNATURE.len());
+    let mut body = body;
+    let write_result: Result<(), ArtifactWriteError> = async {
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(ArtifactWriteError::Transient)?;
+
+            written += chunk.len() as u64;
+            if written > ARTIFACT_MAX_BYTES {
+                return Err(ArtifactWriteError::Fatal(format!(
+                    "artifact exceeds {} byte limit",
+                    ARTIFACT_MAX_BYTES
+                )));
+            }
+            if head.len() < PNG_SIGNATURE.len() {
+                let take = PNG_SIGNATURE.len() - head.len();
+                head.extend(chunk.iter().copied().take(take));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| ArtifactWriteError::Fatal(format!("write {}: {e}", part.display())))?;
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = write_result {
+        drop(file);
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(e);
+    }
+    if written == 0 {
+        drop(file);
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(ArtifactWriteError::Fatal("artifact body is empty".into()));
+    }
+    // A `.png` destination must actually hold a PNG: a 200 + HTML error page
+    // or an empty S3 key is the classic silent-corruption case.
+    if dest
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("png"))
+        .unwrap_or(false)
+        && head != PNG_SIGNATURE
+    {
+        drop(file);
+        let _ = tokio::fs::remove_file(&part).await;
+        return Err(ArtifactWriteError::Fatal(format!(
+            "artifact is not a PNG (leading bytes {:02x?})",
+            head
+        )));
+    }
+    file.sync_all()
+        .await
+        .map_err(|e| ArtifactWriteError::Fatal(format!("fsync {}: {e}", part.display())))?;
+    drop(file);
+    tokio::fs::rename(&part, dest).await.map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        ArtifactWriteError::Fatal(format!("rename to {}: {e}", dest.display()))
+    })?;
+    Ok(written)
+}
+
+/// Whether a failing status is worth another attempt. 4xx (except the two
+/// explicitly transient ones) means the object is missing or forbidden —
+/// retrying only burns time and hammers the CDN.
+fn status_is_retryable(status: u16) -> bool {
+    status >= 500 || status == 408 || status == 429
+}
+
+/// Bounded-retry artifact fetch: GET, stream to `.part`, verify, rename.
+async fn fetch_artifact_to<S, A, Fut>(
+    dest: &std::path::Path,
+    url: &str,
+    mut attempt: A,
+) -> Result<(), String>
+where
+    S: futures::Stream<Item = Result<Vec<u8>, String>> + Unpin,
+    A: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(u16, S), String>>,
+{
+    use futures::StreamExt;
+    let mut last = String::new();
+
+    for n in 1..=ARTIFACT_FETCH_ATTEMPTS {
+        if n > 1 {
+            tokio::time::sleep(ARTIFACT_RETRY_BACKOFF * n).await;
+        }
+        let (status, body) = match attempt().await {
+            Ok(v) => v,
+            Err(e) => {
+                last = format!("GET {url} attempt {n}: {e}");
+                log::warn!("[Generation] artifact fetch {url} attempt {n} failed: {e}");
+                continue;
+            }
+        };
+
+        if !(200..300).contains(&status) {
+            // Read a bounded preview off the error body so the task log shows
+            // what the CDN actually said.
+            let mut preview = String::new();
+            let mut body = body;
+            while let Some(chunk) = body.next().await {
+                match chunk {
+                    Ok(b) if preview.chars().count() < 500 => {
+                        preview.push_str(&String::from_utf8_lossy(&b))
+                    }
+                    Ok(_) => break,
+                    Err(e) => {
+                        preview.push_str(&format!("<{e}>"));
+                        break;
+                    }
+                }
+            }
+            let preview: String = preview.chars().take(500).collect();
+            last = format!("GET {url} HTTP {status}: {preview}");
+            if !status_is_retryable(status) {
+                // Non-transient 4xx: report now rather than retrying.
+                return Err(last);
+            }
+            log::warn!("[Generation] artifact fetch {url} attempt {n}: HTTP {status}");
+            continue;
+        }
+
+        match write_artifact_atomic(dest, body).await {
+            Ok(n_bytes) => {
+                log::info!(
+                    "[Generation] artifact {} -> {} ({} bytes, attempt {n})",
+                    url,
+                    dest.display(),
+                    n_bytes
+                );
+                return Ok(());
+            }
+            Err(ArtifactWriteError::Fatal(m)) => {
+                // The temp file is already gone; nothing else will change the
+                // verdict (bad signature, over limit, disk error).
+                return Err(format!("GET {url} attempt {n}: {m}"));
+            }
+            Err(ArtifactWriteError::Transient(m)) => {
+                last = format!("GET {url} attempt {n}: {m}");
+                log::warn!("[Generation] artifact body read failed: {last}");
+            }
+        }
+    }
+
+    Err(format!(
+        "{last} (giving up after {ARTIFACT_FETCH_ATTEMPTS} attempts)"
+    ))
 }
 
 // ── Phase D tests (docs/provider-engine-tasks.md) ─────────────────────────────
@@ -1950,7 +2236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_queue_full_503_is_a_real_failure() {
+    async fn non_transient_503_is_a_real_failure() {
         let (db, _media) = db_with_slots("sk-image-key", "sk-video-key").await;
         let http =
             Arc::new(StubHttp::new().queue_post(Ok((503, json!({ "code": "maintenance" })))));
@@ -1962,6 +2248,59 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("maintenance"), "got: {err}");
+    }
+
+    // The user's exact failure mode: the gateway's litellm ServiceUnavailable
+    // ("no available server") wrapped as code `fail_to_fetch_task`. This is a
+    // TRANSIENT upstream condition, NOT a bad request — the engine must back
+    // off and retry, not fail the video stage on the first 503.
+    #[tokio::test]
+    async fn fail_to_fetch_task_503_backs_off_then_succeeds() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let unavailable = json!({
+            "code": "fail_to_fetch_task",
+            "message": "{\"error\":{\"message\":\"litellm.ServiceUnavailableError: no available server\",\"code\":\"503\"}}"
+        });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((503, unavailable.clone())))
+                .queue_post(Ok((503, unavailable.clone())))
+                .queue_post(Ok((200, json!({ "videoId": "vid-503" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                ))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .unwrap();
+        let task_dir = media.join("pipe1").join("task1");
+        assert_eq!(
+            out.local_path,
+            task_dir.join("video.mp4").to_string_lossy().into_owned()
+        );
+        // Both transient-503 retries were logged (redacted) before the
+        // successful create — proof the ladder absorbed the provider outage
+        // instead of failing the stage.
+        let req_log = std::fs::read_to_string(task_dir.join("request.log")).unwrap();
+        assert_eq!(
+            req_log.matches("video-create-503").count(),
+            2,
+            "transient 503s logged: {req_log}"
+        );
+        assert!(
+            req_log.contains("fail_to_fetch_task"),
+            "cause recorded: {req_log}"
+        );
+        let _ = std::fs::remove_dir_all(&media);
     }
 
     #[tokio::test]
@@ -2049,5 +2388,275 @@ mod tests {
         assert!(req_log.contains("https://cdn.test/out.mp4"));
         assert!(!req_log.contains("sk-video-key"));
         let _ = std::fs::remove_dir_all(&media);
+    }
+
+    // ── Hardened artifact download ──────────────────────────────────────────
+    //
+    // A provider CDN that returns 200 + image/png and then resets the
+    // connection mid-body was killing image tasks with a bare
+    // "error decoding response body". These tests drive `fetch_artifact_to`
+    // with scripted body streams (no network, no wiremock) and assert the four
+    // properties that matter: retry, no-retry on 4xx, temp cleanup, atomic
+    // rename.
+
+    /// A minimally valid PNG: signature + IHDR + filler. Only the signature is
+    /// verified, but real bytes keep the tests honest about chunk framing.
+    fn png_bytes(pad: usize) -> Vec<u8> {
+        let mut b = PNG_SIGNATURE.to_vec();
+        b.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D, b'I', b'N', b'H', b'D', b'R']);
+        b.extend(std::iter::repeat(0xABu8).take(pad));
+        b
+    }
+
+    /// A scripted body stream: an ordered list of chunk outcomes. An `Err`
+    /// entry models the connection reset that `Response::bytes()` turned into
+    /// "error decoding response body".
+    fn scripted_body(
+        chunks: Vec<Result<Vec<u8>, String>>,
+    ) -> impl futures::Stream<Item = Result<Vec<u8>, String>> + Unpin {
+        futures::stream::iter(chunks)
+    }
+
+    /// Unique temp dir per test so parallel `cargo test` runs cannot collide.
+    fn artifact_test_dir(tag: &str) -> std::path::PathBuf {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "vm_artifact_dl_{}_{}_{}",
+            std::process::id(),
+            tag,
+            n
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A mid-body reset on attempt 1, then a clean 200: the artifact must land
+    /// intact and only the reset attempt may have failed.
+    #[tokio::test]
+    async fn artifact_body_read_failure_retries_then_writes() {
+        let dir = artifact_test_dir("retry");
+        let dest = dir.join("kf-1.png");
+        let expected = png_bytes(4096);
+        let png = expected.clone();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = calls.clone();
+        let result = fetch_artifact_to(&dest, "https://cdn.test/kf-1.png", move || {
+            let c = c.clone();
+            let png = png.clone();
+            let full = png.clone();
+            async move {
+                let n = c.fetch_add(1, Ordering::SeqCst) + 1;
+                if n == 1 {
+                    // 200 + headers arrived, body died halfway.
+                    Ok((
+                        200,
+                        scripted_body(vec![
+                            Ok(png[..32].to_vec()),
+                            Err("error decoding response body".into()),
+                        ]),
+                    ))
+                } else {
+                    Ok((200, scripted_body(vec![Ok(full)])))
+                }
+            }
+        })
+        .await;
+
+        result.expect("retry after read failure succeeds");
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "exactly one retry");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            expected,
+            "artifact bytes are from the successful attempt"
+        );
+        assert!(
+            !artifact_part_path(&dest).exists(),
+            "temp file removed by the rename"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 404 means the object is gone: one attempt, status preserved in the
+    /// error, nothing written.
+    #[tokio::test]
+    async fn artifact_404_is_not_retried_and_writes_nothing() {
+        let dir = artifact_test_dir("404");
+        let dest = dir.join("kf-1.png");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = calls.clone();
+        let err = fetch_artifact_to(&dest, "https://cdn.test/gone.png", move || {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((
+                    404,
+                    scripted_body(vec![Ok(b"<Error>NoSuchKey</Error>".to_vec())]),
+                ))
+            }
+        })
+        .await
+        .expect_err("404 is a failure");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "4xx must not be retried");
+        assert!(err.contains("404"), "status preserved: {err}");
+        assert!(err.contains("NoSuchKey"), "body preview preserved: {err}");
+        assert!(!dest.exists(), "no artifact written for a 404");
+        assert!(!artifact_part_path(&dest).exists(), "no temp file left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every attempt reset mid-body: the error names the final cause, attempts
+    /// are bounded, and no `.part` file or truncated destination survives.
+    #[tokio::test]
+    async fn artifact_exhausted_retries_clean_up_temp_and_report_final_cause() {
+        let dir = artifact_test_dir("exhaust");
+        let dest = dir.join("kf-1.png");
+        let png = png_bytes(64);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = calls.clone();
+        let err = fetch_artifact_to(&dest, "https://cdn.test/flaky.png", move || {
+            let c = c.clone();
+            let png = png.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((
+                    200,
+                    scripted_body(vec![Ok(png), Err("error decoding response body".into())]),
+                ))
+            }
+        })
+        .await
+        .expect_err("all attempts fail");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            ARTIFACT_FETCH_ATTEMPTS as usize,
+            "retries are bounded"
+        );
+        assert!(
+            err.contains("error decoding response body"),
+            "final cause preserved: {err}"
+        );
+        assert!(err.contains("attempt 3"), "last attempt identified: {err}");
+        assert!(
+            !artifact_part_path(&dest).exists(),
+            "temp file removed after each failed attempt"
+        );
+        assert!(!dest.exists(), "no truncated artifact published");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The happy path: body streamed across several chunks, task dir created,
+    /// destination complete, temp file gone.
+    #[tokio::test]
+    async fn artifact_success_streams_and_atomically_renames() {
+        let dir = artifact_test_dir("ok");
+        // Parent does not exist yet — download must create the task dir.
+        let dest = dir.join("images").join("kf-1.png");
+        let png = png_bytes(9000);
+        let png2 = png.clone();
+
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = calls.clone();
+        fetch_artifact_to(&dest, "https://cdn.test/kf-1.png", move || {
+            let c = c.clone();
+            let png2 = png2.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                let third = png2.len() / 3;
+                Ok((
+                    200,
+                    scripted_body(vec![
+                        Ok(png2[..third].to_vec()),
+                        Ok(png2[third..third * 2].to_vec()),
+                        Ok(png2[third * 2..].to_vec()),
+                    ]),
+                ))
+            }
+        })
+        .await
+        .expect("first attempt succeeds");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no retry on success");
+        assert_eq!(std::fs::read(&dest).unwrap(), png, "full body written");
+        assert!(
+            !artifact_part_path(&dest).exists(),
+            "temp file consumed by the rename"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A 200 carrying an HTML error page must not be published as a `.png`.
+    /// This is the silent-corruption case retries cannot fix, so it fails fast.
+    #[tokio::test]
+    async fn artifact_non_png_body_is_rejected_and_temp_cleaned() {
+        let dir = artifact_test_dir("notpng");
+        let dest = dir.join("kf-1.png");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = calls.clone();
+        let err = fetch_artifact_to(&dest, "https://cdn.test/page.png", move || {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((
+                    200,
+                    scripted_body(vec![Ok(b"<!DOCTYPE html><html>err</html>".to_vec())]),
+                ))
+            }
+        })
+        .await
+        .expect_err("HTML is not a PNG");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "bad signature is fatal");
+        assert!(err.contains("not a PNG"), "error names the cause: {err}");
+        assert!(!dest.exists(), "no artifact published");
+        assert!(!artifact_part_path(&dest).exists(), "temp file removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An empty 200 body is rejected rather than materialized as a 0-byte file.
+    #[tokio::test]
+    async fn artifact_empty_body_is_rejected_and_temp_cleaned() {
+        let dir = artifact_test_dir("empty");
+        let dest = dir.join("kf-1.png");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = calls.clone();
+        let err = fetch_artifact_to(&dest, "https://cdn.test/void.png", move || {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok((200, scripted_body(vec![])))
+            }
+        })
+        .await
+        .expect_err("empty body is a failure");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(err.contains("empty"), "error names the cause: {err}");
+        assert!(!dest.exists());
+        assert!(!artifact_part_path(&dest).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 5xx IS transient and is retried within the bound; 403 is not.
+    #[test]
+    fn artifact_status_retryability_classification() {
+        assert!(status_is_retryable(500));
+        assert!(status_is_retryable(502));
+        assert!(status_is_retryable(503));
+        assert!(status_is_retryable(429));
+        assert!(status_is_retryable(408));
+        assert!(!status_is_retryable(400));
+        assert!(!status_is_retryable(403));
+        assert!(!status_is_retryable(404));
     }
 }

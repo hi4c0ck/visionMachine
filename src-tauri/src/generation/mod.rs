@@ -7,6 +7,7 @@
 mod compose;
 mod engine;
 mod ffmpeg;
+pub mod group;
 mod media;
 mod provider;
 mod registry;
@@ -21,8 +22,9 @@ pub use compose::{
 pub use engine::{EngineInput, EngineStage, GenerationEngine};
 pub use ffmpeg::{resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
-    append_jsonl, append_request_log, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
-    session_generation_dirs, session_media_root, write_json,
+    append_jsonl, append_request_log, clear_session_compose_artifacts, clear_staged_session_clips,
+    is_staged_session_clip, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
+    session_generation_dirs, session_media_root, write_json, STAGED_CLIP_PREFIX,
 };
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};

@@ -1,0 +1,45 @@
+name: Stale PRs and issues
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Daily at 06:00 UTC
+  # Allow manual runs (e.g. after a release freeze / triage sweep)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark / close stale PRs and issues
+        uses: actions/stale@v8
+        with:
+          # PRs
+          stale-pr-label: "stale"
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+          # Issues
+          stale-issue-label: "stale"
+          days-before-issue-stale: 60
+          days-before-issue-close: 14
+          # Keep the queue clean: only close after no maintainer interaction.
+          # Issues/PRs with the `pinned`, `security`, or `needs-split`
+          # labels are exempt so genuine work-in-progress is not swept.
+          exempt-pr-labels: "pinned,security,needs-split"
+          exempt-issue-labels: "pinned,security"
+          stale-pr-message: |
+            This PR has been inactive for 30 days. It will be closed in 7
+            days unless a maintainer or the author adds a comment. Small,
+            focused PRs that still need review: reply here to keep it open.
+          close-pr-message: |
+            Closing this PR for inactivity. Small, solid fixes are still
+            welcome — open a new PR if you want to continue this work.
+          stale-issue-message: |
+            This issue has been inactive for 60 days. It will be closed in
+            14 days unless a maintainer or the reporter adds a comment.
+          close-issue-message: |
+            Closing this issue for inactivity. Reopen it (or open a new one)
+            with fresh details if the problem is still reproducible.

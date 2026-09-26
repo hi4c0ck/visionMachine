@@ -114,15 +114,13 @@ impl Database {
 
         if let Some(row) = existing {
             let id: String = row.get(0);
-            sqlx::query(
-                "UPDATE composers SET config_json = ?, updated_at = ? WHERE id = ?",
-            )
-            .bind(&config_json)
-            .bind(&now)
-            .bind(&id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+            sqlx::query("UPDATE composers SET config_json = ?, updated_at = ? WHERE id = ?")
+                .bind(&config_json)
+                .bind(&now)
+                .bind(&id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| e.to_string())?;
         } else {
             let id = uuid::Uuid::new_v4().to_string();
             sqlx::query(
