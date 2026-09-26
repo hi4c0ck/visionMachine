@@ -78,6 +78,22 @@
     if (task) return task.status;
     return pipe.id === currentTaskId ? 'running' : 'queued';
   }
+  function statusClass(status: string): string {
+    switch (status) {
+      case 'done':
+        return 'gen-status-chip done';
+      case 'error':
+        return 'gen-status-chip error';
+      case 'cancelled':
+      case 'rate-limited':
+        return 'gen-status-chip cancelled';
+      case 'running':
+      case 'generating':
+        return 'gen-status-chip running';
+      default:
+        return 'gen-status-chip';
+    }
+  }
 </script>
 
 {#if open}
@@ -95,8 +111,8 @@
           <section class="compact-pipe" class:current={isCurrent}>
             <button class="compact-pipe-header" aria-expanded={taskId ? !!expanded[taskId] : false} onclick={() => toggle(pipe)} disabled={!taskId || staleUi.readOnly}>
               <span class="compact-pipe-name">{pipe.name}</span>
-              <span class="compact-pipe-progress"><span style={`width: ${Math.round((task?.progress ?? 0) * 100)}%`}></span></span>
-              <span class="compact-pipe-status">{statusFor(pipe)}</span>
+              <span class="gen-progress-track"><span style={`width: ${Math.round((task?.progress ?? 0) * 100)}%`}></span></span>
+              <span class={statusClass(statusFor(pipe))}>{statusFor(pipe)}</span>
               <span class="compact-pipe-chevron" aria-hidden="true">{taskId && expanded[taskId] ? '▾' : '▸'}</span>
             </button>
             {#if taskId && expanded[taskId]}
@@ -104,7 +120,7 @@
                 {#if loading[taskId] || !task}
                   <p class="gen-task-pending">Loading pipe stages…</p>
                 {:else}
-                  <div class="gen-progress-bar"><div class="gen-progress-fill" style={`width: ${Math.round(task.progress * 100)}%`}></div></div>
+                  <div class="gen-progress-track"><div class="gen-progress-fill" style={`width: ${Math.round(task.progress * 100)}%`}></div></div>
                   <ul class="gen-stage-list">
                     {#each task.stages as stage (stage.id + ':' + stage.label)}
                       <li class="gen-stage" class:done={stage.status === 'done' || stage.status === 'ready'} class:error={stage.status === 'error'} class:cancelled={stage.status === 'cancelled'} class:ratelimited={stage.status === 'rate-limited'}>
@@ -143,12 +159,11 @@
   .compact-pipe.current { border-color: var(--accent-color, #ff3e00); }
   .compact-pipe-header { width: 100%; display: grid; grid-template-columns: minmax(90px, 1fr) 120px 72px 18px; align-items: center; gap: 10px; padding: 9px 10px; border: 0; background: transparent; color: var(--text-primary, #fff); text-align: left; cursor: pointer; }
   .compact-pipe-header:disabled { cursor: default; }
-  .compact-pipe-progress { height: 5px; background: var(--bg-tertiary, #27272a); border-radius: 3px; overflow: hidden; }
-  .compact-pipe-progress span { display: block; height: 100%; background: var(--accent-color, #ff3e00); }
-  .compact-pipe-status { color: var(--text-muted, #a1a1aa); font: 11px 'JetBrains Mono', monospace; text-align: right; }
+  .compact-pipe-header .gen-progress-track { width: 100%; }
   .compact-pipe-chevron { color: var(--text-muted, #a1a1aa); }
   .compact-pipe-body { border-top: 1px solid var(--border-color, #3f3f46); padding: 9px; }
   .gen-stale-note { margin: 0; padding: 9px 10px; border-top: 1px solid var(--border-color, #3f3f46); color: var(--warning-color, #fbbf24); background: var(--bg-tertiary, #27272a); }
+  .gen-progress-fill { height: 100%; background: var(--accent-color, #ff3e00); transition: width 0.25s ease; }
   .gen-compose-note { margin: 0; padding: 9px 10px; border-top: 1px solid var(--border-color, #3f3f46); font-size: 12px; line-height: 1.45; display: flex; flex-direction: column; gap: 2px; }
   .gen-compose-note.ok { color: var(--success-color, #4ade80); background: var(--bg-tertiary, #27272a); }
   .gen-compose-note.warning, .gen-compose-note.info { color: var(--warning-color, #fbbf24); background: var(--bg-tertiary, #27272a); }

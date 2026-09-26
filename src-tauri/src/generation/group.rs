@@ -698,18 +698,11 @@ impl GroupCoordinator {
                 // generated" symptom).
                 match this.start_pipe(&next_input, &next).await {
                     Ok((tid, _)) => {
-                        // Record the task on the pipe row exactly as
-                        // `start_group` does for pipe #1: the row's
-                        // task_id is how `on_pipe_terminal` finds the row
-                        // later, so without it the follow-up pipe's terminal
-                        // event updates nothing (row stays "running", its
-                        // clip is never staged, and the compose falls back
-                        // to the originals minus this pipe).
-                        // Record the task on the pipe row exactly as
-                        // `start_group` does for pipe #1 — without this the
-                        // follow-up terminal event finds no row, so the row
-                        // stays "running" and the pipe's clip is never
-                        // staged into this run's composition.
+                        // Record the task on the pipe row exactly as `start_group`
+                        // does for pipe #1 — without this the follow-up terminal
+                        // event finds no row (the row's task_id is the lookup
+                        // key), so the row stays "running" at 0 progress and
+                        // the pipe's clip is never staged into the composition.
                         {
                             let mut m = this.state.lock().unwrap();
                             if let Some(r) = m.get_mut(&gid2) {

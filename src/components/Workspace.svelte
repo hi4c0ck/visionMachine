@@ -9,6 +9,7 @@
 	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
 	import SessionGenerateModal from './ComposerModals/SessionGenerateModal.svelte';
+	import type { SessionGenerateStats } from './ComposerModals/SessionGenerateModal.svelte';
 	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece } from '$types';
@@ -321,6 +322,18 @@
 		if (!selectedSession || !activePipe) return;
 		const r = await updateQ(selectedSession.id, activePipe.id, q);
 		if (r.errors.length > 0) console.error('[Workspace] updateQ:', r.errors);
+	}
+
+	// Per-pipe Q/C edits from the session-generation modal (any pipe, not just
+	// the active one) — same store path as the panel above.
+	async function handlePipeQValueChange(sessionId: string, pipeId: string, q: number) {
+		const r = await updateQ(sessionId, pipeId, q);
+		if (r.errors.length > 0) console.error('[Workspace] updateQ (modal):', r.errors);
+	}
+
+	async function handlePipeCValueChange(sessionId: string, pipeId: string, c: number) {
+		const r = await updateC(sessionId, pipeId, c);
+		if (r.errors.length > 0) console.error('[Workspace] updateC (modal):', r.errors);
 	}
 
 	async function handleCValueChange(c: number) {
@@ -1088,7 +1101,7 @@
 		showSessionGenerateModal = true;
 	}
 
-	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean) {
+	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats) {
 		if (!selectedSession || groupActive) return;
 		try {
 			// Per-pipe prompts + profile + resolved specs, matching the per-pipe
@@ -1956,7 +1969,18 @@
 
 			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
 			{#if showSessionGenerateModal && selectedSession}
-				<SessionGenerateModal bind:open={showSessionGenerateModal} session={selectedSession} pipes={selectedSession.pipes} onConfirm={confirmSessionGenerate} />
+				<SessionGenerateModal
+					bind:open={showSessionGenerateModal}
+					session={selectedSession}
+					pipes={selectedSession.pipes}
+					onConfirm={confirmSessionGenerate}
+					onFpsChange={handleFpsChange}
+					onResolutionChange={handleResolutionChange}
+					onOrientationChange={handleOrientationChange}
+					onPipeQChange={(pipeId, q) => handlePipeQValueChange(selectedSession.id, pipeId, q)}
+					onPipeCChange={(pipeId, c) => handlePipeCValueChange(selectedSession.id, pipeId, c)}
+					onSaveAs={() => handleCopySession(selectedSession.id)}
+				/>
 			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
 				<GenerateModal
