@@ -29,6 +29,7 @@
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
+	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { listen } from '@tauri-apps/api/event';
 
@@ -227,41 +228,12 @@
 	// the inverse of that sum: a global frame belongs to the pipe whose
 	// cumulative range contains it, and every pipe's composer ruler offsets
 	// the global playhead by that pipe's start — the same walk, read two ways.
-	interface SessionVideoLayout {
-		/** Pipe i's first frame in the spliced timeline (0-based), aligned to
-		 *  `pipes` order — so `starts[pipeIdx]` is that pipe's own offset. */
-		starts: number[];
-		/** Session-video frame → the owning pipe's index into the session
-		 *  array (out-of-range clamps to the last pipe). */
-		frameToPipe: (f: number) => number;
-	}
-	const sessionVideoLayout = $derived.by((): SessionVideoLayout | null => {
-		if (!previewIsSessionVideo || pipes.length === 0) return null;
-		// Walk in orderIndex (concat) order to compute each pipe's spliced
-		// start, but store the result ALIGNED to the `pipes` array so
-		// `starts[pipeIdx]` is that pipe's own offset for localFrameForPipe.
-		const order = [...pipes].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-		const starts = new Array<number>(pipes.length).fill(0);
-		let acc = 0;
-		for (const p of order) {
-			starts[pipes.indexOf(p)] = acc;
-			acc += p.lengthFrames ?? 0;
-		}
-		return {
-			starts,
-			frameToPipe: (f: number) => {
-				// Walk once to the owning pipe; clamp above the total to the
-				// last pipe so a rounding-overshoot playhead still lands.
-				let remaining = f;
-				for (const p of order) {
-					const len = p.lengthFrames ?? 0;
-					if (remaining < len || p === order[order.length - 1]) return pipes.indexOf(p);
-					remaining -= len;
-				}
-				return pipes.length - 1;
-			},
-			};
-	});
+	// The mapping math (starts / frameToPipe / local clamp / raw start) is
+	// unit-tested in src/lib/sessionVideoLayout.ts; the deriveds below just
+	// thread it through the session-video vs. composer-mode switch.
+	const sessionVideoLayout = $derived.by(() =>
+		previewIsSessionVideo ? computeSessionVideoLayout(pipes) : null
+	);
 
 	// Sliding the session-video carousel (or the top-panel frame step / arrow
 	// keys) moves the GLOBAL playhead. When the spliced video is the preview
@@ -283,12 +255,8 @@
 	// = not in session-video mode (rulers take selectedFrame as-is).
 	const localFrameForPipe = $derived.by(() => {
 		if (!previewIsSessionVideo || !sessionVideoLayout) return null;
-		return (pipeIdx: number): number => {
-			const pipe = pipes[pipeIdx];
-			if (!pipe) return 0;
-			const start = sessionVideoLayout.starts[pipeIdx] ?? 0;
-			return Math.min(Math.max(selectedFrame - start, 0), (pipe.lengthFrames ?? 0) - 1);
-		};
+		return (pipeIdx: number): number =>
+			localFrameForPipeLib(sessionVideoLayout, pipes, pipeIdx, selectedFrame);
 	});
 
 	// Sibling of the clamp above, WITHOUT it: the raw spliced start of pipe i,
@@ -297,7 +265,8 @@
 	// 0 in plain composer mode.
 	const pipeStartForPipe = $derived.by(() => {
 		if (!previewIsSessionVideo || !sessionVideoLayout) return null;
-		return (pipeIdx: number): number => sessionVideoLayout.starts[pipeIdx] ?? 0;
+		return (pipeIdx: number): number =>
+			pipeStartForPipeLib(sessionVideoLayout, pipes, pipeIdx);
 	});
 
 	// Settings (Phase 2): live object + re-sync on store change. The store
