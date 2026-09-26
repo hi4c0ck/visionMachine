@@ -129,9 +129,16 @@
 	}
 
 	$effect(() => {
+		// Track both the session AND the compose outcome so the preview
+		// re-renders when a group's auto-compose finishes and persists
+		// session_video_path (the group-terminal event may arrive before
+		// the DB write lands, so the first restore sees null; the second
+		// refetch updates these two and this effect re-runs).
 		const session = selectedSession;
 		const id = selectedSessionId;
 		void id;
+		void groupComposeState; // effect dep: re-run when compose outcome changes
+		void groupSessionVideoPath; // effect dep: re-run when the path lands
 		void restoreSelectedPreview(session);
 	});
 
