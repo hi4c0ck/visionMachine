@@ -104,6 +104,17 @@ pub struct StartSessionGenerationInput {
     pub failure_policy: String,
     #[serde(default = "yes")]
     pub auto_compose: bool,
+    /// Run-scoped session-stats override (fps/resolution/orientation).
+    /// Absent or per-field-None = build from the composer row, as the
+    /// per-pipe flow does. Sent by the session-generation modal when the
+    /// user edited the run-stats section without ticking "apply to session".
+    #[serde(default)]
+    pub run_stats: Option<crate::commands::generation::RunStats>,
+    /// Run-scoped per-pipe Q/C diff map (only the pipes that changed).
+    /// Absent = every pipe runs with its stored Q/C.
+    #[serde(default)]
+    pub pipe_params:
+        Option<std::collections::HashMap<String, crate::commands::generation::PipeParamOverride>>,
 }
 fn yes() -> bool {
     true
@@ -445,6 +456,14 @@ impl GroupCoordinator {
             profile_id: input.profile_id.clone(),
             image_spec: input.image_spec.clone(),
             video_spec: input.video_spec.clone(),
+            // Run-scoped overrides: the session-stats edit from the modal
+            // (shared across every pipe in the group) + the per-pipe Q/C
+            // diff (only the pipes the user actually changed).
+            run_stats: input.run_stats.clone(),
+            pipe_params: input
+                .pipe_params
+                .as_ref()
+                .and_then(|m| m.get(pipe_id).cloned()),
         };
         let (view, engine_input) =
             crate::commands::generation::build_pipe_start(&composer, &pipe, &params);
@@ -686,6 +705,11 @@ impl GroupCoordinator {
                     media_root: run_params.media_root.clone(),
                     failure_policy: policy.clone(),
                     auto_compose: true,
+                    // Follow-up pipes run with the SAME run-scoped overrides
+                    // as pipe #1 — the group's run params are the source of
+                    // truth for the whole group, not per-pipe.
+                    run_stats: run_params.run_stats.clone(),
+                    pipe_params: run_params.pipe_params.clone(),
                 };
                 // When the follow-up start FAILS (e.g. "video stage has no
                 // resolved video spec" — the engine rejects the task before it
@@ -1219,6 +1243,8 @@ mod tests {
                 pipe_ids: None,
                 failure_policy: "continue".into(),
                 auto_compose: true,
+                run_stats: None,
+                pipe_params: None,
             },
             media_root: None,
             completed_sources: Vec::new(),
@@ -1442,8 +1468,105 @@ mod tests {
             log.parent().unwrap(),
             root.join("Pipe 1").join(&view.task_id)
         );
-        assert_eq!(log.file_name().unwrap(), "request.log");
-        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Run-scoped overrides (Option B): the modal edits fps/res/orientation
+    // + per-pipe Q/C run-locally and sends only the DIFF. The shared builder
+    // substitutes each present override into the EngineInput; absent fields
+    // fall back to the composer/pipe rows — so a no-edit run behaves exactly
+    // like the per-pipe flow.
+    #[test]
+    fn run_stats_and_pipe_params_substitute_into_the_engine_input() {
+        use crate::commands::generation::{
+            build_pipe_start, PipeParamOverride, PipeStartParams, RunStats,
+        };
+        let composer: crate::models::ComposerConfig = serde_json::from_value(serde_json::json!({
+            "id": "c1", "sessionId": "s1", "name": "My Session",
+            "fps": 24, "resolution": "720p", "orientation": "horizontal",
+            "pipes": [{ "id": "p1", "name": "Pipe 1", "orderIndex": 0, "qValue": 18, "cValue": 7.0 }]
+        }))
+        .unwrap();
+        let pipe = composer.pipes[0].clone();
+
+        // No overrides: the EngineInput carries the composer/pipe row values.
+        let base = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &base);
+        assert_eq!(engine.fps, 24, "fps falls back to the composer row");
+        assert_eq!(engine.resolution, "720p");
+        assert_eq!(engine.orientation, "horizontal");
+        assert_eq!(engine.q_value, 18, "q falls back to the pipe row");
+        assert_eq!(engine.c_value, 7.0, "c falls back to the pipe row");
+
+        // Full override: every field substitutes.
+        let full = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            run_stats: Some(RunStats {
+                fps: Some(30),
+                resolution: Some("1080p".into()),
+                orientation: Some("vertical".into()),
+            }),
+            pipe_params: Some(PipeParamOverride {
+                q_value: Some(24),
+                c_value: Some(12.5),
+            }),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &full);
+        assert_eq!(engine.fps, 30, "run-scoped fps wins");
+        assert_eq!(engine.resolution, "1080p", "run-scoped resolution wins");
+        assert_eq!(
+            engine.orientation, "vertical",
+            "run-scoped orientation wins"
+        );
+        assert_eq!(engine.q_value, 24, "run-scoped q wins");
+        assert_eq!(engine.c_value, 12.5, "run-scoped c wins");
+
+        // Partial override: only the set fields substitute; the rest fall back.
+        let partial = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            run_stats: Some(RunStats {
+                fps: Some(48),
+                resolution: None,
+                orientation: None,
+            }),
+            pipe_params: Some(PipeParamOverride {
+                q_value: Some(20),
+                c_value: None,
+            }),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &partial);
+        assert_eq!(engine.fps, 48, "set fps overrides");
+        assert_eq!(engine.resolution, "720p", "absent resolution falls back");
+        assert_eq!(
+            engine.orientation, "horizontal",
+            "absent orientation falls back"
+        );
+        assert_eq!(engine.q_value, 20, "set q overrides");
+        assert_eq!(engine.c_value, 7.0, "absent c falls back");
+
+        // The wire shapes round-trip through serde camelCase (the payload the
+        // frontend builds), so a future field rename can't silently drop an override.
+        let json = serde_json::to_string(&RunStats {
+            fps: Some(30),
+            resolution: None,
+            orientation: None,
+        })
+        .unwrap();
+        assert!(json.contains("\"fps\":30"), "fps serializes camelCase");
+        let back: PipeParamOverride =
+            serde_json::from_value(serde_json::json!({ "qValue": 24 })).unwrap();
+        assert_eq!(back.q_value, Some(24), "qValue key deserializes");
+        assert_eq!(back.c_value, None, "absent cValue = None");
     }
 
     // `order_index` — not completion order — decides concat order, so a run

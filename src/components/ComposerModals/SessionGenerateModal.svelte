@@ -5,6 +5,7 @@
 	import { getSettings } from '$lib/settings/store';
 	import { modelsFor, getPreset, resolveSpecs } from '$lib/settings';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
+	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
 	import type { ModelSelection } from './GenerateModal.svelte';
 	import '../composer-modal.css';
 
@@ -14,17 +15,19 @@
 		orientation: Orientation;
 	}
 
+	/** Per-pipe Q/C run-local values keyed by pipe id. */
+	type PipeParamState = Record<string, { q: number; c: number }>;
+
 	let {
 		open = $bindable(false),
 		session,
 		pipes,
 		onConfirm,
-		/** Store-level setters so the run-stats edits persist to the session
-		 *  like the ToolsPanel does (updateFPS / updateResolution / …). */
+		/** Store-level setters used ONLY when "apply to session" is ticked —
+		 *  the canonical persistence path (updateFPS / updateResolution / …). */
 		onFpsChange,
 		onResolutionChange,
 		onOrientationChange,
-		/** Per-pipe Q/C setters (updateQ / updateC) for the run-stats row. */
 		onPipeQChange,
 		onPipeCChange,
 		/** "Save As": copy the session (media tree included) and redirect this
@@ -40,6 +43,8 @@
 			policy: 'stop' | 'continue',
 			autoCompose: boolean,
 			stats: SessionGenerateStats,
+			runStats: RunStats | null,
+			pipeParams: Record<string, PipeParamOverride> | null,
 		) => Promise<void> | void;
 		onFpsChange?: (fps: number) => void;
 		onResolutionChange?: (res: string) => void;
@@ -53,8 +58,12 @@
 	let autoCompose = $state(true);
 	let busy = $state(false);
 	let savingAs = $state(false);
+	/** When ticked, confirm additionally persists the edits to the session
+	 *  (store setters). Default OFF: edits are run-scoped only. */
+	let applyToSession = $state(false);
 
-	// ── Run stats (seeded from the open session; edits persist via the store) ──
+	// ── Run-local stats (seeded from the open session; NEVER written back
+	//    until Confirm with applyToSession ticked) ──
 	let fps = $state(session.fps);
 	let resolution = $state<ResolutionPreset>(session.resolution);
 	let orientation = $state<Orientation>(session.orientation);
@@ -63,8 +72,42 @@
 		fps = session.fps;
 		resolution = session.resolution;
 		orientation = session.orientation;
+		applyToSession = false;
 	});
 	const stats: SessionGenerateStats = $derived({ fps, resolution, orientation });
+
+	// The run-scoped diff: only fields that actually differ from the session
+	// value ride the wire (the backend builds the EngineInput from the
+	// composer row when a field is absent).
+	const runStats: RunStats = $derived.by(() => {
+		const out: RunStats = {};
+		if (fps !== session.fps) out.fps = fps;
+		if (resolution !== session.resolution) out.resolution = resolution;
+		if (orientation !== session.orientation) out.orientation = orientation;
+		return out;
+	});
+
+	// ── Per-pipe Q/C run-local values (seeded from the pipe rows) ──
+	let pipeParamsLocal = $state<PipeParamState>({});
+	$effect(() => {
+		if (!open) return;
+		pipeParamsLocal = Object.fromEntries(pipes.map((p: PipeRow) => [p.id, { q: p.qValue, c: p.cValue }]));
+	});
+	/** The Q/C diff map: only pipes whose local value differs from the row
+	 *  value, and only the values that changed. Empty → null on the wire. */
+	const pipeParams: Record<string, PipeParamOverride> = $derived.by(() => {
+		const out: Record<string, PipeParamOverride> = {};
+		for (const p of pipes) {
+			const local = pipeParamsLocal[p.id];
+			if (!local) continue;
+			const entry: PipeParamOverride = {};
+			if (local.q !== p.qValue) entry.qValue = local.q;
+			if (local.c !== p.cValue) entry.cValue = local.c;
+			if (Object.keys(entry).length > 0) out[p.id] = entry;
+		}
+		return out;
+	});
+	const hasPipeParamEdits = $derived(Object.keys(pipeParams).length > 0);
 
 	// ── Per-run model override (same pattern as GenerateModal) ──
 	let imageModel = $state('');
@@ -101,44 +144,43 @@
 	const secHint = $derived.by(() => {
 		const spec = selectedVideoModel;
 		if (!spec || spec.requestFormat !== 'video-job-seconds') return null;
-		// Use the longest pipe as the worst case for the hint.
 		const longest = pipes.reduce((acc: number, p: PipeRow) => Math.max(acc, p.lengthFrames ?? 0), 0);
 		if (!longest) return null;
 		return secondsPreview({ lengthFrames: longest } as PipeRow, session, spec);
 	});
 
 	// Block confirm only when the policy is 'stop' AND a conflict exists;
-	// 'continue' policy flags conflicts but still allows the run to start
-	// (healthy pipes proceed, conflicting ones are skipped at runtime).
+	// 'continue' policy flags conflicts but still allows the run to start.
 	const canStart = $derived(
 		pipes.length > 0 && (policy === 'continue' || allConflicts.length === 0),
 	);
 
+	const hasStatsEdits = $derived(
+		runStats.fps !== undefined || runStats.resolution !== undefined || runStats.orientation !== undefined,
+	);
+
 	function handlePipeQ(pipeId: string, e: Event) {
 		const next = Number((e.target as HTMLInputElement).value);
-		if (Number.isFinite(next)) onPipeQChange?.(pipeId, next);
+		if (Number.isFinite(next) && pipeParamsLocal[pipeId]) {
+			pipeParamsLocal = { ...pipeParamsLocal, [pipeId]: { ...pipeParamsLocal[pipeId], q: next } };
+		}
 	}
 	function handlePipeC(pipeId: string, e: Event) {
 		const next = Number((e.target as HTMLInputElement).value);
-		if (Number.isFinite(next)) onPipeCChange?.(pipeId, next);
+		if (Number.isFinite(next) && pipeParamsLocal[pipeId]) {
+			pipeParamsLocal = { ...pipeParamsLocal, [pipeId]: { ...pipeParamsLocal[pipeId], c: next } };
+		}
 	}
 
 	function handleFps(e: Event) {
 		const next = Number((e.target as HTMLSelectElement).value);
-		if (Number.isFinite(next)) {
-			fps = next;
-			onFpsChange?.(next);
-		}
+		if (Number.isFinite(next)) fps = next;
 	}
 	function handleResolution(e: Event) {
-		const next = (e.target as HTMLSelectElement).value as ResolutionPreset;
-		resolution = next;
-		onResolutionChange?.(next);
+		resolution = (e.target as HTMLSelectElement).value as ResolutionPreset;
 	}
 	function handleOrientation(e: Event) {
-		const next = (e.target as HTMLSelectElement).value as Orientation;
-		orientation = next;
-		onOrientationChange?.(next);
+		orientation = (e.target as HTMLSelectElement).value as Orientation;
 	}
 
 	function statusClass(status: string): string {
@@ -174,7 +216,22 @@
 		if (busy || !canStart) return;
 		busy = true;
 		try {
-			await onConfirm({ imageModel, videoModel }, seed, policy, autoCompose, stats);
+			// "Apply to session": persist the run-local edits through the
+			// canonical store path (the session row is updated + saved),
+			// so the modal's values and the session's values agree after
+			// the run. Run-scoped (toggle off): the session stays untouched.
+			if (applyToSession) {
+				if (runStats.fps !== undefined) onFpsChange?.(fps);
+				if (runStats.resolution !== undefined) onResolutionChange?.(resolution);
+				if (runStats.orientation !== undefined) onOrientationChange?.(orientation);
+				for (const [pipeId, entry] of Object.entries(pipeParams)) {
+					if (entry.qValue !== undefined) onPipeQChange?.(pipeId, entry.qValue);
+					if (entry.cValue !== undefined) onPipeCChange?.(pipeId, entry.cValue);
+				}
+			}
+			await onConfirm({ imageModel, videoModel }, seed, policy, autoCompose, stats,
+				Object.keys(runStats).length > 0 ? runStats : null,
+				hasPipeParamEdits ? pipeParams : null);
 		} catch (e) {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
 		} finally {
@@ -201,16 +258,21 @@
 					</div>
 				{/if}
 
-				<!-- ── Pipes (ordered) with per-pipe pre-checks ── -->
+				<!-- ── Pipes (ordered) with per-pipe pre-checks + local Q/C ── -->
 				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionPipes}</span>
 				<div class="gen-pipe-list">
 					{#each rows as row (row.pipe.id)}
+						{@const local = pipeParamsLocal[row.pipe.id]}
 						<div class="gen-pipe-row">
 							<span class="gen-pipe-name">{row.pipe.name}</span>
 							<span class="gen-chips"><span>{row.pipe.lengthFrames}f</span></span>
 							<span class="gen-pipe-params" aria-label="Pipe Q / C">
-								<label>Q<input type="number" min="1" max="50" value={row.pipe.qValue} onchange={(e) => handlePipeQ(row.pipe.id, e)} /></label>
-								<label>C<input type="number" min="1" max="30" step="0.1" value={row.pipe.cValue} onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
+								<label>Q<input type="number" min="1" max="50" value={local?.q ?? row.pipe.qValue}
+									class:changed={local && local.q !== row.pipe.qValue}
+									onchange={(e) => handlePipeQ(row.pipe.id, e)} /></label>
+								<label>C<input type="number" min="1" max="30" step="0.1" value={local?.c ?? row.pipe.cValue}
+									class:changed={local && local.c !== row.pipe.cValue}
+									onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
 							</span>
 							{#if row.conflicts.length}
 								<span class={statusClass('error')}>{row.conflicts[0].message}</span>
@@ -258,36 +320,37 @@
 					<span class="gen-sec-hint">≈ {secHint.shown}s{secHint.clamped ? ' (clamped)' : ''} · longest pipe</span>
 				{/if}
 
-				<!-- ── Run stats (session-level; edits persist via the store) ── -->
-				{#if onFpsChange || onResolutionChange || onOrientationChange}
-					<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunStats}</span>
-					<div class="gen-grid three">
-						<div class="gen-fieldrow">
-							<label for="sg-fps">{APP_CONSTANTS.strings.fps}</label>
-							<select id="sg-fps" value={String(fps)} onchange={handleFps}>
-								{#each APP_CONSTANTS.fpsPresets as f (f)}
-									<option value={String(f)}>{f}</option>
-								{/each}
-							</select>
-						</div>
-						<div class="gen-fieldrow">
-							<label for="sg-res">{APP_CONSTANTS.strings.resolution}</label>
-							<select id="sg-res" value={resolution} onchange={handleResolution}>
-								{#each APP_CONSTANTS.resolutions as r (r)}
-									<option value={r}>{r}</option>
-								{/each}
-							</select>
-						</div>
-						<div class="gen-fieldrow">
-							<label for="sg-orient">{APP_CONSTANTS.strings.orientation}</label>
-							<select id="sg-orient" value={orientation} onchange={handleOrientation}>
-								{#each APP_CONSTANTS.orientations as o (o)}
-									<option value={o}>{o}</option>
-								{/each}
-							</select>
-						</div>
+				<!-- ── Run stats (run-local; persist via the toggle below) ── -->
+				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunStats}</span>
+				<div class="gen-grid three">
+					<div class="gen-fieldrow">
+						<label for="sg-fps">{APP_CONSTANTS.strings.fps}</label>
+						<select id="sg-fps" value={String(fps)} onchange={handleFps}
+							class:changed={fps !== session.fps}>
+							{#each APP_CONSTANTS.fpsPresets as f (f)}
+								<option value={String(f)}>{f}</option>
+							{/each}
+						</select>
 					</div>
-				{/if}
+					<div class="gen-fieldrow">
+						<label for="sg-res">{APP_CONSTANTS.strings.resolution}</label>
+						<select id="sg-res" value={resolution} onchange={handleResolution}
+							class:changed={resolution !== session.resolution}>
+							{#each APP_CONSTANTS.resolutions as r (r)}
+								<option value={r}>{r}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="gen-fieldrow">
+						<label for="sg-orient">{APP_CONSTANTS.strings.orientation}</label>
+						<select id="sg-orient" value={orientation} onchange={handleOrientation}
+							class:changed={orientation !== session.orientation}>
+							{#each APP_CONSTANTS.orientations as o (o)}
+								<option value={o}>{o}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
 
 				<!-- ── Run options ── -->
 				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunOptions}</span>
@@ -306,6 +369,15 @@
 						</label>
 					</div>
 				</div>
+
+				<!-- ── Persist toggle (only when there's something to persist) ── -->
+				{#if hasStatsEdits || hasPipeParamEdits}
+					<label class="gen-check apply-toggle" aria-label="Apply to session">
+						<input type="checkbox" bind:checked={applyToSession} />
+						{APP_CONSTANTS.strings.sessionApplyToSession}
+						<span class="gen-hint">{APP_CONSTANTS.strings.sessionApplyToSessionHint}</span>
+					</label>
+				{/if}
 
 				{#if allConflicts.length > 0}
 					<ul class="gen-conflicts" aria-label="Generation conflicts">
@@ -413,6 +485,10 @@
 		border-color: var(--accent-color, #ff3e00);
 	}
 
+	.gen-pipe-params input.changed {
+		border-color: var(--warning-color, #fbbf24);
+	}
+
 	.gen-check {
 		display: flex;
 		align-items: center;
@@ -421,6 +497,22 @@
 		color: var(--text-secondary, #a1a1aa);
 		cursor: pointer;
 		padding: 9px 0;
+	}
+
+	.apply-toggle {
+		padding: 8px 10px;
+		border: 1px dashed var(--border-color, #3f3f46);
+		border-radius: 7px;
+	}
+
+	.gen-hint {
+		font-size: 11px;
+		color: var(--text-muted, #71717a);
+	}
+
+	/* Run-stats selects: highlight the ones that differ from the session. */
+	.gen-fieldrow select.changed {
+		border-color: var(--warning-color, #fbbf24);
 	}
 
 	.gen-sec-hint {

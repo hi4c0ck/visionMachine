@@ -67,6 +67,8 @@ const APP_CONSTANTS = {
     sessionRunOptions: 'Run options',
     sessionReady: 'Ready',
     sessionGenerating: 'Starting…',
+    sessionApplyToSession: 'Apply to session',
+    sessionApplyToSessionHint: 'Also save these edits to the session (off = run-only override)',
     sessionFailurePolicy: 'Failure policy',
     sessionStopPolicy: 'Stop on first error',
     sessionContinuePolicy: 'Continue with healthy pipes',

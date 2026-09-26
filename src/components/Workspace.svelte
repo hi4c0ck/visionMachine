@@ -21,7 +21,7 @@
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
 	import { isStaleGroup } from '$lib/compactPipes';
-	import { startSessionGeneration, fetchGenerationGroup, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy } from '$lib/composerStore/sessionGeneration';
+	import { startSessionGeneration, fetchGenerationGroup, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
@@ -1101,7 +1101,7 @@
 		showSessionGenerateModal = true;
 	}
 
-	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats) {
+	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null) {
 		if (!selectedSession || groupActive) return;
 		try {
 			// Per-pipe prompts + profile + resolved specs, matching the per-pipe
@@ -1111,7 +1111,7 @@
 			const pair = resolveSpecs(models.imageModel, models.videoModel);
 			const prompts: Record<string, string> = {};
 			for (const p of selectedSession.pipes) prompts[p.id] = summarizePipe(p, { fps: selectedSession?.fps ?? undefined });
-			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null });
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null, runStats: runStats ?? null, pipeParams: pipeParams ?? null });
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
 			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);

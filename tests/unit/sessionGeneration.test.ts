@@ -93,3 +93,39 @@ describe('session modal per-pipe prompts', () => {
     expect(withPrompts.prompts).toEqual({ p1: 'real' });
   });
 });
+
+// Run-scoped overrides (Option B): the modal edits fps/res/orientation +
+// per-pipe Q/C run-locally and sends only the DIFF. The payload must carry
+// both maps (or null when untouched) so the backend substitutes them into
+// the EngineInput; an empty diff serializes to null (the per-pipe default).
+describe('run-scoped stats + pipe-param overrides', () => {
+  const base: SessionGenerationInput = { sessionId: 's1', pipeIds: ['p1', 'p2'], failurePolicy: 'continue', autoCompose: true, imageModel: 'img', videoModel: 'vid', seed: 7, profileId: 'default' };
+
+  it('untouched: runStats and pipeParams serialize to null (build from rows)', () => {
+    const out = buildSessionGenerationPayload(base);
+    expect(out.runStats).toBeNull();
+    expect(out.pipeParams).toBeNull();
+  });
+
+  it('diff-only runStats ride the wire under camelCase keys', () => {
+    const out = buildSessionGenerationPayload({ ...base, runStats: { fps: 30 } });
+    expect(out.runStats).toEqual({ fps: 30 });
+    // A fully-set RunStats keeps all three keys so the Rust Option fields
+    // deserialize (absent keys would default to None = "use the row").
+    const full = buildSessionGenerationPayload({ ...base, runStats: { fps: 48, resolution: '1080p', orientation: 'vertical' } });
+    expect(full.runStats).toEqual({ fps: 48, resolution: '1080p', orientation: 'vertical' });
+  });
+
+  it('diff-only pipeParams: only changed pipes/values are sent', () => {
+    const out = buildSessionGenerationPayload({ ...base, pipeParams: { p2: { qValue: 24 } } });
+    expect(out.pipeParams).toEqual({ p2: { qValue: 24 } });
+    const out2 = buildSessionGenerationPayload({ ...base, pipeParams: { p1: { cValue: 12.5 }, p2: { qValue: 20, cValue: 9 } } });
+    expect(out2.pipeParams).toEqual({ p1: { cValue: 12.5 }, p2: { qValue: 20, cValue: 9 } });
+  });
+
+  it('explicit null maps serialize as null (serde Option default)', () => {
+    const out = buildSessionGenerationPayload({ ...base, runStats: null, pipeParams: null });
+    expect(out.runStats).toBeNull();
+    expect(out.pipeParams).toBeNull();
+  });
+});

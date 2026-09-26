@@ -124,6 +124,40 @@ pub struct StartGenerationInput {
     pub video_spec: Option<ModelSpecWire>,
 }
 
+// ── Run-scoped generation overrides (Option B: hybrid run-local + optional
+//    persist) ──────────────────────────────────────────────────────────────
+// The session-generation modal edits fps/res/orientation/Q/C run-locally and
+// sends the DIFF on the group's start input. The backend substitutes the
+// override values into the EngineInput when present; absent fields fall
+// back to the composer/pipe rows (the per-pipe default). A separate
+// "apply to session" toggle in the modal persists the edits through the
+// store setters — the two paths never run simultaneously for the same run.
+
+/// Run-scoped session-stats override. Each field is `None` when the user
+/// left it at the session's stored value (the backend builds the
+/// EngineInput from the composer row in that case).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStats {
+    #[serde(default)]
+    pub fps: Option<u32>,
+    #[serde(default)]
+    pub resolution: Option<String>,
+    #[serde(default)]
+    pub orientation: Option<String>,
+}
+
+/// Per-pipe Q/C override for one pipe. Only the values the user actually
+/// changed are set; the rest fall back to the pipe row's stored values.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipeParamOverride {
+    #[serde(default)]
+    pub q_value: Option<u32>,
+    #[serde(default)]
+    pub c_value: Option<f32>,
+}
+
 /// Every per-pipe generation start, whether it comes from the single-pipe
 /// `start_generation` command or the session group coordinator, is built
 /// here. Both callers pass the same params and therefore get identical
@@ -147,6 +181,12 @@ pub struct PipeStartParams {
     pub profile_id: Option<String>,
     pub image_spec: Option<ModelSpecWire>,
     pub video_spec: Option<ModelSpecWire>,
+    /// Run-scoped session-stats override (fps/resolution/orientation).
+    /// None = build from the composer row, as the per-pipe flow does.
+    pub run_stats: Option<RunStats>,
+    /// Run-scoped per-pipe Q/C override (diff map, only changed values).
+    /// None = build from the pipe row.
+    pub pipe_params: Option<PipeParamOverride>,
 }
 
 /// Build the initial task view + engine input for one pipe start. Pure: it
@@ -204,11 +244,31 @@ pub fn build_pipe_start(
         prompt: params.prompt.clone(),
         pipe_id: params.pipe_id.clone(),
         pipe_name: Some(pipe_name),
-        fps: composer.fps,
-        resolution: composer.resolution.clone(),
-        orientation: composer.orientation.clone(),
-        q_value: pipe.q_value,
-        c_value: pipe.c_value,
+        fps: params
+            .run_stats
+            .as_ref()
+            .and_then(|r| r.fps)
+            .unwrap_or(composer.fps),
+        resolution: params
+            .run_stats
+            .as_ref()
+            .and_then(|r| r.resolution.clone())
+            .unwrap_or_else(|| composer.resolution.clone()),
+        orientation: params
+            .run_stats
+            .as_ref()
+            .and_then(|r| r.orientation.clone())
+            .unwrap_or_else(|| composer.orientation.clone()),
+        q_value: params
+            .pipe_params
+            .as_ref()
+            .and_then(|p| p.q_value)
+            .unwrap_or(pipe.q_value),
+        c_value: params
+            .pipe_params
+            .as_ref()
+            .and_then(|p| p.c_value)
+            .unwrap_or(pipe.c_value),
         image_model: params.image_model.clone(),
         video_model: params.video_model.clone(),
         seed: params.seed,
@@ -269,6 +329,10 @@ pub async fn start_generation(
         profile_id: input.profile_id,
         image_spec: input.image_spec,
         video_spec: input.video_spec,
+        // The per-pipe flow has no run-scoped overrides — it always builds
+        // from the composer + pipe rows.
+        run_stats: None,
+        pipe_params: None,
     };
     let (view, engine_input) = build_pipe_start(&composer, &pipe, &params);
     let task_id = view.task_id.clone();

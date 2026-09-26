@@ -3,6 +3,21 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { GenerationTaskView, ModelSpec } from '$types';
 
 export type FailurePolicy = 'stop' | 'continue';
+/** Run-scoped session-stats override (fps/res/orientation). Only fields that
+ *  differ from the session's stored values are set; the backend builds the
+ *  EngineInput from the composer row when a field is absent. */
+export interface RunStats {
+  fps?: number;
+  resolution?: string;
+  orientation?: string;
+}
+/** Per-pipe Q/C diff map: only the pipes the user actually changed are
+ *  present, and only the values that differ from the pipe's stored values
+ *  are set. An empty/absent map means "run everything as stored". */
+export interface PipeParamOverride {
+  qValue?: number;
+  cValue?: number;
+}
 export interface SessionGenerationInput {
   sessionId: string; imageModel?: string; videoModel?: string; seed?: number | null;
   profileId?: string | null; pipeIds?: string[] | null; failurePolicy: FailurePolicy; autoCompose: boolean;
@@ -15,6 +30,12 @@ export interface SessionGenerationInput {
    *  these — without `video_spec` the video stage fails with
    *  "video stage has no resolved video spec". */
   imageSpec?: ModelSpec | null; videoSpec?: ModelSpec | null;
+  /** Run-scoped session-stats override (the modal's fps/res/orientation
+   *  edits, when "apply to session" is OFF). Absent = the backend uses
+   *  the composer row's values. */
+  runStats?: RunStats | null;
+  /** Run-scoped per-pipe Q/C diff map (only changed pipes/values). */
+  pipeParams?: Record<string, PipeParamOverride> | null;
 }
 export interface SessionGenerationStart { groupId: string; firstTaskId: string; firstView: GenerationTaskView; }
 /** One current-run source record: which pipe's clip fed this run's
@@ -42,7 +63,10 @@ export function buildSessionGenerationPayload(input: SessionGenerationInput) {
     failurePolicy: input.failurePolicy, autoCompose: input.autoCompose, prompts: input.prompts ?? null,
     // Serde mirror of the frontend catalog spec (Rust `ModelSpecWire`,
     // camelCase) — the same fields the per-pipe flow sends.
-    imageSpec: input.imageSpec ?? null, videoSpec: input.videoSpec ?? null };
+    imageSpec: input.imageSpec ?? null, videoSpec: input.videoSpec ?? null,
+    // Run-scoped overrides (Option fields on the Rust input — absent/null =
+    // "build from the composer/pipe rows", the per-pipe default).
+    runStats: input.runStats ?? null, pipeParams: input.pipeParams ?? null };
 }
 export async function startSessionGeneration(input: SessionGenerationInput): Promise<SessionGenerationStart> {
   const raw = await invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }) as any;
