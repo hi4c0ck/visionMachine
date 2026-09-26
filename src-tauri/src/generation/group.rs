@@ -109,6 +109,22 @@ fn yes() -> bool {
     true
 }
 
+/// Mark a group's pipe row as running the given task: the row's `task_id`
+/// is how `on_pipe_terminal` later locates the row when the task's terminal
+/// event arrives. If a started pipe's row never receives its task_id, that
+/// terminal event updates nothing — the row stays "running" forever, the
+/// pipe's clip is never collected/staged, and the final compose silently
+/// loses that pipe.
+fn mark_pipe_running(r: &mut GroupRun, pipe_id: &str, task_id: &str) {
+    r.current = Some(task_id.to_string());
+    if let Some(p) = r.pipes.iter_mut().find(|p| p.0 == pipe_id) {
+        p.1 = Some(task_id.to_string());
+        p.2 = "running".into();
+        p.3 = 0.0;
+        p.4 = None;
+    }
+}
+
 fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> Option<SourceVideo> {
     (event.status == Some(TaskStatus::Done))
         .then(|| {
@@ -318,7 +334,7 @@ impl GroupCoordinator {
         let first = q.pop_front().unwrap();
         let mut rows = Vec::new();
         for p in &pipes {
-            rows.push((p.id.clone(), None, p.id.clone(), 0.0, None));
+            rows.push((p.id.clone(), None, "queued".into(), 0.0, None));
         }
         {
             let mut m = self.state.lock().unwrap();
@@ -368,11 +384,7 @@ impl GroupCoordinator {
         {
             let mut m = self.state.lock().unwrap();
             if let Some(r) = m.get_mut(&gid) {
-                r.current = Some(tid.clone());
-                r.pipes.iter_mut().find(|p| p.0 == first).map(|p| {
-                    p.1 = Some(tid.clone());
-                    p.2 = "running".into();
-                });
+                mark_pipe_running(r, &first, &tid);
             }
         }
         self.index.lock().unwrap().insert(tid.clone(), gid.clone());
@@ -434,11 +446,13 @@ impl GroupCoordinator {
             image_spec: input.image_spec.clone(),
             video_spec: input.video_spec.clone(),
         };
-        let (view, engine_input) = crate::commands::generation::build_pipe_start(
-            &composer, &pipe, &params,
-        );
+        let (view, engine_input) =
+            crate::commands::generation::build_pipe_start(&composer, &pipe, &params);
         let tid = view.task_id.clone();
-        self.generation.registry.start(view.clone(), engine_input).await?;
+        self.generation
+            .registry
+            .start(view.clone(), engine_input)
+            .await?;
         Ok((tid, view))
     }
 
@@ -684,11 +698,24 @@ impl GroupCoordinator {
                 // generated" symptom).
                 match this.start_pipe(&next_input, &next).await {
                     Ok((tid, _)) => {
-                        this.state
-                            .lock()
-                            .unwrap()
-                            .get_mut(&gid2)
-                            .map(|r| r.current = Some(tid.clone()));
+                        // Record the task on the pipe row exactly as
+                        // `start_group` does for pipe #1: the row's
+                        // task_id is how `on_pipe_terminal` finds the row
+                        // later, so without it the follow-up pipe's terminal
+                        // event updates nothing (row stays "running", its
+                        // clip is never staged, and the compose falls back
+                        // to the originals minus this pipe).
+                        // Record the task on the pipe row exactly as
+                        // `start_group` does for pipe #1 — without this the
+                        // follow-up terminal event finds no row, so the row
+                        // stays "running" and the pipe's clip is never
+                        // staged into this run's composition.
+                        {
+                            let mut m = this.state.lock().unwrap();
+                            if let Some(r) = m.get_mut(&gid2) {
+                                mark_pipe_running(r, &next, &tid);
+                            }
+                        }
                         this.index.lock().unwrap().insert(tid.clone(), gid2.clone());
                         this.emit(GroupEvent {
                             group_id: gid2.clone(),
@@ -848,8 +875,9 @@ impl GroupCoordinator {
             // silently drop a pipe from the session video; falling back to the
             // originals is safe because they are the same clips, in pipe
             // order.
-            let staged_is_complete =
-                !staged.is_empty() && staged.len() == ordered.len() && staged.len() == sources.len();
+            let staged_is_complete = !staged.is_empty()
+                && staged.len() == ordered.len()
+                && staged.len() == sources.len();
             let mut fallback = sources.clone();
             fallback.sort_by_key(|s| {
                 ordered
@@ -1117,6 +1145,99 @@ mod tests {
         assert!(cancel.load(Ordering::Acquire));
     }
 
+    // Regression: a follow-up pipe started mid-run must have its task id
+    // recorded on the group's pipe row (`mark_pipe_running`), or its terminal
+    // event later finds no row (the row's task_id is the lookup key), the
+    // row stays "running" forever, and its clip is never staged — exactly
+    // the "session video is a lone copy of pipe 1" symptom.
+    #[test]
+    fn mark_pipe_running_records_task_id_on_the_pipe_row() {
+        let mut run = test_run(&["pipe-a", "pipe-b"]);
+        assert!(run.pipes.iter().all(|p| p.1.is_none()));
+        // start_group marks the FIRST pipe; the follow-up path marks the
+        // NEXT one — both through the same helper, so they can't drift.
+        mark_pipe_running(&mut run, "pipe-a", "task-a");
+        mark_pipe_running(&mut run, "pipe-b", "task-b");
+        let a = &run.pipes[0];
+        let b = &run.pipes[1];
+        assert_eq!(a.1.as_deref(), Some("task-a"));
+        assert_eq!(a.2, "running");
+        assert_eq!(
+            b.1.as_deref(),
+            Some("task-b"),
+            "the follow-up pipe's row must carry its task id"
+        );
+        assert_eq!(b.2, "running");
+        assert_eq!(
+            run.current.as_deref(),
+            Some("task-b"),
+            "current follows the newest start"
+        );
+    }
+
+    // The terminal-event lookup key: `on_pipe_terminal` finds the row by
+    // `p.1 == Some(&event.task_id)`. Verify a row marked by the helper is
+    // findable the same way the terminal path looks it up.
+    #[test]
+    fn marked_pipe_row_is_findable_by_the_terminal_event_lookup() {
+        let mut run = test_run(&["pipe-a", "pipe-b"]);
+        mark_pipe_running(&mut run, "pipe-b", "task-b");
+        let event_task_id = "task-b";
+        let p = run
+            .pipes
+            .iter()
+            .find(|p| p.1.as_deref() == Some(event_task_id))
+            .expect("the terminal lookup must find the follow-up pipe's row");
+        assert_eq!(p.0, "pipe-b");
+    }
+
+    // Initial rows must carry a real status string, not the pipe's own id —
+    // the view serializes p.2 straight to the wire, where the UI expects
+    // status strings like "queued"/"running"/"done"/"error".
+    #[test]
+    fn initial_pipe_rows_start_queued() {
+        let run = test_run(&["pipe-a", "pipe-b"]);
+        assert_eq!(run.pipes[0].2, "queued");
+        assert_eq!(run.pipes[1].2, "queued");
+    }
+
+    /// A minimal GroupRun for row-level tests (no registry/db involvement).
+    fn test_run(pipe_ids: &[&str]) -> GroupRun {
+        GroupRun {
+            session_id: "s1".into(),
+            pipes: pipe_ids
+                .iter()
+                .map(|id| (id.to_string(), None, "queued".into(), 0.0, None))
+                .collect(),
+            queue: pipe_ids.iter().map(|id| id.to_string()).collect(),
+            current: None,
+            policy: "continue".into(),
+            auto_compose: true,
+            input: StartSessionGenerationInput {
+                session_id: "s1".into(),
+                prompts: Default::default(),
+                media_root: None,
+                image_model: None,
+                video_model: None,
+                seed: None,
+                profile_id: None,
+                image_spec: None,
+                video_spec: None,
+                pipe_ids: None,
+                failure_policy: "continue".into(),
+                auto_compose: true,
+            },
+            media_root: None,
+            completed_sources: Vec::new(),
+            group_sources: Vec::new(),
+            compose_state: None,
+            compose_error: None,
+            session_video_path: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            started_at: 0,
+        }
+    }
+
     #[test]
     fn stage_source_clip_writes_order_indexed_copy() {
         let base = std::env::temp_dir().join(format!("vm_group_stage_{}", std::process::id()));
@@ -1233,8 +1354,7 @@ mod tests {
 
     #[test]
     fn stale_clip_sweep_removes_only_previous_runs_staged_clips() {
-        let base =
-            std::env::temp_dir().join(format!("vm_group_sweep_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("vm_group_sweep_{}", std::process::id()));
         let out_dir = base.join("session-video");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&out_dir).unwrap();
@@ -1320,9 +1440,15 @@ mod tests {
         // resolves sources under exactly this tree. Compare path components
         // rather than a joined string (Windows uses `\`).
         let root = std::path::PathBuf::from(engine.media_root.clone().unwrap());
-        assert_eq!(root, std::path::PathBuf::from("C:/media").join("My Session"));
+        assert_eq!(
+            root,
+            std::path::PathBuf::from("C:/media").join("My Session")
+        );
         let log = std::path::PathBuf::from(view.request_log.clone().unwrap());
-        assert_eq!(log.parent().unwrap(), root.join("Pipe 1").join(&view.task_id));
+        assert_eq!(
+            log.parent().unwrap(),
+            root.join("Pipe 1").join(&view.task_id)
+        );
         assert_eq!(log.file_name().unwrap(), "request.log");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1349,7 +1475,10 @@ mod tests {
         ];
         records.sort_by_key(|r| r.order_index);
         assert_eq!(
-            records.iter().map(|r| r.pipe_id.as_str()).collect::<Vec<_>>(),
+            records
+                .iter()
+                .map(|r| r.pipe_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["p0", "p2"],
             "concat order follows order_index, not completion order"
         );
