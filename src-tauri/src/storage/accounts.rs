@@ -31,7 +31,9 @@ impl AccountService {
     }
 
     async fn count(&self, sql: &str, profile_id: &str) -> Result<i64, String> {
-        let n: i64 = sqlx::query_scalar(sql)
+        // Dynamic SQL (format!-built subquery strings) — audited:
+        // every fragment is a static literal and user data is bound.
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
             .bind(profile_id)
             .fetch_one(&self.pool)
             .await
@@ -104,9 +106,10 @@ impl AccountService {
         let mut paths: Vec<String> = Vec::new();
 
         // Tracked artifacts: generated frames + project files.
-        let rows = sqlx::query(&format!(
+        // Audited: {sess}/{proj} are built from static literals; user data is bound.
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT file_path FROM generated_frames WHERE session_id IN ({sess}) \n UNION \n SELECT file_path FROM project_files WHERE project_id IN ({proj})"
-        ))
+        )))
         .bind(profile_id)
         .bind(profile_id)
         .fetch_all(&self.pool)
@@ -121,9 +124,10 @@ impl AccountService {
         }
 
         // Legacy generation-pipeline outputs (0002 tables, often empty).
-        let legacy = sqlx::query(&format!(
+        // Audited: {sess} is built from static literals; user data is bound.
+        let legacy = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT output_path FROM generation_tasks \n WHERE session_id IN ({sess}) AND output_path IS NOT NULL \n UNION \n SELECT image_path FROM keyframes \n WHERE image_path IS NOT NULL AND node_id IN \n (SELECT id FROM prompt_nodes WHERE pipe_id \n IN (SELECT id FROM pipes WHERE session_id IN ({sess})))"
-        ))
+        )))
         .bind(profile_id)
         .bind(profile_id)
         .fetch_all(&self.pool)
@@ -138,9 +142,9 @@ impl AccountService {
         }
 
         // Media refs embedded in composer / session JSON blobs.
-        let composers = sqlx::query_scalar::<_, String>(&format!(
+        let composers = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(format!(
             "SELECT config_json FROM composers WHERE session_id IN ({sess})"
-        ))
+        )))
         .bind(profile_id)
         .fetch_all(&self.pool)
         .await
@@ -149,9 +153,9 @@ impl AccountService {
             media_scan::collect_from_json(json, &mut paths);
         }
 
-        let blobs = sqlx::query(&format!(
+        let blobs = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT pipes_json, files_metadata FROM sessions WHERE project_id IN ({proj})"
-        ))
+        )))
         .bind(profile_id)
         .fetch_all(&self.pool)
         .await
@@ -236,10 +240,10 @@ impl AccountService {
             })
             .collect();
 
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, session_id, coalesce(name, ''), config_json, coalesce(version, 0) \
              FROM composers WHERE session_id IN ({sess_in})"
-        ))
+        )))
         .bind(profile_id)
         .fetch_all(&self.pool)
         .await
@@ -292,7 +296,8 @@ impl AccountService {
             format!("DELETE FROM projects WHERE profile_id IN ({proj})"),
             "DELETE FROM profiles WHERE id = ?".to_string(),
         ] {
-            sqlx::query(&sql)
+            // Audited: all fragments are static literals, user data is bound.
+            sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
                 .bind(profile_id)
                 .execute(&mut *tx)
                 .await

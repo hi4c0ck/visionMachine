@@ -201,7 +201,11 @@ impl Database {
             }
 
             log::info!("[DB] Executing: {}", stmt);
-            let r = sqlx::query(&stmt).execute(&self.pool).await;
+            // Audited: statements are parsed from our own static migration
+            // files (migrations/*.sql), never from user input.
+            let r = sqlx::query(sqlx::AssertSqlSafe(stmt.clone()))
+                .execute(&self.pool)
+                .await;
             if let Err(e) = r {
                 log::error!("[DB] Failed to execute: {:?}, error: {}", stmt, e);
                 return Err(format!("Migration error: {}", e));
@@ -699,7 +703,9 @@ impl Database {
 
         // Bind exactly the values for the present fields, in the same order,
         // then the session id. No NULLs, no bind-count mismatch.
-        let mut query = sqlx::query(&sql);
+        // Audited: `field` names come from the hard-coded `sets` literals
+        // above (never user input); all values are bound as parameters.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
         for (_, value) in &sets {
             query = query.bind(value);
         }
