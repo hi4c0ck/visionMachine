@@ -146,6 +146,47 @@ export function isConfigured(slot: ProviderSlot | null | undefined): boolean {
   return Boolean(validateHttpUrl(slot.baseUrl) && slot.apiKey && slot.model);
 }
 
+/**
+ * Per-kind provider status snapshot (P6).
+ *
+ * Captures the FACT that a key is present without ever carrying the key
+ * value itself — the chip and other UI read `hasKey`, not `slot.apiKey`.
+ * This is the shape the store recomputes on profile load and on every
+ * settings change, so the UI never re-derives key presence off the raw
+ * settings object (which can be mid-load / default-seeded and would report
+ * "key not set" even when the persisted key exists).
+ */
+export interface ProviderStatusSnapshot {
+  /** True when the slot's apiKey is non-empty (key set, regardless of validity). */
+  hasKey: boolean;
+  /** True when url + key + model are all present (the generation gate). */
+  configured: boolean;
+  /** The preset id, for the chip label. */
+  preset: string;
+  /** The model id, for the chip label. */
+  model: string;
+}
+
+/** Derive a key-presence status for one slot. Pure; never returns the key. */
+export function providerStatusFor(kind: ProviderKind, s: Settings): ProviderStatusSnapshot {
+  const slot = s.providers[kind];
+  return {
+    hasKey: Boolean(slot?.apiKey),
+    configured: isConfigured(slot),
+    preset: slot?.preset ?? '',
+    model: slot?.model ?? '',
+  };
+}
+
+/** Derive a status snapshot for every provider kind. */
+export function providerStatuses(s: Settings): Record<ProviderKind, ProviderStatusSnapshot> {
+  return {
+    text: providerStatusFor('text', s),
+    image: providerStatusFor('image', s),
+    video: providerStatusFor('video', s),
+  };
+}
+
 // Settings values are free strings; coerce into the app's closed unions so
 // callers (session creation, frame math) never see out-of-domain data.
 const KNOWN_RESOLUTIONS: readonly string[] = ['480p', '720p', '1080p'];

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { APP_CONSTANTS } from '$constants';
-	import type { Settings } from '$types';
+	import type { ProviderKind, Settings } from '$types';
+	import type { ProviderStatusSnapshot } from '$lib/settings/guards';
 	import ProviderStatus from './Settings/ProviderStatus.svelte';
 	import FrameCarousel from './FrameCarousel.svelte';
 
@@ -21,6 +22,7 @@
 		ruler = null,
 		showRuler = false,
 		providers = null,
+		providerStatus = null,
 		onopenprovidersettings,
 	} = $props<{
 		userName: string;
@@ -57,6 +59,8 @@
 		showRuler?: boolean;
 		/** Provider settings for the status chip (Phase 4). null = chip hidden. */
 		providers?: Settings['providers'] | null;
+		/** Per-kind key-presence / configured snapshot (P6) for the chip. */
+		providerStatus?: Record<ProviderKind, ProviderStatusSnapshot> | null;
 		/** Open the settings modal at the Providers tab. */
 		onopenprovidersettings?: () => void;
 	}>();
@@ -324,8 +328,8 @@
 				</select>
 			</div>
 
-			{#if providers && onopenprovidersettings}
-				<ProviderStatus {providers} onopen={onopenprovidersettings} />
+			{#if providers && providerStatus && onopenprovidersettings}
+				<ProviderStatus {providers} providerStatus={providerStatus} onopen={onopenprovidersettings} />
 			{/if}
 		</div>
 

@@ -13,6 +13,8 @@ import {
   maskKey,
   isConfigured,
   redactLog,
+  providerStatusFor,
+  providerStatuses,
 } from '../../src/lib/settings/guards';
 import { AGNES_PRESET, CUSTOM_PRESET, getPreset, modelsFor, getModel, defaultPresetFor } from '../../src/lib/settings/catalog';
 
@@ -106,6 +108,39 @@ describe('isConfigured', () => {
     expect(isConfigured({ preset: 'custom', baseUrl: 'https://x', apiKey: '', model: 'm' })).toBe(false);
     expect(isConfigured({ preset: 'custom', baseUrl: 'https://x', apiKey: 'k', model: '' })).toBe(false);
     expect(isConfigured(null)).toBe(false);
+  });
+});
+
+describe('providerStatusFor / providerStatuses (P6 — key-presence snapshot)', () => {
+  it('reports hasKey=true and configured=true for a fully-set slot', () => {
+    const s: Settings = {
+      ...DEFAULT_SETTINGS,
+      providers: {
+        ...DEFAULT_SETTINGS.providers,
+        video: { ...DEFAULT_SETTINGS.providers.video, apiKey: 'sk-real-key', baseUrl: 'https://apihub.agnes-ai.com' },
+      },
+    };
+    const st = providerStatusFor('video', s);
+    expect(st.hasKey).toBe(true);
+    expect(st.configured).toBe(true);
+    expect(st.preset).toBe('agnes');
+    expect(st.model).toBe('agnes-video-2.5-flash');
+    // The snapshot carries presence flags, never the key value.
+    expect(JSON.stringify(st)).not.toContain('sk-real-key');
+  });
+
+  it('reports hasKey=false + configured=false for the default keyless slot', () => {
+    const st = providerStatusFor('video', DEFAULT_SETTINGS);
+    expect(st.hasKey).toBe(false);
+    expect(st.configured).toBe(false);
+  });
+
+  it('providerStatuses covers every kind in one snapshot', () => {
+    const st = providerStatuses(DEFAULT_SETTINGS);
+    expect(Object.keys(st).sort()).toEqual(['image', 'text', 'video']);
+    expect(st.text.configured).toBe(false);
+    expect(st.image.hasKey).toBe(false);
+    expect(st.video.hasKey).toBe(false);
   });
 });
 

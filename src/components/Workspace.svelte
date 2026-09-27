@@ -27,7 +27,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
-		import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId } from '$lib/settings';
+		import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -272,8 +272,13 @@
 	// Settings (Phase 2): live object + re-sync on store change. The store
 	// replaces its object on every commit, so a plain reassignment re-renders.
 	let settings = $state<Settings>(getSettings());
+	// Provider status snapshot (P6): per-kind key presence + configured flag,
+	// recomputed by the store on profile load and on every settings change.
+	// The chip reads this instead of sniffing apiKey off the live settings.
+	let providerStatus = $state(getProviderStatus());
 	setOnSettingsChange(() => {
 		settings = getSettings();
+		providerStatus = getProviderStatus();
 	});
 
 	// Media-mode UI driver (docs/agnes-model-catalog.md, Q7): the configured
@@ -2005,6 +2010,7 @@
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
 		providers={settings.providers}
+		providerStatus={providerStatus}
 		onopenprovidersettings={() => {
 			settingsTab = 'providers';
 			showSettings = true;

@@ -7,8 +7,8 @@
 // mirrors composerStore's dev path.
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { Settings } from '$types';
-import { DEFAULT_SETTINGS, normalizeSettings } from './guards';
+import type { ProviderKind, Settings } from '$types';
+import { DEFAULT_SETTINGS, normalizeSettings, providerStatuses, type ProviderStatusSnapshot } from './guards';
 
 // The live normalized settings object. `current` is the source of truth;
 // consumers register via setOnSettingsChange (composerStore callback pattern)
@@ -18,6 +18,12 @@ let profileId: string | null = null;
 let saveTimer: number | null = null;
 let saving = false;
 let onChange: (() => void) | null = null;
+// Provider status snapshot (P6): a key-presence + configured flag per kind,
+// recomputed on profile load and on every settings change. UI reads THIS
+// (via getProviderStatus) instead of sniffing apiKey off the live settings
+// object, so a mid-load / default-seeded object can no longer report
+// "key not set" for a persisted key.
+let providerStatus: Record<ProviderKind, ProviderStatusSnapshot> = providerStatuses(current);
 
 function clone(s: Settings): Settings {
   return JSON.parse(JSON.stringify(s));
@@ -35,6 +41,16 @@ export function setOnSettingsChange(cb: (() => void) | null): void {
 
 export function getProfileId(): string | null {
   return profileId;
+}
+
+/**
+ * Read the provider status snapshot (P6): per-kind key presence + the
+ * generation gate. Recomputed on profile load and after every settings
+ * change; callers never re-derive key presence off the raw settings object.
+ * The snapshot carries `hasKey` (a boolean), never the key value.
+ */
+export function getProviderStatus(): Record<ProviderKind, ProviderStatusSnapshot> {
+  return providerStatus;
 }
 
 /**
@@ -60,6 +76,7 @@ export async function loadSettings(profile: string): Promise<void> {
     }
   }
   current = raw ? normalizeSettings(raw) : clone(DEFAULT_SETTINGS);
+  providerStatus = providerStatuses(current);
   syncFfmpegUserPath();
   onChange?.();
 }
@@ -81,6 +98,7 @@ export function syncFfmpegUserPath(): void {
  */
 export async function commitSettings(full: Settings): Promise<void> {
   current = normalizeSettings(full);
+  providerStatus = providerStatuses(current);
   syncFfmpegUserPath();
   onChange?.();
   await saveSettingsNow();
@@ -91,6 +109,7 @@ export function updateSettings(mutator: (draft: Settings) => void): void {
   const draft = clone(current);
   mutator(draft);
   current = normalizeSettings(draft);
+  providerStatus = providerStatuses(current);
   onChange?.();
   scheduleSave();
 }

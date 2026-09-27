@@ -5,16 +5,32 @@
 	// ACTUAL per-kind state (which slot is missing what) instead of a bare
 	// "Provider not set". Click opens the settings modal at the Providers tab.
 	import type { ProviderKind, Settings } from '$types';
-	import { isConfigured, PROVIDER_KINDS, maskKey } from '$lib/settings/guards';
+	import { isConfigured, PROVIDER_KINDS, maskKey, type ProviderStatusSnapshot } from '$lib/settings/guards';
 	import { getPreset, getModel } from '$lib/settings/catalog';
 
 	let {
 		providers,
+		providerStatus = null,
 		onopen,
 	} = $props<{
 		providers: Settings['providers'];
+		/**
+		 * Per-kind key-presence / configured snapshot (P6), recomputed by the
+		 * settings store on profile load + on every settings change. The chip
+		 * reads key presence from HERE (a boolean), never off the raw
+		 * settings object — so a mid-load / default-seeded settings object can
+		 * no longer report "key not set" for a persisted key. Optional for
+		 * backward compatibility: when absent, key presence is derived from
+		 * `providers` directly (the pre-fix behavior).
+		 */
+		providerStatus?: Record<ProviderKind, ProviderStatusSnapshot> | null;
 		onopen: () => void;
 	}>();
+
+	// Key-presence resolver: prefer the store's snapshot (P6); fall back to
+	// sniffing the live slot when the snapshot isn't wired (direct usage).
+	const hasKey = (kind: ProviderKind): boolean =>
+		providerStatus ? providerStatus[kind].hasKey : Boolean(providers[kind]?.apiKey);
 
 	// Per-kind diagnosis: which field is missing (url / key / model).
 	// A keyless agnes/custom provider still counts as usable ONLY when the
@@ -29,15 +45,22 @@
 		if (!slot) return ['url', 'key', 'model'];
 		const gaps: Gap[] = [];
 		if (!/^https?:\/\/\S+$/.test((slot.baseUrl ?? '').trim())) gaps.push('url');
-		if (!slot.apiKey) gaps.push('key');
+		if (!hasKey(kind)) gaps.push('key');
 		if (!slot.model) gaps.push('model');
 		return gaps;
 	}
 
 	const video = providers.video;
-	const videoOk = isConfigured(video);
-	const allOk = PROVIDER_KINDS.every((k) => isConfigured(providers[k]));
-	const missing = PROVIDER_KINDS.filter((k) => !isConfigured(providers[k]));
+	const videoConfigured = providerStatus
+		? providerStatus.video.configured
+		: isConfigured(video);
+	const videoOk = videoConfigured;
+	const allOk = PROVIDER_KINDS.every(
+		(k) => (providerStatus ? providerStatus[k].configured : isConfigured(providers[k])),
+	);
+	const missing = PROVIDER_KINDS.filter(
+		(k) => !(providerStatus ? providerStatus[k].configured : isConfigured(providers[k])),
+	);
 
 	// Video model display name (falls back to the raw id when it is not in the
 	// configured preset's catalog, e.g. a pending / custom model).
@@ -75,7 +98,9 @@
 					const gaps = gapsFor(k);
 					// Show the masked key prefix only when a key IS present, so
 					// the user sees "set but something else is off" vs "empty".
-					const keyPresent = Boolean(slot?.apiKey);
+					// The mask value comes from the live slot (display only, P6);
+					// the presence decision itself came from the snapshot.
+					const keyPresent = hasKey(k);
 					const masked = keyPresent ? ` (key ${maskKey(slot!.apiKey)})` : '';
 					return `${k}: ${gaps.join(' + ')} missing${masked}`;
 				})

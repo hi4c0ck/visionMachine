@@ -108,10 +108,11 @@ test.describe('Settings', () => {
   });
   test('provider status chip opens the modal at the Providers tab', async ({ page }) => {
     // The chip lives in the top bar; with the default (keyless) settings it
-    // reports the unconfigured state. Clicking it must land on Providers.
+    // reports the unconfigured state ("Video: key missing"). Clicking it must
+    // land on Providers.
     const chip = page.locator('.provider-chip');
     await expect(chip).toBeVisible();
-    await expect(chip).toContainText('Provider not set');
+    await expect(chip).toContainText('missing');
     await chip.click();
     const modal = page.locator('.settings-modal');
     await expect(modal).toBeVisible();
