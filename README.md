@@ -61,7 +61,7 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 | **Provider access** | Free Agnes generation is built in; for other providers, set a base URL + API key in **Settings → Providers** (see [docs/agnes-model-catalog.md](docs/agnes-model-catalog.md)). |
 
 [Releases page](https://github.com/hi4c0ck/visionMachine/releases) ·
-[What's new in v0.7.4](docs/releases)
+[What's new in v0.7.4](https://github.com/hi4c0ck/visionMachine/releases)
 
 ## Screenshot guide
 
