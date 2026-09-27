@@ -1,0 +1,66 @@
+# Keep the "latest version" lines in README.md in lockstep with the
+# version in package.json. Runs whenever the version string or the
+# README itself changes on develop; commits the rewrite back to develop
+# only when there is an actual diff, so it never produces no-op commits.
+
+name: Sync README version
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - package.json
+      - README.md
+      - .github/workflows/sync-readme-version.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-readme-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rewrite README version lines from package.json
+        id: rewrite
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Single source of truth: the frontend version in package.json.
+          # (It is kept in step with tauri.conf.json + Cargo.toml by hand
+          # at release time — see docs/ROADMAP.md "Release process".)
+          VERSION=$(node -p "require('./package.json').version")
+          echo "package.json version: $VERSION"
+
+          BEFORE=$(md5sum README.md | cut -d' ' -f1)
+
+          # Replace every "vX.Y.Z — download MSI" / "What's new in vX.Y.Z"
+          # marker with the current version. The patterns below are anchored
+          # to the exact two lines in README.md, so unrelated "v..." text
+          # elsewhere in the file is untouched.
+          sed -i -E "s|v[0-9]+\.[0-9]+\.[0-9]+ — download MSI|v${VERSION} — download MSI|" README.md
+          sed -i -E "s|What's new in v[0-9]+\.[0-9]+\.[0-9]+|What's new in v${VERSION}|" README.md
+
+          AFTER=$(md5sum README.md | cut -d' ' -f1)
+
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "README already reflects v${VERSION} — nothing to do."
+            exit 0
+          fi
+
+          # Commit the rewrite back to develop (bot-authored, no PR needed
+          # for a version-bump bookkeeping change).
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore(README): sync latest version to v${VERSION}"
+          git push origin HEAD:develop
+
+          echo "Updated README.md to v${VERSION}."

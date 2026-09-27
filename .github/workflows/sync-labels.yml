@@ -1,0 +1,75 @@
+# Keep the remote labels in lockstep with .github/labels.yml.
+# Runs on push to the labels file on develop (plus a weekly catch-up and a
+# manual trigger), so labels are created the moment labels.yml lands.
+
+name: Sync labels
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/sync-labels.yml
+  schedule:
+    - cron: '0 7 * * 1' # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sync-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync labels from .github/labels.yml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Desired labels from the declarative file, one per line:
+          # "name<TAB>color<TAB>description". Small PyYAML-free parser:
+          # walk top-level list items; each item has name/color/description.
+          DESIRED=$(python3 - <<'PY'
+          import re, sys
+          text = open('.github/labels.yml').read()
+          # Split into top-level list items: lines starting with "  - ".
+          items = re.split(r'(?m)^  - (?=name:)', text)
+          for it in items:
+              if not it.strip():
+                  continue
+              name = re.search(r'(?m)^\s*name:\s*(.+)$', it)
+              color = re.search(r'(?m)^\s*color:\s*(.+)$', it)
+              desc = re.search(r'(?m)^\s*description:\s*(.+)$', it)
+              if not name:
+                  continue
+              def clean(m):
+                  return m.group(1).strip().strip('"').strip("'") if m else ''
+              sys.stdout.write(f"{clean(name)}\t{clean(color)}\t{clean(desc)}\n")
+          PY
+          )
+
+          # Current remote labels: "name<TAB>color"
+          CURRENT=$(gh label list --json name,color --jq '.[] | [.name, .color] | @tsv')
+
+          # Create missing labels.
+          while IFS=$'\t' read -r name color desc; do
+            [ -z "$name" ] && continue
+            if ! echo "$CURRENT" | awk -F'\t' '{print $1}' | grep -qx "$name"; then
+              echo "Creating label: $name"
+              gh label create "$name" --color "$color" --description "$desc" --force
+            fi
+          done <<< "$DESIRED"
+
+          # Delete remote labels no longer desired.
+          for name in $(echo "$CURRENT" | awk -F'\t' '{print $1}'); do
+            if ! echo "$DESIRED" | awk -F'\t' '{print $1}' | grep -qx "$name"; then
+              echo "Deleting label: $name"
+              gh label delete "$name"
+            fi
+          done
+
+          echo "Label sync complete."

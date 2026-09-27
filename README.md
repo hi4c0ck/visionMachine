@@ -55,13 +55,13 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 
 | | |
 |---|---|
-| **Latest release** | [**v0.7.2 — download MSI**](https://github.com/hi4c0ck/visionMachine/releases/latest) |
+| **Latest release** | [**v0.7.4 — download MSI**](https://github.com/hi4c0ck/visionMachine/releases/latest) |
 | **System** | Windows 10/11, x64 |
 | **Install** | Run the MSI. SmartScreen will show an *"unknown publisher"* warning — the build is not code-signed yet. Click **More info → Run anyway**. |
 | **Provider access** | Free Agnes generation is built in; for other providers, set a base URL + API key in **Settings → Providers** (see [docs/agnes-model-catalog.md](docs/agnes-model-catalog.md)). |
 
 [Releases page](https://github.com/hi4c0ck/visionMachine/releases) ·
-[What's new in v0.7.2](docs/releases)
+[What's new in v0.7.4](docs/releases)
 
 ## Screenshot guide
 

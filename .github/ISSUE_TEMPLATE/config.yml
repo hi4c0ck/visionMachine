@@ -1,0 +1,4 @@
+# Controls the "New issue" form.
+# Keeping `blank_issue` on guarantees a free-form issue is always possible,
+# even if a template file is later deleted or misconfigured.
+blank_issue: true

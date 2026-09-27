@@ -1,0 +1,35 @@
+# Declarative source of truth for repo labels.
+#
+# Every label the project's templates and workflows reference lives here, with
+# a GitHub-standard color. `.github/workflows/sync-labels.yml` keeps the
+# remote labels in lockstep: creates what's missing, deletes what's absent.
+# Add a new label in ONE place (here) and the sync picks it up.
+
+labels:
+  - name: bug
+    color: "b60200"
+    description: "Something isn't working as expected"
+
+  - name: enhancement
+    color: "a2eeef"
+    description: "A new feature or improvement to existing behavior"
+
+  - name: docs
+    color: "0075ca"
+    description: "Documentation, comments, or in-app help text"
+
+  - name: needs-split
+    color: "d4c5f9"
+    description: "PR exceeds the size gate; split into smaller PRs"
+
+  - name: stale
+    color: "eeeeee"
+    description: "Inactive for a while; will close if no activity"
+
+  - name: pinned
+    color: "006b75"
+    description: "Pinned anchor issue; exempt from the stale sweep"
+
+  - name: security
+    color: "d73a4a"
+    description: "Security-related; exempt from the stale sweep"
