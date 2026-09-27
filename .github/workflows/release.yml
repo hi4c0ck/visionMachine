@@ -1,14 +1,21 @@
 name: Release (build on tag)
 
-# Build a Windows MSI when a vX.Y.Z tag is pushed that points at a commit
-# reachable from the `production` branch, and publish it to a GitHub Release.
+# Build Windows MSIs + a Linux AppImage when a vX.Y.Z tag is pushed that
+# points at a commit reachable from the `production` branch, and publish
+# them to a single GitHub Release.
 #
 # The "production only" guard prevents a stray tag cut on develop or a
-# feature branch from building an untested MSI. A tag whose commit is not
-# reachable from production fails the guard and the job is skipped.
+# feature branch from building untested installers. A tag whose commit is
+# not reachable from production fails the guard and the jobs are skipped.
 #
-# No code-signing certificate is configured yet, so the published MSI is
+# No code-signing certificate is configured yet, so the published MSIs are
 # unsigned (SmartScreen will show a warning — see the note in README.md).
+# The Linux AppImage is unsigned by design (AppImage has no native signing
+# chain); distros with AppArmor policies may prompt on first launch.
+#
+# The final publish job waits for BOTH platform build jobs and then creates
+# / updates the GitHub Release with all installers, so the release page
+# lists Windows + Linux assets in one place.
 
 on:
   push:
@@ -93,7 +100,8 @@ jobs:
       - name: Capture tiny MSI
         shell: pwsh
         run: |
-          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/tiny.msi
+          New-Item -ItemType Directory -Force -Path ./.release-msi | Out-Null
+          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/tiny.msi -Force
           Get-ChildItem ./.release-msi | Write-Host
 
       # ── Variant 2: full (bundled ffmpeg sidecar, ~155 MB) ────────────────
@@ -109,7 +117,7 @@ jobs:
       - name: Capture full MSI
         shell: pwsh
         run: |
-          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/full.msi
+          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/full.msi -Force
           Get-ChildItem ./.release-msi | Write-Host
 
       - name: Upload build artifacts
@@ -118,15 +126,95 @@ jobs:
           name: visionmachine-msi
           path: ./.release-msi/*.msi
 
+      # The GitHub Release itself is created by the `publish-release` job,
+      # which runs after BOTH platform builds finish and attaches every
+      # installer (MSI + AppImage) to a single release page.
+
+      - name: Print build info
+        run: |
+          Write-Host "Built tiny + full MSIs for release ${{ github.ref_name }}"
+
+  build-linux:
+    name: Build Linux AppImage
+    needs: [check-guard]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + ffmpeg sidecar
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/git/db/
+            src-tauri/target/
+            build-state/ffmpeg-cache/
+          key: ${{ runner.os }}-release-x86_64-unknown-linux-gnu-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # Full variant: bundle the pinned Btbn ffmpeg sidecar so session compose
+      # works out of the box on Linux too (same shape as the full MSI).
+      - name: Build full-variant AppImage (bundled ffmpeg)
+        run: node scripts/build/runner.mjs --light --features bundled-ffmpeg --target x86_64-unknown-linux-gnu
+
+      - name: Capture AppImage
+        run: |
+          mkdir -p ./.release-appimage
+          cp src-tauri/target/release/bundle/appimage/*.AppImage ./.release-appimage/full.AppImage
+          ls -la ./.release-appimage/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: visionmachine-appimage
+          path: ./.release-appimage/*.AppImage
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-release, build-linux]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download MSIs
+        uses: actions/download-artifact@v6
+        with:
+          name: visionmachine-msi
+          path: ./.release-assets
+
+      - name: Download AppImage
+        uses: actions/download-artifact@v6
+        with:
+          name: visionmachine-appimage
+          path: ./.release-assets
+
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ./.release-msi/tiny.msi
-            ./.release-msi/full.msi
+            ./.release-assets/*.msi
+            ./.release-assets/*.AppImage
           generate_release_notes: true
           body: |
-            Two Windows MSI variants:
+            **Windows (MSI)** — two variants:
 
             - **`tiny.msi`** — no bundled ffmpeg. Pipe generation works as-is;
               session compose ("Compose session video") requires an ffmpeg path
@@ -135,13 +223,11 @@ jobs:
               Btbn GPL build); session compose works out of the box, user path
               still takes precedence when set.
 
-            **Note:** both builds are unsigned (no code-signing certificate is
+            **Linux (AppImage)** — full variant with bundled ffmpeg sidecar,
+            works out of the box. Users needing AppArmor may need to allow the
+            AppImage through their policy on first launch.
+
+            **Note:** the MSIs are unsigned (no code-signing certificate is
             configured yet), so Windows SmartScreen will show an
             "unknown publisher" warning on first install. Click
             **More info → Run anyway**.
-
-            Install and use it, or build from source — see the README.
-
-      - name: Print release info
-        run: |
-          Write-Host "Published tiny + full MSIs to release ${{ github.ref_name }}"
