@@ -33,3 +33,21 @@ labels:
   - name: security
     color: "d73a4a"
     description: "Security-related; exempt from the stale sweep"
+
+# Labels the sync workflow is allowed to DELETE if they are no longer listed
+# above (e.g. a renamed/retired project label). GitHub's default triage
+# labels (duplicate, help wanted, good first issue, wontfix, question,
+# accessibility) and language labels (javascript, rust, dependencies) are
+# intentionally NOT here, so the sync never wipes them. The sync only ever
+# deletes a remote label when it is BOTH present remotely AND in this
+# allowlist but absent from the `labels:` list above (e.g. `documentation`,
+# which is a redundant duplicate of `docs`).
+deletable:
+  - bug
+  - enhancement
+  - docs
+  - documentation
+  - needs-split
+  - stale
+  - pinned
+  - security

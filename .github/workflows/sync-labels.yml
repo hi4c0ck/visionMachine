@@ -31,24 +31,36 @@ jobs:
           set -euo pipefail
 
           # Desired labels from the declarative file, one per line:
-          # "name<TAB>color<TAB>description". Small PyYAML-free parser:
-          # walk top-level list items; each item has name/color/description.
+          # "name<TAB>color<TAB>description". PyYAML-free line-walk parser:
+          # accumulate name/color/description across an item's lines, flush
+          # at the next "  - name:" boundary. Comment/blank lines skipped.
           DESIRED=$(python3 - <<'PY'
-          import re, sys
-          text = open('.github/labels.yml').read()
-          # Split into top-level list items: lines starting with "  - ".
-          items = re.split(r'(?m)^  - (?=name:)', text)
-          for it in items:
-              if not it.strip():
+          lines = open('.github/labels.yml').read().splitlines()
+          out, rec = [], {}
+          def flush():
+              if rec.get('name'):
+                  out.append((rec['name'], rec.get('color',''), rec.get('desc','')))
+              rec.clear()
+          in_labels = False
+          for line in lines:
+              s = line.strip()
+              if s == 'labels:':
+                  in_labels, rec = True, {}
                   continue
-              name = re.search(r'(?m)^\s*name:\s*(.+)$', it)
-              color = re.search(r'(?m)^\s*color:\s*(.+)$', it)
-              desc = re.search(r'(?m)^\s*description:\s*(.+)$', it)
-              if not name:
+              if s == 'deletable:':
+                  in_labels, rec = False, {}
                   continue
-              def clean(m):
-                  return m.group(1).strip().strip('"').strip("'") if m else ''
-              sys.stdout.write(f"{clean(name)}\t{clean(color)}\t{clean(desc)}\n")
+              if in_labels and s.startswith('- name:'):
+                  flush()
+                  rec['name'] = s.split(':', 1)[1].strip().strip('"').strip("'")
+              elif in_labels and s.startswith('color:'):
+                  rec['color'] = s.split(':', 1)[1].strip().strip('"').strip("'")
+              elif in_labels and s.startswith('description:'):
+                  rec['desc'] = s.split(':', 1)[1].strip().strip('"').strip("'")
+              elif in_labels and not s:
+                  flush()
+          flush()
+          print('\n'.join('\t'.join(r) for r in out))
           PY
           )
 
@@ -64,11 +76,36 @@ jobs:
             fi
           done <<< "$DESIRED"
 
-          # Delete remote labels no longer desired.
+          # Deletable labels: the sync may delete a remote label only when it is
+          # BOTH in the `deletable:` allowlist in labels.yml AND no longer listed
+          # above. This protects GitHub's default triage + language labels.
+          DELETABLE=$(python3 - <<'PY'
+          import re
+          lines = open('.github/labels.yml').read().splitlines()
+          out = []
+          in_block = False
+          for line in lines:
+              if line.rstrip() == 'deletable:':
+                  in_block = True
+                  continue
+              if in_block and (line.startswith('- ') or line.startswith('  - ')):
+                  out.append(line.split('-', 1)[1].strip().strip('"').strip("'"))
+              elif in_block and line.strip() and not line.startswith(' '):
+                  break  # next top-level key ends the block
+          print('\n'.join(out))
+          PY
+          )
+
+          # Delete only remote labels that are (a) deletable-allowlisted and
+          # (b) no longer desired. Never delete default triage/language labels.
           for name in $(echo "$CURRENT" | awk -F'\t' '{print $1}'); do
             if ! echo "$DESIRED" | awk -F'\t' '{print $1}' | grep -qx "$name"; then
-              echo "Deleting label: $name"
-              gh label delete "$name"
+              if echo "$DELETABLE" | grep -qx "$name"; then
+                echo "Deleting label: $name"
+                gh label delete "$name" --yes
+              else
+                echo "Skipping undeletable remote label: $name"
+              fi
             fi
           done
 
