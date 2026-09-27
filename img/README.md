@@ -1,7 +1,8 @@
 # img/
 
-Place the captured screenshots described in [SCREENSHOTS.md](../SCREENSHOTS.md)
-In this folder, using exactly these file names:
+Captured screenshots + short motion clips for the README's "A quick look"
+section. Place new captures here using the exact file names below
+(full capture rules: [SCREENSHOTS.md](../SCREENSHOTS.md)).
 
 **Already in place:**
 - `screenshot-composer.png` — the hero image (full composer, populated session)

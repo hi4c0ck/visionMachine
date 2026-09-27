@@ -63,29 +63,26 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 [Releases page](https://github.com/hi4c0ck/visionMachine/releases) ·
 [What's new in v0.7.4](https://github.com/hi4c0ck/visionMachine/releases)
 
-## Screenshot guide
+## A quick look
 
-*Each image shows one concrete workflow moment, not a tour of the whole
-app. See [SCREENSHOTS.md](SCREENSHOTS.md) for how the remaining captures
-will land in `img/`.)*
+Here's what you'll see in the app — each image shows one moment from a
+real workflow, so you can picture the flow before you start.
 
-1. **The composer at a glance** — pipes, keyframes, timeline with
-   segments/tags, and the tools panel, one screenshot (`img/screenshot-composer.png`).
+**The composer** — where you design a shot. Pipes, keyframes, the
+segment/tag timeline, and the tools panel, all in one view:
 
-   | Composer in motion |
-   |---|
-   | <img src="img/composer-preview.gif" alt="VisionMachine composer in motion" width="480"> |
+<p align="center">
+  <img src="img/composer-preview.gif" alt="The composer in motion" width="480">
+</p>
 
-2. **Your library** — projects/sessions panel with stored generations,
-   shown in motion (`img/projects-panel.gif`):
+**Your library** — every project and session you create stays right there
+in the side panel, ready to open again:
 
-   | Projects panel |
-   |---|
-   | <img src="img/projects-panel.gif" alt="Projects and sessions panel" width="320">
+<p align="center">
+  <img src="img/projects-panel.gif" alt="The projects and sessions panel" width="320">
+</p>
 
-*Remaining captures (`composer-tags.png`, `preview-ruler.png`,
-`generation-progress.png`) are on the [SCREENSHOTS.md](SCREENSHOTS.md)
-list — they land in `img/` once captured.*
+Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
 
 ## Try it in 5 minutes
 
