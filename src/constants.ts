@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.3';
+const APP_VERSION = '0.7.4';
 
 // Footer / attribution copy. The repo lives at hi4c0ck/visionMachine and
 // the copyright holder is @HorizonesMachines (see NOTICE.md / LICENSE).

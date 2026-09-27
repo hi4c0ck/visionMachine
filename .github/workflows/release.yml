@@ -100,9 +100,9 @@ jobs:
       - name: Capture tiny MSI
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path ./.release-msi | Out-Null
-          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/tiny.msi -Force
-          Get-ChildItem ./.release-msi | Write-Host
+          New-Item -ItemType Directory -Force -Path ./release-msi | Out-Null
+          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./release-msi/tiny.msi -Force
+          Get-ChildItem ./release-msi | Write-Host
 
       # ── Variant 2: full (bundled ffmpeg sidecar, ~155 MB) ────────────────
       # fetch-ffmpeg.mjs downloads the pinned Btbn GPL build for the target
@@ -117,14 +117,14 @@ jobs:
       - name: Capture full MSI
         shell: pwsh
         run: |
-          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./.release-msi/full.msi -Force
-          Get-ChildItem ./.release-msi | Write-Host
+          Copy-Item src-tauri/target/release/bundle/msi/*.msi ./release-msi/full.msi -Force
+          Get-ChildItem ./release-msi | Write-Host
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: visionmachine-msi
-          path: ./.release-msi/*.msi
+          path: ./release-msi/*.msi
 
       # The GitHub Release itself is created by the `publish-release` job,
       # which runs after BOTH platform builds finish and attaches every
@@ -201,15 +201,18 @@ jobs:
 
       - name: Capture AppImage
         run: |
-          mkdir -p ./.release-appimage
-          cp src-tauri/target/release/bundle/appimage/*.AppImage ./.release-appimage/full.AppImage
-          ls -la ./.release-appimage/
+          # NOTE: the staging dir must NOT be dot-prefixed. actions/upload-artifact
+          # treats leading-dot entries as hidden and will skip their contents
+          # ("No files were found"), so we use a plain `release-appimage/` name.
+          mkdir -p ./release-appimage
+          cp src-tauri/target/release/bundle/appimage/*.AppImage ./release-appimage/full.AppImage
+          ls -la ./release-appimage/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
           name: visionmachine-appimage
-          path: ./.release-appimage/*.AppImage
+          path: ./release-appimage/*.AppImage
 
   publish-release:
     name: Publish GitHub Release
@@ -221,20 +224,20 @@ jobs:
         uses: actions/download-artifact@v6
         with:
           name: visionmachine-msi
-          path: ./.release-assets
+          path: ./release-assets
 
       - name: Download AppImage
         uses: actions/download-artifact@v6
         with:
           name: visionmachine-appimage
-          path: ./.release-assets
+          path: ./release-assets
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ./.release-assets/*.msi
-            ./.release-assets/*.AppImage
+            ./release-assets/*.msi
+            ./release-assets/*.AppImage
           generate_release_notes: true
           body: |
             **Windows (MSI)** — two variants:
