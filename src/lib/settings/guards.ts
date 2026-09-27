@@ -149,18 +149,23 @@ export function isConfigured(slot: ProviderSlot | null | undefined): boolean {
 /**
  * Per-kind provider status snapshot (P6).
  *
- * Captures the FACT that a key is present without ever carrying the key
- * value itself — the chip and other UI read `hasKey`, not `slot.apiKey`.
- * This is the shape the store recomputes on profile load and on every
- * settings change, so the UI never re-derives key presence off the raw
- * settings object (which can be mid-load / default-seeded and would report
- * "key not set" even when the persisted key exists).
+ * Captures the FACTS the chip needs (key presence + the generation gate +
+ * which field is missing) without ever carrying the key value itself — the
+ * chip reads these booleans, never `slot.apiKey`. This is the shape the
+ * store recomputes on profile load and on every settings change, so the UI
+ * never re-derives key presence off the raw settings object (which can be
+ * mid-load / default-seeded and would report "key not set" even when the
+ * persisted key exists). It is the SINGLE source of truth the chip renders
+ * from — it must not mix this with the live `providers` object, which is
+ * what let the "Configured" badge and the chip's "key missing" disagree.
  */
 export interface ProviderStatusSnapshot {
   /** True when the slot's apiKey is non-empty (key set, regardless of validity). */
   hasKey: boolean;
   /** True when url + key + model are all present (the generation gate). */
   configured: boolean;
+  /** The exact field(s) still missing — `url` / `key` / `model`. */
+  gaps: ('url' | 'key' | 'model')[];
   /** The preset id, for the chip label. */
   preset: string;
   /** The model id, for the chip label. */
@@ -170,9 +175,17 @@ export interface ProviderStatusSnapshot {
 /** Derive a key-presence status for one slot. Pure; never returns the key. */
 export function providerStatusFor(kind: ProviderKind, s: Settings): ProviderStatusSnapshot {
   const slot = s.providers[kind];
+  const gaps: ('url' | 'key' | 'model')[] = [];
+  if (!slot) gaps.push('url', 'key', 'model');
+  else {
+    if (!validateHttpUrl(slot.baseUrl)) gaps.push('url');
+    if (!slot.apiKey) gaps.push('key');
+    if (!slot.model) gaps.push('model');
+  }
   return {
     hasKey: Boolean(slot?.apiKey),
     configured: isConfigured(slot),
+    gaps,
     preset: slot?.preset ?? '',
     model: slot?.model ?? '',
   };

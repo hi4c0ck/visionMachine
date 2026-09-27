@@ -51,6 +51,9 @@
 
 	// Preset switch reflows URL to the preset default and picks the first
 	// usable model for this kind — predictable, no dangling model.
+	// It also clears the key: a key belongs to the vendor its URL points at,
+	// so carrying the old preset's key into the new one made the card read
+	// "Configured" while the chip correctly reported the key as not set.
 	function setPreset(id: string) {
 		const next = getPreset(id);
 		if (!next || next.id === slot.preset) return;
@@ -60,6 +63,7 @@
 			...slot,
 			preset: next.id,
 			baseUrl: next.defaultBaseUrl,
+			apiKey: '',
 			model: model?.id ?? slot.model,
 		});
 		testResult = null;

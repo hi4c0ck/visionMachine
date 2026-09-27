@@ -27,8 +27,10 @@
 		onopen: () => void;
 	}>();
 
-	// Key-presence resolver: prefer the store's snapshot (P6); fall back to
-	// sniffing the live slot when the snapshot isn't wired (direct usage).
+	// Key-presence resolver: read the snapshot's `hasKey` when it's wired
+	// (the store recomputes it on load + every save, so it is the
+	// authoritative presence flag); only fall back to the live slot when
+	// the snapshot is absent (legacy direct-usage path).
 	const hasKey = (kind: ProviderKind): boolean =>
 		providerStatus ? providerStatus[kind].hasKey : Boolean(providers[kind]?.apiKey);
 
@@ -41,16 +43,25 @@
 	// empty.
 	type Gap = 'url' | 'key' | 'model';
 	function gapsFor(kind: ProviderKind): Gap[] {
+		// Single source of truth: read the gaps from the snapshot when it's
+		// wired (the store recomputes it on load + every save, so it is
+		// never stale relative to the persisted settings). Only fall back
+		// to the live slot for the field the snapshot does not carry — and
+		// even that is just the legacy direct-usage path.
+		if (providerStatus) return providerStatus[kind].gaps;
 		const slot = providers[kind];
 		if (!slot) return ['url', 'key', 'model'];
 		const gaps: Gap[] = [];
 		if (!/^https?:\/\/\S+$/.test((slot.baseUrl ?? '').trim())) gaps.push('url');
-		if (!hasKey(kind)) gaps.push('key');
+		if (!slot.apiKey) gaps.push('key');
 		if (!slot.model) gaps.push('model');
 		return gaps;
 	}
 
 	const video = providers.video;
+	// Every configured/gap/label decision below comes from the snapshot when
+	// it's wired — the dot color and the text can never disagree, because
+	// they read the same recomputed object instead of two different graphs.
 	const videoConfigured = providerStatus
 		? providerStatus.video.configured
 		: isConfigured(video);
