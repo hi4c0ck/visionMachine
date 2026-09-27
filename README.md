@@ -66,19 +66,26 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 ## Screenshot guide
 
 *Each image shows one concrete workflow moment, not a tour of the whole
-app. (Drop real captures into `img/` — see [SCREENSHOTS.md](SCREENSHOTS.md)
-for the exact list to capture.)*
+app. See [SCREENSHOTS.md](SCREENSHOTS.md) for how the remaining captures
+will land in `img/`.)*
 
 1. **The composer at a glance** — pipes, keyframes, timeline with
    segments/tags, and the tools panel, one screenshot (`img/screenshot-composer.png`).
-2. **Directing a shot** — a segment with camera + lighting tags selected,
-   showing per-zone prompt editing (`img/composer-tags.png`).
-3. **Seeing what got generated** — generated video in the top preview with
-   the frame ruler, scrubbed mid-clip (`img/preview-ruler.png`).
-4. **Progress you can trust** — the generation progress modal with
-   per-stage status (keyframes → video) (`img/generation-progress.png`).
-5. **Your library** — projects/sessions panel with stored generations
-   (`img/projects-panel.png`).
+
+   | Composer in motion |
+   |---|
+   | <img src="img/composer-preview.gif" alt="VisionMachine composer in motion" width="480"> |
+
+2. **Your library** — projects/sessions panel with stored generations,
+   shown in motion (`img/projects-panel.gif`):
+
+   | Projects panel |
+   |---|
+   | <img src="img/projects-panel.gif" alt="Projects and sessions panel" width="320">
+
+*Remaining captures (`composer-tags.png`, `preview-ruler.png`,
+`generation-progress.png`) are on the [SCREENSHOTS.md](SCREENSHOTS.md)
+list — they land in `img/` once captured.*
 
 ## Try it in 5 minutes
 
