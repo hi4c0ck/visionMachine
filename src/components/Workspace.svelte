@@ -27,7 +27,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
-		import { getSettings, loadSettings, setOnSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus } from '$lib/settings';
+		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -276,10 +276,14 @@
 	// recomputed by the store on profile load and on every settings change.
 	// The chip reads this instead of sniffing apiKey off the live settings.
 	let providerStatus = $state(getProviderStatus());
-	setOnSettingsChange(() => {
+	// Named + kept: setOnSettingsChange is ADDITIVE (multi-listener store), so
+	// this settings/providerStatus re-sync must coexist with the ffmpeg
+	// re-probe listener below — and onDestroy removes exactly this one.
+	const onSettingsChangeSync = () => {
 		settings = getSettings();
 		providerStatus = getProviderStatus();
-	});
+	};
+	setOnSettingsChange(onSettingsChangeSync);
 
 	// Media-mode UI driver (docs/agnes-model-catalog.md, Q7): the configured
 	// video model spec carries the row-visibility rules for the pipe UI.
@@ -1353,6 +1357,9 @@
 	let compositionProgress = $state<{ phase: 'preparing' | 'copy' | 'reencode' | 'finalizing' | 'complete'; progress: number; detail?: string } | null>(null);
 	let compositionUnlisten: (() => void) | null = null;
 	let ffmpegCapability = $state<{ source: string; path: string } | null>(null);
+	// Own settings-change listener for the ffmpeg re-probe (kept so onDestroy
+	// can remove exactly this one — the settings store is multi-listener).
+	let syncFfmpegReprobe: (() => void) | null = null;
 
 	function compositionLabel(state: typeof compositionProgress): string {
 		if (!state) return 'Composing…';
@@ -1376,12 +1383,12 @@
 				.then((r) => { ffmpegCapability = { source: r.source, path: r.path }; })
 				.catch(() => { ffmpegCapability = null; });
 		};
-		reprobe();
+		reprobe(); // initial probe on mount
 		// Re-probe when a settings commit lands (a user-set ffmpeg path takes
-		// effect without a restart).
-		setOnSettingsChange(() => {
-			void reprobe();
-		});
+		// effect without a restart). Own listener — additive store, so it
+		// coexists with the settings/providerStatus re-sync listener.
+		syncFfmpegReprobe = () => { void reprobe(); };
+		setOnSettingsChange(syncFfmpegReprobe);
 	});
 
 	function cancelSessionVideoComposition() {
@@ -1988,7 +1995,10 @@
 			activeGroupId = null;
 			groupTaskId = null;
 			stopWatching();
-		setOnSettingsChange(null);
+		// Remove BOTH settings listeners (the store is multi-listener — each
+		// removal must pass the exact registered reference).
+		unregisterSettingsChange(onSettingsChangeSync);
+		if (syncFfmpegReprobe) unregisterSettingsChange(syncFfmpegReprobe);
 	});
 </script>
 

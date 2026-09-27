@@ -3,7 +3,7 @@
  * Regression guard for: default seeding, normalization of raw shapes,
  * http(s)-only URLs, key masking, and the shareable-log redaction rule (P5/P6).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { GenerationLogEntry, Settings } from '../../src/types';
 import {
   DEFAULT_SETTINGS,
@@ -141,6 +141,46 @@ describe('providerStatusFor / providerStatuses (P6 — key-presence snapshot)', 
     expect(st.text.configured).toBe(false);
     expect(st.image.hasKey).toBe(false);
     expect(st.video.hasKey).toBe(false);
+  });
+});
+
+describe('settings store — multi-listener change notifications', () => {
+  // Regression: the store used to hold a single-slot `onChange`, so a later
+  // registration (the ffmpeg re-probe in Workspace's onMount) silently clobbered
+  // the settings/providerStatus re-sync listener — the provider status chip
+  // stayed stale after a Settings save. Both listeners must now fire.
+  it('fires every registered listener on a settings change, none clobbered', async () => {
+    const { setOnSettingsChange, unregisterSettingsChange, commitSettings, getProviderStatus } =
+      await import('../../src/lib/settings/store');
+    const first = vi.fn();
+    const second = vi.fn();
+    setOnSettingsChange(first);
+    setOnSettingsChange(second);
+
+    const full = {
+      ...DEFAULT_SETTINGS,
+      providers: {
+        ...DEFAULT_SETTINGS.providers,
+        video: {
+          ...DEFAULT_SETTINGS.providers.video,
+          apiKey: 'sk-test',
+          baseUrl: 'https://apihub.agnes-ai.com',
+        },
+      },
+    };
+    await commitSettings(full);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    // The snapshot both listeners read is the post-commit one.
+    expect(getProviderStatus().video.hasKey).toBe(true);
+
+    unregisterSettingsChange(first);
+    unregisterSettingsChange(second);
+    await commitSettings(full);
+    // Unregistered: neither fires again.
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
   });
 });
 

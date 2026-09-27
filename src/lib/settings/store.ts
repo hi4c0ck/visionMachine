@@ -17,7 +17,14 @@ let current: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 let profileId: string | null = null;
 let saveTimer: number | null = null;
 let saving = false;
-let onChange: (() => void) | null = null;
+// MULTIPLE independent listeners: each consumer (Workspace settings re-sync,
+// the ffmpeg re-probe, …) registers its own callback and no registration
+// clobbers the others. A single-slot `let onChange` here used to let a later
+// onMount registration (the ffmpeg re-probe) silently overwrite the
+// Workspace's settings/providerStatus re-sync, so the provider status chip
+// stayed stale after a Settings save. Adding chains; unregisterSettingsChange
+// removes. Each entry is a plain function (never null).
+const onChanges = new Set<() => void>();
 // Provider status snapshot (P6): a key-presence + configured flag per kind,
 // recomputed on profile load and on every settings change. UI reads THIS
 // (via getProviderStatus) instead of sniffing apiKey off the live settings
@@ -34,9 +41,25 @@ export function getSettings(): Settings {
   return current;
 }
 
-/** Register a notification callback (UI re-sync, mirrors composerStore's setOnUpdate). */
-export function setOnSettingsChange(cb: (() => void) | null): void {
-  onChange = cb;
+/**
+ * Register a settings-change notification callback (UI re-sync, mirrors
+ * composerStore's setOnUpdate). ADDITIVE: each consumer adds its own listener,
+ * so no registration clobbers another (the old single-slot let `onChange`
+ * let the ffmpeg re-probe silently overwrite the Workspace's
+ * settings/providerStatus re-sync). Pair with unregisterSettingsChange on
+ * teardown.
+ */
+export function setOnSettingsChange(cb: () => void): void {
+  onChanges.add(cb);
+}
+
+/** Remove a previously-registered listener (must be the same function ref). */
+export function unregisterSettingsChange(cb: () => void): void {
+  onChanges.delete(cb);
+}
+
+function notifyChanges(): void {
+  for (const cb of [...onChanges]) cb();
 }
 
 export function getProfileId(): string | null {
@@ -78,7 +101,7 @@ export async function loadSettings(profile: string): Promise<void> {
   current = raw ? normalizeSettings(raw) : clone(DEFAULT_SETTINGS);
   providerStatus = providerStatuses(current);
   syncFfmpegUserPath();
-  onChange?.();
+  notifyChanges();
 }
 
 /**
@@ -100,7 +123,7 @@ export async function commitSettings(full: Settings): Promise<void> {
   current = normalizeSettings(full);
   providerStatus = providerStatuses(current);
   syncFfmpegUserPath();
-  onChange?.();
+  notifyChanges();
   await saveSettingsNow();
 }
 
@@ -110,7 +133,7 @@ export function updateSettings(mutator: (draft: Settings) => void): void {
   mutator(draft);
   current = normalizeSettings(draft);
   providerStatus = providerStatuses(current);
-  onChange?.();
+  notifyChanges();
   scheduleSave();
 }
 
