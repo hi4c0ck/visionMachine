@@ -17,6 +17,18 @@ let current: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 let profileId: string | null = null;
 let saveTimer: number | null = null;
 let saving = false;
+// Monotonic generation counter. Every entry point that REPLACES `current`
+// (loadSettings / commitSettings / updateSettings) bumps it; an async load
+// that finishes after a newer commit/update is stale and must not clobber
+// the fresher state — this is the race that let the provider chip revert to
+// "key not set" on a freshly configured provider (a late loadSettings
+// re-applied the pre-save blob over the just-saved one).
+let generation = 0;
+
+function bumpGeneration(): number {
+  generation += 1;
+  return generation;
+}
 // MULTIPLE independent listeners: each consumer (Workspace settings re-sync,
 // the ffmpeg re-probe, …) registers its own callback and no registration
 // clobbers the others. A single-slot `let onChange` here used to let a later
@@ -82,6 +94,12 @@ export function getProviderStatus(): Record<ProviderKind, ProviderStatusSnapshot
  */
 export async function loadSettings(profile: string): Promise<void> {
   profileId = profile;
+  // Captured BEFORE the await: if a commit/update bumps the generation while
+  // this load is in flight, the persisted blob we read is stale — the chip
+  // would revert a freshly configured provider to "key not set", or re-apply
+  // a just-cleared key. Drop the late load instead of clobbering the newer
+  // in-memory state.
+  const gen = generation;
   let raw: unknown = null;
   if (isTauri()) {
     try {
@@ -98,6 +116,9 @@ export async function loadSettings(profile: string): Promise<void> {
       raw = null;
     }
   }
+  // A commit/update landed while this load was in flight — the persisted blob
+  // we just read is stale, so drop it instead of rolling the UI back.
+  if (gen !== generation) return;
   current = raw ? normalizeSettings(raw) : clone(DEFAULT_SETTINGS);
   providerStatus = providerStatuses(current);
   syncFfmpegUserPath();
@@ -120,6 +141,7 @@ export function syncFfmpegUserPath(): void {
  * Normalizes, updates the store, persists immediately.
  */
 export async function commitSettings(full: Settings): Promise<void> {
+  bumpGeneration();
   current = normalizeSettings(full);
   providerStatus = providerStatuses(current);
   syncFfmpegUserPath();
@@ -129,6 +151,7 @@ export async function commitSettings(full: Settings): Promise<void> {
 
 /** In-place typed mutation; schedules a debounced persist. */
 export function updateSettings(mutator: (draft: Settings) => void): void {
+  bumpGeneration();
   const draft = clone(current);
   mutator(draft);
   current = normalizeSettings(draft);
@@ -154,20 +177,22 @@ function scheduleSave(): void {
   }, 800);
 }
 
-async function persistNow(): Promise<void> {
-  if (saving || !profileId) return;
+function persistNow(): Promise<void> {
+  if (saving || !profileId) return Promise.resolve();
   saving = true;
-  try {
-    if (isTauri()) {
-      await invoke('save_settings', { profileId, settings: current });
-    } else {
-      localStorage.setItem(`vm-settings-${profileId}`, JSON.stringify(current));
+  return (async () => {
+    try {
+      if (isTauri()) {
+        await invoke('save_settings', { profileId, settings: current });
+      } else {
+        localStorage.setItem(`vm-settings-${profileId}`, JSON.stringify(current));
+      }
+    } catch (e) {
+      console.error('[settings] save failed:', e);
+    } finally {
+      saving = false;
     }
-  } catch (e) {
-    console.error('[settings] save failed:', e);
-  } finally {
-    saving = false;
-  }
+  })();
 }
 
 // ── Provider ping (P7: real reachability) ───────────────────────────────────

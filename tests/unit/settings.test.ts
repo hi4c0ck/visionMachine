@@ -182,6 +182,36 @@ describe('settings store — multi-listener change notifications', () => {
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
   });
+
+  // Regression: a loadSettings that was in flight when the user saved a new
+  // provider key used to re-apply the stale persisted blob on completion,
+  // rolling the chip back to "key not set" for a just-configured provider
+  // (and re-applying a just-cleared key). A commit while a load is in flight
+  // must invalidate the late load.
+  it('a commit during an in-flight loadSettings invalidates the late load', async () => {
+    const mod = await import('../../src/lib/settings/store');
+    const { loadSettings, commitSettings, getProviderStatus } = mod;
+    const full = {
+      ...DEFAULT_SETTINGS,
+      providers: {
+        ...DEFAULT_SETTINGS.providers,
+        video: {
+          ...DEFAULT_SETTINGS.providers.video,
+          apiKey: 'sk-new-key',
+          baseUrl: 'https://apihub.agnes-ai.com',
+        },
+      },
+    };
+    // Start a load (in browser dev it reads localStorage — no row yet → null),
+    // then commit a key BEFORE the load resolves. The late load must NOT
+    // clobber the committed snapshot.
+    const loadP = loadSettings('stale-load-profile');
+    await commitSettings(full);
+    expect(getProviderStatus().video.hasKey).toBe(true);
+    await loadP;
+    // The committed key survives the late load resolution.
+    expect(getProviderStatus().video.hasKey).toBe(true);
+  });
 });
 
 describe('redactLog (P5 — shareable log)', () => {
