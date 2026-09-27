@@ -1,3 +1,36 @@
+# VisionMachine v0.7.5
+
+### Provider settings (the main fix)
+- Provider status chip now always matches reality: configure a provider and
+  it shows configured immediately; clear the key and it shows "key needed"
+  immediately — no logout required
+- Switching the provider preset clears the API key with it, so a key from
+  the old vendor can no longer masquerade as "Configured"
+
+### Stability
+- A slow startup settings load can no longer overwrite a provider config
+  you just saved (stale-load guard in the settings store)
+- Projects list scrolls; profile panel stays pinned in landscape layout
+
+### Docs
+- README screenshot section rewritten as a friendly "A quick look"
+  guide, with two short motion clips of the composer and the projects
+  panel
+
+# VisionMachine v0.7.4
+
+### Linux support
+- Official Linux AppImage build (full variant, bundled ffmpeg) alongside
+  the Windows MSIs — same GitHub Release, both platforms
+- Linux AppImage build fixed to run natively; release CI asserts the
+  artifact exists
+
+### Repo
+- Canonical GPL-3.0 license text + attribution addendum moved to NOTICE
+- GitHub issue templates, PR template, declarative label sync
+- CI: Rust unit tests run on every PR; release pipeline hardened
+  (production-only tag guard, multi-platform publish)
+
 # VisionMachine v0.7.3
 
 ### Session generation (new)

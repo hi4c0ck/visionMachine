@@ -1,6 +1,6 @@
 [package]
 name = "vision-machine"
-version = "0.7.4"
+version = "0.7.5"
 description = "VisionMachine - AI-powered video generation desktop app"
 authors = []
 edition = "2021"
