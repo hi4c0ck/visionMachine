@@ -94,4 +94,17 @@ describe('per-executable SHA-256 pins', () => {
       internal.PinnedAssetSha256['ffmpeg-N-126782-gdc52424419-win64-gpl.zip'],
     ).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  describe('exec-bit guard (assertExecBit)', () => {
+    // assertExecBit is a no-op on Windows targets and on a Windows host
+    // (no exec bit concept); it only enforces + re-stamps on non-Windows
+    // targets staged from a non-Windows host. On this test host it must at
+    // minimum be present and callable without throwing for a Windows triple.
+    it('is exported and callable for a windows target (no-op)', () => {
+      expect(typeof internal.assertExecBit).toBe('function');
+      // windows target returns immediately regardless of host — safe to call
+      // with a non-existent path because the function exits before stat.
+      internal.assertExecBit('does-not-matter', 'ffmpeg', 'x86_64-pc-windows-msvc');
+    });
+  });
 });

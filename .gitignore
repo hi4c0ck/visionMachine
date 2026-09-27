@@ -129,6 +129,9 @@ src-tauri/dist/
 !src-tauri/binaries/
 !src-tauri/binaries/.gitkeep
 src-tauri/binaries/ffmpeg-*
+src-tauri/binaries/ffprobe-*
+# tar/zip extraction scratch trees dropped under binaries/ during staging
+src-tauri/binaries/.extract-*
 
 # Batch scripts in repo root (use build.bat instead)
 build-now.bat

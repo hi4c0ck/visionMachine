@@ -108,25 +108,40 @@ fn check_memory() -> CheckResult {
     // Try to get memory info from /proc/meminfo on Linux
     #[cfg(target_os = "linux")]
     {
-        if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
-            for line in content.lines() {
-                if line.starts_with("MemTotal:") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        if let Ok(kb) = parts[1].parse::<u64>() {
-                            let total_mb = kb / 1024;
-                            const MIN_MB: u64 = 2048;
-                            if total_mb < MIN_MB {
-                                return CheckResult::Fail(format!(
-                                    "Insufficient RAM: {} MB (need {} MB)",
-                                    total_mb, MIN_MB
-                                ));
+        // Reading meminfo can fail or the MemTotal line can be absent; either
+        // way we must still yield a CheckResult (not `()`), so the fall-through
+        // below returns a Warning rather than leaving the loop as the tail expr.
+        let found = std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|content| {
+                for line in content.lines() {
+                    if line.starts_with("MemTotal:") {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            if let Ok(kb) = parts[1].parse::<u64>() {
+                                let total_mb = kb / 1024;
+                                const MIN_MB: u64 = 2048;
+                                if total_mb < MIN_MB {
+                                    return Some(CheckResult::Fail(format!(
+                                        "Insufficient RAM: {} MB (need {} MB)",
+                                        total_mb, MIN_MB
+                                    )));
+                                }
+                                return Some(CheckResult::Pass(format!(
+                                    "Memory OK: {} MB total",
+                                    total_mb
+                                )));
                             }
-                            return CheckResult::Pass(format!("Memory OK: {} MB total", total_mb));
                         }
                     }
                 }
-            }
+                None
+            });
+        match found {
+            Some(result) => result,
+            None => CheckResult::Warning(
+                "Could not read /proc/meminfo MemTotal; memory not verified".to_string(),
+            ),
         }
     }
 

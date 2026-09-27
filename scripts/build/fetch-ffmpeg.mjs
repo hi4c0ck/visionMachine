@@ -22,6 +22,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -287,6 +288,10 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
       const assetName = path.basename(new URL(url).pathname);
       assertExecutableSha256(dest, 'ffmpeg', assetName);
       assertExecutableSha256(ffprobeDest, 'ffprobe', assetName);
+      // A locally-swapped file can be byte-identical but lose its exec bit;
+      // re-check (and re-stamp) on reuse too.
+      assertExecBit(dest, 'ffmpeg', target);
+      assertExecBit(ffprobeDest, 'ffprobe', target);
       stagedOk = true;
     } catch (e) {
       console.warn(
@@ -402,6 +407,9 @@ async function stageForTarget(target, { throwOnNoUrl = true } = {}) {
     renameSync(ffprobeSource, ffprobeDest);
     assertRealBinary(ffprobeDest);
     assertExecutableSha256(ffprobeDest, 'ffprobe', assetName);
+    // Non-Windows: guarantee the exec bit before shipping (see assertExecBit).
+    assertExecBit(dest, 'ffmpeg', target);
+    assertExecBit(ffprobeDest, 'ffprobe', target);
     // Success: drop the scratch tree (it still holds ffplay, docs, etc. we
     // didn't move). The failure path below keeps it for a re-extract.
     rmSync(outDir, { recursive: true, force: true });
@@ -584,6 +592,28 @@ function assertExecutableSha256(filePath, tool, assetName) {
   console.log(`[fetch-ffmpeg] ${tool} SHA-256 verified (${expected.slice(0, 12)}…)`);
 }
 
+// On non-Windows targets the sidecar is launched directly, so it must carry
+// the execute bit. tar -xJf preserves archive mode bits, but a non-exec
+// binary (from a umask, a cp-based refactor, or a different tar build) would
+// ship fine, bundle fine, and only fail at first launch with EACCES — a
+// runtime error we would otherwise never catch at build time. Re-stamp the
+// bit after staging so the build fails loud instead of the AppImage dying
+// on a real machine. No-op on Windows (no exec bit; .exe via PATHEXT).
+function assertExecBit(filePath, tool, target) {
+  if (target.includes('windows')) return;
+  if (process.platform === 'win32') return; // can't meaningfully chmod a Windows host
+  const mode = statSync(filePath).mode & 0o111;
+  if (mode === 0) {
+    throwStageError(
+      `staged ${tool} (${filePath}) has no execute bit (mode ${(statSync(filePath).mode & 0o777).toString(8)}) ` +
+        `— it would ship into the bundle but fail at first launch. Fix the staging path.`,
+    );
+  }
+  // Re-stamp owner/other exec so a future copy/restore can't silently strip it.
+  chmodSync(filePath, 0o755);
+  console.log(`[fetch-ffmpeg] ${tool} exec bit OK (0755)`);
+}
+
 function assertRealBinary(filePath) {
   const st = statSync(filePath);
   // A real ffmpeg build is at least a few MB; an HTML error page is <1 MB.
@@ -732,4 +762,5 @@ export const _internal = {
   destPath,
   PinnedExecutableSha256,
   PinnedAssetSha256,
+  assertExecBit,
 };
