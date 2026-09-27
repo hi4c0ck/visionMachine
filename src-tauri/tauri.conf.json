@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": ["msi", "appimage"],
     "icon": ["icons/icon.ico", "icons/icon.png"]
   }
 }
