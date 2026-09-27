@@ -249,9 +249,11 @@
   .projects-panel {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     background: var(--bg-secondary);
     border-right: 1px solid var(--panel-left-border);
+    overflow: hidden; /* list scrolls inside, never behind the profile panel */
   }
 
   .panel-header {
@@ -297,6 +299,8 @@
   .projects-list {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0; /* shrinkable inside the flex column; content scrolls, not pushes */
     padding: 6px;
   }
 
@@ -311,6 +315,7 @@
     transition: all var(--transition-fast);
     position: relative;
     border: 1px solid transparent;
+    flex-shrink: 0; /* rows keep their size; the list scrolls instead */
   }
 
   .project-item:hover {
@@ -408,6 +413,7 @@
     margin-bottom: 1px;
     transition: all var(--transition-fast);
     border: 1px solid transparent;
+    flex-shrink: 0; /* rows keep their size; the list scrolls instead */
   }
 
   .session-item:hover {

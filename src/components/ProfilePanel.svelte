@@ -75,11 +75,13 @@
 		gap: 8px;
 		padding: 10px 12px;
 		border-top: 1px solid var(--border-color, #4E525A);
+		/* Pin at the bottom of the left column at its NATURAL height. The
+		   projects panel above absorbs the free space and scrolls internally,
+		   so the Settings entry here is always reachable — the profile row
+		   must never be pushed below the viewport. */
 		flex-shrink: 0;
-		/* Sit compact at the bottom of the left column; the projects list
-			   above absorbs the free space. Also pins correctly in 'single'
-			   layout mode where the profile is the only child. */
 		margin-top: auto;
+		overflow: hidden;
 	}
 
 	/* ── Header ── */

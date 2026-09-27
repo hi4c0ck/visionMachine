@@ -2333,6 +2333,7 @@
 		display: flex;
 		flex: 1;
 		overflow: hidden;
+		min-height: 0; /* let the body shrink inside the 100vh column */
 	}
 
 	.left-column {
@@ -2341,6 +2342,8 @@
 		max-width: 320px;
 		display: flex;
 		flex-direction: column;
+		min-height: 0; /* needed so the ProjectsPanel child can shrink/scroll
+		                 instead of pushing the ProfilePanel out of the viewport */
 		background: var(--bg-secondary, #14141f);
 		border-right: 1px solid var(--panel-left-border, rgba(255, 215, 0, 0.35));
 		box-shadow: var(--shadow-panel-left, inset 0 0 40px rgba(255, 215, 0, 0.03));
