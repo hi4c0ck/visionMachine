@@ -173,8 +173,26 @@ jobs:
 
       # Full variant: bundle the pinned Btbn ffmpeg sidecar so session compose
       # works out of the box on Linux too (same shape as the full MSI).
+      # tauri.conf.json now declares targets: ["msi", "appimage"] — Tauri
+      # filters to the host platform, so on this ubuntu runner only the
+      # AppImage is produced. The runner's build step swallows tauri's
+      # bundling stdout, so we assert the artifact exists below to turn a
+      # silently-skipped bundle into a clear, diagnosable failure.
       - name: Build full-variant AppImage (bundled ffmpeg)
         run: node scripts/build/runner.mjs --light --features bundled-ffmpeg --target x86_64-unknown-linux-gnu
+
+      - name: Assert AppImage produced
+        run: |
+          echo "=== bundle output ==="
+          find src-tauri/target/release/bundle -type f 2>/dev/null || true
+          if ! ls src-tauri/target/release/bundle/appimage/*.AppImage 1>/dev/null 2>&1; then
+            echo "ERROR: tauri build finished but produced no AppImage."
+            echo "--- last tauri build log ---"
+            tail -40 build-state/build-*.log 2>/dev/null || echo "(no build log found)"
+            exit 1
+          fi
+          echo "AppImage present:"
+          ls -la src-tauri/target/release/bundle/appimage/
 
       - name: Capture AppImage
         run: |
