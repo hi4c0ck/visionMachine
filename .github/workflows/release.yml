@@ -173,22 +173,27 @@ jobs:
 
       # Full variant: bundle the pinned Btbn ffmpeg sidecar so session compose
       # works out of the box on Linux too (same shape as the full MSI).
-      # tauri.conf.json now declares targets: ["msi", "appimage"] — Tauri
-      # filters to the host platform, so on this ubuntu runner only the
-      # AppImage is produced. The runner's build step swallows tauri's
-      # bundling stdout, so we assert the artifact exists below to turn a
-      # silently-skipped bundle into a clear, diagnosable failure.
+      # No explicit --target: this IS the host triple, and passing it would make
+      # Tauri nest the whole build under target/x86_64-unknown-linux-gnu/,
+      # diverging from the capture path below (and from the Windows job, which
+      # builds natively into target/release/). ffmpeg staging defaults to the
+      # host triple when --target is absent, so this is a no-op for sidecar
+      # selection. tauri.conf.json declares targets: ["msi", "appimage"] —
+      # Tauri filters to the host platform, so only the AppImage is produced.
       - name: Build full-variant AppImage (bundled ffmpeg)
-        run: node scripts/build/runner.mjs --light --features bundled-ffmpeg --target x86_64-unknown-linux-gnu
+        run: node scripts/build/runner.mjs --light --features bundled-ffmpeg
 
       - name: Assert AppImage produced
         run: |
-          echo "=== bundle output ==="
-          find src-tauri/target/release/bundle -type f 2>/dev/null || true
+          # tauri's bundling stdout is swallowed by the runner, so assert the
+          # artifact exists on disk to turn a silently-skipped bundle into a
+          # clear, diagnosable failure (with the build log surfaced).
           if ! ls src-tauri/target/release/bundle/appimage/*.AppImage 1>/dev/null 2>&1; then
             echo "ERROR: tauri build finished but produced no AppImage."
             echo "--- last tauri build log ---"
             tail -40 build-state/build-*.log 2>/dev/null || echo "(no build log found)"
+            echo "--- any appimage dirs ---"
+            find src-tauri/target -type d -name appimage 2>/dev/null || true
             exit 1
           fi
           echo "AppImage present:"
