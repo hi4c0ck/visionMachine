@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Mark / close stale PRs and issues
-        uses: actions/stale@v8
+        uses: actions/stale@v11
         with:
           # PRs
           stale-pr-label: "stale"
