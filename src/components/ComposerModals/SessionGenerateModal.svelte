@@ -69,6 +69,11 @@
 	 *  run-local edits (fps/res/orientation, Q/C) survive the session swap and
 	 *  apply to the COPY instead of being reset to the copy's values. */
 	let saveAsDone = $state(false);
+	/** Pre-copy Q/C map, re-keyed to the copy's new pipe ids when the copy
+	 *  resolves (the backend re-mints every piece id in pipe order). */
+	let preCopyParams: PipeParamState | null = null;
+	/** Pipe ids captured before the copy; consumed once by the re-key effect. */
+	let oldPipeIdsRef: string[] | null = null;
 
 	// ── Run-local stats (seeded from the open session; NEVER written back
 	//    until Confirm with applyToSession ticked) ──
@@ -103,6 +108,27 @@
 		if (saveAsDone) return; // the copy re-mints the pipe ids; keep the
 		// edits the user typed before the copy instead of losing them.
 		pipeParamsLocal = Object.fromEntries(pipes.map((p: PipeRow) => [p.id, { q: p.qValue, c: p.cValue }]));
+	});
+	// Re-key: when the copy's re-minted pipe ids arrive (pipes prop updates
+	// after handleCopySession swaps selectedSessionId + loadSession resolves),
+	// map the captured pre-copy Q/C onto the new ids by pipe position
+	// (Pipe::rekeyed preserves order: old index i → new index i).
+	$effect(() => {
+		if (!saveAsDone || !preCopyParams || !oldPipeIdsRef) return;
+		const preCopy = preCopyParams; // capture — const narrows for the closure
+		const oldIds = oldPipeIdsRef;
+		const newIds = pipes.map((p: PipeRow) => p.id);
+		if (newIds.length === oldIds.length && newIds[0] !== oldIds[0]) {
+			// The pipes prop switched to the copy's re-minted ids — re-key now.
+			pipeParamsLocal = Object.fromEntries(
+				newIds.map((newId: string, i: number) => [
+					newId,
+					preCopy[oldIds[i]] ?? { q: pipes[i].qValue, c: pipes[i].cValue },
+				]),
+			);
+			preCopyParams = null;
+			oldPipeIdsRef = null;
+		}
 	});
 	/** The Q/C diff map: only pipes whose local value differs from the row
 	 *  value, and only the values that changed. Empty → null on the wire. */
@@ -215,10 +241,23 @@
 		if (savingAs || busy || !onSaveAs) return;
 		savingAs = true;
 		try {
+			// Capture the typed Q/C by pipe position BEFORE the copy re-mints
+			// every pipe id (Pipe::rekeyed preserves order, so index i of
+			// the old array maps to index i of the new one).
+			const oldPipeIds = pipes.map((p: PipeRow) => p.id);
+			preCopyParams = {
+				...pipeParamsLocal,
+				...Object.fromEntries(
+					pipes.map((p: PipeRow, i: number) => [p.id, { q: p.qValue, c: p.cValue }]),
+				),
+			};
 			await onSaveAs();
 			// The session prop now points at the copy; keep every run-local
-			// edit (stats + per-pipe Q/C) targeting it instead of re-seeding.
+			// edit (stats + Q/C) targeting it instead of re-seeding.
+			// The copy's re-minted pipe ids arrive with the next pipes prop
+			// update — the $effect below re-keys preCopyParams onto them.
 			saveAsDone = true;
+			oldPipeIdsRef = oldPipeIds;
 		} catch (e) {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
 		} finally {
