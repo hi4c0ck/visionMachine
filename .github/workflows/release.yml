@@ -221,19 +221,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download MSIs
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: visionmachine-msi
           path: ./release-assets
 
       - name: Download AppImage
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: visionmachine-appimage
           path: ./release-assets
 
       - name: Create / update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ./release-assets/*.msi
