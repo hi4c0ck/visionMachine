@@ -65,6 +65,10 @@
 	/** When ticked, confirm additionally persists the edits to the session
 	 *  (store setters). Default OFF: edits are run-scoped only. */
 	let applyToSession = $state(false);
+	/** "Save As" ran: suppress the open-change effect re-seeding so the local
+	 *  run-local edits (fps/res/orientation, Q/C) survive the session swap and
+	 *  apply to the COPY instead of being reset to the copy's values. */
+	let saveAsDone = $state(false);
 
 	// ── Run-local stats (seeded from the open session; NEVER written back
 	//    until Confirm with applyToSession ticked) ──
@@ -73,6 +77,7 @@
 	let orientation = $state<Orientation>(session.orientation);
 	$effect(() => {
 		if (!open) return;
+		if (saveAsDone) return; // session swapped to the copy — keep the run-local edits
 		fps = session.fps;
 		resolution = session.resolution;
 		orientation = session.orientation;
@@ -95,6 +100,8 @@
 	let pipeParamsLocal = $state<PipeParamState>({});
 	$effect(() => {
 		if (!open) return;
+		if (saveAsDone) return; // the copy re-mints the pipe ids; keep the
+		// edits the user typed before the copy instead of losing them.
 		pipeParamsLocal = Object.fromEntries(pipes.map((p: PipeRow) => [p.id, { q: p.qValue, c: p.cValue }]));
 	});
 	/** The Q/C diff map: only pipes whose local value differs from the row
@@ -205,10 +212,13 @@
 	}
 
 	async function saveAs() {
-		if (savingAs || !onSaveAs) return;
+		if (savingAs || busy || !onSaveAs) return;
 		savingAs = true;
 		try {
 			await onSaveAs();
+			// The session prop now points at the copy; keep every run-local
+			// edit (stats + per-pipe Q/C) targeting it instead of re-seeding.
+			saveAsDone = true;
 		} catch (e) {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
 		} finally {
