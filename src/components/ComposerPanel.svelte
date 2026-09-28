@@ -805,7 +805,7 @@ import { flashToast } from '$lib/flashToast';
 			{#if mediaState(pipe).downgraded}
 				<div class="media-downgrade-note" role="note"
 					title="This pipe has no media in the locked kind — deploy sends the other kind (or text) instead. Add media of the locked kind or switch the mode.">
-					<span class="media-downgrade-mark" aria-hidden="true">⚠</span> {mediaState(pipe).locked === 'keyframes' ? 'Keyframes' : 'Subjects'} locked but none in this pipe — deploy runs as {mediaState(pipe).effMode === 'text' ? 'text-only' : mediaState(pipe).effMode === 'keyframes' ? 'Keyframes' : 'Reference'}
+					<span class="media-downgrade-mark" aria-hidden="true">·</span> {mediaState(pipe).locked === 'keyframes' ? 'Keyframes' : 'Subjects'} locked but empty here → ships as {mediaState(pipe).effMode === 'text' ? 'text-only' : mediaState(pipe).effMode === 'keyframes' ? 'keyframes' : 'reference'}
 				</div>
 			{/if}
 			{#if mediaState(pipe).showToggle}
@@ -826,11 +826,6 @@ import { flashToast } from '$lib/flashToast';
 						onclick={() => handleMediaModeChange(pipe, 'reference')}>
 						Reference
 					</button>
-					{#if mediaState(pipe).downgraded}
-						<span class="media-mode-note" title="This pipe has no media in the locked kind — deploy will send the other kind (or text) instead.">
-							→ ships as {mediaState(pipe).effMode === 'keyframes' ? 'Keyframes' : 'Reference'}
-						</span>
-				{/if}
 				</div>
 			{/if}
 
@@ -1128,24 +1123,24 @@ import { flashToast } from '$lib/flashToast';
 		white-space: nowrap;
 	}
 
-	/* Pipe-level warning: the user's locked media kind has no pieces —
-		 the engine's content-aware resolution will ship the other kind (or text).
+	/* Pipe-level note: the user's locked media kind is empty — the engine's
+		 content-aware resolution ships the other kind (or text). Quiet and
+		 inline, not a blocking warning: this is informational, not an error.
 		 Shown above the keyframes/subject rows, even when the toggle is hidden
 		 (single-mode models that don't honor the stored lock). */
 	.media-downgrade-note {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		margin: 2px 0 6px;
-		padding: 4px 8px;
+		margin: 2px 0 4px;
 		font-size: 11px;
-		color: var(--warning-color, var(--text-muted, #71717a));
-		border: 1px dashed var(--warning-color, var(--border));
-		border-radius: 6px;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		color: var(--text-muted, #71717a);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.media-downgrade-mark {
+		display: inline-block;
+		margin-right: 2px;
+		color: var(--text-muted, #71717a);
 	}
 
 </style>

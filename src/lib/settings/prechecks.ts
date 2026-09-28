@@ -15,8 +15,7 @@ export interface PipeConflict {
     | 'frames-overflow'
     | 'fps-off-grid'
     | 'media-cap'
-    | 'txt2img-no-prompt'
-    | 'media-deploy';
+    | 'txt2img-no-prompt';
   message: string;
 }
 
@@ -123,28 +122,11 @@ export function pipePrechecks(
         }
       }
     }
-
-    // Locked-kind downgrade: the user's media-mode lock names a kind, but the
-    // effective wire mode cross-fell away from it because that kind holds no
-    // media pieces (and the other kind is also absent for the 'text' fall).
-    // Only for models with real mode rules — unknown models keep today's
-    // behavior (the lock is the whole story, no downgrade expected).
-    const lockWire = mediaLock === 'reference' ? 'reference' : 'keyframe';
-    if (effMode && media.modes.length > 0 && effMode !== lockWire) {
-      const lockedName = mediaLock === 'reference' ? 'reference (subjects)' : 'keyframes';
-      const effName =
-        effMode === 'keyframe'
-          ? 'keyframe'
-          : effMode === 'reference'
-            ? 'reference'
-            : 'text-only';
-      out.push({
-        code: 'media-deploy',
-        message: `${lockedName} locked but no ${
-          mediaLock === 'reference' ? 'subject' : 'keyframe'
-        } media in this pipe — deploy will run as ${effName}; add media or switch the mode`,
-      });
-    }
+    // NOTE: a locked kind with no media pieces (the engine cross-falls to the
+    // other kind or to `text`) is ACCEPTABLE — the content-aware resolution is
+    // the intended behavior, not a generation blocker. It is surfaced as a
+    // quiet note in the pipe UI (ComposerPanel's downgrade note), not here.
+    // Only caps / missing-prompt / cap-overflow are blocking conflicts.
   }
 
   // ── txt2img pieces must carry a prompt (O1 / E4) ─────────────────────
