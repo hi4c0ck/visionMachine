@@ -3,7 +3,8 @@
 // Runs on generation Confirm (gate) and when a single reference is
 // re-validated after an edit. Local (non-http) paths are skipped for now.
 
-import type { PipeRow } from '$types';
+import type { PipeRow, ModelMedia } from '$types';
+import { effectiveMediaMode } from '$lib/settings';
 
 export interface RefUrlTarget {
   refKind: 'keyframe' | 'subject';
@@ -21,7 +22,7 @@ export function isRemoteUrl(url: string): boolean {
  *  - subjects:  url / img2img → imageUrl (txt2img has none)
  * Non-http(s) paths are skipped here (uncheckable for now — D5).
  */
-export function collectRemoteUrls(pipe: PipeRow, videoMedia?: { sharedArray?: boolean }): RefUrlTarget[] {
+export function collectRemoteUrls(pipe: PipeRow, videoMedia?: ModelMedia): RefUrlTarget[] {
   const out: RefUrlTarget[] = [];
   const push = (refKind: RefUrlTarget['refKind'], refId: string, url: string | undefined) => {
     const u = url?.trim();
@@ -32,12 +33,12 @@ export function collectRemoteUrls(pipe: PipeRow, videoMedia?: { sharedArray?: bo
     if (ty === 'url') push('keyframe', kf.id, kf.imageSrc);
     if (ty === 'img2img') push('keyframe', kf.id, kf.referenceUrl);
   }
-  // Subjects only matter when the model actually consumes them:
-  //  - sharedArray: subjects merge into the keyframe image array
-  //  - reference mode: subjects are the primary input
-  // In plain keyframes mode, subjects are inert — skip them.
-  const mode = pipe.mediaMode ?? 'keyframes';
-  if (videoMedia?.sharedArray || mode === 'reference') {
+  // Subjects matter when the model ships them: sharedArray (merge into the
+  // keyframe array) or when the EFFECTIVE wire mode is reference (the
+  // content-aware resolution can cross-fall a locked keyframes pipe with no
+  // keyframes into reference — the D5 gate must cover those subjects).
+  const eff = effectiveMediaMode(pipe, videoMedia);
+  if (videoMedia?.sharedArray || eff === 'reference') {
     for (const sr of pipe.subjectReferences ?? []) {
       const ty = sr.type ?? 'url';
       if (ty === 'url' || ty === 'img2img') push('subject', sr.id, sr.imageUrl);

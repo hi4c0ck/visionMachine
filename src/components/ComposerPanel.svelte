@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec, GlobalElement, SoundElement, ResolutionPreset, Orientation } from '$types';
 	import { RESOLUTION_DIMS } from '$types';
+	import { effectiveMediaMode } from '$lib/settings';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
 	import SegmentModal from './ComposerModals/SegmentModal.svelte';
@@ -96,27 +97,41 @@ import { flashToast } from '$lib/flashToast';
 	const MAX_SUBJECT_REFS = 5;
 	const DEFAULT_FRAME_COUNT = 241;
 
-	// ── Media mode (docs/agnes-model-catalog.md, Q7) ──────────────────────────
+	// ── Media mode (docs/agnes-model-catalog.md, Q7) ──────────────────────────────
 	// Per-pipe row visibility is driven by the configured video model's media
 	// capabilities: unknown / dual / shared-array models keep BOTH rows;
 	// exclusive models show one row + the mode toggle.
+	//
+	// The stored pipe.mediaMode is a USER LOCK: it stays highlighted on the
+	// toggle even when the model would cross-fall, but row visibility follows
+	// the EFFECTIVE wire mode (effectiveMediaMode — the content-aware
+	// resolution the engine ships on deploy), so the "right tumbler" — the
+	// keyframes row vs the subject-refs row — matches what will actually send.
 	function mediaState(pipe: PipeRow): {
 		showKf: boolean;
 		showSubjects: boolean;
 		showToggle: boolean;
-		effMode: 'keyframes' | 'reference';
+		effMode: 'keyframes' | 'reference' | 'text';
+		/** The stored lock, independent of model capabilities — the toggle's source of truth. */
+		locked: 'keyframes' | 'reference';
+		/** Effective wire mode will cross-fall away from the lock (deploy runs the other kind or text). */
+		downgraded: boolean;
 	} {
 		const media = videoModel?.media;
-		const stored: 'keyframes' | 'reference' = pipe.mediaMode === 'reference' ? 'reference' : 'keyframes';
+		const locked: 'keyframes' | 'reference' = pipe.mediaMode === 'reference' ? 'reference' : 'keyframes';
 		if (!media || media.modes.length === 0 || media.dual || media.sharedArray) {
-			return { showKf: true, showSubjects: true, showToggle: false, effMode: stored };
+			return { showKf: true, showSubjects: true, showToggle: false, effMode: locked, locked, downgraded: false };
 		}
-		const effMode: 'keyframes' | 'reference' = media.modes.includes(stored) ? stored : (media.modes[0] ?? 'keyframes');
+		const eff = effectiveMediaMode(pipe, media);
+		const effMode: 'keyframes' | 'reference' | 'text' =
+			eff === 'keyframe' ? 'keyframes' : eff;
 		return {
 			showKf: effMode === 'keyframes',
 			showSubjects: effMode === 'reference',
 			showToggle: media.modes.length > 1,
 			effMode,
+			locked,
+			downgraded: effMode !== locked,
 		};
 	}
 
@@ -787,6 +802,12 @@ import { flashToast } from '$lib/flashToast';
 			/>
 
 			<!-- ═══ MEDIA MODE (pipe-level, model-driven — docs/agnes-model-catalog.md Q7) ═══ -->
+			{#if mediaState(pipe).downgraded}
+				<div class="media-downgrade-note" role="note"
+					title="This pipe has no media in the locked kind — deploy sends the other kind (or text) instead. Add media of the locked kind or switch the mode.">
+					<span class="media-downgrade-mark" aria-hidden="true">⚠</span> {mediaState(pipe).locked === 'keyframes' ? 'Keyframes' : 'Subjects'} locked but none in this pipe — deploy runs as {mediaState(pipe).effMode === 'text' ? 'text-only' : mediaState(pipe).effMode === 'keyframes' ? 'Keyframes' : 'Reference'}
+				</div>
+			{/if}
 			{#if mediaState(pipe).showToggle}
 				<div class="media-mode" role="group" aria-label="Media mode" onclick={(e) => e.stopPropagation()}
 				>
@@ -794,17 +815,22 @@ import { flashToast } from '$lib/flashToast';
 					<button
 						type="button"
 						class="media-opt"
-						class:active={mediaState(pipe).effMode === 'keyframes'}
+						class:active={mediaState(pipe).locked === 'keyframes'}
 						onclick={() => handleMediaModeChange(pipe, 'keyframes')}>
 						Keyframes
 					</button>
 					<button
 						type="button"
 						class="media-opt"
-						class:active={mediaState(pipe).effMode === 'reference'}
+						class:active={mediaState(pipe).locked === 'reference'}
 						onclick={() => handleMediaModeChange(pipe, 'reference')}>
 						Reference
 					</button>
+					{#if mediaState(pipe).downgraded}
+						<span class="media-mode-note" title="This pipe has no media in the locked kind — deploy will send the other kind (or text) instead.">
+							→ ships as {mediaState(pipe).effMode === 'keyframes' ? 'Keyframes' : 'Reference'}
+						</span>
+				{/if}
 				</div>
 			{/if}
 
@@ -1089,6 +1115,37 @@ import { flashToast } from '$lib/flashToast';
 		background: var(--accent, #ff3e00);
 		border-color: var(--accent, #ff3e00);
 		color: #fff;
+	}
+
+	/* Downgrade hint: the locked kind is empty — the deploy ships the other kind.
+		 Shown next to the toggle so the "right tumbler" the engine picks is visible. */
+	.media-mode-note {
+		font-size: 10px;
+		color: var(--warning-color, var(--text-muted, #71717a));
+		padding: 1px 6px;
+		border: 1px dashed var(--border);
+		border-radius: 999px;
+		white-space: nowrap;
+	}
+
+	/* Pipe-level warning: the user's locked media kind has no pieces —
+		 the engine's content-aware resolution will ship the other kind (or text).
+		 Shown above the keyframes/subject rows, even when the toggle is hidden
+		 (single-mode models that don't honor the stored lock). */
+	.media-downgrade-note {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin: 2px 0 6px;
+		padding: 4px 8px;
+		font-size: 11px;
+		color: var(--warning-color, var(--text-muted, #71717a));
+		border: 1px dashed var(--warning-color, var(--border));
+		border-radius: 6px;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 </style>

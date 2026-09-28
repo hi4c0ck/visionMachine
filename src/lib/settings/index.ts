@@ -12,4 +12,5 @@ export * from './guards';
 export * from './store';
 export * from './logs';
 export * from './prechecks';
+export * from './mediaMode';
 export * from './resolveSpecs';
