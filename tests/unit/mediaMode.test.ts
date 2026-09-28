@@ -1,7 +1,8 @@
 /**
  * Unit tests for mediaMode.ts — content-aware wire-mode resolution
- * (frontend mirror of Rust's `seconds_mode_wire`) + the `media-deploy`
- * precheck conflict.
+ * (frontend mirror of Rust's `seconds_mode_wire`), the ComposerPanel
+ * downgrade note behavior, and the non-blocking cap-against-effective-mode
+ * precheck.
  */
 import { describe, it, expect } from 'vitest';
 import { effectiveMediaMode, mediaLockMismatch, pipeMediaContent } from '../../src/lib/settings/mediaMode';
@@ -116,53 +117,34 @@ describe('pipeMediaContent', () => {
   });
 });
 
-describe('pipePrechecks — media-deploy (locked-kind downgrade)', () => {
+describe('pipePrechecks — locked-kind downgrade (acceptable, non-blocking)', () => {
   const sess = sessionWith();
   const dualSpec = secondsSpec({ media: { modes: ['keyframes', 'reference'], maxKeyframes: 2, maxRefs: 5 } });
 
-  it('flags a keyframes-locked pipe with no keyframes when subjects ship instead', () => {
-    const c = pipePrechecks(pipeWith({ mediaMode: 'keyframes', subjectReferences: [subj(1)] }), sess, null, dualSpec);
-    const hit = c.find((x) => x.code === 'media-deploy');
-    expect(hit).toBeTruthy();
-    expect(hit!.message).toContain('keyframes locked');
-    expect(hit!.message).toContain('reference');
+  it('does NOT block a keyframes-locked pipe that cross-falls to reference (subjects ship instead)', () => {
+    // The content-aware downgrade is acceptable: it surfaces as a quiet note in
+    // the pipe UI, not a generation-blocking conflict. A url subject with a
+    // real imageUrl is well-formed, so no conflict at all.
+    const c = pipePrechecks(
+      pipeWith({ mediaMode: 'keyframes', subjectReferences: [{ ...subj(1), imageUrl: 'https://x/i.png' }] }),
+      sess,
+      null,
+      dualSpec,
+    );
+    expect(c).toEqual([]);
   });
 
-  it('flags a reference-locked pipe with no subjects when keyframes ship instead', () => {
+  it('does NOT block a reference-locked pipe that cross-falls to keyframe', () => {
     const c = pipePrechecks(pipeWith({ mediaMode: 'reference', keyframes: [kf(1)] }), sess, null, dualSpec);
-    const hit = c.find((x) => x.code === 'media-deploy');
-    expect(hit).toBeTruthy();
-    expect(hit!.message).toContain('reference (subjects) locked');
-    expect(hit!.message).toContain('keyframe');
+    expect(c).toEqual([]);
   });
 
-  it('flags the text-only fall when both kinds are empty', () => {
+  it('does NOT block the text-only fall when both kinds are empty', () => {
     const c = pipePrechecks(pipeWith({ mediaMode: 'keyframes' }), sess, null, dualSpec);
-    const hit = c.find((x) => x.code === 'media-deploy');
-    expect(hit).toBeTruthy();
-    expect(hit!.message).toContain('text-only');
+    expect(c).toEqual([]);
   });
 
-  it('no conflict when the locked kind has content', () => {
-    const c = pipePrechecks(pipeWith({ mediaMode: 'keyframes', keyframes: [kf(1)] }), sess, null, dualSpec);
-    expect(c.map((x) => x.code)).not.toContain('media-deploy');
-  });
-
-  it('no conflict on a keyframes-only model when the lock is honored', () => {
-    const kfOnly = secondsSpec({ media: { modes: ['keyframes'], maxKeyframes: 2 } });
-    // The lock is honored (supported + has content) → no cross-fall, no conflict.
-    const c = pipePrechecks(pipeWith({ mediaMode: 'keyframes', keyframes: [kf(1)] }), sess, null, kfOnly);
-    expect(c.map((x) => x.code)).not.toContain('media-deploy');
-    // Unsupported lock (reference on a keyframes-only model) cross-falls to
-    // keyframe when keyframe content is present → the downgrade IS surfaced,
-    // naming the wire mode that ships.
-    const c2 = pipePrechecks(pipeWith({ mediaMode: 'reference', keyframes: [kf(1)] }), sess, null, kfOnly);
-    const hit = c2.find((x) => x.code === 'media-deploy');
-    expect(hit).toBeTruthy();
-    expect(hit!.message).toContain('deploy will run as keyframe');
-  });
-
-  it('caps run against the effective mode, not the lock', () => {
+  it('caps run against the effective (shipped) mode, not the lock', () => {
     // Locked keyframes with 0 keyframes → ships as reference (cross-fall);
     // the cap that applies is the reference cap (5), not the keyframe cap.
     const c = pipePrechecks(
@@ -171,7 +153,6 @@ describe('pipePrechecks — media-deploy (locked-kind downgrade)', () => {
       null,
       dualSpec,
     );
-    expect(c.map((x) => x.code)).toContain('media-deploy');
     expect(c.map((x) => x.code)).not.toContain('media-cap'); // 5 ≤ ref cap 5
 
     // Same pipe, 6 subjects → over the ref cap the engine will apply.
@@ -182,5 +163,17 @@ describe('pipePrechecks — media-deploy (locked-kind downgrade)', () => {
       dualSpec,
     );
     expect(c2.map((x) => x.code)).toContain('media-cap');
+  });
+
+  it('an empty imageUrl on a shipped reference subject still blocks', () => {
+    // Cross-fall ships the subjects; a url subject with no image is a real
+    // defect (broken slot) regardless of the lock — still blocking.
+    const c = pipePrechecks(
+      pipeWith({ mediaMode: 'keyframes', subjectReferences: [subj(1)] }),
+      sess,
+      null,
+      dualSpec,
+    );
+    expect(c.map((x) => x.code)).toContain('txt2img-no-prompt');
   });
 });
