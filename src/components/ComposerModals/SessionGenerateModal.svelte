@@ -15,6 +15,10 @@
 		orientation: Orientation;
 	}
 
+	/** Copy + auto-compose icons (inline SVGs — no icon dependency in the app). */
+	const COPY_ICON = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>`;
+	const CHECK_ICON = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5"/></svg>`;
+
 	/** Per-pipe Q/C run-local values keyed by pipe id. */
 	type PipeParamState = Record<string, { q: number; c: number }>;
 
@@ -242,150 +246,158 @@
 
 {#if open}
 	<div class="modal-overlay" onclick={() => (open = false)} role="presentation">
-		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+		<div class="modal sg-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<div class="modal-header">
 				<h3>{APP_CONSTANTS.strings.sessionGenerate}</h3>
 				<span class="modal-sub">{APP_CONSTANTS.strings.sessionGenerateHint} · {session.name}</span>
 			</div>
-			<div class="modal-body">
-				<!-- ── Save As ── -->
-				{#if onSaveAs}
-					<div class="saveas-row" aria-label="Save As">
-						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionSaveAs}</span>
-						<button class="gen-mini-btn" type="button" onclick={saveAs} disabled={savingAs}>
-							{savingAs ? APP_CONSTANTS.strings.sessionSaveAsCopying : APP_CONSTANTS.strings.sessionSaveAsCopy}
-						</button>
+			<div class="modal-body sg-body">
+				<!-- ── Two-pane body: scrollable pipes (left) + run controls (right). ── -->
+				<div class="sg-split">
+					<div class="sg-pane sg-pipes">
+						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionPipes} · {rows.length}</span>
+						<div class="gen-pipe-list">
+							{#each rows as row, i (row.pipe.id)}
+								{@const local = pipeParamsLocal[row.pipe.id]}
+								<div class="gen-pipe-row">
+									<span class="gen-pipe-index" aria-hidden="true">{i + 1}</span>
+									<span class="gen-pipe-name">{row.pipe.name}</span>
+									<span class="gen-chips"><span>{row.pipe.lengthFrames}f</span></span>
+									<span class="gen-pipe-params" aria-label="Pipe Q / C">
+										<label>Q<input type="number" min="1" max="50" value={local?.q ?? row.pipe.qValue}
+											class:changed={local && local.q !== row.pipe.qValue}
+											onchange={(e) => handlePipeQ(row.pipe.id, e)} /></label>
+										<label>C<input type="number" min="1" max="30" step="0.1" value={local?.c ?? row.pipe.cValue}
+											class:changed={local && local.c !== row.pipe.cValue}
+											onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
+									</span>
+									{#if row.conflicts.length}
+										<span class={statusClass('error')}>{row.conflicts[0].message}</span>
+								{:else}
+									<span class="sg-ready">{@html CHECK_ICON}{APP_CONSTANTS.strings.sessionReady}</span>
+								{/if}
+								</div>
+							{/each}
+						</div>
 					</div>
-				{/if}
 
-				<!-- ── Pipes (ordered) with per-pipe pre-checks + local Q/C ── -->
-				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionPipes}</span>
-				<div class="gen-pipe-list">
-					{#each rows as row (row.pipe.id)}
-						{@const local = pipeParamsLocal[row.pipe.id]}
-						<div class="gen-pipe-row">
-							<span class="gen-pipe-name">{row.pipe.name}</span>
-							<span class="gen-chips"><span>{row.pipe.lengthFrames}f</span></span>
-							<span class="gen-pipe-params" aria-label="Pipe Q / C">
-								<label>Q<input type="number" min="1" max="50" value={local?.q ?? row.pipe.qValue}
-									class:changed={local && local.q !== row.pipe.qValue}
-									onchange={(e) => handlePipeQ(row.pipe.id, e)} /></label>
-								<label>C<input type="number" min="1" max="30" step="0.1" value={local?.c ?? row.pipe.cValue}
-									class:changed={local && local.c !== row.pipe.cValue}
-									onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
-							</span>
-							{#if row.conflicts.length}
-								<span class={statusClass('error')}>{row.conflicts[0].message}</span>
-							{:else}
-								<span class={statusClass('done')}>{APP_CONSTANTS.strings.sessionReady}</span>
+					<div class="sg-pane sg-controls">
+						<!-- ── Save As (duplicates the session + its media, re-targets THIS run at the copy) ── -->
+						{#if onSaveAs}
+							<div class="saveas-card" role="group" aria-label="Save As">
+								<button class="saveas-btn" type="button" onclick={saveAs} disabled={savingAs || busy}
+									title="Duplicates this session (pipes + media) and re-targets this run at the copy — the original stays untouched.">
+									{@html COPY_ICON}<span>{savingAs ? APP_CONSTANTS.strings.sessionSaveAsCopying : APP_CONSTANTS.strings.sessionSaveAsCopy}</span>
+								</button>
+								<p class="saveas-hint">Run on a duplicate instead — originals, media and last-gen state stay untouched.</p>
+							</div>
+						{/if}
+
+						<!-- ── Models (per-run override, seeded from global settings) ── -->
+						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionModels}</span>
+						<div class="gen-grid">
+							<div class="gen-fieldrow">
+								<label for="sg-image-model">Image model</label>
+								<select id="sg-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
+									{#each imageModels as m (m.id)}
+										<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+									{/each}
+								</select>
+							</div>
+							<div class="gen-fieldrow">
+								<label for="sg-video-model">Video model</label>
+								<select id="sg-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
+									{#each videoModels as m (m.id)}
+										<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+									{/each}
+								</select>
+							</div>
+							{#if selectedVideoModel?.supportsSeed}
+								<div class="gen-fieldrow">
+									<label for="sg-seed">Seed (video)</label>
+									<input
+										id="sg-seed"
+										type="number"
+										min="0"
+										step="1"
+										value={seed ?? ''}
+										oninput={(e) => (seed = e.currentTarget.value === '' ? null : Number(e.currentTarget.value))}
+									/>
+								</div>
 							{/if}
 						</div>
-					{/each}
-				</div>
+						{#if secHint}
+							<span class="gen-sec-hint">≈ {secHint.shown}s{secHint.clamped ? ' (clamped)' : ''} · longest pipe</span>
+						{/if}
 
-				<!-- ── Models (per-run override, seeded from global settings) ── -->
-				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionModels}</span>
-				<div class="gen-grid">
-					<div class="gen-fieldrow">
-						<label for="sg-image-model">Image model</label>
-						<select id="sg-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
-							{#each imageModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
-							{/each}
-						</select>
-					</div>
-					<div class="gen-fieldrow">
-						<label for="sg-video-model">Video model</label>
-						<select id="sg-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
-							{#each videoModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
-							{/each}
-						</select>
-					</div>
-					{#if selectedVideoModel?.supportsSeed}
-						<div class="gen-fieldrow">
-							<label for="sg-seed">Seed (video)</label>
-							<input
-								id="sg-seed"
-								type="number"
-								min="0"
-								step="1"
-								value={seed ?? ''}
-								oninput={(e) => (seed = e.currentTarget.value === '' ? null : Number(e.currentTarget.value))}
-							/>
+						<!-- ── Run stats (run-local; persist via the toggle below) ── -->
+						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunStats}</span>
+						<div class="gen-grid three">
+							<div class="gen-fieldrow">
+								<label for="sg-fps">{APP_CONSTANTS.strings.fps}</label>
+								<select id="sg-fps" value={String(fps)} onchange={handleFps}
+									class:changed={fps !== session.fps}>
+									{#each APP_CONSTANTS.fpsPresets as f (f)}
+										<option value={String(f)}>{f}</option>
+									{/each}
+								</select>
+							</div>
+							<div class="gen-fieldrow">
+								<label for="sg-res">{APP_CONSTANTS.strings.resolution}</label>
+								<select id="sg-res" value={resolution} onchange={handleResolution}
+									class:changed={resolution !== session.resolution}>
+									{#each APP_CONSTANTS.resolutions as r (r)}
+										<option value={r}>{r}</option>
+									{/each}
+								</select>
+							</div>
+							<div class="gen-fieldrow">
+								<label for="sg-orient">{APP_CONSTANTS.strings.orientation}</label>
+								<select id="sg-orient" value={orientation} onchange={handleOrientation}
+									class:changed={orientation !== session.orientation}>
+									{#each APP_CONSTANTS.orientations as o (o)}
+										<option value={o}>{o}</option>
+									{/each}
+								</select>
+							</div>
 						</div>
-					{/if}
-				</div>
-				{#if secHint}
-					<span class="gen-sec-hint">≈ {secHint.shown}s{secHint.clamped ? ' (clamped)' : ''} · longest pipe</span>
-				{/if}
 
-				<!-- ── Run stats (run-local; persist via the toggle below) ── -->
-				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunStats}</span>
-				<div class="gen-grid three">
-					<div class="gen-fieldrow">
-						<label for="sg-fps">{APP_CONSTANTS.strings.fps}</label>
-						<select id="sg-fps" value={String(fps)} onchange={handleFps}
-							class:changed={fps !== session.fps}>
-							{#each APP_CONSTANTS.fpsPresets as f (f)}
-								<option value={String(f)}>{f}</option>
-							{/each}
-						</select>
-					</div>
-					<div class="gen-fieldrow">
-						<label for="sg-res">{APP_CONSTANTS.strings.resolution}</label>
-						<select id="sg-res" value={resolution} onchange={handleResolution}
-							class:changed={resolution !== session.resolution}>
-							{#each APP_CONSTANTS.resolutions as r (r)}
-								<option value={r}>{r}</option>
-							{/each}
-						</select>
-					</div>
-					<div class="gen-fieldrow">
-						<label for="sg-orient">{APP_CONSTANTS.strings.orientation}</label>
-						<select id="sg-orient" value={orientation} onchange={handleOrientation}
-							class:changed={orientation !== session.orientation}>
-							{#each APP_CONSTANTS.orientations as o (o)}
-								<option value={o}>{o}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
+						<!-- ── Run options ── -->
+						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunOptions}</span>
+						<div class="gen-grid">
+							<div class="gen-fieldrow">
+								<label for="sg-policy">{APP_CONSTANTS.strings.sessionFailurePolicy}</label>
+								<select id="sg-policy" bind:value={policy}>
+									<option value="stop">{APP_CONSTANTS.strings.sessionStopPolicy}</option>
+									<option value="continue">{APP_CONSTANTS.strings.sessionContinuePolicy}</option>
+								</select>
+							</div>
+							<div class="gen-fieldrow">
+								<label class="gen-check">
+									<input type="checkbox" bind:checked={autoCompose} />
+									{APP_CONSTANTS.strings.sessionAutoCompose}
+								</label>
+							</div>
+						</div>
 
-				<!-- ── Run options ── -->
-				<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunOptions}</span>
-				<div class="gen-grid">
-					<div class="gen-fieldrow">
-						<label for="sg-policy">{APP_CONSTANTS.strings.sessionFailurePolicy}</label>
-						<select id="sg-policy" bind:value={policy}>
-							<option value="stop">{APP_CONSTANTS.strings.sessionStopPolicy}</option>
-							<option value="continue">{APP_CONSTANTS.strings.sessionContinuePolicy}</option>
-						</select>
-					</div>
-					<div class="gen-fieldrow">
-						<label class="gen-check">
-							<input type="checkbox" bind:checked={autoCompose} />
-							{APP_CONSTANTS.strings.sessionAutoCompose}
-						</label>
+						<!-- ── Persist toggle (only when there's something to persist) ── -->
+						{#if hasStatsEdits || hasPipeParamEdits}
+							<label class="gen-check apply-toggle" aria-label="Apply to session">
+								<input type="checkbox" bind:checked={applyToSession} />
+								{APP_CONSTANTS.strings.sessionApplyToSession}
+								<span class="gen-hint">{APP_CONSTANTS.strings.sessionApplyToSessionHint}</span>
+							</label>
+						{/if}
+
+						{#if allConflicts.length > 0}
+							<ul class="gen-conflicts" aria-label="Generation conflicts">
+								{#each allConflicts as c (c.message)}
+									<li>{c.message}</li>
+								{/each}
+							</ul>
+						{/if}
 					</div>
 				</div>
-
-				<!-- ── Persist toggle (only when there's something to persist) ── -->
-				{#if hasStatsEdits || hasPipeParamEdits}
-					<label class="gen-check apply-toggle" aria-label="Apply to session">
-						<input type="checkbox" bind:checked={applyToSession} />
-						{APP_CONSTANTS.strings.sessionApplyToSession}
-						<span class="gen-hint">{APP_CONSTANTS.strings.sessionApplyToSessionHint}</span>
-					</label>
-				{/if}
-
-				{#if allConflicts.length > 0}
-					<ul class="gen-conflicts" aria-label="Generation conflicts">
-						{#each allConflicts as c (c.message)}
-							<li>{c.message}</li>
-						{/each}
-					</ul>
-				{/if}
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => (open = false)} disabled={busy}>
@@ -400,60 +412,136 @@
 {/if}
 
 <style>
-	.saveas-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		padding: 8px 10px;
-		border: 1px dashed var(--border-color, #3f3f46);
-		border-radius: 7px;
+	/* Wide two-pane session modal: pipes scroll on the left, controls stay on the right. */
+	.sg-modal {
+		width: min(860px, 94vw);
+		max-width: 860px;
 	}
 
-	.gen-mini-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 5px 10px;
-		font-size: 12px;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		color: var(--text-secondary, #a1a1aa);
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 5px;
-		cursor: pointer;
-		transition: border-color 0.15s ease, color 0.15s ease;
+	.sg-body {
+		padding: 14px 18px 18px;
+		gap: 12px;
 	}
 
-	.gen-mini-btn:hover:not(:disabled) {
-		border-color: var(--accent-color, #ff3e00);
-		color: var(--text-primary, #fff);
+	.sg-split {
+		display: grid;
+		grid-template-columns: minmax(300px, 44%) minmax(260px, 1fr);
+		gap: 14px;
+		align-items: start;
 	}
 
-	.gen-mini-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.gen-pipe-list {
+	.sg-pane {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 10px;
+		min-width: 0;
 	}
 
-	.gen-pipe-row {
-		display: grid;
-		grid-template-columns: minmax(90px, 1fr) auto auto;
-		align-items: center;
-		gap: 10px;
-		padding: 8px 10px;
+	/* Left pane: the pipe list owns the scroll (long sessions → no modal growth). */
+	.sg-pipes .gen-pipe-list {
+		max-height: min(46vh, 430px);
+		overflow-y: auto;
 		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 7px;
+		border-radius: 8px;
+		padding: 8px;
+		gap: 6px;
+		scrollbar-width: thin;
+	}
+
+	.sg-pipes .gen-pipe-row {
+		grid-template-columns: 18px minmax(0, 1fr) auto auto;
+		gap: 8px;
+		padding: 7px 8px;
+		border-radius: 6px;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	}
+
+	.gen-pipe-index {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--text-muted, #71717a);
+		background: var(--bg-secondary, #27272a);
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.sg-ready {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 11px;
+		color: var(--success-color, #4ade80);
+		white-space: nowrap;
 	}
 
 	.gen-pipe-name {
 		font-size: 0.85rem;
 		font-weight: 600;
 		color: var(--text-primary, #fff);
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* Right pane: the Save-As card is explained, not just a mystery button. */
+	.saveas-card {
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+		padding: 10px 12px;
+		border: 1px dashed var(--border-color, #3f3f46);
+		border-radius: 8px;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	}
+
+	.saveas-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		align-self: flex-start;
+		padding: 6px 11px;
+		font-size: 12px;
+		font-weight: 500;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		color: var(--text-secondary, #a1a1aa);
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 6px;
+		cursor: pointer;
+		transition: border-color 0.15s ease, color 0.15s ease;
+	}
+
+	.saveas-btn:hover:not(:disabled) {
+		border-color: var(--accent-color, #ff3e00);
+		color: var(--text-primary, #fff);
+	}
+
+	.saveas-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.saveas-hint {
+		margin: 0;
+		font-size: 11px;
+		line-height: 1.4;
+		color: var(--text-muted, #71717a);
+	}
+
+	/* Narrow viewports: stack the panes back into the classic single column. */
+	@media (max-width: 640px) {
+		.sg-split {
+			grid-template-columns: 1fr;
+		}
+		.sg-pipes .gen-pipe-list {
+			max-height: 30vh;
+		}
 	}
 
 	.gen-pipe-params {
