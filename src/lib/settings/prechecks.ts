@@ -4,6 +4,7 @@
 
 import type { ModelSpec, PipeRow, SessionData } from '$types';
 import { snapTo8nPlus1 } from '$types';
+import { effectiveMediaMode } from './mediaMode';
 
 /** A concrete, user-fixable generation conflict (E4). */
 export interface PipeConflict {
@@ -14,7 +15,8 @@ export interface PipeConflict {
     | 'frames-overflow'
     | 'fps-off-grid'
     | 'media-cap'
-    | 'txt2img-no-prompt';
+    | 'txt2img-no-prompt'
+    | 'media-deploy';
   message: string;
 }
 
@@ -76,8 +78,13 @@ export function pipePrechecks(
   }
 
   // ── Media caps (E4) ──────────────────────────────────────────────────────
-  const mediaMode = pipe.mediaMode ?? 'keyframes';
+  // Cap + subject-prompt checks run against the EFFECTIVE wire mode (the
+  // content-aware resolution the engine will actually send), not the stored
+  // lock alone — a locked kind with no media pieces cross-falls, and the
+  // cap that matters is the one on the kind that ships.
+  const mediaLock = pipe.mediaMode ?? 'keyframes';
   const videoShared = !!(video && !video.pending && video.media?.sharedArray);
+  const effMode = video && !video.pending ? effectiveMediaMode(pipe, video.media) : null;
   if (video && !video.pending && video.media) {
     const media = video.media;
     const kfs = pipe.keyframes?.length ?? 0;
@@ -92,14 +99,14 @@ export function pipePrechecks(
           message: `shared media cap ${cap}: this pipe has ${kfs} keyframe(s) + ${subs} subject(s)`,
         });
       }
-    } else if (mediaMode === 'keyframes') {
+    } else if (effMode === 'keyframe') {
       const cap = media.maxKeyframes ?? 2;
       if (kfs > cap) {
         out.push({ code: 'media-cap', message: `keyframes mode allows ${cap} keyframe(s); this pipe has ${kfs}` });
       }
       // Plain keyframes mode: subjects are inert — no cap, no prompt check.
       // (sharedArray is handled above; reference is handled below.)
-    } else if (mediaMode === 'reference') {
+    } else if (effMode === 'reference') {
       const cap = media.maxRefs ?? 5;
       if (subs > cap) {
         out.push({ code: 'media-cap', message: `reference mode allows ${cap} subject(s); this pipe has ${subs}` });
@@ -116,6 +123,28 @@ export function pipePrechecks(
         }
       }
     }
+
+    // Locked-kind downgrade: the user's media-mode lock names a kind, but the
+    // effective wire mode cross-fell away from it because that kind holds no
+    // media pieces (and the other kind is also absent for the 'text' fall).
+    // Only for models with real mode rules — unknown models keep today's
+    // behavior (the lock is the whole story, no downgrade expected).
+    const lockWire = mediaLock === 'reference' ? 'reference' : 'keyframe';
+    if (effMode && media.modes.length > 0 && effMode !== lockWire) {
+      const lockedName = mediaLock === 'reference' ? 'reference (subjects)' : 'keyframes';
+      const effName =
+        effMode === 'keyframe'
+          ? 'keyframe'
+          : effMode === 'reference'
+            ? 'reference'
+            : 'text-only';
+      out.push({
+        code: 'media-deploy',
+        message: `${lockedName} locked but no ${
+          mediaLock === 'reference' ? 'subject' : 'keyframe'
+        } media in this pipe — deploy will run as ${effName}; add media or switch the mode`,
+      });
+    }
   }
 
   // ── txt2img pieces must carry a prompt (O1 / E4) ─────────────────────
@@ -128,7 +157,9 @@ export function pipePrechecks(
   //  - reference mode: subjects are the primary input
   //  - sharedArray:    subjects merge into the keyframe image array
   // In plain keyframe mode, subjects are inert metadata — skip the check.
-  if (mediaMode === 'reference' || videoShared) {
+  // (The effective wire mode cross-fell away from the lock when its own kind
+  // has no pieces, so `effMode` — not the lock — is what ships.)
+  if ((effMode ?? mediaLock) === 'reference' || videoShared) {
     for (const sr of pipe.subjectReferences ?? []) {
       if ((sr.type ?? 'url') === 'txt2img' && !(sr.prompt?.trim())) {
         out.push({ code: 'txt2img-no-prompt', message: `subject ${sr.id} (txt2img) needs a prompt` });

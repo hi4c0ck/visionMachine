@@ -21,8 +21,10 @@ export type RequestFormat =
   | 'video-job-seconds';
 
 /** Pipe-level media mode (docs/agnes-model-catalog.md, Q7). Default is
- *  'keyframes'. Drives keyframes/subject-refs row visibility per model. */
-export type MediaMode = 'keyframes' | 'reference';
+ *  'keyframes'. Drives keyframes/subject-refs row visibility per model.
+ *  'text' marks a model that offers no media (wire-level fallback only —
+ *  never a user-selectable lock; a stored pipe never carries it). */
+export type MediaMode = 'keyframes' | 'reference' | 'text';
 
 /** Per-model media-mode rules — the pipe UI shows/hides the keyframes and
  *  subject-refs rows based on these (docs/agnes-model-catalog.md, Q7).
