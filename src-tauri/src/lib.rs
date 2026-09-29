@@ -182,6 +182,7 @@ pub fn run() {
             commands::generation::start_generation,
             commands::generation::start_session_generation,
             commands::generation::get_generation_group,
+            commands::generation::get_latest_session_generation_group,
             commands::generation::cancel_generation_group,
             commands::generation::get_generation_task,
             commands::generation::cancel_generation,

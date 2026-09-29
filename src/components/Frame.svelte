@@ -23,6 +23,7 @@
 		showRuler = false,
 		providers = null,
 		providerStatus = null,
+		providerLoading = false,
 		onopenprovidersettings,
 	} = $props<{
 		userName: string;
@@ -61,6 +62,13 @@
 		providers?: Settings['providers'] | null;
 		/** Per-kind key-presence / configured snapshot (P6) for the chip. */
 		providerStatus?: Record<ProviderKind, ProviderStatusSnapshot> | null;
+		/**
+		 * True while the active profile's settings are still in flight (P6b).
+		 * Passed straight to the chip, which renders a neutral "Loading…"
+		 * state instead of asserting key presence off the default-seeded
+		 * snapshot. Defaults to false for backward compatibility.
+		 */
+		providerLoading?: boolean;
 		/** Open the settings modal at the Providers tab. */
 		onopenprovidersettings?: () => void;
 	}>();
@@ -329,7 +337,7 @@
 			</div>
 
 			{#if providers && providerStatus && onopenprovidersettings}
-				<ProviderStatus {providers} providerStatus={providerStatus} onopen={onopenprovidersettings} />
+				<ProviderStatus {providers} providerStatus={providerStatus} loading={providerLoading} onopen={onopenprovidersettings} />
 			{/if}
 		</div>
 

@@ -117,4 +117,32 @@ impl Database {
             sources_json: r.try_get("sources_json").ok().flatten(),
         }))
     }
+
+    /// The session's most recent group row (by `started_at`). Lets the UI
+    /// restore a composed session video on session selection across app
+    /// restarts — the per-run localStorage bridge is deleted when the group
+    /// goes terminal, so the DB row is the only source of truth that
+    /// survives. `None` when the session has no group runs yet.
+    pub async fn get_latest_generation_group_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<GenerationGroupRow>, String> {
+        let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json FROM generation_groups WHERE session_id = ? ORDER BY started_at DESC LIMIT 1")
+            .bind(session_id).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(row.map(|r| GenerationGroupRow {
+            group_id: r.get("group_id"),
+            session_id: r.get("session_id"),
+            status: r.get("status"),
+            progress: r.get("progress"),
+            pipes_json: r.get("pipes_json"),
+            failure_policy: r.get("failure_policy"),
+            auto_compose: r.get::<i64, _>("auto_compose") != 0,
+            session_video_path: r.get("session_video_path"),
+            compose_state: r.get("compose_state"),
+            compose_error: r.get("compose_error"),
+            error: r.get("error"),
+            started_at: r.get("started_at"),
+            sources_json: r.try_get("sources_json").ok().flatten(),
+        }))
+    }
 }

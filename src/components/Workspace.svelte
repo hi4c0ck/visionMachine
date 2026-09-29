@@ -21,13 +21,13 @@
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
 	import { isStaleGroup } from '$lib/compactPipes';
-	import { startSessionGeneration, fetchGenerationGroup, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
+	import { startSessionGeneration, fetchGenerationGroup, fetchLatestGenerationGroupForSession, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
-		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus } from '$lib/settings';
+		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -55,6 +55,9 @@
 
 	// User profile
 	let userProfileId = $state<string | null>(null);
+	/** The `userName` the current `userProfileId` was resolved for — a profile
+	 *  switch (different userName) forces the id to re-resolve. */
+	let lastLoadedProfile = $state<string | null>(null);
 	let userProjectsFiles = $state<Record<string, ProjectFile[]>>({});
 
 	// State
@@ -158,6 +161,15 @@
 		// pipe clip. It takes precedence over any pipe's last-gen video. The
 		// attach runs through attachSessionVideo so it is also mirrored into
 		// the ToolsPanel preview section (see syncCompose / compose button).
+		//
+		// IMPORTANT: run this check for the CURRENT session, not just "some
+		// session video is set". `groupSessionVideoPath`/`groupComposeState`
+		// are armed by the last RESTORED group, which can belong to a DIFFERENT
+		// session (the user just switched away from a composed one). Without the
+		// sid guard a stale path from the previous session would re-attach that
+		// session's video to the top panel — exactly the "preview doesn't change
+		// when I switch sessions" bug. The path's owning session is implicit:
+		// it is only ever armed for the session currently being restored.
 		if (groupSessionVideoPath && groupComposeState === 'done') {
 			// A composed session video owns the top panel even when a pipe
 			// preview was attached earlier — always re-attach (refreshing
@@ -169,6 +181,19 @@
 				return;
 			}
 			return;
+		}
+		// No session video for this session: clear whatever is attached so the
+		// panels reflect the NEW session. This is the cross-session leak guard:
+		// toolsSessionVideo / lastComposedSessionVideo can still hold the
+		// PREVIOUS session's composed video (attachSessionVideo mirrors the
+		// tool panel on the same attach), so without this the tool panel would
+		// keep showing the other session's full video — exactly the "another
+		// session's full video appears as the session preview" bug.
+		if (previewIsSessionVideo || toolsSessionVideo || (lastComposedSessionVideo && lastComposedSessionVideo.sessionId !== sid)) {
+			previewVideo = null;
+			previewIsSessionVideo = false;
+			toolsSessionVideo = null;
+			lastComposedSessionVideo = null;
 		}
 		// Fall back to a single-pipe last-gen video only when nothing is
 		// attached yet; a session video that's already showing wins. Note the
@@ -191,14 +216,12 @@
 	}
 
 	$effect(() => {
-		// Track both the session AND the compose outcome so the preview
-		// re-renders when a group's auto-compose finishes and persists
-		// session_video_path (the group-terminal event may arrive before
-		// the DB write lands, so the first restore sees null; the second
-		// refetch updates these two and this effect re-runs).
+		// Track the session AND the compose outcome so the preview re-renders
+		// both when a group's auto-compose finishes/persists session_video_path
+		// AND when the user switches to a session that has no composed video
+		// (the clear-branch below must run on the session change itself).
 		const session = selectedSession;
-		const id = selectedSessionId;
-		void id;
+		void session; // effect dep: re-run when the selected session changes
 		void groupComposeState; // effect dep: re-run when compose outcome changes
 		void groupSessionVideoPath; // effect dep: re-run when the path lands
 		void restoreSelectedPreview(session);
@@ -276,14 +299,49 @@
 	// recomputed by the store on profile load and on every settings change.
 	// The chip reads this instead of sniffing apiKey off the live settings.
 	let providerStatus = $state(getProviderStatus());
+	// Load-lifecycle flag (P6b): true while the active profile's settings are
+	// still in flight. Re-read on every store notification (load settles →
+	// false; a profile switch kicks off a new load → true), so the chip never
+	// asserts key presence off the default-seeded snapshot.
+	let providerLoading = $state(isSettingsLoading());
 	// Named + kept: setOnSettingsChange is ADDITIVE (multi-listener store), so
 	// this settings/providerStatus re-sync must coexist with the ffmpeg
 	// re-probe listener below — and onDestroy removes exactly this one.
 	const onSettingsChangeSync = () => {
 		settings = getSettings();
 		providerStatus = getProviderStatus();
+		providerLoading = isSettingsLoading();
 	};
 	setOnSettingsChange(onSettingsChangeSync);
+
+	// Profile change: Workspace stays mounted across account switches (App
+	// keeps it in the {:else} branch), so onMount never re-runs and the
+	// provider key snapshot would stay stale for the NEW profile. Watch
+	// userName: when it changes, resolve the NEW profile's id and load
+	// settings under THAT id (the provider key + settings live under the
+	// hashed profile id, and loadProjects lazily re-resolves it on next
+	// call). The store then recomputes providerStatus + notifies, refreshing
+	// the chip. Skips the initial run (the onMount path already loaded).
+	let lastLoadedUserName = $state(userName);
+	$effect(() => {
+		if (userName === lastLoadedUserName) return;
+		lastLoadedUserName = userName;
+		if (!isTauri() || !userName) return;
+		void (async () => {
+			// Resolve the backend profile id for this userName BEFORE loading,
+			// so the store never loads under the previous profile's id.
+			let id = userProfileId && lastLoadedProfile === userName ? userProfileId : null;
+			if (!id) {
+				const profileResult = await invoke('get_user_profile', { input: { userName } });
+				id = profileResult as string;
+				userProfileId = id;
+				lastLoadedProfile = userName;
+			}
+			// The store's generation guard keeps a slow in-flight load from
+			// clobbering a just-saved key.
+			await loadSettings(id);
+		})();
+	});
 
 	// Media-mode UI driver (docs/agnes-model-catalog.md, Q7): the configured
 	// video model spec carries the row-visibility rules for the pipe UI.
@@ -338,7 +396,54 @@
 	let groupComposeState = $state<string | null>(null);
 	let groupComposeError = $state<string | null>(null);
 	let groupSessionVideoPath = $state<string | null>(null);
+	// Overall group progress (0..=1, the backend's stage-count-weighted
+	// average across the group's pipes) + the compose step's live phase,
+	// shown in the group modal so a long run reads as progress, not a freeze.
+	let groupProgress = $state(0);
+	let groupComposePhase = $state<string | null>(null);
 	let restoredGroupSessionId = $state<string | null>(null);
+	// Live poll timer: while a group is running the per-pipe task views +
+	// the group progress only move on terminal events, so the modal's bars
+	// would sit at 0% for a whole pipe. A 2 s poll of the authoritative
+	// group view (live in-memory, persisted fallback) keeps them accurate.
+	let groupPollTimer: number | null = null;
+	function stopGroupPoll() {
+		if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
+	}
+	function startGroupPoll() {
+		stopGroupPoll();
+		if (!isTauri()) return;
+		groupPollTimer = window.setInterval(() => {
+			const gid = activeGroupId;
+			if (!gid || groupStale) { stopGroupPoll(); return; }
+			void fetchGenerationGroup(gid).then((g) => {
+				if (gid !== activeGroupId) return; // a new group took over
+				groupProgress = g.progress ?? 0;
+				// Merge the live per-pipe progress so the compact rows +
+				// status chips track the exact stage state, not just terminals.
+				const merged: Record<string, GenerationTaskView> = { ...groupTaskViews };
+				for (const p of g.pipes) {
+					if (!p?.pipeId) continue;
+					const task = groupTaskViews[p.pipeId];
+					if (task && p.taskId && p.taskId === task.taskId && p.progress !== undefined) {
+						merged[p.pipeId] = { ...task, progress: p.progress };
+					}
+				}
+				groupTaskViews = merged;
+				// Track the compose step's live phase ('running' = in flight,
+				// 'done'/'error'/'cancelled' = terminal) so the modal can show
+				// the exact stage instead of a frozen per-pipe bar.
+				if (g.composeState !== undefined && g.composeState !== null) {
+					groupComposePhase = g.composeState;
+				}
+				groupComposeState = g.composeState ?? groupComposeState;
+				groupComposeError = g.composeError ?? groupComposeError;
+				groupSessionVideoPath = g.sessionVideoPath ?? groupSessionVideoPath;
+				// Group reached a terminal state — stop polling.
+				if (!['running'].includes(g.status)) stopGroupPoll();
+			}).catch(() => {});
+		}, 2000);
+	}
 	const groupActive = $derived(activeGroupId !== null && !groupStale);
 	const groupProgressVisible = $derived(groupActive || groupStale || Object.keys(groupTaskViews).length > 0);
 
@@ -495,11 +600,17 @@
 			}
 
 			// Get user profile first
-			if (!userProfileId) {
+			// Resolve the profile id only when the active profile changed: the
+			// provider key + settings live under the hashed `profile_<hash>` id,
+			// while `list_projects`/`get_or_create_profile` key off that same id.
+			// Caching per `userName` keeps the lazy resolution stable across
+			// repeated loads in one profile's lifetime.
+			if (!userProfileId || lastLoadedProfile !== userName) {
 				const profileResult = await invoke('get_user_profile', {
 					input: { userName }
 				});
 				userProfileId = profileResult as string;
+				lastLoadedProfile = userName;
 			}
 
 			// Call backend to get projects with profile_id
@@ -729,40 +840,76 @@
 	async function restoreSessionGenerationGroup(sessionId: string) {
 		const key = `visionmachine:generation-group:${sessionId}`;
 		const groupId = localStorage.getItem(key);
-		if (!groupId) return;
-		try {
-			const group = await fetchGenerationGroup(groupId);
-			activeGroupId = group.groupId;
-			groupStatus = group.status;
-			groupStale = isStaleGroup(group.status, group.live);
-			groupTaskId = null;
-			groupPipeTaskIds = Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []));
-			groupTaskViews = {};
-			groupComposeState = group.composeState ?? null;
-			groupComposeError = group.composeError ?? null;
-			groupSessionVideoPath = group.sessionVideoPath ?? null;
-			// A persisted session video is the preview target across app
-			// restarts — attach it so the top panel shows the composed
-			// timeline instead of falling back to a single pipe clip. Read the
-			// session's name from the hydrated store (this function only has
-			// the id, and it can run before the preview recovers on its own).
-			if (group.composeState === 'done' && group.sessionVideoPath) {
-				const name = sessions.get(sessionId)?.name ?? 'Session';
-				const path = group.sessionVideoPath;
-				void attachSessionVideo(path, `${name} — session video`);
+		// The localStorage key is only set for a run that STARTED in this
+		// webview session, and is deleted the moment that group goes terminal.
+		// So on a fresh launch (or after the last run finished) the key is
+		// absent — and the composed session video would be unreachable. The DB
+		// row is the source of truth that survives, so when the bridge is gone
+		// fall back to the session's newest group row from the backend.
+		let group: Awaited<ReturnType<typeof fetchGenerationGroup>> | null = null;
+		if (groupId) {
+			try {
+				group = await fetchGenerationGroup(groupId);
+			} catch {
+				localStorage.removeItem(key);
 			}
-			stopWatching();
-			showProgressModal = groupStale;
-		} catch {
-			localStorage.removeItem(key);
-		} finally {
-			restoredGroupSessionId = sessionId;
 		}
+		if (!group && isTauri()) {
+			// Pure-read DB fallback: the session's most recent group row. Null
+			// when the session has never run a group — nothing to restore.
+			group = await fetchLatestGenerationGroupForSession(sessionId).catch(() => null);
+		}
+		if (!group) { restoredGroupSessionId = sessionId; return; }
+		// A group that is LIVE (running with a task) owns the session — arm the
+		// active-group machinery (poller, watcher, cancel guard, Generate block).
+		// A TERMINAL group restored from the DB (the common cross-restart case)
+		// must NOT: leaving activeGroupId set would make groupActive true and
+		// silently no-op the session-level Generate button for that session.
+		const isLiveGroup = group.live && group.status === 'running';
+		if (isLiveGroup) {
+			activeGroupId = group.groupId;
+		} else {
+			activeGroupId = null;
+		}
+		groupStatus = group.status;
+		groupStale = isStaleGroup(group.status, group.live);
+		groupTaskId = null;
+		groupPipeTaskIds = isLiveGroup
+			? Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []))
+			: {};
+		groupTaskViews = {};
+		groupComposeState = group.composeState ?? null;
+		groupComposeError = group.composeError ?? null;
+		// The session video path is only meaningful when the compose SUCCEEDED.
+		// A failed / cancelled latest compose must not leave a stale path from
+		// another session attached — clear it so the preview can fall back (or
+		// blank) rather than showing the previous session's video.
+		groupSessionVideoPath = (group.composeState === 'done') ? (group.sessionVideoPath ?? null) : null;
+		// The compose outcome landed but the video can't be attached: the file
+		// is gone, or read_media_file rejected the path as outside every known
+		// media root (a writer path whose root the reader doesn't allow — see
+		// media_roots() in generation.rs). Used to be a silent no-op, which is
+		// exactly the "placeholder + top panel never changes, no error" state;
+		// surface the reason so the next run can tell which link broke.
+		if (group.composeState === 'done' && group.sessionVideoPath) {
+			const name = sessions.get(sessionId)?.name ?? 'Session';
+			const path = group.sessionVideoPath;
+			const ok = await attachSessionVideo(path, `${name} — session video`);
+			if (!ok) {
+				flashToast(`Session video unavailable: ${path} (missing file or outside media roots)`, 'error');
+			}
+		}
+		stopWatching();
+		showProgressModal = groupStale && group.live === false && group.status === 'running';
+		restoredGroupSessionId = sessionId;
 	}
 
 	$effect(() => {
 		const sessionId = selectedSessionId;
 		if (sessionId && restoredGroupSessionId !== sessionId) {
+			stopGroupPoll();
+			groupProgress = 0;
+			groupComposePhase = null;
 			void restoreSessionGenerationGroup(sessionId);
 		}
 	});
@@ -1256,9 +1403,12 @@
 			restoredGroupSessionId = selectedSession.id;
 			groupStatus = 'running';
 			groupStale = false;
+			groupProgress = 0;
+			groupComposePhase = null;
 			groupTaskId = result.firstTaskId;
 			groupPipeTaskIds = { [result.firstView.pipeId]: result.firstTaskId };
 			groupTaskViews = { [result.firstView.pipeId]: result.firstView };
+			startGroupPoll();
 			const firstPipe = selectedSession.pipes.find((p) => p.id === result.firstView.pipeId);
 			if (firstPipe) {
 				const startedAt = Date.now();
@@ -1319,6 +1469,9 @@
 				if (event.kind === 'group-terminal') {
 					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
 					groupStatus = event.status ?? 'done'; groupStale = false;
+					stopGroupPoll();
+					groupProgress = 1;
+					groupComposePhase = null;
 					// The terminal event is dispatched before the compose result
 					// is persisted — refetch once (and once more after a short
 					// delay for the compose-terminal case) so the modal shows the
@@ -1347,6 +1500,7 @@
 
 	async function cancelSessionGenerationGroup() {
 		if (!activeGroupId) return;
+		stopGroupPoll();
 		try { await cancelSessionGeneration(activeGroupId); } catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
 
@@ -1860,6 +2014,7 @@
 
 	function closeProgressModal() {
 			const closedId = activeTaskId;
+			stopGroupPoll();
 			stopWatching();
 			showProgressModal = false;
 			progressMinimized = false;
@@ -1912,8 +2067,15 @@
 		// from lastComposedSessionVideo (the record that a session video exists
 		// for this session — the "Open in preview" button re-attaches it).
 		detachSessionVideo();
+		// Mirror the tool panel ONLY from this session's own composed video.
+		// When the record belongs to a different session (a cross-session
+		// leak from a previous attach) it must be cleared, not re-shown —
+		// otherwise the tool panel would display the OTHER session's full
+		// video while the user is inspecting a pipe clip here.
 		if (lastComposedSessionVideo?.sessionId === selectedSessionId) {
 			toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		} else {
+			toolsSessionVideo = null;
 		}
 		previewVideo = null;
 		previewIsSessionVideo = false;
@@ -1994,6 +2156,7 @@
 			groupUnlisten = null;
 			activeGroupId = null;
 			groupTaskId = null;
+			stopGroupPoll();
 			stopWatching();
 		// Remove BOTH settings listeners (the store is multi-listener — each
 		// removal must pass the exact registered reference).
@@ -2021,6 +2184,7 @@
 		onlayoutChange={handleLayoutChange}
 		providers={settings.providers}
 		providerStatus={providerStatus}
+		providerLoading={providerLoading}
 		onopenprovidersettings={() => {
 			settingsTab = 'providers';
 			showSettings = true;
@@ -2160,6 +2324,8 @@
 					composeState={groupComposeState}
 					composeError={groupComposeError}
 					sessionVideoPath={groupSessionVideoPath}
+					groupProgress={groupProgress}
+					composePhase={groupComposePhase}
 					onFetch={fetchGenerationTask}
 					onLoaded={(view) => { groupTaskViews[view.pipeId] = view; }}
 					onCancel={cancelSessionGenerationGroup}

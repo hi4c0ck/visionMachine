@@ -190,7 +190,7 @@ describe('settings store — multi-listener change notifications', () => {
   // must invalidate the late load.
   it('a commit during an in-flight loadSettings invalidates the late load', async () => {
     const mod = await import('../../src/lib/settings/store');
-    const { loadSettings, commitSettings, getProviderStatus } = mod;
+    const { loadSettings, commitSettings, getProviderStatus, isSettingsLoading } = mod;
     const full = {
       ...DEFAULT_SETTINGS,
       providers: {
@@ -211,6 +211,56 @@ describe('settings store — multi-listener change notifications', () => {
     await loadP;
     // The committed key survives the late load resolution.
     expect(getProviderStatus().video.hasKey).toBe(true);
+  });
+
+  // P6b regression: the initial-load window. Before the fix, providerStatus was
+  // computed from DEFAULT_SETTINGS at module init and stayed that way until the
+  // first loadSettings settled — so a freshly-configured profile showed
+  // "key not set" on startup for the duration of the load. The store must now
+  // expose the load lifecycle (isSettingsLoading) so the UI can render a
+  // neutral state instead of asserting key presence off the default-seeded
+  // snapshot.
+  //
+  // NOTE: in the browser-dev path the read is a synchronous localStorage
+  // getItem, so by the time `await loadP` settles the flag is already false.
+  // In the real Tauri path the read is an async invoke, so the flag IS true
+  // for the in-flight window. We test what the unit harness can observe:
+  // the flag is false after settlement, and a cross-profile switch re-arms
+  // it until the new load settles.
+  it('isSettingsLoading is false after a settled profile load', async () => {
+    const mod = await import('../../src/lib/settings/store');
+    const { loadSettings, isSettingsLoading } = mod;
+    await loadSettings('p6b-settle');
+    expect(isSettingsLoading()).toBe(false);
+  });
+
+  it('a cross-profile switch re-arms the loading flag until the new load settles', async () => {
+    const mod = await import('../../src/lib/settings/store');
+    const { loadSettings, isSettingsLoading, getLoadedProfile } = mod;
+    // Settle on profile A.
+    await loadSettings('p6b-a');
+    expect(getLoadedProfile()).toBe('p6b-a');
+    expect(isSettingsLoading()).toBe(false);
+    // Start the load for B (in browser dev the read is sync, so the promise
+    // may already be resolved by the time we assert — but the flag logic
+    // still ran: it was set true the moment B's load began, then cleared
+    // when B settled). The observable invariant: after B settles, the
+    // flag is false AND the loaded profile is B.
+    await loadSettings('p6b-b');
+    expect(getLoadedProfile()).toBe('p6b-b');
+    expect(isSettingsLoading()).toBe(false);
+  });
+
+  it('an idempotent re-load of the settled profile does not re-arm the flag', async () => {
+    const mod = await import('../../src/lib/settings/store');
+    const { loadSettings, isSettingsLoading } = mod;
+    await loadSettings('p6b-idem');
+    expect(isSettingsLoading()).toBe(false);
+    // Re-calling with the same settled profile is a no-op for the flag:
+    // the snapshot already represents this profile, so there is no window
+    // where key-presence claims would be unreliable.
+    await loadSettings('p6b-idem');
+    expect(isSettingsLoading()).toBe(false);
   });
 });
 

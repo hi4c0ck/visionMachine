@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: mockInvoke,
 }));
 
-import { fetchGenerationGroup } from '../../src/lib/composerStore/sessionGeneration';
+import { fetchGenerationGroup, fetchLatestGenerationGroupForSession } from '../../src/lib/composerStore/sessionGeneration';
 
 describe('group restore surfaces compose outcome and run sources', () => {
   beforeEach(() => {
@@ -37,7 +37,8 @@ describe('group restore surfaces compose outcome and run sources', () => {
       ],
     });
     const g = await fetchGenerationGroup('g1');
-    expect(mockInvoke).toHaveBeenCalledWith('get_generation_group', { groupId: 'g1' });
+    // snake_case flat-arg convention (rename_all = "snake_case" on the Rust command).
+    expect(mockInvoke).toHaveBeenCalledWith('get_generation_group', { group_id: 'g1' });
     expect(g.composeState).toBe('error');
     expect(g.composeError).toBe('ffmpeg exited 1');
     expect(g.live).toBe(false);
@@ -94,5 +95,32 @@ describe('group restore surfaces compose outcome and run sources', () => {
     expect(g.sessionId).toBe('s4');
     expect(g.composeState).toBe('cancelled');
     expect(g.sources).toEqual([]);
+  });
+});
+
+describe('fetchLatestGenerationGroupForSession (DB fallback on session select)', () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+  });
+
+  it('invokes the per-session query and parses the view', async () => {
+    mockInvoke.mockResolvedValue({
+      groupId: 'g5',
+      sessionId: 's5',
+      status: 'done',
+      live: false,
+      composeState: 'done',
+      sessionVideoPath: 'C:/m/s5/session-video/session.mp4',
+    });
+    const g = await fetchLatestGenerationGroupForSession('s5');
+    expect(mockInvoke).toHaveBeenCalledWith('get_latest_session_generation_group', { session_id: 's5' });
+    expect(g?.groupId).toBe('g5');
+    expect(g?.composeState).toBe('done');
+    expect(g?.sessionVideoPath).toBe('C:/m/s5/session-video/session.mp4');
+  });
+
+  it('returns null when the session has no group runs (backend Null)', async () => {
+    mockInvoke.mockResolvedValue(null);
+    expect(await fetchLatestGenerationGroupForSession('s-none')).toBeNull();
   });
 });

@@ -15,6 +15,8 @@ import { DEFAULT_SETTINGS, normalizeSettings, providerStatuses, type ProviderSta
 // and re-read getSettings() on each notification.
 let current: Settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
 let profileId: string | null = null;
+/** Which profile id `current` was last loaded from (null = still on defaults). */
+let loadedProfile: string | null = null;
 let saveTimer: number | null = null;
 let saving = false;
 // Monotonic generation counter. Every entry point that REPLACES `current`
@@ -43,6 +45,18 @@ const onChanges = new Set<() => void>();
 // object, so a mid-load / default-seeded object can no longer report
 // "key not set" for a persisted key.
 let providerStatus: Record<ProviderKind, ProviderStatusSnapshot> = providerStatuses(current);
+// Load lifecycle (P6b): true while the ACTIVE profile's settings are still in
+// flight. The snapshot above is a pure function of `current`, and `current`
+// is seeded from DEFAULT_SETTINGS at module init — so until the first
+// loadSettings settles it looks EXACTLY like "loaded, key genuinely absent".
+// That indistinguishability is the initial-load window the P6 generation guard
+// does NOT cover (it only stops a *late* load clobbering a *newer* commit).
+// Consumers that assert key presence (the provider chip, a generate pre-check)
+// must read this flag and treat "not loaded yet" as a neutral state, never
+// as "key not set". Flipped to true the moment a load for a DIFFERENT
+// profile starts, so a profile switch can't leave the NEW profile's chip
+// flashing a transient "key not set" while its settings load.
+let settingsLoading = false;
 
 function clone(s: Settings): Settings {
   return JSON.parse(JSON.stringify(s));
@@ -79,6 +93,38 @@ export function getProfileId(): string | null {
 }
 
 /**
+ * True while the active profile's settings are still in flight — the first
+ * loadSettings has not settled, OR a profile switch has kicked off a new
+ * load. Lets callers distinguish "seeded from defaults, not loaded yet" —
+ * a neutral state — from "loaded, key genuinely absent" (a real gap).
+ *
+ * This is the ONLY signal that closes the initial-load window the P6
+ * generation guard does not cover: the guard stops a LATE load from
+ * clobbering a NEWER commit, but while the very first load is in flight the
+ * snapshot is the default-seeded one and looks identical to "loaded, no
+ * key." Consumers that assert key presence (the provider chip, a generate
+ * pre-check) must read this flag and render a neutral state while it is true.
+ */
+export function isSettingsLoading(): boolean {
+  // An in-flight load (settingsLoading) OR a store that has never settled on
+  // any profile (loadedProfile === null). The second branch is the one the
+  // UI actually observes: a Workspace that mounts before the first load has
+  // run (or whose load has not yet completed) must treat the snapshot as
+  // unreliable. The two flags are kept in lockstep by loadSettings, so
+  // reading them together is race-free.
+  return settingsLoading || loadedProfile === null;
+}
+
+/**
+ * The profile id `current` + `providerStatus` were LAST loaded from. `null`
+ * until the first `loadSettings` settles — lets callers tell "seeded from
+ * defaults, not loaded yet" apart from "loaded, key genuinely absent".
+ */
+export function getLoadedProfile(): string | null {
+  return loadedProfile;
+}
+
+/**
  * Read the provider status snapshot (P6): per-kind key presence + the
  * generation gate. Recomputed on profile load and after every settings
  * change; callers never re-derive key presence off the raw settings object.
@@ -94,6 +140,13 @@ export function getProviderStatus(): Record<ProviderKind, ProviderStatusSnapshot
  */
 export async function loadSettings(profile: string): Promise<void> {
   profileId = profile;
+  // The active profile's settings are about to go in flight. If we are
+  // switching AWAY from a settled profile, its snapshot no longer represents
+  // the profile the UI is showing — mark the load pending so the chip (and
+  // any key-presence assert) reads a neutral state, not a transient
+  // "key not set" off the outgoing profile's snapshot. A load for the SAME
+  // settled profile (idempotent re-call) leaves the flag as-is.
+  settingsLoading = loadedProfile !== profile;
   // Captured BEFORE the await: if a commit/update bumps the generation while
   // this load is in flight, the persisted blob we read is stale — the chip
   // would revert a freshly configured provider to "key not set", or re-apply
@@ -117,10 +170,22 @@ export async function loadSettings(profile: string): Promise<void> {
     }
   }
   // A commit/update landed while this load was in flight — the persisted blob
-  // we just read is stale, so drop it instead of rolling the UI back.
-  if (gen !== generation) return;
+  // we just read is stale, so drop it instead of rolling the UI back. If the
+  // in-memory settings now belong to a DIFFERENT profile (a profile switch
+  // raced a just-saved key), the store still shows the OLD profile's
+  // providerStatus — re-notify so the chip re-syncs from what actually won.
+  if (gen !== generation) {
+    // A commit/update won the race; the UI already has that fresher state.
+    // Clear the pending flag only if we have actually settled on a profile —
+    // otherwise a different load is in flight and must keep it pending.
+    if (loadedProfile === profile) settingsLoading = false;
+    if (loadedProfile !== profile) notifyChanges();
+    return;
+  }
   current = raw ? normalizeSettings(raw) : clone(DEFAULT_SETTINGS);
   providerStatus = providerStatuses(current);
+  loadedProfile = profile;
+  settingsLoading = false;
   syncFfmpegUserPath();
   notifyChanges();
 }
