@@ -197,13 +197,23 @@
 <ErrorHandler error={runtimeError}>
 	{#if showWelcome}
 		<div class="app">
-			<header class="header">
-				<div class="logo-section">
-					<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
-					<span class="version-badge">v{APP_CONSTANTS.strings.version}</span>
+			<header class="stripe" aria-label="VisionMachine">
+				<div class="stripe-clip">
+					<div class="stripe-scroll" aria-hidden="true">
+						{#each Array(24) as _, i}
+							<span class="stripe-letter">VM</span>
+						{/each}
+					</div>
 				</div>
-				
-				<div class="controls">
+
+				<div class="stripe-logo">
+					<div class="film-frame film-frame-logo" role="img" aria-label="VisionMachine">
+						<img src="/icons/vm-mark-128.png" alt="VisionMachine" class="film-mark" />
+					</div>
+				</div>
+
+				<div class="stripe-controls">
+					<span class="stripe-version">v{APP_CONSTANTS.strings.version}</span>
 					<select class="theme-select" value={selectedTheme} onchange={(e) => applyTheme(e.currentTarget.value)}>
 						{#each APP_CONSTANTS.themes as theme}
 							<option value={theme.id}>{theme.name}</option>
@@ -295,43 +305,124 @@
 		background: var(--bg-primary);
 	}
 
-	.header {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 16px 24px;
-		background: var(--bg-secondary);
-		border-bottom: 1px solid var(--border);
-		height: 60px;
+	/* Full-width horizontal film-stripe band. A solid top margin sets the
+	   strip off the window edge; the film edge text ("VM" repeated, letters
+	   interlocking) scrolls slowly along the band, and the logo medallion
+	   sits on top of it in the left zone — a film frame on the icon's own
+	   black/gray surface. */
+	.stripe {
+		position: relative;
+		width: 100%;
+		margin-top: 28px;
+		height: 92px;
 		flex-shrink: 0;
+		overflow: hidden;
+		background: #101014;
+		border-top: 1px solid var(--border);
+		border-bottom: 1px solid var(--border);
 	}
 
-	.logo-section {
+	.stripe-clip {
+		position: absolute;
+		inset: 0;
+		mask-image: linear-gradient(
+			to right,
+			black 0%,
+			black 30%,
+			transparent 72%,
+			transparent 100%
+		);
+		-webkit-mask-image: linear-gradient(
+			to right,
+			black 0%,
+			black 30%,
+			transparent 72%,
+			transparent 100%
+		);
+	}
+
+	.stripe-scroll {
+		position: absolute;
+		top: 0;
+		left: 0;
+		height: 100%;
 		display: flex;
 		align-items: center;
-		gap: 12px;
+		white-space: nowrap;
+		animation: stripe-move 80s linear infinite;
 	}
 
-	.logo-text {
-		font-size: 1.2rem;
-		font-weight: 700;
-		color: var(--text-primary);
-		letter-spacing: -0.02em;
+	@keyframes stripe-move {
+		from { transform: translateX(0); }
+		to   { transform: translateX(-50%); }
 	}
 
-	.version-badge {
+	.stripe-letter {
+		font-size: 54px;
+		font-weight: 800;
+		line-height: 1;
+		/* interlock the two glyphs of each pair so the film-edge read as
+		   one continuous ribbon, like "W W W" on a movie reel */
+		letter-spacing: -0.18em;
+		color: rgba(255, 255, 255, 0.12);
+		padding-right: 1.18em;
+		user-select: none;
+	}
+
+	/* The logo zone: a single film frame containing the mark, hovering
+	   over the scrolling lettering, with a fixed 56px start margin. */
+	.stripe-logo {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		align-items: center;
+		width: 320px;
+		padding-left: 56px;
+		box-sizing: border-box;
+		height: 100%;
+	}
+
+	.film-frame-logo {
+		position: relative;
+		width: 72px;
+		height: 72px;
+		background: #0f0f13;
+		border-radius: 8px;
+		overflow: hidden;
+		box-shadow:
+			inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+			0 6px 24px rgba(0, 0, 0, 0.55);
+	}
+
+	.film-mark {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		/* the mark art sits in the middle band of the square, so a slight
+		   upward shift centers the "VM" glyph inside the frame */
+		object-position: 50% 44%;
+		scale: 1.15;
+	}
+
+	.stripe-controls {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		margin-left: auto;
+		height: 100%;
+		padding-right: 24px;
+		box-sizing: border-box;
+	}
+
+	.stripe-version {
 		font-size: 0.7rem;
-		padding: 2px 8px;
-		background: var(--bg-tertiary);
-		border-radius: 12px;
+		letter-spacing: 0.04em;
 		color: var(--text-muted);
-		border: 1px solid var(--border);
-	}
-
-	.controls {
-		display: flex;
-		gap: 16px;
-		align-items: center;
+		font-weight: 600;
 	}
 
 	.theme-select {
