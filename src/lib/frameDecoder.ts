@@ -24,6 +24,12 @@
 /** Carousel step in frames (the composer 8n grid). */
 export const CAROUSEL_STEP = 8;
 
+/** LRU size for decoded frame thumbnails. */
+const LRU_SIZE = 16;
+
+/** Guard so a stuck decode can't hold the UI hostage. */
+const DECODE_TIMEOUT_MS = 5000;
+
 /** Top-panel preview strip height in px — the frame-preview band in Frame.svelte. */
 export const CAROUSEL_STRIP_H = 180;
 
@@ -80,12 +86,6 @@ export function thumbnailIntrinsic(
   const h = Math.max(1, Math.round(w * ratio));
   return { w, h };
 }
-
-/** LRU size for decoded frame thumbnails. */
-const LRU_SIZE = 16;
-
-/** Guard so a stuck decode can't hold the UI hostage. */
-const DECODE_TIMEOUT_MS = 5000;
 
 /**
  * WebCodecs video types, read defensively so the module is safe to import
@@ -163,6 +163,12 @@ export class FrameSource {
   constructor(url: string, fps: number) {
     this.url = url;
     this.fps = fps > 0 ? fps : 24;
+    // Create the capture <video> eagerly so its METADATA (duration +
+    // videoWidth/videoHeight) is available as soon as it loads — even when
+    // the WebCodecs fast path never touches it. Without this, a
+    // WebCodecs-only environment leaves mediaSize/mediaDurationFrames null
+    // forever and the carousel falls back to the session's preset aspect.
+    this.ensureCaptureVideo();
   }
 
   /** True when WebCodecs can drive the decoder in this environment. */
@@ -189,6 +195,19 @@ export class FrameSource {
     const v = this.captureVideo;
     if (!v || !isFinite(v.duration) || v.duration <= 0) return null;
     return Math.floor(v.duration * this.fps);
+  }
+
+  /**
+   * The media's ACTUAL width/height, measured off the capture <video>
+   * (null until its metadata has loaded). The carousel sizes its cards to
+   * the TRUE video aspect — the preset in the session (720p vertical ⇒
+   * 720×1280) is only an intent; the real file's dimensions are what render.
+   * Read-only snapshot; safe to poll.
+   */
+  get mediaSize(): { width: number; height: number } | null {
+    const v = this.captureVideo;
+    if (!v || !v.videoWidth || !v.videoHeight) return null;
+    return { width: v.videoWidth, height: v.videoHeight };
   }
 
   /**

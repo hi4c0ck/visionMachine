@@ -12,8 +12,8 @@
 	import type { SessionGenerateStats } from './ComposerModals/SessionGenerateModal.svelte';
 	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece } from '$types';
-	import { getMaxFramesForResolution } from '$types';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece, ResolutionPreset, Orientation } from '$types';
+	import { getMaxFramesForResolution, RESOLUTION_DIMS } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
 	import { summarizePipe } from '$lib/promptEngine';
@@ -243,6 +243,23 @@
 			: pipeMax;
 	});
 	let activePipe = $derived(selectedSession?.pipes[activePipeIdx ?? 0] ?? selectedSession?.pipes[0] ?? null);
+
+	/** Video aspect ratio (width/height) for the current session — derived from
+	 *  orientation + resolution via RESOLUTION_DIMS. Passed to Frame →
+	 *  FrameCarousel so cards size to the true video aspect (no crop on
+	 *  portrait sessions). null when no session is selected. */
+	let videoAspect = $derived.by((): number | null => {
+		const session = selectedSession;
+		if (!session) return null;
+		try {
+			const res = (session.resolution ?? '720p') as ResolutionPreset;
+			const ori = (session.orientation ?? 'horizontal') as Orientation;
+			const dims = RESOLUTION_DIMS[res][ori];
+			return dims.width / dims.height;
+		} catch {
+			return null;
+		}
+	});
 
 	// ── Session-video frame space ─────────────────────────────────────────────
 	// The composed session video splices every pipe clip back-to-back in
@@ -2175,6 +2192,7 @@
 		fps={selectedSession?.fps ?? null}
 		totalFrames={totalFrames}
 		carouselFrame={selectedFrame ?? 0}
+		videoAspect={videoAspect}
 		oncarouselSelect={(f) => (selectedFrame = f)}
 		onframeSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}

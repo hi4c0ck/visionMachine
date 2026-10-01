@@ -25,6 +25,7 @@
 		providerStatus = null,
 		providerLoading = false,
 		onopenprovidersettings,
+		videoAspect = null,
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -71,6 +72,13 @@
 		providerLoading?: boolean;
 		/** Open the settings modal at the Providers tab. */
 		onopenprovidersettings?: () => void;
+		/**
+		 * Video aspect ratio (width/height) of the session video, derived from
+		 * session orientation + resolution. e.g. 16/9 = 1.778, 9/16 = 0.5625.
+		 * Passed to the frame carousel so it can size cards to the true aspect.
+		 * null = fall back to the fixed 170px card width.
+		 */
+		videoAspect?: number | null;
 	}>();
 
 	const layouts = [
@@ -85,6 +93,49 @@
 	// (poster extraction etc.) is explicitly deferred.
 	let videoEl = $state<HTMLVideoElement | null>(null);
 	let videoPlaying = $state(false);
+	// The media's ACTUAL width/height, read off the live <video> element the
+	// moment its metadata lands. This is the ground-truth aspect — the session
+	// preset (videoAspect) is only an intent. Drives the strip height below so
+	// portrait media get a tall band instead of a letterboxed 180px strip.
+	let measuredVideoSize = $state<{ width: number; height: number } | null>(null);
+
+	// Report the element's intrinsic size as soon as it's known (loadeddata
+	// guarantees videoWidth/videoHeight + duration are set). Fires once per
+	// media; a new url remounts the element (videoEl is cleared in the effect
+	// below) so a fresh measurement starts on each switch.
+	function onVideoMeta(e: Event) {
+		const el = e.target as HTMLVideoElement;
+		if (el.videoWidth && el.videoHeight) {
+			const w = el.videoWidth, h = el.videoHeight;
+			if (!measuredVideoSize || measuredVideoSize.width !== w || measuredVideoSize.height !== h) {
+				measuredVideoSize = { width: w, height: h };
+			}
+		}
+	}
+
+	// The strip's true aspect: measured size wins, the session preset is the
+	// seed until the measurement lands, null = unknown (landscape fallback).
+	const stripAspect = $derived(
+		measuredVideoSize ? measuredVideoSize.width / measuredVideoSize.height : videoAspect
+	);
+
+	// ── Adaptive strip height ────────────────────────────────────────────────
+	// The band is a fixed 180px for landscape/square media. Portrait media
+	// (aspect < 1) get a TALLER band so the video fills it full-height instead
+	// of letterboxing into a narrow 180px strip: the band grows until the
+	// media's width at that height reaches PORTRAIT_MAX_W, after which the
+	// width caps and the video letterboxes only slightly. No crop, no
+	// distortion — object-fit:contain always shows the whole frame.
+	const PORTRAIT_MAX_W = 260; // px — a portrait frame up to ~260px wide reads
+	                             // as "full", not as a thin strip.
+	const stripH = $derived.by(() => {
+		const a = stripAspect;
+		if (a == null || !Number.isFinite(a) || a <= 0) return 180;
+		if (a >= 1) return 180; // landscape/square: the standard band
+		// Portrait: height such that width = PORTRAIT_MAX_W, i.e. h = W/a,
+		// but never shorter than the standard 180px band.
+		return Math.max(180, Math.round(PORTRAIT_MAX_W / a));
+	});
 	// The media URL is ready but the element hasn't finished its first load
 	// (network still in flight or codec probing). While true the panel shows a
 	// spinner instead of a dead 0:00 shell — clearing the element on each new
@@ -108,6 +159,7 @@
 	function resetVideoState() {
 		videoEl = null; // force a fresh element on the next preview
 		videoPlaying = false;
+		measuredVideoSize = null; // the old element's size is meaningless now
 		videoLoading = false;
 		// Leaving a dead preview also exits carousel mode — the center card
 		// the carousel keeps parked on a frame no longer exists.
@@ -227,7 +279,7 @@
 	</div>
 
 	<!-- Middle section: frame/video preview container -->
-	<div class="frame-preview">
+	<div class="frame-preview" style={`height:${stripH}px`}>
 		{#if video}
 			{#if mode === 'carousel' && carouselReady}
 				<!-- Carousel mode: the SAME <video> element is parked in the
@@ -239,6 +291,8 @@
 					totalFrames={totalFrames!}
 					fps={fps!}
 					frame={carouselFrame}
+					videoAspect={videoAspect}
+					stripH={stripH}
 					onframeSelect={(f) => oncarouselSelect?.(f)}
 					onexit={toggleMode}
 				/>
@@ -259,6 +313,7 @@
 					src={video.url}
 					muted
 					playsinline
+					onloadeddata={onVideoMeta}
 					oncanplay={() => (videoLoading = false)}
 					onerror={() => (videoLoading = false)}
 					onpause={() => (videoPlaying = false)}
