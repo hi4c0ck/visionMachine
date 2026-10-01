@@ -24,6 +24,63 @@
 /** Carousel step in frames (the composer 8n grid). */
 export const CAROUSEL_STEP = 8;
 
+/** Top-panel preview strip height in px — the frame-preview band in Frame.svelte. */
+export const CAROUSEL_STRIP_H = 180;
+
+/** Fixed card width (px) used when no video aspect is known. */
+export const CAROUSEL_FALLBACK_CARD_W = 170;
+
+/** Neighbor cards overlap this fraction of the previous card's width. */
+export const CAROUSEL_OVERLAP = 0.55;
+
+/**
+ * Card width in px for the given video aspect (width/height), at the
+ * strip's rendered height `stripH` (px). Cards track the strip's full height
+ * so portrait videos get narrow cards and landscape videos get wide ones —
+ * no crop, no letterbox. `stripH` defaults to CAROUSEL_STRIP_H (the standard
+ * 180px band); the top panel passes a taller value for portrait media so the
+ * card box matches the band's REAL height. When the aspect is unknown
+ * (null/undefined/non-finite/≤0), falls back to the fixed width.
+ */
+export function carouselCardWidth(
+  stripH: number,
+  aspect: number | null | undefined,
+): number {
+  if (aspect == null || !Number.isFinite(aspect) || aspect <= 0) return CAROUSEL_FALLBACK_CARD_W;
+  return Math.round(stripH * aspect);
+}
+
+/**
+ * Pixel width of horizontal drag movement per carousel step.
+ * One step advances the strip by one card width, folded by the neighbor
+ * overlap. No rubber-banding: pointer travel maps 1:1 to strip movement.
+ */
+export function carouselDragPxPerStep(cardW: number, overlap: number = CAROUSEL_OVERLAP): number {
+  return Math.round(cardW * (1 + (1 - overlap)));
+}
+
+/**
+ * Backing-store dimensions for a thumbnail canvas that must fill a card of
+ * `cardW` px wide. The intrinsic bitmap is 1:1 with the card box (width =
+ * cardW, height aspect-corrected to the source), so object-fit:fill renders
+ * it with NO second scale — a 2×-resolution backing store would be
+ * down-sampled again by the CSS into the 1× card box (a double scaler that
+ * blurs the portrait thumbnail). A zero/negative height bitmap clamps to
+ * 1px so the canvas never has a zero-height backing store.
+ */
+export function thumbnailIntrinsic(
+  cardW: number,
+  bitmapW: number,
+  bitmapH: number,
+): { w: number; h: number } {
+  const w = Math.max(1, Math.round(cardW));
+  // Guard the ratio itself: a missing/zero bitmap width would produce a
+  // non-finite height, which would corrupt the canvas. Default to 1px.
+  const ratio = bitmapW > 0 ? bitmapH / bitmapW : 0;
+  const h = Math.max(1, Math.round(w * ratio));
+  return { w, h };
+}
+
 /** LRU size for decoded frame thumbnails. */
 const LRU_SIZE = 16;
 
