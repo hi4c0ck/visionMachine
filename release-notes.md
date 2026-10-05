@@ -1,32 +1,31 @@
 # VisionMachine v0.7.6
 
-### Smoother generation
-- Agnes Video V2.0 no longer fails on keyframe videos with confusing
-  provider errors
-- When the model can't use the media you picked, the app falls back to a
-  mode that works and tells you so
-- When the provider's video queue is full, the app keeps trying with
-  short retries instead of waiting on one long timeout
-- A session video you composed earlier still shows after you restart the
-  app
+### Generation
+- Agnes Video V2.0: the "image as a list of at least 2 items" 400 is
+  gone; pipes with less media than the model's minimum now ship as a
+  text-to-video job with a one-line note instead of failing
+- 503 "video queue full": the poller probes the queue every ~15 s
+  instead of the old single 2-minute wait
+- Prechecks: paid models are blocked from a run, and media pieces
+  without a source image are flagged before it starts
+- Settings self-heal: a stored model id the catalog no longer knows
+  falls back to the preset default, so the model picker can't end up
+  empty
 
-### Sessions & settings
-- Renaming a session sticks: press Enter, the name saves, and it no
-  longer reverts to the old one
+### Sessions
+- Rename: Enter saves and unfocuses; the new name no longer reverts on
+  re-select
 - "Copy session & run there" carries your in-flight edits over to the
   copy
-- If a saved model disappears from the catalog, settings switch to the
-  preset default instead of leaving the picker empty
-- Paid models can no longer sneak into a generation run
-- The footer now reads "Horizones Machines" properly
+- A composed session video now survives an app restart
+- Closing the window mid-run asks first; "keep working" no longer kills
+  the running tasks, and a wedged preview recovers instead of staying
+  un-closeable
 
-### Calmer app
-- Closing the window while a generation is running asks you first —
-  choosing to keep working no longer kills the running tasks
-- If the preview gets stuck, the app notices and recovers instead of
-  leaving the window un-closeable
-- The session generation modal is now a wide two-pane layout: pipe list
-  on the left, run controls on the right
+### UI
+- Session generation modal: two-pane — scrollable pipe list left, run
+  controls right
+- Footer now reads "Horizones Machines"
 
 # VisionMachine v0.7.5
 
