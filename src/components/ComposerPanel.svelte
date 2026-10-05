@@ -125,9 +125,14 @@ import { flashToast } from '$lib/flashToast';
 		const eff = effectiveMediaMode(pipe, media);
 		const effMode: 'keyframes' | 'reference' | 'text' =
 			eff === 'keyframe' ? 'keyframes' : eff;
+		// Show the LOCKED kind's row, not the effective one: an empty
+		// pipe (no keyframes AND no subjects) cross-falls to `text`
+		// in the wire, but hiding both rows then would leave the user
+		// with no way to add the very media that would un-hide them.
+		// `downgraded` below still surfaces the text-fallthrough note.
 		return {
-			showKf: effMode === 'keyframes',
-			showSubjects: effMode === 'reference',
+			showKf: locked === 'keyframes',
+			showSubjects: locked === 'reference',
 			showToggle: media.modes.length > 1,
 			effMode,
 			locked,
