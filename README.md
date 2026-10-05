@@ -55,13 +55,13 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 
 | | |
 |---|---|
-| **Latest release** | [**v0.7.5 — download MSI**](https://github.com/hi4c0ck/visionMachine/releases/latest) |
+| **Latest release** | [**v0.7.6 — download MSI**](https://github.com/hi4c0ck/visionMachine/releases/latest) |
 | **System** | Windows 10/11, x64 |
 | **Install** | Run the MSI. SmartScreen will show an *"unknown publisher"* warning — the build is not code-signed yet. Click **More info → Run anyway**. |
 | **Provider access** | Free Agnes generation is built in; for other providers, set a base URL + API key in **Settings → Providers** (see [docs/agnes-model-catalog.md](docs/agnes-model-catalog.md)). |
 
 [Releases page](https://github.com/hi4c0ck/visionMachine/releases) ·
-[What's new in v0.7.5](https://github.com/hi4c0ck/visionMachine/releases)
+[What's new in v0.7.6](https://github.com/hi4c0ck/visionMachine/releases)
 
 ## A quick look
 
@@ -83,7 +83,7 @@ in the side panel, ready to open again:
 </p>
 
 **Provider settings** — where a provider's base URL + API key live
-(Settings → Providers; the built-in free Agnes presets need no key):
+(Settings → Providers). [Get Agnes API Key](https://agnes-ai.com):
 
 <p align="center">
   <img src="img/provider-settings.gif" alt="Navigating to Settings → Providers" width="300">
@@ -224,5 +224,5 @@ Check browser console for errors. Common causes:
 
 ## License
 
-GPL-3.0-or-later, with an attribution addendum. © 2026 @HorizonesMachines.
+GPL-3.0-or-later, with an attribution addendum. © 2026 @Horizones Machines.
 Full text: [LICENSE](LICENSE) · quick guide: [NOTICE.md](NOTICE.md)
