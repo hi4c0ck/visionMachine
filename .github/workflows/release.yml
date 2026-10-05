@@ -232,28 +232,50 @@ jobs:
           name: visionmachine-appimage
           path: ./release-assets
 
+      # Release body = the user-facing changelog (top section of
+      # release-notes.md, written per docs/CHANGELOG_STYLE.md) plus the
+      # installer notes. generate_release_notes is intentionally OFF: it
+      # appends the raw dependabot/commit list, which is not user-facing.
+      - name: Build release body (changelog + installer notes)
+        id: release-body
+        run: |
+          # Top "# VisionMachine vX.Y.Z" section = the newest entry.
+          awk '/^# VisionMachine / { if (seen) exit; seen = 1; print; next } seen { print }' \
+            release-notes.md > changelog.md
+          cat > installers.md <<'NOTES'
+          ## Installers
+
+          **Windows (MSI)** — two variants:
+
+          - **tiny.msi** — no bundled ffmpeg. Pipe generation works out of
+            the box; session video compose needs an ffmpeg path in
+            Settings → Tools.
+          - **full.msi** — ships a bundled ffmpeg sidecar (~155 MB); session
+            compose works out of the box. A user-set ffmpeg path still
+            takes precedence.
+
+          **Linux (AppImage)** — full variant with bundled ffmpeg, works
+          out of the box. AppArmor may prompt on first launch.
+
+          **Note:** the MSIs are unsigned (no code-signing certificate
+          yet), so Windows SmartScreen will show an "unknown publisher"
+          warning on first install. Click **More info → Run anyway**.
+          NOTES
+          {
+            cat changelog.md
+            echo
+            cat installers.md
+          } > body.md
+          {
+            echo 'release-body<<RELEASE_BODY_DELIM'
+            cat body.md
+            echo 'RELEASE_BODY_DELIM'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             ./release-assets/*.msi
             ./release-assets/*.AppImage
-          generate_release_notes: true
-          body: |
-            **Windows (MSI)** — two variants:
-
-            - **`tiny.msi`** — no bundled ffmpeg. Pipe generation works as-is;
-              session compose ("Compose session video") requires an ffmpeg path
-              in Settings → Tools (user system or custom install).
-            - **`full.msi`** — ships a bundled ffmpeg sidecar (~155 MB,
-              Btbn GPL build); session compose works out of the box, user path
-              still takes precedence when set.
-
-            **Linux (AppImage)** — full variant with bundled ffmpeg sidecar,
-            works out of the box. Users needing AppArmor may need to allow the
-            AppImage through their policy on first launch.
-
-            **Note:** the MSIs are unsigned (no code-signing certificate is
-            configured yet), so Windows SmartScreen will show an
-            "unknown publisher" warning on first install. Click
-            **More info → Run anyway**.
+          body: ${{ steps.release-body.outputs.release-body }}

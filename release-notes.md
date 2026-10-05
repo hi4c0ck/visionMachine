@@ -1,59 +1,32 @@
 # VisionMachine v0.7.6
 
-### Video generation
-- Agnes Video V2.0 (legacy ID) now runs on the 2.5 wire shape (seconds /
-  size / reference media) — the "mode=keyframes requires image as a list
-  of at least 2 items" 400 is gone; when a pipe falls below the model's
-  media floor the shaper downgrades to text-to-video instead of shipping
-  a broken job
-- Media-mode lock: the tumbler now shows the EFFECTIVE wire mode the
-  engine will ship — a locked kind with no pieces quietly cross-falls to
-  the other kind (or text-only) with a one-line note; real defects
-  (media caps, empty reference images) still block
+### Smoother generation
+- Agnes Video V2.0 no longer fails on keyframe videos with confusing
+  provider errors
+- When the model can't use the media you picked, the app falls back to a
+  mode that works and tells you so
+- When the provider's video queue is full, the app keeps trying with
+  short retries instead of waiting on one long timeout
+- A session video you composed earlier still shows after you restart the
+  app
 
-### Fixes
-- Session rename: Enter saves and unfocuses the editor; renamed sessions
-  no longer revert to the old name on re-select
-- Footer attribution reads "Horizones Machines" (was glued together)
-- A session video composed in a previous run now survives an app
-  restart: selection falls back to the generation group's DB record, so
-  the preview re-attaches instead of going silent
-- "Copy session & run there" in the session generate modal keeps your
-  in-flight edits: run-local changes survive the copy and per-pipe
-  edits re-map onto the copy's fresh pipe ids
-- 503 video-queue-full no longer dead-waits: the poller probes the
-  queue on a short retry backoff instead of sitting on a long timeout
+### Sessions & settings
+- Renaming a session sticks: press Enter, the name saves, and it no
+  longer reverts to the old one
+- "Copy session & run there" carries your in-flight edits over to the
+  copy
+- If a saved model disappears from the catalog, settings switch to the
+  preset default instead of leaving the picker empty
+- Paid models can no longer sneak into a generation run
+- The footer now reads "Horizones Machines" properly
 
-### Stability
-- Close guard: closing the window while generation is live asks to
-  confirm; "keep working" disarms the backend force-close watchdog so it
-  no longer kills the running tasks
-- Renderer heartbeat: a wedged webview is detected and logged instead of
-  a frozen, un-closeable window
-- Settings self-heal: a stored model id the catalog no longer knows is
-  migrated to the preset's default generable model on load; read-only
-  (paid) models are blocked in prechecks and media pieces without a
-  source image are flagged before the run starts
-
-### UI
-- Session generate modal: wide two-pane layout (scrollable pipe list
-  left, run controls right; stacks to one column under 640 px)
-- Welcome page: full-width horizontal film-stripe band with the logo
-  frame hovering over it
-- Group progress modal restyled to the shared modal anatomy
-
-### Tooling
-- Dependabot: actions/checkout 4 → 7; npm 11 tree (TypeScript 7, vitest
-  5, svelte-plugin 7, jsdom 30); Rust: sqlx 0.9 + 14 dep updates
-- svelte-check now runs on the TS7 native compiler (`--tsgo`)
-- LF line endings enforced repo-wide via .gitattributes
-
-### Docs
-- README provider section links to the Agnes API key (replaces the
-  "built-in presets need no key" claim) and gains a Settings → Providers
-  motion clip
-- License/copyright lines read "@Horizones Machines" (two words) in
-  LICENSE, NOTICE, README and CONTRIBUTING
+### Calmer app
+- Closing the window while a generation is running asks you first —
+  choosing to keep working no longer kills the running tasks
+- If the preview gets stuck, the app notices and recovers instead of
+  leaving the window un-closeable
+- The session generation modal is now a wide two-pane layout: pipe list
+  on the left, run controls on the right
 
 # VisionMachine v0.7.5
 
