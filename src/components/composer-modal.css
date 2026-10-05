@@ -241,17 +241,43 @@
 .gen-status-chip.rate-limited { color: var(--warning-color, #fbbf24); border-color: var(--warning-color, #fbbf24); }
 .gen-status-chip.running { color: var(--accent-color, #ff3e00); border-color: var(--accent-color, #ff3e00); }
 
-/* Thin progress track shared by pipe rows. */
+/* Progress tracks (shared by pipe rows + the group/pipe bars).
+   Rounded, theme-tinted track; the fill animates width on every update so
+   live progress reads as smooth motion instead of hard 0%→100% jumps. */
 .gen-progress-track {
-	height: 5px;
+	height: 6px;
 	background: var(--bg-tertiary, #27272a);
-	border-radius: 3px;
+	border: 1px solid var(--border-color, #3f3f46);
+	border-radius: 4px;
 	overflow: hidden;
 }
 
+/* Generic animated fill — any direct child element of the track. The
+   `transition` covers both the 0.25 s micro-moves (live task ticks) and the
+   slower group-poll cadence; width never animates backwards visibly. */
 .gen-progress-track > * {
 	display: block;
 	height: 100%;
 	background: var(--accent-color, #ff3e00);
-	transition: width 0.25s ease;
+	border-radius: 3px;
+	transition: width 0.45s ease;  /* long enough to blend the 2 s group poll */
 }
+
+/* The compact row fill is a themed variant of the same track geometry, with
+   a success tint when the pipe has completed (matches the done-status chip). */
+.gen-progress-track-fill {
+	display: block;
+	height: 100%;
+	background: var(--accent-color, #ff3e00);
+	border-radius: 3px;
+	transition: width 0.45s ease, background-color 0.2s ease;
+}
+.gen-progress-track-fill.done { background: var(--success-color, #4ade80); }
+
+/* Themed bar for the compact pipe body + the header group bar: a slightly
+   taller track with a rounded cap, consistent with the shared geometry. */
+.gen-progress-bar {
+	height: 7px;
+	border-radius: 4px;
+}
+.gen-progress-bar > * { height: 100%; border-radius: 4px; }

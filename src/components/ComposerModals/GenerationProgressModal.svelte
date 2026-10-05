@@ -292,14 +292,16 @@
 						</button>
 					{/if}
 				{:else}
-					<!-- Terminal state (or first poll pending): OK is enabled only
-						 when the task has actually reached a terminal state, so the
-						 user acknowledges the real outcome before the modal closes.
-						 Backdrop click and Esc are disabled (the overlay carries no
-						 handler) — this modal is not closable by any other means. -->
-					{@const okEnabled = task !== null && ['done', 'error', 'cancelled'].includes(task.status)}
+					<!-- Not busy: either the task is terminal (the user acks the
+					     real outcome before the modal closes) or the view is still
+					     pending / failed to load — a missing view is NOT a live
+					     task, so dismiss is allowed there too; without this the
+					     modal is an unclosable dead end. Backdrop click and Esc
+					     are disabled (the overlay carries no handler) — this
+					     modal is not closable by any other means. -->
+					{@const okEnabled = task === null || ['done', 'error', 'cancelled'].includes(task.status)}
 					<button class="btn-confirm" onclick={onClose} disabled={!okEnabled}>
-						{!okEnabled ? '…' : 'OK'}
+						OK
 					</button>
 				{/if}
 			</div>

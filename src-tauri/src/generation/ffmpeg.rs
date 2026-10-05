@@ -1,20 +1,22 @@
 //! ffmpeg binary locator + probe (two-variant ship: bundled sidecar / user-path / system).
 //!
 //! Resolution order:
-//! 1. Bundled sidecar (when compiled with `--features bundled-ffmpeg`):
-//!    Tauri's `bundle.externalBin` mechanism stages
-//!    `src-tauri/binaries/ffmpeg-<target-triple>[.exe]` at build time and
-//!    copies it (triple suffix stripped, per tauri-build's copy_binaries)
-//!    next to the main executable: `ffmpeg(.exe)`. Production: install dir.
-//!    Dev/tests: the build output dir (where tauri-build places it), then
-//!    the source `binaries/` staging tree with the triple-suffixed name.
+//! 1. Sidecar next to the executable: the triple-stripped `ffmpeg(.exe)` +
+//!    `ffprobe(.exe)` (staged next to the exe by the `bundled-ffmpeg` build
+//!    step — production: install dir; dev: `target/<profile>`), then the
+//!    source `binaries/` staging tree with the triple-suffixed names.
+//!    Probed UNCONDITIONALLY: the feature only controls *staging*
+//!    (download/copy of the binaries), never the runtime lookup — a sidecar
+//!    that already sits next to the exe is used even by a tiny-variant
+//!    build.
 //! 2. User-set path from settings (`tools.ffmpegPath`) — probed via `-version`.
 //! 3. System `$PATH` — last-resort, probed once.
 //!
-//! The tiny variant (feature off) has NO bundled branch; it still supports
-//! user-path + system. This module is pure std (no shell plugin needed) —
-//! the sidecar is executed via `std::process::Command` against a path we
-//! resolve ourselves, matching the existing `compose.rs` design.
+//! The tiny variant does not stage a binary, but a leftover/adjacent
+//! sidecar is still picked up; user-path + system remain the fallbacks.
+//! This module is pure std (no shell plugin needed) — the sidecar is
+//! executed via `std::process::Command` against a path we resolve
+//! ourselves, matching the existing `compose.rs` design.
 //!
 //! Cross-compilation safety: the target triple is baked in at compile time
 //! (via `build.rs` → `cargo:rustc-env=TARGET_TRIPLE`), so a Windows binary
@@ -99,23 +101,22 @@ fn exe_dir() -> Option<PathBuf> {
 fn candidate_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
 
-    // 1. Bundled sidecar (feature-gated):
+    // 1. Sidecar binaries (probed unconditionally — see module docs):
     //    a) Shipped binaries next to the executable (production install, or
     //       the tauri-build output dir in dev): `ffmpeg(.exe)` (+ ffprobe),
-    //       triple stripped.
+    //       triple stripped. The `bundled-ffmpeg` feature only controls
+    //       *staging* (download/copy into that dir), so a tiny-variant
+    //       build with a sidecar already next to the exe still uses it.
     //    b) Source staging tree fallback for local checkouts: the
     //       triple-suffixed names `fetch-ffmpeg.mjs` writes under `binaries/`.
-    #[cfg(feature = "bundled-ffmpeg")]
-    {
-        if let Some(dir) = exe_dir() {
-            for name in runtime_sidecar_names() {
-                out.push(dir.join(name));
-            }
+    if let Some(dir) = exe_dir() {
+        for name in runtime_sidecar_names() {
+            out.push(dir.join(name));
         }
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        for name in staged_sidecar_names() {
-            out.push(manifest.join("binaries").join(name));
-        }
+    }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for name in staged_sidecar_names() {
+        out.push(manifest.join("binaries").join(name));
     }
 
     // 2. User-set path: read from the environment variable the app sets
@@ -207,22 +208,18 @@ fn source_label(path: &Path) -> String {
     if !s.contains('/') && !s.contains('\\') {
         return "system".into();
     }
-    #[cfg(feature = "bundled-ffmpeg")]
+    // A path is the bundled sidecar when it lives next to the executable
+    // (shipped, triple-stripped name — ffmpeg OR ffprobe) or in the source
+    // `binaries/` staging tree (triple-suffixed name).
+    let stripped = runtime_sidecar_names();
+    if stripped.iter().any(|n| s.ends_with(n)) && !s.contains("binaries") {
+        return "bundled".into();
+    }
+    let triple = compile_target_triple();
+    if s.contains("binaries")
+        && (s.contains(&format!("ffmpeg-{}", triple)) || s.contains(&format!("ffprobe-{}", triple)))
     {
-        // A path is the bundled sidecar when it lives next to the executable
-        // (shipped, triple-stripped name — ffmpeg OR ffprobe) or in the source
-        // `binaries/` staging tree (triple-suffixed name).
-        let stripped = runtime_sidecar_names();
-        if stripped.iter().any(|n| s.ends_with(n)) && !s.contains("binaries") {
-            return "bundled".into();
-        }
-        let triple = compile_target_triple();
-        if s.contains("binaries")
-            && (s.contains(&format!("ffmpeg-{}", triple))
-                || s.contains(&format!("ffprobe-{}", triple)))
-        {
-            return "bundled".into();
-        }
+        return "bundled".into();
     }
     // Absolute or user-set path (env var must be set for the candidate to exist).
     "user".into()

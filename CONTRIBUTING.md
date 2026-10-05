@@ -117,7 +117,7 @@ By submitting a contribution you represent that:
 - Your contributions are incorporated into the project under
   **GPL-3.0-or-later** (the project's license).
 - You will not remove or strip the copyright notice /
-  attribution (© 2026 @HorizonesMachines) that applies to the project's
+  attribution (© 2026 @Horizones Machines) that applies to the project's
   own code.
 
 The full copyright and attribution terms live in

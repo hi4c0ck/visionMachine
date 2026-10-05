@@ -23,7 +23,9 @@
 		showRuler = false,
 		providers = null,
 		providerStatus = null,
+		providerLoading = false,
 		onopenprovidersettings,
+		videoAspect = null,
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -61,8 +63,22 @@
 		providers?: Settings['providers'] | null;
 		/** Per-kind key-presence / configured snapshot (P6) for the chip. */
 		providerStatus?: Record<ProviderKind, ProviderStatusSnapshot> | null;
+		/**
+		 * True while the active profile's settings are still in flight (P6b).
+		 * Passed straight to the chip, which renders a neutral "Loading…"
+		 * state instead of asserting key presence off the default-seeded
+		 * snapshot. Defaults to false for backward compatibility.
+		 */
+		providerLoading?: boolean;
 		/** Open the settings modal at the Providers tab. */
 		onopenprovidersettings?: () => void;
+		/**
+		 * Video aspect ratio (width/height) of the session video, derived from
+		 * session orientation + resolution. e.g. 16/9 = 1.778, 9/16 = 0.5625.
+		 * Passed to the frame carousel so it can size cards to the true aspect.
+		 * null = fall back to the fixed 170px card width.
+		 */
+		videoAspect?: number | null;
 	}>();
 
 	const layouts = [
@@ -77,6 +93,15 @@
 	// (poster extraction etc.) is explicitly deferred.
 	let videoEl = $state<HTMLVideoElement | null>(null);
 	let videoPlaying = $state(false);
+
+	// ── Fixed strip height ───────────────────────────────────────────────────
+	// The top panel is a fixed 180px band for ANY preview, independent of the
+	// video's aspect ratio. Earlier this band grew with portrait media
+	// (PORTRAIT_MAX_W / aspect, up to ~460px) — switching sessions then
+	// resized the top panel and shifted every panel below it. Phase decision:
+	// no panel resizing; the video letterboxes into the fixed band via
+	// object-fit:contain (full frame visible, no crop, no distortion).
+	const stripH = 180;
 	// The media URL is ready but the element hasn't finished its first load
 	// (network still in flight or codec probing). While true the panel shows a
 	// spinner instead of a dead 0:00 shell — clearing the element on each new
@@ -219,7 +244,7 @@
 	</div>
 
 	<!-- Middle section: frame/video preview container -->
-	<div class="frame-preview">
+	<div class="frame-preview" style={`height:${stripH}px`}>
 		{#if video}
 			{#if mode === 'carousel' && carouselReady}
 				<!-- Carousel mode: the SAME <video> element is parked in the
@@ -231,6 +256,8 @@
 					totalFrames={totalFrames!}
 					fps={fps!}
 					frame={carouselFrame}
+					videoAspect={videoAspect}
+					stripH={stripH}
 					onframeSelect={(f) => oncarouselSelect?.(f)}
 					onexit={toggleMode}
 				/>
@@ -329,7 +356,7 @@
 			</div>
 
 			{#if providers && providerStatus && onopenprovidersettings}
-				<ProviderStatus {providers} providerStatus={providerStatus} onopen={onopenprovidersettings} />
+				<ProviderStatus {providers} providerStatus={providerStatus} loading={providerLoading} onopen={onopenprovidersettings} />
 			{/if}
 		</div>
 

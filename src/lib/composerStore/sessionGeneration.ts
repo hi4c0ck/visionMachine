@@ -68,12 +68,52 @@ export function buildSessionGenerationPayload(input: SessionGenerationInput) {
     // "build from the composer/pipe rows", the per-pipe default).
     runStats: input.runStats ?? null, pipeParams: input.pipeParams ?? null };
 }
-export async function startSessionGeneration(input: SessionGenerationInput): Promise<SessionGenerationStart> {
-  const raw = await invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }) as any;
+export async function startSessionGeneration(input: SessionGenerationInput, timeoutMs = 60_000): Promise<SessionGenerationStart> {
+  // Bound the wait: a wedged invoke would leave the generate modal stuck in
+  // busy forever (Cancel disabled, "screen locked" report). If the backend
+  // task nevertheless started past the deadline the registry still tracks
+  // it — restoring the session surfaces it instead of losing the run.
+  const timeout = new Promise<never>((_resolve, reject) =>
+    setTimeout(
+      () => reject(new Error(`Session start timed out after ${Math.round(timeoutMs / 1000)} s — try again`)),
+      timeoutMs,
+    ),
+  );
+  const raw = (await Promise.race([
+    invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }),
+    timeout,
+  ])) as any;
   return { groupId: raw.group_id ?? raw.groupId, firstTaskId: raw.first_task_id ?? raw.firstTaskId, firstView: raw.first_view ?? raw.firstView };
 }
 export async function fetchGenerationGroup(groupId: string): Promise<GenerationGroupView> {
-  const raw = await invoke('get_generation_group', { groupId }) as any;
+  // NOTE: `get_generation_group` is a `rename_all = "snake_case"` flat-arg
+  // command — the JS payload key must be `group_id` (same convention as
+  // `get_generation_task` / `cancel_generation`, which the rest of the app
+  // already calls with snake_case keys). The camelCase `{ groupId }` form
+  // silently deserializes to an empty string and the command errors — that
+  // silent failure is why session-video restore never worked.
+  const raw = await invoke('get_generation_group', { group_id: groupId }) as any;
+  return parseGenerationGroup(raw);
+}
+
+/**
+ * The session's most recent group row from the DB (or `null` when the
+ * session has no group runs). Pure read — the localStorage bridge is gone
+ * after a group goes terminal or across an app restart, so this is the
+ * source of truth for "which composed session video does this session own".
+ */
+export async function fetchLatestGenerationGroupForSession(
+  sessionId: string,
+): Promise<GenerationGroupView | null> {
+  // Same snake_case flat-arg convention as get_generation_group above.
+  const raw = (await invoke('get_latest_session_generation_group', {
+    session_id: sessionId,
+  })) as any;
+  if (!raw || raw === null) return null;
+  return parseGenerationGroup(raw);
+}
+
+function parseGenerationGroup(raw: any): GenerationGroupView {
   return {
     groupId: raw.groupId ?? raw.group_id,
     sessionId: raw.sessionId ?? raw.session_id,
@@ -88,7 +128,8 @@ export async function fetchGenerationGroup(groupId: string): Promise<GenerationG
   };
 }
 export async function cancelSessionGeneration(groupId: string): Promise<void> {
-  await invoke('cancel_generation_group', { groupId });
+  // snake_case flat-arg convention (rename_all = "snake_case" on the command).
+  await invoke('cancel_generation_group', { group_id: groupId });
 }
 export function subscribeGroupEvent(groupId: string, cb: (event: GroupEvent) => void): Promise<UnlistenFn> {
   if (!isTauri()) return Promise.resolve(() => {});

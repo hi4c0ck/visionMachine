@@ -15,7 +15,7 @@ import type {
   ResolutionPreset,
   Settings,
 } from '$types';
-import { AGNES_PRESET, CUSTOM_PRESET, defaultPresetFor, modelsFor } from './catalog';
+import { AGNES_PRESET, CUSTOM_PRESET, defaultPresetFor, getPreset, getModel, modelsFor } from './catalog';
 
 export const PROVIDER_KINDS: ProviderKind[] = ['text', 'image', 'video'];
 
@@ -59,6 +59,22 @@ export const DEFAULT_SETTINGS: Settings = {
 
 // ── Normalization ─────────────────────────────────────────────────────────────
 
+/**
+ * Migrate a persisted model id that no longer exists in the catalog
+ * (a catalog rework renamed/dropped the model) to the preset's default
+ * generable model. Applied on every normalize (load AND commit) so legacy
+ * blobs self-heal. Known models — including read-only (paid) and pending
+ * entries, which are intentional user data — are kept as stored; the
+ * generation gates keep the non-generable ones out of runs.
+ */
+function migrateStoredModel(preset: string, kind: ProviderKind, model: string): string {
+  const p = getPreset(preset);
+  if (!p) return model;
+  if (getModel(p, model)) return model; // known model — keep as stored
+  const fallback = modelsFor(p, kind).find((m) => !m.pending && !m.readOnly);
+  return fallback?.id ?? model;
+}
+
 function normalizeSlot(kind: ProviderKind, raw: unknown): ProviderSlot {
   const def = DEFAULT_SETTINGS.providers[kind];
   const r = (raw ?? {}) as Partial<ProviderSlot>;
@@ -70,7 +86,7 @@ function normalizeSlot(kind: ProviderKind, raw: unknown): ProviderSlot {
         ? normalizeBaseUrl(preset, r.baseUrl)
         : def.baseUrl,
     apiKey: typeof r.apiKey === 'string' ? r.apiKey : '',
-    model: typeof r.model === 'string' && r.model ? r.model : def.model,
+    model: migrateStoredModel(preset, kind, typeof r.model === 'string' && r.model ? r.model : def.model),
   };
 }
 

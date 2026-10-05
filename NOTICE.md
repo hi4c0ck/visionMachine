@@ -2,9 +2,9 @@
 
 ## Copyright
 
-© 2026 @HorizonesMachines. All rights reserved.
+© 2026 @Horizones Machines. All rights reserved.
 
-VisionMachine, originally developed by @HorizonesMachines.
+VisionMachine, originally developed by @Horizones Machines.
 
 ## License
 

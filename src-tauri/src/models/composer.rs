@@ -345,14 +345,15 @@ impl Pipe {
     }
 
     /// Clone this pipe with brand-new ids for every level (pipe, keyframes,
-    /// subject refs, elements, segments, tags) while carrying forward the
-    /// source's LAST generation state (pipe.last_generation + keyframe /
-    /// subject previews), re-rooted to the destination session media dir
-    /// via `remap`. The id remint is what prevents Svelte 5
-    /// each_key_duplicate when the two sessions later diverge; the carried
-    /// artifacts are what make the copy feel like a true fork of the source
-    /// instead of a blank skeleton.
-    pub fn rekeyed(&self, remap: &dyn Fn(&str) -> String) -> Self {
+    /// subject refs, elements, segments, tags) while carrying the DESIGN
+    /// content forward (name, layout params, prompts, user-provided URLs,
+    /// media mode). Generation artifacts are NOT carried: previews, piece
+    /// statuses and last-generation state reset to blank, so the copy is a
+    /// clean fork with a completely fresh id set — the source's media tree
+    /// stays untouched, and the copy's own runs mint artifacts that belong
+    /// to it alone. The id remint is what prevents Svelte 5
+    /// each_key_duplicate when the two sessions later diverge.
+    pub fn rekeyed(&self) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: self.name.clone(),
@@ -370,13 +371,12 @@ impl Pipe {
                     image_src: kf.image_src.clone(),
                     prompt: kf.prompt.clone(),
                     reference_url: kf.reference_url.clone(),
-                    // Carry the source's settled preview into the copy, but
-                    // point the local path at the NEW session media dir so
-                    // the copy's chips render after a media-tree copy. The
-                    // remote URL is provider-cached — it stays valid as-is.
-                    preview_remote_url: kf.preview_remote_url.clone(),
-                    preview_local_path: kf.preview_local_path.as_ref().map(|p| remap(p)),
-                    status: kf.status.clone(),
+                    // Generation artifacts stay with the source session: the
+                    // copy's pieces start ungenerated and mint their own
+                    // previews on their own media tree.
+                    preview_remote_url: None,
+                    preview_local_path: None,
+                    status: "pending".into(),
                     force_regen: false,
                 })
                 .collect(),
@@ -388,9 +388,9 @@ impl Pipe {
                     image_url: ref_.image_url.clone(),
                     kind: ref_.kind.clone(),
                     prompt: ref_.prompt.clone(),
-                    preview_remote_url: ref_.preview_remote_url.clone(),
-                    preview_local_path: ref_.preview_local_path.as_ref().map(|p| remap(p)),
-                    status: ref_.status.clone(),
+                    preview_remote_url: None,
+                    preview_local_path: None,
+                    status: "pending".into(),
                     use_frames: ref_.use_frames,
                     frame_start: ref_.frame_start,
                     frame_end: ref_.frame_end,
@@ -444,15 +444,9 @@ impl Pipe {
                 })
                 .collect(),
             order_index: self.order_index,
-            // Carry the source's last video artifact (remapped to the new
-            // media dir) so the copy's preview strip + tools panel show the
-            // same last generation instead of a blank state.
-            last_generation: self.last_generation.as_ref().map(|lg| LastGeneration {
-                task_id: lg.task_id.clone(),
-                video_path: remap(&lg.video_path),
-                generated_at: lg.generated_at,
-                status: lg.status.clone(),
-            }),
+            // The copy has no generation history of its own yet — its first
+            // run will mint a fresh last-generation state.
+            last_generation: None,
             media_mode: self.media_mode.clone(),
         }
     }
@@ -489,10 +483,16 @@ fn default_orientation() -> String {
 }
 
 impl ComposerConfig {
+    /// A new composer for a session. Invariant: `id` equals `session_id` —
+    /// the frontend session-io treats the composer's `id` as the session
+    /// identifier, so a random UUID here would orphan the session's
+    /// composer from its load path (a `get_composer` for the stray uuid
+    /// finds neither a composer row nor a session row → "Untitled
+    /// Composer" with empty pipes).
     pub fn new(session_id: &str, name: &str) -> Self {
         let now = Utc::now();
         Self {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: session_id.to_string(),
             session_id: session_id.to_string(),
             name: name.to_string(),
             pipes: vec![Pipe::new("Pipe 1", 121)],
@@ -655,10 +655,10 @@ mod tests {
     }
 
     /// Session duplication must re-mint every piece id so the copy's composer
-    /// never shares keys with the source (Svelte 5 each_key_duplicate), while
-    /// carrying the layout/params forward AND the last-generation state
-    /// (re-rooted via the remap so the copy's previews point at its own media
-    /// tree after the media copy).
+    /// never shares keys with the source (Svelte 5 each_key_duplicate),
+    /// carrying the design forward but NOT the generation artifacts: a copy
+    /// starts blank (no previews, no last-generation state, pending pieces)
+    /// so nothing is re-rooted from the source's media tree.
     #[test]
     fn pipe_rekeyed_mints_new_ids_and_drops_artifacts() {
         let pipe = Pipe {
@@ -710,8 +710,8 @@ mod tests {
             }),
             media_mode: "reference".into(),
         };
-        // no remapping (identical path) — ids still minted, artifacts carried.
-        let copy = pipe.rekeyed(&|p: &str| p.to_string());
+        // Ids minted at every level; the copy starts artifact-free.
+        let copy = pipe.rekeyed();
         // New ids at every level.
         assert_ne!(copy.id, "p1");
         assert_ne!(copy.keyframes[0].id, "k1");
@@ -723,6 +723,11 @@ mod tests {
         assert_eq!(copy.media_mode, "reference");
         assert_eq!(copy.keyframes[0].prompt.as_deref(), Some("a dragon"));
         assert_eq!(copy.keyframes[0].frame, 16);
+        // User-provided content survives (the copy re-references it).
+        assert_eq!(
+            copy.subject_references[0].image_url.as_str(),
+            "https://example.com/ref.jpg"
+        );
         let tl = copy
             .elements
             .iter()
@@ -735,34 +740,18 @@ mod tests {
         assert_eq!(tl.segments[0].tags[0].prompt.as_deref(), Some("slow zoom"));
         assert_ne!(tl.segments[0].id, "s1");
         assert_ne!(tl.segments[0].tags[0].id, "g1");
-        // Last-generation state IS carried, re-rooted via the remap (identity
-        // here), with a fresh piece but the same task reference.
-        let lg = copy.last_generation.as_ref().expect("last gen carried");
-        assert_eq!(lg.task_id, "t9");
-        assert_eq!(lg.status, "done");
-        // Keyframe preview carried + status kept; force_regen always resets.
-        assert_eq!(
-            copy.keyframes[0].preview_remote_url.as_deref(),
-            Some("https://example.com/dragon.png")
+        // Generation artifacts do NOT carry: the copy starts blank — no last
+        // generation, no previews, all pieces pending (its own runs will
+        // mint artifacts on its own media tree).
+        assert!(
+            copy.last_generation.is_none(),
+            "the copy has no generation history of its own yet"
         );
-        assert_eq!(
-            copy.keyframes[0].preview_local_path.as_deref(),
-            Some("C:/media/dragon.png")
-        );
-        assert_eq!(copy.keyframes[0].status, "done");
+        assert!(copy.keyframes[0].preview_remote_url.is_none());
+        assert!(copy.keyframes[0].preview_local_path.is_none());
+        assert_eq!(copy.keyframes[0].status, "pending");
         assert!(!copy.keyframes[0].force_regen);
-
-        // A real remap re-roots local paths into the destination session dir.
-        let re = pipe.rekeyed(&|p: &str| p.replace("C:/", "D:/copy/"));
-        let re_lg = re.last_generation.as_ref().unwrap();
-        assert_eq!(re_lg.video_path, "D:/copy/out/video.mp4");
-        assert_eq!(
-            re.keyframes[0].preview_local_path.as_deref(),
-            Some("D:/copy/media/dragon.png")
-        );
-        assert_eq!(
-            re.keyframes[0].preview_local_path.as_deref(),
-            Some("D:/copy/media/dragon.png")
-        );
+        assert!(copy.subject_references[0].preview_remote_url.is_none());
+        assert_eq!(copy.subject_references[0].status, "pending");
     }
 }

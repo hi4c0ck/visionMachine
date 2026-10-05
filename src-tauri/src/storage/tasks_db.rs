@@ -112,6 +112,27 @@ impl Database {
         Ok(())
     }
 
+    /// Self-heal rows a hard kill left behind: a task that is
+    /// 'running'/'queued' in the DB but has no live task in the in-memory
+    /// registry can never reach a terminal state — the registry lives in
+    /// process memory, so the terminal write was lost with the killed
+    /// process. Mark it an interrupted error so it cannot resurrect as a
+    /// live run (the session-restore fallback would otherwise surface it
+    /// as an endless "running" task on every launch) and so the
+    /// `get_generation_task` DB fallback reports a terminal error instead
+    /// of a task that polls "running" forever.
+    pub async fn heal_stale_generation_tasks(&self) -> Result<usize, String> {
+        const NOTE: &str = "interrupted — the app closed mid-run; no live task owns this row";
+        let res = sqlx::query(
+            "UPDATE video_generation_tasks \n             SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP \n             WHERE status IN ('running', 'queued')",
+        )
+        .bind(NOTE)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() as usize)
+    }
+
     pub async fn get_generation_task_row(
         &self,
         task_id: &str,

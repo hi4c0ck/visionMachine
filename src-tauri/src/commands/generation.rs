@@ -75,12 +75,19 @@ async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str)
             return Some(trimmed);
         }
     }
-    // 3. Default: <appData>/com.visionmachine.desktop/media/<session_id>.
-    if let Some(d) = dirs::data_local_dir() {
+    // 3. Default: the user's VisionMachine catalog container with a profile
+    //    layer — <home>/VisionMachine/<profile>/Projects (the same shape the
+    //    frontend project-creation default uses). User content belongs in
+    //    the user's catalog, not in %LOCALAPPDATA%.
+    let profile = profile_name_for_session(db, session_id)
+        .await
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    if let Some(home) = dirs::home_dir() {
         return Some(
-            d.join("com.visionmachine.desktop")
-                .join("media")
-                .join(session_id)
+            home.join("VisionMachine")
+                .join(sanitize_dir_name(&profile))
+                .join("Projects")
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -88,11 +95,55 @@ async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str)
     Some(
         std::env::temp_dir()
             .join("visionmachine")
-            .join("media")
-            .join(session_id)
+            .join("Projects")
             .to_string_lossy()
             .into_owned(),
     )
+}
+
+/// The profile that owns the session's project (sessions → projects →
+/// profiles.name). None when the chain is broken (legacy rows without a
+/// profile) — callers fall back to "default".
+async fn profile_name_for_session(
+    db: &crate::storage::db::Database,
+    session_id: &str,
+) -> Option<String> {
+    sqlx::query(
+        "SELECT pr.name FROM sessions s \
+              JOIN projects p ON p.id = s.project_id \
+              JOIN profiles pr ON pr.id = p.profile_id \
+              WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+    .flatten()
+}
+
+/// Filesystem-safe name for a directory layer (profile names may carry
+/// spaces; only the Windows-reserved characters are replaced). Shared with
+/// the frontend project-creation default so both sides build the same
+/// `<home>/VisionMachine/<profile>/Projects` shape.
+pub fn sanitize_dir_name(s: &str) -> String {
+    let cleaned: String = s
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "default".to_string()
+    } else {
+        cleaned
+    }
 }
 
 #[derive(Deserialize)]
@@ -411,6 +462,35 @@ pub async fn get_generation_group(
     // The persisted fallback must report the same source records the live
     // view does, so a reader that restores a finished group can prove which
     // clips produced its session video instead of trusting a bare path.
+    let sources: Vec<crate::storage::generation_groups_db::GroupSourceRecord> = row
+        .sources_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+    Ok(
+        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"sources":sources,"startedAt":row.started_at,"live":false}),
+    )
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_latest_session_generation_group(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    // Pure read (house style, S10): the session's newest group row, or null
+    // when the session has no group runs. Lets the UI restore a composed
+    // session video on selection across app restarts — the per-run
+    // localStorage bridge is gone by then, and this row is the only
+    // source of truth that survives.
+    let row = {
+        let db = &state.db.lock().await;
+        db.get_latest_generation_group_for_session(&session_id)
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    let Some(row) = row else {
+        return Ok(serde_json::Value::Null);
+    };
     let sources: Vec<crate::storage::generation_groups_db::GroupSourceRecord> = row
         .sources_json
         .as_deref()
@@ -896,10 +976,28 @@ pub async fn read_media_file(
     std::fs::read(&requested).map_err(|e| format!("read {}: {e}", requested.display()))
 }
 
-/// All known media roots: the project `directory_path` tree + the default
-/// app-data media tree (mirrors `resolve_media_root` in this module).
+/// All known media roots: the session `directory_path` trees (0009 — the
+/// highest-precedence root `resolve_media_root` uses, and where a session's
+/// composed video + generated artifacts land when the user picked a session
+/// folder), the project `directory_path` trees, and the default app-data
+/// media tree. Mirrors `resolve_media_root` in this module exactly — a root
+/// the writer uses must be a root the reader (`read_media_file`) allows,
+/// or the tool-panel/top-panel preview silently loses the video.
 async fn media_roots(db: &crate::storage::db::Database) -> Vec<std::path::PathBuf> {
     let mut roots = Vec::new();
+    if let Ok(rows) = sqlx::query("SELECT directory_path FROM sessions WHERE directory_path IS NOT NULL AND directory_path != ''")
+        .fetch_all(&db.pool)
+        .await
+    {
+        for r in rows {
+            if let Ok(Some(dir)) = r.try_get::<Option<String>, _>(0) {
+                let trimmed = dir.trim().to_string();
+                if !trimmed.is_empty() {
+                    roots.push(std::path::PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
     if let Ok(rows) = sqlx::query("SELECT directory_path FROM projects WHERE directory_path IS NOT NULL AND directory_path != ''")
         .fetch_all(&db.pool)
         .await
@@ -915,6 +1013,27 @@ async fn media_roots(db: &crate::storage::db::Database) -> Vec<std::path::PathBu
     }
     if let Some(d) = dirs::data_local_dir() {
         roots.push(d.join("com.visionmachine.desktop").join("media"));
+    }
+    // User catalog containers (the resolve_media_root fallback, one layer
+    // per profile) — a reader must allow what the writer can produce.
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(rows) = sqlx::query("SELECT name FROM profiles")
+            .fetch_all(&db.pool)
+            .await
+        {
+            for r in rows {
+                if let Ok(Some(n)) = r.try_get::<Option<String>, _>(0) {
+                    let n = n.trim().to_string();
+                    if !n.is_empty() {
+                        roots.push(
+                            home.join("VisionMachine")
+                                .join(sanitize_dir_name(&n))
+                                .join("Projects"),
+                        );
+                    }
+                }
+            }
+        }
     }
     roots
 }

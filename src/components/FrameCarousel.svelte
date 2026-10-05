@@ -15,6 +15,9 @@
 		carouselCardX,
 		carouselCardOpacityF,
 		snapCarouselFrame,
+		carouselCardWidth,
+		carouselDragPxPerStep,
+		thumbnailIntrinsic,
 		type ThumbDiag
 	} from '$lib/frameDecoder';
 
@@ -24,6 +27,8 @@
 		totalFrames,
 		fps = 24,
 		frame,
+		videoAspect = null,
+		stripH = 180,
 		onframeSelect,
 		onexit
 	} = $props<{
@@ -41,11 +46,49 @@
 		fps?: number;
 		/** Current center frame (the shared selectedFrame). */
 		frame: number;
+		/**
+		 * Video aspect ratio (width/height) of the session video — a SEED, not
+		 * the truth. The carousel measures the media's ACTUAL dimensions off its
+		 * capture <video> and sizes cards to those once known; this preset is
+		 * only the card width until that measurement lands. null = use the
+		 * fixed 170px fallback immediately.
+		 */
+		videoAspect?: number | null;
+		/**
+		 * The top-panel strip's rendered height (px). The parent band is 180px
+		 * for landscape/square media and grows taller for portrait media, so
+		 * cards must track it: a portrait card's width = stripH × aspect keeps
+		 * the box at the video's true aspect at the band's REAL height.
+		 */
+		stripH?: number;
 		/** Advance the shared frame selection (snaps to the 8-grid). */
 		onframeSelect?: (frame: number) => void;
 		/** Exit carousel mode (back to full-screen playback). */
 		onexit?: () => void;
 	}>();
+
+	// Measured media dimensions, mirrored off the source's capture <video> by
+	// the poll effect further down. Declared here (above CARD_W) so the card
+	// width can be derived from them without a forward reference.
+	//   mediaDurFrames — end-of-media in frames (null until metadata).
+	//   mediaSize      — the ACTUAL width/height (null until metadata). Cards
+	//                    size to the real video, not the session's preset.
+	let mediaDurFrames = $state<number|null>(null);
+	let mediaSize = $state<{ width: number; height: number } | null>(null);
+
+	// Card width from the media's TRUE aspect. The real size (measured off the
+	// source's capture <video> once metadata lands) wins; the session preset
+	// (videoAspect) is only the seed shown until that measurement arrives; the
+	// fixed 170px is the last resort when neither is known. The card box keeps
+	// the video's true aspect, so object-fit:fill never crops or letterboxes.
+	// The card tracks the strip's REAL height (stripH, passed from the parent
+	// band), not a hard-coded 180 — portrait bands are taller.
+	const CARD_W = $derived(
+		carouselCardWidth(stripH, mediaSize ? mediaSize.width / mediaSize.height : videoAspect)
+	);
+	const OVERLAP = 0.55;
+	/** px of horizontal drag per carousel step (1 : 1, no damped rubber-band). */
+	const DRAG_PX_PER_STEP = $derived(carouselDragPxPerStep(CARD_W));
 
 	// Perf lever (plan B1): default 8-frame grid. If 720p+ decode feels
 	// heavy, flip CAROUSEL_STEP to a sub-sample (e.g. 4) in frameDecoder or
@@ -139,34 +182,102 @@
 	// and "unsupported runtime" instead of showing a generic ellipsis.
 	let thumbDiag = $state<ThumbDiag>('pending');
 
-	// (Re)build the decoder source when the media or fps changes.
+	// ── Per-video reset (solid pipeline on video switch) ─────────────────────
+	// All per-video state belongs to ONE video.url. When the url (or fps, which
+	// also bounds the frame grid) changes we clear every one of them and
+	// rebuild the decoder from scratch, so frames, durations, and readiness
+	// from the previous clip never leak into the new one. This effect keys on
+	// video.url + fps and is the SINGLE place that resets on a switch.
+	//
+	// IMPORTANT: Svelte runs $effect bodies in source order and their
+	// cleanups in the SAME order on dependency change. We declare the reset
+	// effect AFTER the source-building effect below so that on a url change
+	// the old FrameSource is disposed FIRST (releasing its capture video,
+	// WebCodecs decoder, and LRU bitmaps) and THEN the Svelte-side state is
+	// cleared. Reversing that order would let the new source start capturing
+	// while the old one's in-flight work is still writing into `thumbs`.
+
+	// (Re)build the decoder source when the media or fps changes. The cleanup
+	// disposes the old FrameSource (closes the WebCodecs decoder + capture
+	// video + LRU bitmaps) BEFORE the reset effect below clears Svelte state,
+	// so no in-flight capture from the previous video races the new one.
 	$effect(() => {
 		const url = video.url;
 		const s = new FrameSource(url, fps);
 		source = s;
-		thumbs = {};
-		thumbDiag = 'pending';
 		return () => {
 			s.dispose();
 			if (source === s) source = null;
 		};
 	});
 
+	$effect(() => {
+		void video.url;
+		void fps;
+		thumbs = {};
+		thumbDiag = 'pending';
+		mediaDurFrames = null;
+		mediaSize = null;
+		// The live <video> element still shows the old clip (or a 0:00 shell)
+		// until the new url's canplay fires — mark it not-ready so the center
+		// card falls back to the (re-decoded) thumbnail, not a stale frame.
+		videoReady = false;
+		seekSettled = false;
+		// Drag position was relative to the old video's frame grid — drop it;
+		// the chase effect re-syncs visualStep to the new center frame.
+		dragActive = false;
+	});
+
 	// Track the source's diagnostic state (loading / out-of-range / failed /
 	// unsupported) and reactivity so placeholders render the right copy and
 	// side frames past the real video end stop pretending to load.
-	let mediaDurFrames = $state<number | null>(null);
+	//
+	// This effect depends ONLY on `source` — it must NOT read any other
+	// $state in its body, because reading a $state inside an $effect makes
+	// the effect depend on it, and writing it would re-run the effect →
+	// infinite loop on entering carousel mode. The last-pushed value is kept
+	// in a plain local for the stop-polling check.
+	//
+	// Terminal states stop polling: 'unsupported' and 'failed' never resolve
+	// on their own (the runtime can't decode at all / the capture broke
+	// permanently). Only 'pending' and 'loading' keep a re-poll so the
+	// placeholder copy upgrades to 'ok' the moment the first bitmap lands.
 	$effect(() => {
 		const src = source;
 		if (!src) return;
 		let cancelled = false;
+		let last = src.diag.thumb; // plain local — NOT the reactive state
+		let lastDur: number | null = null; // plain local — NOT the reactive state
+		let lastSize: { width: number; height: number } | null = null; // plain local
 		const poll = () => {
 			if (cancelled) return;
-			thumbDiag = src.diag.thumb;
+			const diag = src.diag.thumb;
+			if (diag !== last) {
+				last = diag;
+				thumbDiag = diag; // same-value write is a no-op, no churn
+			}
+			// Keep the measured-duration mirror fresh so the decode effect
+			// re-clamps its pool as soon as the source measures the media.
+			// Both mirrors are pushed through PLAIN LOCALS (lastDur/lastSize)
+			// so the effect's reactive deps stay ONLY `source` — it never
+			// depends on the $state it writes, so a value change can't re-run
+			// it into a loop. A same-value write is a no-op anyway.
 			const d = src.mediaDurationFrames;
-			if (d !== null && d !== mediaDurFrames) mediaDurFrames = d;
-			// Keep polling until a bitmap lands; the source settles fast.
-			if (src.diag.thumb !== 'ok') setTimeout(poll, 500);
+			if (d !== null && d !== lastDur) {
+				lastDur = d;
+				mediaDurFrames = d;
+			}
+			// Same for the ACTUAL media size — card width tracks it so the
+			// strip sizes to the real video, not the session's preset.
+			const s = src.mediaSize;
+			if (s && s !== lastSize) {
+				lastSize = s;
+				mediaSize = s;
+			}
+			// Re-poll only while the source can still transition to 'ok'.
+			if (diag === 'pending' || diag === 'loading') {
+				setTimeout(poll, 500);
+			}
 		};
 		poll();
 		return () => { cancelled = true; };
@@ -184,14 +295,23 @@
 	// would otherwise seek to the last frame (duplicates) or spin — so skip
 	// them and let the UI render "out of range" for those slots.
 	$effect(() => {
-		const frames = poolFrames.filter(
-			(f): f is number => f !== null && (mediaDurFrames === null || f <= mediaDurFrames)
-		);
 		const src = source;
-		if (!src || frames.length === 0) return;
+		if (!src) return;
+		// Read the measured duration directly off the source (a plain class
+		// getter, not a $state) so this effect's reactive deps are only
+		// `source` and `poolFrames` — no cross-effect state sharing, no loop.
+		const dur = src.mediaDurationFrames;
+		const frames = poolFrames.filter(
+			(f): f is number => f !== null && (dur === null || f <= dur)
+		);
+		if (frames.length === 0) return;
 		let cancelled = false;
 		const settled = (f: number, b: ImageBitmap | null) => {
 			if (cancelled) return;
+			// Guard against an orphaned source: if the video.url has changed
+			// since this effect ran, `src` is the old FrameSource and its
+			// in-flight promises must NOT write into the new video's thumbs.
+			if (src !== source) return;
 			thumbs = { ...thumbs, [f]: b };
 		};
 		for (const f of frames) {
@@ -335,21 +455,19 @@
 		step(event.deltaY > 0 || event.deltaX > 0 ? 1 : -1);
 	}
 
-	// Paint a decoded frame into the card's canvas at a FIXED intrinsic size
-	// (THUMB_PX wide, aspect-corrected to the source), independent of the
-	// card's on-screen box. The card is CSS-transformed (transform: scale),
-	// and clientWidth/clientHeight on a child of a scaled element can read
-	// 0 or a stale value in WebView2 — which silently skips the paint. The
-	// canvas is laid out at width:100%/height:100% + object-fit:cover by the
-	// card's CSS, so the browser scales the fixed backing store to fit the
-	// (possibly mid-transition) slot. No layout read needed.
-	const THUMB_PX = 340; // 2× the max card width; crisp enough, memory-bounded
+	// Paint a decoded frame into the card's canvas. The backing store is 1:1 with
+	// the card box (width = CARD_W, height aspect-corrected to the source), so
+	// object-fit:fill renders it with no second scale — a 2×-resolution store
+	// would be down-sampled again by the CSS (a double scaler that blurs the
+	// portrait thumbnail). The card is CSS-transformed (transform: scale), and
+	// clientWidth/clientHeight on a child of a scaled element can read 0 or a
+	// stale value in WebView2 — so we derive the intrinsic size from CARD_W
+	// (a $derived constant, not a layout read) instead.
 	function drawThumbnail(node: HTMLCanvasElement, bitmap: ImageBitmap | null | undefined) {
 		const paint = (value: ImageBitmap | null | undefined) => {
 			if (!value) return;
-			// Intrinsic backing store: THUMB_PX wide, source aspect ratio.
-			const w = THUMB_PX;
-			const h = Math.max(1, Math.round(THUMB_PX * (value.height / value.width)));
+			// 1:1 with the card box, aspect-corrected to the source.
+			const { w, h } = thumbnailIntrinsic(CARD_W, value.width, value.height);
 			if (node.width !== w) node.width = w;
 			if (node.height !== h) node.height = h;
 			const ctx = node.getContext('2d');
@@ -366,15 +484,6 @@
 		paint(bitmap);
 		return { update: paint, destroy: () => {} };
 	}
-
-	// ── layout math (plan B2) ───────────────────────────────────────────────
-	// Horizontal strip: center card full height, neighbors shorter (dip)
-	// and overlapping inward. Each neighbor's offset folds the card width
-	// by OVERLAP so the outer cards tuck under their inner neighbors.
-	const CARD_W = 170; // px, center card width
-	const OVERLAP = 0.55;
-	/** px of horizontal drag per carousel step (1 : 1, no damped rubber-band). */
-	const DRAG_PX_PER_STEP = Math.round(CARD_W * (1 + (1 - OVERLAP))); // 285.5
 
 	/**
 	 * Continuous card geometry (the semi-state): the card's position/scale are
@@ -400,6 +509,7 @@
 	<div
 		class="fc-strip"
 		class:fc-dragging={dragActive}
+		style:--fc-card-w={`${CARD_W}px`}
 		role="group"
 		aria-label={APP_CONSTANTS.strings.frameCarousel}
 		onpointerdown={beginDrag}
@@ -545,8 +655,9 @@
 	.fc-video-layer {
 		position: absolute;
 		bottom: 0;
-		left: calc(50% - 85px); /* CARD_W / 2 */
-		width: 170px; /* CARD_W */
+		left: 50%;
+		width: var(--fc-card-w, 170px);
+		transform: translateX(-50%);
 		height: 100%;
 		border-radius: 8px;
 		overflow: hidden;
@@ -571,7 +682,7 @@
 		inset: 0;
 		width: 100%;
 		height: 100%;
-		object-fit: cover;
+		object-fit: fill;
 		display: block;
 		/* Pointer events bubble to the strip handler, so a drag that starts
 			 on the center card or a thumbnail still sweeps frames. Disable

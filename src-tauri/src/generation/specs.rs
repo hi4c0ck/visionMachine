@@ -61,6 +61,34 @@ pub struct ModelSpecMedia {
     pub max_audios: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_videos: Option<u32>,
+    /// Wire values of the `mode` param per logical media mode (keys are the
+    /// frontend mode names: "keyframes" / "reference" / "text"). Models
+    /// served through provider routes with different mode-name families
+    /// (V2.0 legacy route: ti2vid/keyframes/multi_reference) declare the
+    /// translation here; absent → the shaper falls back to the logical
+    /// name (2.5-route behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_modes: Option<std::collections::HashMap<String, String>>,
+    /// Reference-image floor for the reference (multi_reference) wire mode
+    /// (V2.0 legacy route: 2 — live 400 2026-10-04 "mode=multi_reference
+    /// requires at least 2 images when background_image is omitted"). Below
+    /// the floor the shaper falls back to the text-mode wire value; a single
+    /// image (if any) rides the top-level `image` field instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_refs: Option<u32>,
+    /// Keyframe-image floor for the keyframes wire mode (V2.0 legacy
+    /// route: 2 — live 400 2026-10-04 "mode=keyframes requires image as
+    /// a list of at least 2 items"). Below the floor the shaper falls
+    /// back to the text-mode wire value; a single keyframe (if any) rides
+    /// the top-level `image` field instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_keyframes: Option<u32>,
+    /// Wire field name for the reference image list: "images" (2.5 route,
+    /// always an array) or "image" (v2.0 legacy route: a single URL string
+    /// for one reference, an array for multiple — live probes 2026-10-04:
+    /// the legacy validator ignores `images[]` and 400s with "param: image").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_field: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,5 +193,29 @@ mod tests {
         // Unknown fields on the wire are tolerated (old callers, new specs).
         let extra = serde_json::json!({ "id": "x", "somethingNew": 1 });
         let _: ModelSpecWire = serde_json::from_value(extra).unwrap();
+
+        // wireModes (V2.0 legacy-route mode names) round-trips camelCase.
+        let v2 = serde_json::json!({
+            "id": "agnes-video-v2.0",
+            "kind": "video",
+            "endpoint": "/v1/videos",
+            "sync": false,
+            "requestFormat": "video-job-seconds",
+            "media": {
+                "modes": ["keyframes", "reference"],
+                "wireModes": { "keyframes": "keyframes", "reference": "multi_reference", "text": "ti2vid" },
+                "minRefs": 2,
+                "imageField": "image"
+            }
+        });
+        let v2spec: ModelSpecWire = serde_json::from_value(v2).unwrap();
+        let w = v2spec.media.as_ref().unwrap().wire_modes.as_ref().unwrap();
+        assert_eq!(w.get("text").unwrap(), "ti2vid");
+        assert_eq!(w.get("reference").unwrap(), "multi_reference");
+        assert_eq!(v2spec.media.as_ref().unwrap().min_refs, Some(2));
+        assert_eq!(
+            v2spec.media.as_ref().unwrap().image_field.as_deref(),
+            Some("image")
+        );
     }
 }

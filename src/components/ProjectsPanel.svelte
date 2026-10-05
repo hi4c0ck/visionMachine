@@ -161,6 +161,21 @@
                   class="session-name-input"
                   value={session.name}
                   oninput={(e) => handleRenameSession(session.id, e.currentTarget.value)}
+                  onkeydown={(e) => {
+                    // Enter: commit the rename and drop focus. Stop the
+                    // bubble so the row-level Enter handler doesn't
+                    // re-select the session mid-edit. Plain clicks still
+                    // bubble to the row (standard tree behavior: clicking
+                    // anywhere in the row — including the name field —
+                    // selects the session); the authoritative-name fix in
+                    // get_composer makes that re-select safe for renames.
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleRenameSession(session.id, e.currentTarget.value);
+                      e.currentTarget.blur();
+                    }
+                  }}
                   placeholder="Session name"
                 />
                 <span class="session-action-cluster">

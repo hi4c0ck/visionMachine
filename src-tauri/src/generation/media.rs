@@ -135,6 +135,42 @@ pub fn clear_staged_session_clips(out_dir: &std::path::Path) {
     }
 }
 
+/// Archive the session's previous final video (if any) so a new composition
+/// does not silently overwrite it: `session.mp4` moves to
+/// `session-video/archive/session-<unix-ms>.mp4`. The session keeps its
+/// final-video history instead of only the latest wired one.
+///
+/// Best-effort: an archive failure (IO) never blocks the new composition —
+/// the stale-clear would have removed the output file anyway.
+pub fn archive_previous_session_video(out_path: &std::path::Path) {
+    if !out_path.is_file() {
+        return;
+    }
+    let Some(out_dir) = out_path.parent() else {
+        return;
+    };
+    let archive_dir = out_dir.join("archive");
+    if std::fs::create_dir_all(&archive_dir).is_err() {
+        return;
+    }
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = archive_dir.join(format!("session-{ms}.mp4"));
+    if let Err(e) = std::fs::rename(out_path, &dest) {
+        log::warn!(
+            "[Media] could not archive previous session video {} ({e})",
+            out_path.display()
+        );
+        return;
+    }
+    log::info!(
+        "[Media] archived previous session video -> {}",
+        dest.display()
+    );
+}
+
 /// Session-level generation tree under the session root (full-session
 /// artifacts — the session's own generation log, shared across pipes):
 ///

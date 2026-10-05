@@ -13,9 +13,24 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
     },
 };
+
+/// Acquire a std lock without panic cascades. A panic on any task thread
+/// while holding one of these locks (the group coordinator's state/index
+/// maps) poisons the mutex; a plain `.lock().unwrap()` would then make
+/// every later caller panic. Recovering via `into_inner` keeps the group
+/// machinery (advance/compose/finish) alive instead of silently dead.
+fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => {
+            log::error!("[Generation] group: recovering a poisoned mutex; continuing");
+            p.into_inner()
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -294,10 +309,10 @@ impl GroupCoordinator {
         }
     }
     pub fn set_event_sink(&self, f: impl Fn(GroupEvent) + Send + Sync + 'static) {
-        *self.event_sink.lock().unwrap() = Some(Arc::new(f));
+        *resilient_lock(&self.event_sink) = Some(Arc::new(f));
     }
     fn emit(&self, e: GroupEvent) {
-        if let Some(s) = self.event_sink.lock().unwrap().as_ref() {
+        if let Some(s) = resilient_lock(&self.event_sink).as_ref() {
             s(e)
         }
     }
@@ -348,7 +363,7 @@ impl GroupCoordinator {
             rows.push((p.id.clone(), None, "queued".into(), 0.0, None));
         }
         {
-            let mut m = self.state.lock().unwrap();
+            let mut m = resilient_lock(&self.state);
             m.insert(
                 gid.clone(),
                 GroupRun {
@@ -390,15 +405,27 @@ impl GroupCoordinator {
             started_at: Self::now(),
             sources_json: None,
         };
+        // Start the first pipe BEFORE persisting the group row: when the
+        // registry rejects the start (e.g. "Generation already in progress"),
+        // a persisted "running" group with no task behind it would survive
+        // every later app restart as a phantom stale group and keep
+        // re-opening the progress modal over it. The in-memory run is rolled
+        // back on the error path for the same reason.
+        let (tid, view) = match self.start_pipe(&input, &first).await {
+            Ok(r) => r,
+            Err(e) => {
+                resilient_lock(&self.state).remove(&gid);
+                return Err(e);
+            }
+        };
         self.db.insert_generation_group(&row).await?;
-        let (tid, view) = self.start_pipe(&input, &first).await?;
         {
-            let mut m = self.state.lock().unwrap();
+            let mut m = resilient_lock(&self.state);
             if let Some(r) = m.get_mut(&gid) {
                 mark_pipe_running(r, &first, &tid);
             }
         }
-        self.index.lock().unwrap().insert(tid.clone(), gid.clone());
+        resilient_lock(&self.index).insert(tid.clone(), gid.clone());
         self.emit(GroupEvent {
             group_id: gid.clone(),
             kind: "pipe-started".into(),
@@ -530,14 +557,14 @@ impl GroupCoordinator {
         // reads, so a later failed attempt's `clear_session_compose_artifacts`
         // pass can never orphan a pipe's last-gen clip.
         let media_root = {
-            let m = self.state.lock().unwrap();
+            let m = resilient_lock(&self.state);
             m.get(gid).and_then(|r| r.media_root.clone())
         };
         let order_index: u32 = {
             // The run's pipes vec is in queue order (order_index-sorted at
             // start_group), so the position of this pipe's row IS its
             // timeline order.
-            let m = self.state.lock().unwrap();
+            let m = resilient_lock(&self.state);
             m.get(gid)
                 .and_then(|r| r.pipes.iter().position(|p| p.0 == source.label))
                 .unwrap_or(0) as u32
@@ -547,7 +574,7 @@ impl GroupCoordinator {
             stage_source_clip(&out_dir, source, order_index)
         };
         if let Some(staged) = staged_path.clone() {
-            let mut m = self.state.lock().unwrap();
+            let mut m = resilient_lock(&self.state);
             if let Some(r) = m.get_mut(gid) {
                 r.group_sources
                     .push(crate::storage::generation_groups_db::GroupSourceRecord {
@@ -575,10 +602,10 @@ impl GroupCoordinator {
     }
 
     pub async fn on_pipe_terminal(&self, event: &crate::generation::GenTaskEvent) {
-        let gid = { self.index.lock().unwrap().get(&event.task_id).cloned() };
+        let gid = { resilient_lock(&self.index).get(&event.task_id).cloned() };
         let Some(gid) = gid else { return };
         let (pipe, next, policy, _started_at, run_params) = {
-            let mut m = self.state.lock().unwrap();
+            let mut m = resilient_lock(&self.state);
             let Some(r) = m.get_mut(&gid) else { return };
             r.current = None;
             let mut p = r
@@ -642,17 +669,16 @@ impl GroupCoordinator {
         // Best-effort: a failure here only downgrades the run (compose falls
         // back to the originals that `completed_sources` still references).
         if event.status == Some(TaskStatus::Done) {
-            let source_for_persist = self
-                .state
-                .lock()
-                .unwrap()
-                .get(&gid)
-                .and_then(|r| {
-                    r.completed_sources
-                        .iter()
-                        .find(|s| pipe.as_deref() == Some(s.label.as_str()))
-                })
-                .cloned();
+            let source_for_persist = {
+                let m = resilient_lock(&self.state);
+                m.get(&gid)
+                    .and_then(|r| {
+                        r.completed_sources
+                            .iter()
+                            .find(|s| pipe.as_deref() == Some(s.label.as_str()))
+                    })
+                    .cloned()
+            };
             let composer_name_for_persist = self
                 .db
                 .get_composer(&event.view.session_id)
@@ -677,13 +703,12 @@ impl GroupCoordinator {
         if let Some(next) = next {
             let this = self.clone();
             let gid2 = gid.clone();
-            let next_session = self
-                .state
-                .lock()
-                .unwrap()
-                .get(&gid)
-                .map(|r| r.session_id.clone())
-                .unwrap_or_default();
+            let next_session = {
+                let m = resilient_lock(&self.state);
+                m.get(&gid)
+                    .map(|r| r.session_id.clone())
+                    .unwrap_or_default()
+            };
             let session_for_fail_event = next_session.clone();
             tokio::spawn(async move {
                 // Rebuild the run params from the group's stored input so
@@ -728,12 +753,12 @@ impl GroupCoordinator {
                         // key), so the row stays "running" at 0 progress and
                         // the pipe's clip is never staged into the composition.
                         {
-                            let mut m = this.state.lock().unwrap();
+                            let mut m = resilient_lock(&this.state);
                             if let Some(r) = m.get_mut(&gid2) {
                                 mark_pipe_running(r, &next, &tid);
                             }
                         }
-                        this.index.lock().unwrap().insert(tid.clone(), gid2.clone());
+                        resilient_lock(&this.index).insert(tid.clone(), gid2.clone());
                         this.emit(GroupEvent {
                             group_id: gid2.clone(),
                             kind: "pipe-started".into(),
@@ -771,14 +796,13 @@ impl GroupCoordinator {
                 }
             });
         } else {
-            let status = if self
-                .state
-                .lock()
-                .unwrap()
-                .get(&gid)
-                .map(|r| r.pipes.iter().any(|p| p.2 == "error"))
-                .unwrap_or(false)
-            {
+            let has_error = {
+                let m = resilient_lock(&self.state);
+                m.get(&gid)
+                    .map(|r| r.pipes.iter().any(|p| p.2 == "error"))
+                    .unwrap_or(false)
+            };
+            let status = if has_error {
                 GroupStatus::DoneWithErrors
             } else {
                 GroupStatus::Done
@@ -794,7 +818,7 @@ impl GroupCoordinator {
     /// so the group reaches a terminal state instead of stalling.
     async fn fail_pipe_and_advance(&self, gid: &str, event: &crate::generation::GenTaskEvent) {
         {
-            let mut m = self.state.lock().unwrap();
+            let mut m = resilient_lock(&self.state);
             if let Some(r) = m.get_mut(gid) {
                 if let Some(p) = r.pipes.iter_mut().find(|p| p.0 == event.view.pipe_id) {
                     p.2 = "error".into();
@@ -802,14 +826,13 @@ impl GroupCoordinator {
                 }
             }
         }
-        let status = if self
-            .state
-            .lock()
-            .unwrap()
-            .get(gid)
-            .map(|r| r.pipes.iter().any(|p| p.2 == "error"))
-            .unwrap_or(false)
-        {
+        let has_error = {
+            let m = resilient_lock(&self.state);
+            m.get(gid)
+                .map(|r| r.pipes.iter().any(|p| p.2 == "error"))
+                .unwrap_or(false)
+        };
+        let status = if has_error {
             GroupStatus::DoneWithErrors
         } else {
             GroupStatus::Done
@@ -818,7 +841,7 @@ impl GroupCoordinator {
     }
     fn compose_and_finish(&self, gid: &str, status: GroupStatus) {
         let snapshot = {
-            let m = self.state.lock().unwrap();
+            let m = resilient_lock(&self.state);
             m.get(gid).map(|r| {
                 (
                     r.session_id.clone(),
@@ -847,7 +870,7 @@ impl GroupCoordinator {
                 return;
             }
             {
-                let mut m = this.state.lock().unwrap();
+                let mut m = resilient_lock(&this.state);
                 if let Some(r) = m.get_mut(&gid_owned) {
                     r.compose_state = Some("running".into());
                 }
@@ -951,7 +974,7 @@ impl GroupCoordinator {
                 ),
             };
             {
-                let mut m = this.state.lock().unwrap();
+                let mut m = resilient_lock(&this.state);
                 if let Some(r) = m.get_mut(&gid_owned) {
                     r.compose_state = compose_state.clone();
                     r.compose_error = compose_error.clone();
@@ -991,7 +1014,7 @@ impl GroupCoordinator {
         });
     }
     fn finish_group(&self, gid: &str, status: GroupStatus, error: Option<String>) {
-        let Some(run) = self.state.lock().unwrap().remove(gid) else {
+        let Some(run) = resilient_lock(&self.state).remove(gid) else {
             return;
         };
         {
@@ -1014,7 +1037,7 @@ impl GroupCoordinator {
     }
     pub fn cancel_group(&self, gid: &str) {
         let current = {
-            let mut m = self.state.lock().unwrap();
+            let mut m = resilient_lock(&self.state);
             let Some(r) = m.get_mut(gid) else { return };
             r.queue.clear();
             r.cancel.store(true, Ordering::Release);
@@ -1023,19 +1046,17 @@ impl GroupCoordinator {
         if let Some(t) = current {
             let _ = self.generation.registry.cancel(&t);
         }
-        let session_id = self
-            .state
-            .lock()
-            .unwrap()
-            .get(gid)
-            .map(|r| r.session_id.clone());
+        let session_id = {
+            let m = resilient_lock(&self.state);
+            m.get(gid).map(|r| r.session_id.clone())
+        };
         if let Some(session_id) = session_id {
             self.compose_registry.cancel(&session_id);
         }
         self.finish_group(gid, GroupStatus::Cancelled, None);
     }
     pub fn view(&self, gid: &str) -> Option<GenerationGroupView> {
-        let m = self.state.lock().unwrap();
+        let m = resilient_lock(&self.state);
         m.get(gid).map(|r| GenerationGroupView {
             group_id: gid.into(),
             session_id: r.session_id.clone(),
@@ -1064,7 +1085,7 @@ impl GroupCoordinator {
         })
     }
     pub fn has_task(&self, tid: &str) -> bool {
-        self.index.lock().unwrap().contains_key(tid)
+        resilient_lock(&self.index).contains_key(tid)
     }
 }
 #[cfg(test)]

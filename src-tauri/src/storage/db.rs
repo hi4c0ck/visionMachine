@@ -1056,6 +1056,25 @@ mod update_session_tests {
         assert!(res.is_err(), "expected error for missing session, got Ok");
         assert!(res.unwrap_err().contains("no-such-session-id"));
     }
+
+    #[tokio::test]
+    async fn test_rename_survives_composer_row() {
+        let (db, _project_id, session_id) = setup().await;
+        // Persist a composer row that embeds the original name — exactly
+        // what the frontend's first saveSession produces.
+        let composer = db.get_composer(&session_id).await.unwrap();
+        assert_eq!(composer.name, "S");
+        db.save_composer(&composer).await.unwrap();
+        // Rename through the sessions table (the update_session path).
+        db.update_session(&session_id, &serde_json::json!({ "name": "Renamed" }))
+            .await
+            .unwrap();
+        // The composer row is still stale: get_composer must answer with
+        // the sessions-table name, otherwise re-selecting the session in
+        // the UI reverts the rename.
+        let loaded = db.get_composer(&session_id).await.unwrap();
+        assert_eq!(loaded.name, "Renamed");
+    }
 }
 
 #[cfg(test)]

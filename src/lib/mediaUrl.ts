@@ -56,7 +56,18 @@ export async function toMediaUrl(path: string | null | undefined): Promise<strin
   if (existing) return existing;
   const p = readMediaBytes(path)
     .then((bytes) => {
-      const blob = new Blob([bytes], { type: mediaMime(path) });
+      // The Blob constructor wants an exact ArrayBuffer / ArrayBuffer
+      // view, not a bare Uint8Array (TS 7 typed-array generics reject
+      // it as BlobPart) — hand it the underlying buffer, copying only
+      // when the view is offset.
+      const part: ArrayBuffer =
+        bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+          ? (bytes.buffer as ArrayBuffer)
+          : (bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength,
+            ) as ArrayBuffer);
+      const blob = new Blob([part], { type: mediaMime(path) });
       return URL.createObjectURL(blob);
     })
     .catch(() => {

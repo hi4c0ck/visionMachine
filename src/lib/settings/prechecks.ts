@@ -11,6 +11,7 @@ export interface PipeConflict {
   code:
     | 'spec-pending'
     | 'spec-missing'
+    | 'spec-locked'
     | 'not-8n1'
     | 'frames-overflow'
     | 'fps-off-grid'
@@ -36,7 +37,7 @@ export function pipePrechecks(
   const out: PipeConflict[] = [];
   const video = videoSpec;
 
-  // ── Spec gates ──────────────────────────────────────────────────────────
+  // ── Spec gates ─────────────────────────────────────────────────────────
   if (!video || video.pending) {
     out.push({
       code: 'spec-pending',
@@ -47,6 +48,23 @@ export function pipePrechecks(
     out.push({
       code: 'spec-pending',
       message: 'Image model details are pending — pick a configured image model in Settings',
+    });
+  }
+  // Read-only (paid) specs are Settings-browse only — block them here too,
+  // not just in the per-pipe modal, so the session group flow (policy
+  // "continue") cannot start a run on a non-generable model.
+  const lockedVideo = video && !video.pending && video.readOnly ? video : null;
+  if (lockedVideo) {
+    out.push({
+      code: 'spec-locked',
+      message: `video model ${lockedVideo.id} is read-only (paid) — pick a generable model in Settings`,
+    });
+  }
+  const lockedImage = imageSpec && !imageSpec.pending && imageSpec.readOnly ? imageSpec : null;
+  if (lockedImage) {
+    out.push({
+      code: 'spec-locked',
+      message: `image model ${lockedImage.id} is read-only (paid) — pick a generable model in Settings`,
     });
   }
 
@@ -145,6 +163,33 @@ export function pipePrechecks(
     for (const sr of pipe.subjectReferences ?? []) {
       if ((sr.type ?? 'url') === 'txt2img' && !(sr.prompt?.trim())) {
         out.push({ code: 'txt2img-no-prompt', message: `subject ${sr.id} (txt2img) needs a prompt` });
+      }
+    }
+  }
+
+  // ── url/img2img pieces need an image to consume ──────────────────────
+  // The engine's pre-seed silently DROPS a piece that has no source URL and
+  // no settled preview (build_stage_plan: has_url || has_preview) — the
+  // video would ship with fewer media anchors than the pipe shows. Surface
+  // the gap where the model actually consumes the kind.
+  if (videoShared || effMode === 'keyframe') {
+    for (const kf of pipe.keyframes ?? []) {
+      const ty = kf.type ?? 'url';
+      const settled = !!kf.previewRemoteUrl?.trim();
+      if (ty === 'url' && !(kf.imageSrc?.trim()) && !settled) {
+        out.push({ code: 'txt2img-no-prompt', message: `keyframe ${kf.slotIndex} (url) has no image — set a source URL` });
+      }
+      if (ty === 'img2img' && !(kf.referenceUrl?.trim()) && !settled) {
+        out.push({ code: 'txt2img-no-prompt', message: `keyframe ${kf.slotIndex} (img2img) has no reference image — set a reference URL or switch to txt2img` });
+      }
+    }
+  }
+  if (videoShared) {
+    for (const sr of pipe.subjectReferences ?? []) {
+      const ty = sr.type ?? 'url';
+      const settled = !!sr.previewRemoteUrl?.trim();
+      if ((ty === 'url' || ty === 'img2img') && !(sr.imageUrl?.trim()) && !settled) {
+        out.push({ code: 'txt2img-no-prompt', message: `subject ${sr.id} has no reference image — set a URL or switch to txt2img` });
       }
     }
   }

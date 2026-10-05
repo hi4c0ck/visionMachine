@@ -15,7 +15,11 @@ import type { ModelMedia, PipeRow } from '$types';
 /** The wire mode actually sent by the engine for a video deploy. */
 export type EffectiveMediaMode = 'keyframe' | 'reference' | 'text';
 
-/** Count of keyframe / subject media pieces on a pipe (raw, UI-side). */
+/** Count of keyframe / subject media pieces on a pipe (raw slot count).
+ *  Mirrors the engine: by the time the video stage runs, every queued image
+ *  piece (url / txt2img / img2img) has settled into the upstream — so the
+ *  raw slot count is the faithful predictor of the wire mode, not just the
+ *  already-settled subset. */
 export function pipeMediaContent(pipe: PipeRow): { keyframes: number; subjects: number } {
   return {
     keyframes: (pipe.keyframes ?? []).length,

@@ -21,7 +21,12 @@ export class SessionServiceImpl implements SessionService {
       const pipes = rawPipes.map((p) => normalizePipe(p));
 
       const session: SessionData = {
-        id: backendData.id || sessionId,
+        // The session's identity is the session id the load was requested
+        // with, never the composer's internal id: a blob id that drifted
+        // from the session id (legacy copies) used to re-key the tree's
+        // session object and orphan it from its load path ("Untitled
+        // Composer" on first click).
+        id: sessionId,
         name: backendData.name || 'Session',
         pipes,
         fps: backendData.fps || 24,

@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { effectiveMediaMode, mediaLockMismatch, pipeMediaContent } from '../../src/lib/settings/mediaMode';
 import { pipePrechecks } from '../../src/lib/settings/prechecks';
-import type { ModelSpec, PipeRow, SessionData } from '../../src/types';
+import type { ModelSpec, PipeKeyframe, PipeRow, SessionData, SubjectReference } from '../../src/types';
 
 function sessionWith(overrides: Partial<SessionData> = {}): SessionData {
   return {
@@ -52,14 +52,17 @@ function secondsSpec(overrides: Partial<ModelSpec> = {}): ModelSpec {
   };
 }
 
-const kf = (i: number) => ({
+// Typed fixtures: unannotated object literals widen `type`/`status` to
+// `string`, which no longer satisfies the `KeyframeType`/`GenerationStatus`
+// unions the prechecks consume.
+const kf = (i: number): PipeKeyframe => ({
   id: `k${i}`,
   frame: 0,
-  slotIndex: i as 1 | 2 | 3,
+  slotIndex: i,
   type: 'url',
   status: 'pending',
 });
-const subj = (i: number) => ({
+const subj = (i: number): SubjectReference => ({
   id: `s${i}`,
   imageUrl: '',
   useFrames: false,
@@ -135,7 +138,14 @@ describe('pipePrechecks — locked-kind downgrade (acceptable, non-blocking)', (
   });
 
   it('does NOT block a reference-locked pipe that cross-falls to keyframe', () => {
-    const c = pipePrechecks(pipeWith({ mediaMode: 'reference', keyframes: [kf(1)] }), sess, null, dualSpec);
+    // Well-formed keyframe (real source URL): the cross-fall itself is not a
+    // conflict — the shipped mode just carries a properly-settled piece.
+    const c = pipePrechecks(
+      pipeWith({ mediaMode: 'reference', keyframes: [{ ...kf(1), imageSrc: 'https://x/k1.png' }] }),
+      sess,
+      null,
+      dualSpec,
+    );
     expect(c).toEqual([]);
   });
 

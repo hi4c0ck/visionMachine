@@ -118,7 +118,7 @@ pub trait GenerationEngine: Send + Sync {
     /// Run one stage to completion or failure.
     /// `cancel` is polled for user cancellation; `on_progress` reports 0.0..=1.0;
     /// `on_event` reports a short human-readable state line (e.g. "503 queue
-    /// full — retry in 30 s", "polling: in_progress 42%") that the registry
+    /// full — retry in 15 s", "polling: in_progress 42%") that the registry
     /// mirrors onto the stage view so the UI's progress modal can show a live
     /// "last event" line instead of a frozen bar during long provider waits.
     /// The line is deliberately terse — NOT the full request/response; the

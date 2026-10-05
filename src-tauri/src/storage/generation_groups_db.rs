@@ -79,6 +79,27 @@ impl Database {
             .execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Self-heal groups a hard kill left 'running': the in-memory coordinator
+    /// is gone with the process, so such a row can never reach a terminal
+    /// state. Without this, the session-restore fallback
+    /// (`get_latest_session_generation_group`) resurfaces the dead run as a
+    /// "running" group on every launch — the UI shows a permanently-running
+    /// chip / re-opened progress modal and the user experiences the same
+    /// hang after every force-close. A terminal status also unblocks a
+    /// fresh run of the same session. Terminal groups (done/error/
+    /// cancelled) are untouched, so a finished session video keeps
+    /// restoring from its row.
+    pub async fn heal_stale_generation_groups(&self) -> Result<usize, String> {
+        const NOTE: &str = "interrupted — the app closed mid-run; no live group owns this row";
+        let res = sqlx::query(
+            "UPDATE generation_groups \n             SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP \n             WHERE status = 'running'",
+        )
+        .bind(NOTE)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() as usize)
+    }
     /// Persist the composition outcome AND its source records atomically, so
     /// the group row never describes a source set different from what was
     /// actually staged/concatenated.
@@ -101,6 +122,34 @@ impl Database {
     ) -> Result<Option<GenerationGroupRow>, String> {
         let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json FROM generation_groups WHERE group_id = ?")
             .bind(group_id).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(row.map(|r| GenerationGroupRow {
+            group_id: r.get("group_id"),
+            session_id: r.get("session_id"),
+            status: r.get("status"),
+            progress: r.get("progress"),
+            pipes_json: r.get("pipes_json"),
+            failure_policy: r.get("failure_policy"),
+            auto_compose: r.get::<i64, _>("auto_compose") != 0,
+            session_video_path: r.get("session_video_path"),
+            compose_state: r.get("compose_state"),
+            compose_error: r.get("compose_error"),
+            error: r.get("error"),
+            started_at: r.get("started_at"),
+            sources_json: r.try_get("sources_json").ok().flatten(),
+        }))
+    }
+
+    /// The session's most recent group row (by `started_at`). Lets the UI
+    /// restore a composed session video on session selection across app
+    /// restarts — the per-run localStorage bridge is deleted when the group
+    /// goes terminal, so the DB row is the only source of truth that
+    /// survives. `None` when the session has no group runs yet.
+    pub async fn get_latest_generation_group_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<GenerationGroupRow>, String> {
+        let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json FROM generation_groups WHERE session_id = ? ORDER BY started_at DESC LIMIT 1")
+            .bind(session_id).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(row.map(|r| GenerationGroupRow {
             group_id: r.get("group_id"),
             session_id: r.get("session_id"),
