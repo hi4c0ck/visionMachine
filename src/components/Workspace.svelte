@@ -447,6 +447,14 @@
 					}
 				}
 				groupTaskViews = merged;
+				// Keep the pill's live state fresh: mirror the merged pipe view
+				// onto `activeTask` (the event stream only drives it while the
+				// task watcher is armed — a closed/minimized modal would otherwise
+				// show a frozen line while the group keeps running).
+				if (activeTaskId) {
+					const pid = Object.keys(groupPipeTaskIds).find((p) => groupPipeTaskIds[p] === activeTaskId);
+					if (pid && merged[pid]) activeTask = merged[pid];
+				}
 				// Track the compose step's live phase ('running' = in flight,
 				// 'done'/'error'/'cancelled' = terminal) so the modal can show
 				// the exact stage instead of a frozen per-pipe bar.
@@ -457,9 +465,102 @@
 				groupComposeError = g.composeError ?? groupComposeError;
 				groupSessionVideoPath = g.sessionVideoPath ?? groupSessionVideoPath;
 				// Group reached a terminal state — stop polling.
-				if (!['running'].includes(g.status)) stopGroupPoll();
+				if (!['running'].includes(g.status)) {
+					stopGroupPoll();
+					if (gid !== activeGroupId) return; // a new group took over mid-flight
+					// Safety net: if the group-terminal event was lost (the
+					// subscription dropped mid-session), the poller is the only
+					// signal that the group ended — run the same cleanup as the
+					// event handler so `activeGroupId` doesn't linger and the
+					// session's Generate button silently no-ops forever.
+					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
+					groupStatus = g.status ?? 'done';
+					if (progressMinimized) pillTerminal = (g.status ?? 'done') === 'done' ? 'done' : 'error';
+					if (selectedSession) localStorage.removeItem(`visionmachine:generation-group:${selectedSession.id}`);
+				}
 			}).catch(() => {});
 		}, 2000);
+	}
+	// Group event watcher (extracted from `confirmSessionGenerate` so the
+	// session-restore path can re-arm the SAME callbacks after a session
+	// switch dropped them — a live group without its terminal-event
+	// subscription leaves `activeGroupId` set forever and silently no-ops
+	// the session's Generate button). `logCtx` carries the per-run
+	// generation-log params (models/seed): present only for a run confirmed
+	// in this UI session; the restore path has no such context and skips
+	// the log-start write.
+	function subscribeGroupWatcher(gid: string, logCtx: { models: ModelSelection; seed: number | null } | null) {
+		groupUnlisten?.();
+		void subscribeGroupEvent(gid, (event) => {
+			if (event.pipeId && event.taskId) {
+				groupPipeTaskIds[event.pipeId] = event.taskId;
+				void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; }).catch(() => {});
+			}
+			if (event.kind === 'pipe-started' && event.pipeId && event.taskId) {
+				groupTaskId = event.taskId;
+				activeTaskId = event.taskId;
+				const startedPipe = selectedSession?.pipes.find((p) => p.id === event.pipeId);
+				if (startedPipe && logCtx) {
+					const groupLog = buildGenerationLogEntry(event.taskId, selectedSession!.id, startedPipe, logCtx.models, Date.now(), logCtx.seed);
+					groupLog.groupId = event.groupId;
+					void writeGenerationLogStart(groupLog);
+				}
+				void fetchGenerationTask(event.taskId).then((view) => { activeTask = view; groupTaskViews[event.pipeId!] = view; }).catch(() => {});
+			}
+			if (event.kind === 'pipe-terminal' && event.taskId && event.pipeId) {
+				void fetchGenerationTask(event.taskId).then((view) => {
+					groupTaskViews[event.pipeId!] = view;
+					if (view.taskId === activeTaskId) activeTask = view; // keep pill/modal live after the poller stopped
+					void reconcileTerminal(view);
+				}).catch(() => {});
+			}
+			if (event.kind === 'compose-terminal') {
+				if (activeGroupId) {
+					void fetchGenerationGroup(activeGroupId).then((g) => {
+						groupComposeState = g.composeState ?? null;
+						groupComposeError = g.composeError ?? null;
+						groupSessionVideoPath = g.sessionVideoPath ?? null;
+						if (progressMinimized) {
+							if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
+							// Compose success must not mask a failed pipe: a
+							// 'done_with_errors' group already marked the pill red, and a
+							// subset session video is not "Generation complete".
+							else if (g.composeState === 'done' && g.sessionVideoPath && pillTerminal !== 'error') pillTerminal = 'done';
+						}
+						if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+							void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
+						}
+					}).catch(() => {});
+				}
+				return;
+			}
+			if (event.kind === 'group-terminal') {
+				groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
+				groupStatus = event.status ?? 'done'; groupStale = false;
+				// Final pill marker: green only on a clean 'done' — 'error'
+				// (stop policy), 'done_with_errors' (continue policy) and
+				// 'cancelled' all read as a failed run. A later compose-terminal
+				// event can downgrade 'done' to 'error' when the compose itself
+				// fails (it never upgrades 'error' back to 'done').
+				if (progressMinimized) pillTerminal = (event.status ?? 'done') === 'done' ? 'done' : 'error';
+				stopGroupPoll();
+				groupProgress = 1;
+				groupComposePhase = null;
+				const syncCompose = () => {
+					void fetchGenerationGroup(gid).then((g) => {
+						groupComposeState = g.composeState ?? null;
+						groupComposeError = g.composeError ?? null;
+						groupSessionVideoPath = g.sessionVideoPath ?? null;
+						if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
+							void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
+						}
+					}).catch(() => {});
+				};
+				syncCompose();
+				setTimeout(syncCompose, 1500);
+				if (selectedSession) localStorage.removeItem(`visionmachine:generation-group:${selectedSession.id}`);
+			}
+		}).then((unlisten) => { groupUnlisten = unlisten; });
 	}
 	const groupActive = $derived(activeGroupId !== null && !groupStale);
 	const groupProgressVisible = $derived(groupActive || groupStale || Object.keys(groupTaskViews).length > 0);
@@ -481,6 +582,10 @@
 	// minimized, the pill flips to done/error so the outcome is visible in the
 	// top panel even without re-opening the modal. Reset on the next task.
 	let pillTerminal = $state<'done' | 'error' | null>(null);
+	// A live group keeps the UI actionable even when the per-task watcher was
+	// closed (modal OK/X mid-run): a null `activeTask` must not read as
+	// "nothing running" while the session group is still in flight.
+	const groupLivenessActive = $derived(groupActive);
 	// Close-app guard (D10): the backend blocks a window close while a
 	// generation task is live (closing would cancel the provider job) and
 	// emits `close-blocked` with the active count. Show a confirm dialog; on
@@ -532,6 +637,11 @@
 	function keepWorking() {
 		if (closeCancelling) return; // cancel-all in flight: don't dismiss
 		closeBlocked = false;
+		// The user chose to keep the app open: disarm the backend's
+		// force-close watchdog (it would otherwise cancel the live tasks
+		// 60 s after the original X-click despite this explicit "stay"
+		// choice).
+		if (isTauri()) void invoke('close_dismissed').catch(() => {});
 	}
 
 	// Settings modal (Phase 3): opened from the profile panel (Defaults tab)
@@ -539,7 +649,16 @@
 	let showSettings = $state(false);
 	let settingsTab = $state<'defaults' | 'providers' | 'tools'>('defaults');
 
-	const anyTaskActive = $derived(activeTask !== null && !isTerminalTaskStatus(activeTask.status));
+	const anyTaskActive = $derived((activeTask !== null && !isTerminalTaskStatus(activeTask.status)) || groupLivenessActive);
+	// Live engine-state line for the minimized pill (e.g. "queue full — retry in 120 s"): the newest lastEvent across the task's stages. Without this a task waiting on the provider's queue is visually indistinguishable from a stuck one — the pill read a static "Generation running" while the backoff ladder worked.
+	const pillLiveLine = $derived.by(() => {
+		if (!activeTask || !anyTaskActive) return null;
+		let latest: { ev: string; at: number } | null = null;
+		for (const s of activeTask.stages) {
+			if (s.lastEvent && s.lastEventAt && (!latest || s.lastEventAt > latest.at)) latest = { ev: s.lastEvent, at: s.lastEventAt };
+		}
+		return latest?.ev ?? null;
+	});
 	const generatePipe = $derived.by(() => {
 		if (!generateModalPipeId || !selectedSession) return null;
 		return selectedSession.pipes.find((p) => p.id === generateModalPipeId) ?? null;
@@ -876,7 +995,37 @@
 			// when the session has never run a group — nothing to restore.
 			group = await fetchLatestGenerationGroupForSession(sessionId).catch(() => null);
 		}
-		if (!group) { restoredGroupSessionId = sessionId; return; }
+		if (!group) {
+			// No group run for this session: drop the previous session's group
+			// machinery (event watcher + poller + state). Otherwise a foreign
+			// live `activeGroupId` survives the session switch, the group-
+			// terminal event never clears it (its subscription is lost), and
+			// this session's Generate button silently no-ops — the "I press
+			// Generate and nothing happens" stuck state.
+			activeGroupId = null;
+			groupUnlisten?.();
+			groupUnlisten = null;
+			groupTaskId = null;
+			groupStatus = null;
+			groupStale = false;
+			groupProgress = 0;
+			groupComposePhase = null;
+			groupTaskViews = {};
+			groupPipeTaskIds = {};
+			groupComposeState = null;
+			groupComposeError = null;
+			groupSessionVideoPath = null;
+			stopGroupPoll();
+			stopWatching();
+			activeTask = null;
+			activeTaskId = null;
+			activeLogEntry = null;
+			showProgressModal = false;
+			progressMinimized = false;
+			pillTerminal = null;
+			restoredGroupSessionId = sessionId;
+			return;
+		}
 		// A group that is LIVE (running with a task) owns the session — arm the
 		// active-group machinery (poller, watcher, cancel guard, Generate block).
 		// A TERMINAL group restored from the DB (the common cross-restart case)
@@ -885,6 +1034,18 @@
 		const isLiveGroup = group.live && group.status === 'running';
 		if (isLiveGroup) {
 			activeGroupId = group.groupId;
+			// Re-arm the live-group machinery: a session switch stopped the
+			// poller (and the no-group reset above drops the watcher), so a
+			// still-live group must be re-subscribed + re-polled — without
+			// the watcher its group-terminal event never arrives and
+			// `activeGroupId` (the Generate guard) stays set forever.
+			// `logCtx` is null: a restored run has no per-run generation-log
+			// context (the log-start entry, if any, was written at confirm).
+			subscribeGroupWatcher(group.groupId, null);
+			startGroupPoll();
+			stopWatching();
+			activeTask = null;
+			activeTaskId = null;
 		} else {
 			activeGroupId = null;
 		}
@@ -917,7 +1078,12 @@
 			}
 		}
 		stopWatching();
-		showProgressModal = groupStale && group.live === false && group.status === 'running';
+		// A stale (persisted, no live task) running group re-opens its
+		// modal so the user can dismiss it; a LIVE group re-opens its
+		// progress view too — without this the live group's compact panel
+		// mounts but stays invisible (open=false), and the session shows
+		// no progress UI at all.
+		showProgressModal = (groupStale && group.live === false && group.status === 'running') || isLiveGroup;
 		restoredGroupSessionId = sessionId;
 	}
 
@@ -974,7 +1140,9 @@
 	async function handleCreateProject(input: { name: string; path?: string }) {
 			try {
 				loading = true;
-				const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
+				// Default container with the profile layer:
+				// <home>\VisionMachine\<profile>\Projects\<name>.
+				const basePath = input.path || `${getHomeDir()}\\VisionMachine\\${sanitizeDirName(userName ?? '')}\\Projects`;
 				const projectPath = `${basePath}\\${input.name}`;
 
 				// Get user profile if not loaded
@@ -1022,7 +1190,7 @@
 		}
 
 	function handleCreateProjectFallback(input: { name: string; path?: string }) {
-		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\Projects`;
+		const basePath = input.path || `${getHomeDir()}\\VisionMachine\\${sanitizeDirName(userName ?? '')}\\Projects`;
 		const projectPath = `${basePath}\\${input.name}`;
 		
 		const newProject: ProjectData = {
@@ -1322,13 +1490,14 @@
 
 	// ── Copy session (full duplicate, new name + id) ──────────────────────────
 
-	// Copy a session: full duplicate (new id + name) with the source's media
-	// tree (last-state images/videos) + last-generation state carried over
-	// (backend does the heavy lift — Pipe::rekeyed re-mints ids, re-roots
-	// artifact paths, and copies the media dir). The name suffixes "(copy)"
-	// until it is unique among the project's sessions, and a lightweight
-	// busy guard (reuses the project `loading` flag) covers the media copy,
-	// which can take a moment for a dozen+ MB of artifacts.
+	// Copy a session: full duplicate (new id + name) carrying the DESIGN
+	// only — layout, prompts, user-provided URLs. No media-tree copy and no
+	// carried artifacts: the backend re-mints every piece id and blanks the
+	// previews / last-gen state, so the copy's runs mint artifacts of its
+	// own (nothing re-rooted from the source — the uuid flow stays
+	// unambiguous). The name suffixes "(copy)" until it is unique among the
+	// project's sessions; the busy guard (reuses the project `loading`
+	// flag) covers the short backend call.
 	async function handleCopySession(sessionId: string) {
 		if (!isTauri()) return;
 		const src = (projects || []).flatMap((p: any) => p.sessions || []).find((s: any) => s.id === sessionId);
@@ -1356,7 +1525,7 @@
 
 			// Deep-clone the pipes so the copy's in-memory snapshot is fully
 			// independent of the source (no shared array refs). The backend
-			// re-minted the piece ids + re-rooted the last-gen paths; `loadSession`
+			// re-minted the piece ids with artifacts blanked; `loadSession`
 			// below pulls that authoritative copy into the store.
 			const clonePipe = (p: any) => JSON.parse(JSON.stringify(p));
 			const copySession: any = {
@@ -1399,12 +1568,23 @@
 	// There is no separate session-persistence path in this component.
 
 	function handleGenerate() {
-		if (!selectedSession || !selectedSession.pipes?.length || groupActive) return;
+		if (!selectedSession || !selectedSession.pipes?.length) return;
+		if (groupActive) { flashToast('Session generation is already in progress — open it from the pill, or wait for it to finish', 'info'); return; }
 		showSessionGenerateModal = true;
 	}
 
 	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null) {
-		if (!selectedSession || groupActive) return;
+		if (!selectedSession) return;
+		if (groupActive) { flashToast('Session generation is already in progress', 'info'); return; }
+		// Read-only (paid) model gate: the session flow's "continue" policy
+		// tolerates per-pipe conflicts, but a paid-only model can never run —
+		// block the whole run instead.
+		const s = getSettings();
+		const svp = getPreset(s.providers.video.preset);
+		if (svp && getModel(svp, models.videoModel)?.readOnly) {
+			flashToast('Video model is read-only (paid) — pick a generable model in Settings', 'error');
+			return;
+		}
 		try {
 			// Per-pipe prompts + profile + resolved specs, matching the per-pipe
 			// `start_generation` flow — the provider engine REQUIRES the
@@ -1438,80 +1618,7 @@
 			groupComposeState = null;
 			groupComposeError = null;
 			groupSessionVideoPath = null;
-			groupUnlisten?.();
-			void subscribeGroupEvent(result.groupId, (event) => {
-				if (event.pipeId && event.taskId) {
-					groupPipeTaskIds[event.pipeId] = event.taskId;
-					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; }).catch(() => {});
-				}
-				if (event.kind === 'pipe-started' && event.pipeId && event.taskId) {
-					groupTaskId = event.taskId;
-					activeTaskId = event.taskId;
-					const startedPipe = selectedSession?.pipes.find((p) => p.id === event.pipeId);
-					if (startedPipe) {
-						const groupLog = buildGenerationLogEntry(event.taskId, selectedSession!.id, startedPipe, models, Date.now(), seed);
-						groupLog.groupId = event.groupId;
-						void writeGenerationLogStart(groupLog);
-					}
-					void fetchGenerationTask(event.taskId).then((view) => { activeTask = view; groupTaskViews[event.pipeId!] = view; }).catch(() => {});
-				}
-				if (event.kind === 'pipe-terminal' && event.taskId && event.pipeId) {
-					void fetchGenerationTask(event.taskId).then((view) => { groupTaskViews[event.pipeId!] = view; void reconcileTerminal(view); }).catch(() => {});
-				}
-				if (event.kind === 'compose-terminal') {
-					// Compose finished (or failed) after the pipes went terminal —
-					// refresh the persisted compose outcome so the modal + pill
-					// reflect it (error strings included, not just a silent OK),
-					// and attach the composed video to the top panel + tool-panel
-					// preview as soon as the path lands (don't wait for the
-					// group-terminal refetch a moment later).
-					if (activeGroupId) {
-						void fetchGenerationGroup(activeGroupId).then((g) => {
-							groupComposeState = g.composeState ?? null;
-							groupComposeError = g.composeError ?? null;
-							groupSessionVideoPath = g.sessionVideoPath ?? null;
-							// A failed / cancelled compose is not a clean "done" —
-							// the pill (if minimized) must read as an error.
-							if (progressMinimized) {
-								if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
-								else if (g.composeState === 'done' && g.sessionVideoPath) pillTerminal = 'done';
-							}
-							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
-								void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
-							}
-						}).catch(() => {});
-					}
-					return;
-				}
-				if (event.kind === 'group-terminal') {
-					groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
-					groupStatus = event.status ?? 'done'; groupStale = false;
-					stopGroupPoll();
-					groupProgress = 1;
-					groupComposePhase = null;
-					// The terminal event is dispatched before the compose result
-					// is persisted — refetch once (and once more after a short
-					// delay for the compose-terminal case) so the modal shows the
-					// persisted composeState/composeError/sessionVideoPath instead
-					// of a silent success. A successfully composed session video
-					// IS the preview target (the full session timeline, not a
-					// single pipe clip) — attach it to the top panel as soon as
-					// the path lands.
-					const syncCompose = () => {
-						void fetchGenerationGroup(result.groupId).then((g) => {
-							groupComposeState = g.composeState ?? null;
-							groupComposeError = g.composeError ?? null;
-							groupSessionVideoPath = g.sessionVideoPath ?? null;
-							if (g.composeState === 'done' && g.sessionVideoPath && selectedSession) {
-								void attachSessionVideo(g.sessionVideoPath, `${selectedSession.name} — session video`);
-							}
-						}).catch(() => {});
-					};
-					syncCompose();
-					setTimeout(syncCompose, 1500);
-					if (selectedSession) localStorage.removeItem(`visionmachine:generation-group:${selectedSession.id}`);
-				}
-			}).then((unlisten) => { groupUnlisten = unlisten; });
+			subscribeGroupWatcher(result.groupId, { models, seed });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
 
@@ -1972,7 +2079,12 @@
 		// (top panel) flips to the terminal color so it's visible even without
 		// watching the modal. If the modal is open the user already sees the
 		// outcome (OK footer), so no extra noise.
-		if (progressMinimized) {
+		// A per-pipe terminal INSIDE a live group must NOT mark the pill: the
+		// group moves on to the next pipe — only the GROUP terminal carries the
+		// final outcome (the group handlers above set the marker; compose-
+		// terminal can downgrade it on a compose failure). Single-task runs
+		// (no active group) keep the per-task marker.
+		if (progressMinimized && !activeGroupId) {
 			pillTerminal = view.status === 'done' ? 'done' : 'error';
 		}
 		// Force-persist the just-mutated session (ref statuses + preview
@@ -2062,11 +2174,37 @@
 	}
 
 	/** Re-open the modal from the pill (D10). */
-	function restoreProgressModal() {
-		if (!activeTaskId) return;
+	async function restoreProgressModal() {
+		if (!activeTaskId && !activeTask) {
+			// The modal was closed mid-group (OK/X drops the task watcher, and the
+			// compact widget renders nothing while closed) — re-seed the task
+			// views from the backend group so the modal is actionable again
+			// instead of silently no-op'ing (the stuck "nothing I can click" UI).
+			if (activeGroupId) {
+				try {
+					const g = await fetchGenerationGroup(activeGroupId);
+					if (g.groupId !== activeGroupId) return; // a different group took over
+					groupPipeTaskIds = Object.fromEntries(g.pipes.flatMap((p) => p.pipeId && p.taskId ? [[p.pipeId, p.taskId]] : []));
+					let lastTaskId: string | null = null;
+					for (const p of g.pipes) if (p.taskId) lastTaskId = p.taskId;
+					if (lastTaskId) {
+						activeTaskId = lastTaskId;
+						activeTask = await fetchGenerationTask(lastTaskId).catch(() => null);
+					}
+					// Closing the modal stopped the group poller — re-arm the
+					// terminal-detection safety net, so a lost event watcher can't
+					// leave `activeGroupId` set (and the Generate button no-op'ing)
+					// forever.
+					startGroupPoll();
+				} catch {
+					// The group is gone (evicted/closed) — nothing to re-open.
+				}
+			}
+			if (!activeTaskId && !activeTask) return;
+		}
 		showProgressModal = true;
 		progressMinimized = false;
-		void refreshActiveTask(); // re-sync now that the user is back
+		if (activeTaskId) void refreshActiveTask(); // re-sync now that the user is back
 	}
 
 	/** ToolsPanel last-gen thumb → top-panel preview (D9, served via Phase E media command). */
@@ -2138,6 +2276,14 @@
 		return typeof window !== 'undefined' 
 			? (window as any).navigator?.userContext?.homeDirectory || 'C:\\Users\\user'
 			: 'C:\\Users\\user';
+	}
+
+	/** Filesystem-safe directory layer for a profile name (spaces are fine,
+	 *  Windows-reserved chars are not). Used for the media-container layer:
+	 *  <home>\VisionMachine\<profile>\Projects. */
+	function sanitizeDirName(name: string): string {
+		const s = (name || '').replace(/[\\/:*?"<>|]+/g, '_').trim();
+		return s || 'default';
 	}
 
 	onMount(async () => {
@@ -2319,7 +2465,6 @@
 					onOrientationChange={handleOrientationChange}
 					onPipeQChange={(pipeId, q) => handlePipeQValueChange(selectedSession.id, pipeId, q)}
 					onPipeCChange={(pipeId, c) => handlePipeCValueChange(selectedSession.id, pipeId, c)}
-					onSaveAs={() => handleCopySession(selectedSession.id)}
 				/>
 			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
@@ -2365,11 +2510,13 @@
 			{/if}
 
 			<!-- D10 persistent pill: visible when the progress modal is minimized
-			     (or the task just went terminal while it was), so the user can
-			     return to the full modal with one click instead of hunting for it.
-			     Terminal color (done = green, error = red) signals the outcome
-			     without needing to re-open the modal. -->
-			{#if (progressMinimized || (pillTerminal !== null && !showProgressModal)) && activeTask}
+			 (or the task just went terminal while it was), so the user can
+			 return to the full modal with one click instead of hunting for it.
+			 Terminal color (done = green, error = red) signals the outcome
+			 without needing to re-open the modal. Also a last-resort fallback:
+			 whenever a task is live but no progress modal is open (e.g. the
+			 group modal never rendered), the pill keeps the run visible. -->
+			{#if (activeTask || groupActive) && !showProgressModal && (progressMinimized || pillTerminal !== null || anyTaskActive)}
 				<button
 					class="gen-pill"
 					class:gen-pill-done={pillTerminal === 'done'}
@@ -2382,9 +2529,14 @@
 						<span class="gen-pill-text">Generation complete</span>
 					{:else if pillTerminal === 'error'}
 						<span class="gen-pill-text">Generation failed</span>
-					{:else if anyTaskActive}
+					{:else if activeTask && anyTaskActive}
 						<span class="gen-pill-text">Generation running · {activeTask.taskId.slice(0, 8)}</span>
-					{:else}
+						{#if pillLiveLine}
+							<span class="gen-pill-live" title="Latest engine state — click to open the progress modal">{pillLiveLine}</span>
+						{/if}
+					{:else if groupActive}
+						<span class="gen-pill-text">Session generation running</span>
+					{:else if activeTask}
 						<span class="gen-pill-text">Generation finished · {activeTask.taskId.slice(0, 8)}</span>
 					{/if}
 				</button>
@@ -2501,6 +2653,14 @@
 	}
 	.gen-pill-text {
 		color: var(--text-muted, #a1a1aa);
+	}
+	.gen-pill-live {
+		font-size: 11px;
+		color: var(--warning-color, var(--text-muted, #71717a));
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 260px;
 	}
 	@keyframes gen-pill-pulse {
 		0%, 100% { opacity: 0.5; }

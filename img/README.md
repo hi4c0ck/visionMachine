@@ -8,6 +8,7 @@ section. Place new captures here using the exact file names below
 - `screenshot-composer.png` — the hero image (full composer, populated session)
 - `composer-preview.gif` — 4 s motion clip of the composer (from `composer.mp4`, 480 px wide, < 330 KB)
 - `projects-panel.gif` — projects/sessions panel in motion (from `projects-panel.mp4`, 320 px wide, < 580 KB)
+- `provider-settings.gif` — navigation to Settings → Providers / API key screen (from `Session 9/session-video/session.mp4`, 300 px wide, < 780 KB)
 
 **Still to capture:**
 - `composer-tags.png` — a segment with camera + lighting tags selected

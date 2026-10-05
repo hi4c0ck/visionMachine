@@ -60,9 +60,20 @@
 		if (!spec || spec.requestFormat !== 'video-job-seconds') return null;
 		return secondsPreview(pipe, session, spec);
 	});
+	// Reseed at most once per distinct model/preset config. The self-heal
+	// check below READS the model arrays + models, and a plain run reassigns
+	// those $state arrays on every pass — Svelte re-invalidates this very
+	// effect until it aborts with `effect_update_depth_exceeded` (the
+	// "frozen window / modal never appears" symptom). The key guard makes
+	// re-runs no-ops; as a bonus the user's own select picks no longer snap
+	// back to the settings default.
+	let modelSeedKey = $state<string | null>(null);
 	$effect(() => {
 		if (!open) return;
 		const s = getSettings();
+		const key = [s.providers.image.model, s.providers.video.model, s.providers.image.preset, s.providers.video.preset].join('|');
+		if (modelSeedKey === key) return;
+		modelSeedKey = key;
 		imageModel = s.providers.image.model;
 		videoModel = s.providers.video.model;
 		const ip = getPreset(s.providers.image.preset);
@@ -71,6 +82,11 @@
 		// not confirmable for generation.
 		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly);
 		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly);
+		// Self-heal: a saved default that is no longer selectable (read-only /
+		// unknown) must not leave the select empty — fall back to the first
+		// generable model of the kind.
+		if (!imageModels.some((m) => m.id === imageModel)) imageModel = imageModels.find((m) => !m.pending)?.id ?? imageModel;
+		if (!videoModels.some((m) => m.id === videoModel)) videoModel = videoModels.find((m) => !m.pending)?.id ?? videoModel;
 		// Re-roll only when “always new seed” is on; keep the fixed value
 		// across opens otherwise.
 		if (s.generationDefaults.alwaysNewSeed) seed = Math.floor(Math.random() * 100000);

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import Workspace from './components/Workspace.svelte';
 	import Footer from './components/Footer.svelte';
@@ -187,6 +187,31 @@
 			
 			applyTheme(selectedTheme);
 			loadAccounts();
+
+			// Renderer liveness ping (backend `ui_heartbeat` checker): every 5 s
+			// tell the backend the webview is alive; when the pings stop the
+			// backend logs it — that distinguishes a dead renderer from a
+			// wedged main thread on the next "frozen window" report.
+			if (isTauri()) {
+				const beat = () => void invoke('ui_heartbeat').catch(() => {});
+				beat();
+				const beatTimer = window.setInterval(beat, 5000);
+				onDestroy(() => window.clearInterval(beatTimer));
+
+				// The packaged webview has no visible console: forward uncaught
+				// JS errors + unhandled promise rejections to the backend log
+				// (`js_error_log`) so a wedged UI leaves a `[UI] js error` trace
+				// instead of a silent "frozen window".
+				const reportJsError = (kind: string, detail: unknown) => {
+					const msg = detail instanceof Error
+						? `${detail.name}: ${detail.message}\n${String(detail.stack ?? '').slice(0, 1500)}`
+						: String(detail);
+					void invoke('js_error_log', { message: `${kind}: ${msg}`.slice(0, 4000) }).catch(() => {});
+				};
+				window.addEventListener('error', (e) =>
+					reportJsError('window error', `${e.message} @ ${e.filename ?? '?'}:${e.lineno ?? 0}:${e.colno ?? 0}`));
+				window.addEventListener('unhandledrejection', (e) => reportJsError('unhandled rejection', e.reason));
+			}
 		} catch (e) {
 			console.error('[App] Failed to restore state:', e);
 			runtimeError = e instanceof Error ? e : new Error('Failed to restore application state');

@@ -40,6 +40,36 @@ export interface ModelMedia {
   maxRefs?: number;
   maxAudios?: number;
   maxVideos?: number;
+  /**
+   * Wire value of the `mode` param per logical media mode (key = frontend
+   * mode name). Declared when the model is served through a provider route
+   * with a different mode-name family (V2.0 legacy route:
+   * ti2vid/keyframes/multi_reference vs the 2.5 route's
+   * text/keyframe/reference). Absent → the shaper sends the logical name.
+   */
+  wireModes?: Partial<Record<MediaMode, string>>;
+  /**
+   * Reference-image floor for the reference (multi_reference) wire mode
+   * (V2.0 legacy route: 2 — live 400 2026-10-04: multi_reference requires
+   * ≥2 images). Below it the shaper falls back to the text-mode wire value;
+   * a single image (if any) rides the top-level `image` field.
+   */
+  minRefs?: number;
+  /**
+   * Keyframe-image floor for the keyframes wire mode (V2.0 legacy route:
+   * 2 — live 400 2026-10-04: "mode=keyframes requires image as a list of
+   * at least 2 items"). Below it the shaper falls back to the text-mode
+   * wire value; a single keyframe (if any) rides the top-level `image`
+   * field.
+   */
+  minKeyframes?: number;
+  /**
+   * Wire field name for the reference image list. 2.5 route: `images`
+   * (array). V2.0 legacy route: `image` — a single URL string for one
+   * reference, an array for multiple (live probes 2026-10-04: the legacy
+   * validator ignores `images[]` and rejects with 400 "param: image").
+   */
+  imageField?: 'images' | 'image';
 }
 
 /**

@@ -9,6 +9,27 @@ model, zero UI/engine rework).
 - Official docs (agnes-ai.com, fetched 2026-09-16): Agnes 2.5 Flash (text),
   Agnes Image 2.5 Flash, Agnes Image 2.1 Flash, Agnes Video V2.0,
   Agnes Video 2.5, Agnes Video 2.5 Flash.
+- **Live re-verification (fetched 2026-10-04, agnes-ai.com/en/docs):**
+  - Retirement notice (agnes-video-v20 page): "Agnes Video v2.0 has been
+    retired. Migrate to the Agnes Video 2.5 series." — but the endpoint
+    keeps serving the legacy model ID through the 2.5-series engine
+    (live generation log 2026-10-03: HTTP 200 + 2.5-style perf_params).
+    **User decision 2026-10-04:** run `agnes-video-v2.0` on the 2.5
+    config (`video-job-seconds` wire shape, reference media modes);
+    the legacy frames shape (`video-job-frames`, extra_body keyframes)
+    is no longer maintained in the catalog.
+  - 2.5-flash contract confirmed: `reference` mode = `images[]` ≤5 +
+    `audios[]` ≤3, `videos` FORBIDDEN (400); `<Picture N>`/`<Audio N>`
+    prompt tokens; `model_name` required in poll for keyframe/reference.
+  - Paid 2.5 confirmed: `images` ≤8 (<15 MB each, <50 MB request,
+    256–5760 px), `videos` ≤1 (2–12 s, 24–60 FPS,
+    `{url, start_seconds, require_audio}`), `audios` ≤3 (2–12 s total),
+    ≤12 media files total — matches the entries below.
+  - V2.0 legacy-route media floors (live 400s 2026-10-04):
+    `mode=keyframes` requires `image` as a list of ≥2 items, and
+    `mode=multi_reference` ≥2 images; below a floor the route is
+    unusable, so the shaper downgrades to `ti2vid` (single media rides
+    the top-level `image` field as a string — `image`, never `images[]`).
 - hermes skills notes (`C:\Users\user\AppData\Local\hermes\skills`):
   `creative/agnes-video-keyframes-workflow` (V2.0 legacy payload, size
   normalization, polling reliability, 503 backoff),
@@ -65,7 +86,7 @@ model, zero UI/engine rework).
 | text  | `agnes-2.5-flash`       | `POST /v1/chat/completions` | sync    | $0.05/M in, $0.15/M out → **$0** | active (inert) |
 | image | `agnes-image-2.5-flash` | `POST /v1/images/generations` | sync  | $0.010–0.024/img by tier → **$0** | active, DEFAULT |
 | image | `agnes-image-2.1-flash` | `POST /v1/images/generations` | sync  | same as 2.5 → **$0**     | active (fallback) |
-| video | `agnes-video-v2.0`      | `POST /v1/videos`     | async   | $0.005/s → **$0**        | active (fps-native) |
+| video | `agnes-video-v2.0`      | `POST /v1/videos`     | async   | $0.005/s → **$0**        | active (legacy ID, 2.5 config) |
 | video | `agnes-video-2.5-flash` | `POST /v1/videos`     | async   | $0.025/s → **$0**        | active, DEFAULT |
 | video | `agnes-video-2.5`       | `POST /v1/videos`     | async   | $0.025–0.055/s (paid)   | **READ-ONLY**       |
 
@@ -106,7 +127,17 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
 - Provisional res mapping (Q2, harden later): 480p/720p → `"1K"`,
   1080p → `"2K"`; orientation → ratio (horizontal `16:9`, vertical `9:16`).
 
-### video — `agnes-video-v2.0` (active alternate, fps-native, free)
+### video — `agnes-video-v2.0` (legacy ID · 2.5 config — user decision 2026-10-04)
+
+> Official docs mark V2.0 "retired" (migrate to the 2.5 series), but the
+> provider keeps serving the model ID through the 2.5-series engine (live
+> log 2026-10-03: HTTP 200, 2.5-style perf_params). Decision: the catalog
+> runs `agnes-video-v2.0` on the **2.5 config** — `video-job-seconds` wire
+> shape (seconds/size/aspect_ratio), `keyframe`/`reference` media modes,
+> 720P-only size map. The legacy frames shape (num_frames/frame_rate/
+> extra_body keyframes array) is no longer maintained; the v2.0 notes
+> below stay as the historical reference only.
+
 - Create `POST /v1/videos`. Poll `GET /agnesapi?video_id={videoId}`
   (model_name optional); legacy `GET /v1/videos/{taskId}` — hermes: most
   reliable; on 503 `video_queue_full` back off 30/60/120 s.
@@ -282,7 +313,9 @@ export const AGNES_PRESET: PresetSpec = {
     { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash (fallback)',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
       limits: { /* identical tiers/ratios as 2.5 */ }, supportsSeed: false },
-    // VIDEO — 2.5-flash first = default; v2.0 = fps-native alternate.
+    // VIDEO — 2.5-flash first = default; v2.0 = legacy ID on the 2.5
+    // config (user decision 2026-10-04: the provider serves the legacy
+    // ID through the 2.5-series engine; the frames shape is unmaintained).
     { id: 'agnes-video-2.5-flash', kind: 'video', label: 'Agnes Video 2.5 Flash',
       endpoint: '/v1/videos', sync: false,
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
@@ -290,15 +323,17 @@ export const AGNES_PRESET: PresetSpec = {
       limits: { seconds: [4, 12], resolutions: ['720P'],
                  ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
       supportsSeed: true },
-    { id: 'agnes-video-v2.0', kind: 'video', label: 'Agnes Video V2.0 (fps-native)',
+    { id: 'agnes-video-v2.0', kind: 'video', label: 'Agnes Video V2.0 (legacy · 2.5 config)',
       endpoint: '/v1/videos', sync: false,
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
-      requestFormat: 'video-job-frames',
-      limits: { fps: [18, 24, 30, 48, 60], // API range 1–60
-                 resolutions: ['480p', '720p', '1080p'],
-                 ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
-                 maxFrames: 441 }, // 8n+1 rule = our SLA grid
-      supportsSeed: true },
+      requestFormat: 'video-job-seconds',
+      limits: { seconds: [4, 12], resolutions: ['720P'],
+                 ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+                 sizeMap: { '480p': '720P', '720p': '720P', '1080p': '720P' },
+                 ratioMap: { horizontal: '16:9', vertical: '9:16' } },
+      supportsSeed: true,
+      media: { modes: ['keyframes', 'reference'],
+               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
     // VIDEO — paid, READ-ONLY (Q3): inspect in Settings, never generable.
     { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid · read-only)',
       endpoint: '/v1/videos', sync: false,

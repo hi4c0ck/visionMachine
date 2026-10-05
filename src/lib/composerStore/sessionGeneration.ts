@@ -68,8 +68,21 @@ export function buildSessionGenerationPayload(input: SessionGenerationInput) {
     // "build from the composer/pipe rows", the per-pipe default).
     runStats: input.runStats ?? null, pipeParams: input.pipeParams ?? null };
 }
-export async function startSessionGeneration(input: SessionGenerationInput): Promise<SessionGenerationStart> {
-  const raw = await invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }) as any;
+export async function startSessionGeneration(input: SessionGenerationInput, timeoutMs = 60_000): Promise<SessionGenerationStart> {
+  // Bound the wait: a wedged invoke would leave the generate modal stuck in
+  // busy forever (Cancel disabled, "screen locked" report). If the backend
+  // task nevertheless started past the deadline the registry still tracks
+  // it — restoring the session surfaces it instead of losing the run.
+  const timeout = new Promise<never>((_resolve, reject) =>
+    setTimeout(
+      () => reject(new Error(`Session start timed out after ${Math.round(timeoutMs / 1000)} s — try again`)),
+      timeoutMs,
+    ),
+  );
+  const raw = (await Promise.race([
+    invoke('start_session_generation', { input: buildSessionGenerationPayload(input) }),
+    timeout,
+  ])) as any;
   return { groupId: raw.group_id ?? raw.groupId, firstTaskId: raw.first_task_id ?? raw.firstTaskId, firstView: raw.first_view ?? raw.firstView };
 }
 export async function fetchGenerationGroup(groupId: string): Promise<GenerationGroupView> {

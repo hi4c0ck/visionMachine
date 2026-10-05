@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod app;
 pub mod artifacts;
 pub mod auth;
 pub mod composer;

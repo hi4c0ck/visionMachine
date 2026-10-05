@@ -79,6 +79,27 @@ impl Database {
             .execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Self-heal groups a hard kill left 'running': the in-memory coordinator
+    /// is gone with the process, so such a row can never reach a terminal
+    /// state. Without this, the session-restore fallback
+    /// (`get_latest_session_generation_group`) resurfaces the dead run as a
+    /// "running" group on every launch — the UI shows a permanently-running
+    /// chip / re-opened progress modal and the user experiences the same
+    /// hang after every force-close. A terminal status also unblocks a
+    /// fresh run of the same session. Terminal groups (done/error/
+    /// cancelled) are untouched, so a finished session video keeps
+    /// restoring from its row.
+    pub async fn heal_stale_generation_groups(&self) -> Result<usize, String> {
+        const NOTE: &str = "interrupted — the app closed mid-run; no live group owns this row";
+        let res = sqlx::query(
+            "UPDATE generation_groups \n             SET status = 'error', error = ?, updated_at = CURRENT_TIMESTAMP \n             WHERE status = 'running'",
+        )
+        .bind(NOTE)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(res.rows_affected() as usize)
+    }
     /// Persist the composition outcome AND its source records atomically, so
     /// the group row never describes a source set different from what was
     /// actually staged/concatenated.

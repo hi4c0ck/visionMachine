@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::commands::settings::{normalize_settings, ProviderSlot};
@@ -53,20 +53,22 @@ async fn cancel_watcher(cancel: &AtomicBool) {
 /// problem when polled slowly; a tighter-than-10 s cadence only burns quota
 /// and keeps us off the 429 radar.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
-/// 503 backoff sequence (catalog hermes note): 30 s, 60 s, 120 s, then hold
-/// at 120 s. Applies to ANY transient 503 cause, not just `video_queue_full`
-/// (see `is_transient_503`): provider-side availability outages
-/// (`fail_to_fetch_task` / `no available server` / gateway 503s) are
-/// transient in exactly the same way — the request is fine, the provider
-/// just can't serve it right now.
-const BACKOFF_SECS: [u64; 3] = [30, 60, 120];
+/// 503 backoff sequence (user decision 2026-10-04): steady 15 s. Queue
+/// contention is won by steady re-entry — the old 30/60/120 s hold sat idle
+/// for two minutes doing nothing; 429s on the re-entry are tolerated (still
+/// transient, still retried). Applies to ANY transient 503 cause, not just
+/// `video_queue_full` (see `is_transient_503`): provider-side availability
+/// outages (`fail_to_fetch_task` / `no available server` / gateway 503s)
+/// are transient in exactly the same way — the request is fine, the
+/// provider just can't serve it right now.
+const BACKOFF_SECS: [u64; 3] = [15, 15, 15];
 /// Image generation timeout (catalog: 60-360 s; typical ~15-18 s).
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Poll transport timeout (transient network, not the job itself).
 const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Whether a 503 body describes a TRANSIENT provider-side condition that the
-/// backoff ladder should absorb (retry with the 30/60/120 s schedule).
+/// backoff should absorb (retry on the steady 15 s schedule).
 ///
 /// HTTP 503 by definition means "service unavailable" — the provider could
 /// not serve the request right now. Whether the cause is its own render
@@ -83,7 +85,7 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(30);
 /// - bodies whose text mentions `no available server` or `ServiceUnavailable`
 ///   (the raw litellm payload the gateway inlines in the `message` field —
 ///   match on the human text so a differently-wrapped variant still hits).
-fn is_transient_503(body: &serde_json::Value) -> bool {
+fn is_transient_503(body: &Value) -> bool {
     let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("");
     if code.contains("video_queue_full") || code.contains("fail_to_fetch_task") {
         return true;
@@ -96,7 +98,7 @@ fn is_transient_503(body: &serde_json::Value) -> bool {
 
 /// A short, user-facing label for a 503 cause (shown in the modal's live
 /// state line; the full body stays in the redacted request log).
-fn transient_503_label(body: &serde_json::Value) -> &'static str {
+fn transient_503_label(body: &Value) -> &'static str {
     let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("");
     if code.contains("video_queue_full") {
         "queue full"
@@ -105,6 +107,47 @@ fn transient_503_label(body: &serde_json::Value) -> &'static str {
     } else {
         "unavailable"
     }
+}
+
+/// Fail fast when the shaped payload carries a non-fetchable media source
+/// (a local file path). That happens when the image stage's provider
+/// returned `b64_json` instead of a URL (ignoring `response_format: "url"`)
+/// and `record_upstream` fell back to the local artifact — the video API
+/// cannot fetch a local path, so sending it would burn a multi-minute
+/// render on a guaranteed failure.
+fn assert_media_fetchable(payload: &Value) -> Result<(), String> {
+    let mut urls: Vec<(&str, &str)> = Vec::new();
+    for key in ["image", "first_frame", "last_frame"] {
+        if let Some(v) = payload.get(key).and_then(|v| v.as_str()) {
+            urls.push((key, v));
+        }
+    }
+    if let Some(arr) = payload.get("images").and_then(|v| v.as_array()) {
+        for v in arr.iter().filter_map(|v| v.as_str()) {
+            urls.push(("images", v));
+        }
+    }
+    if let Some(arr) = payload
+        .get("extra_body")
+        .and_then(|v| v.get("image"))
+        .and_then(|v| v.as_array())
+    {
+        for v in arr.iter().filter_map(|v| v.as_str()) {
+            urls.push(("extra_body.image", v));
+        }
+    }
+    for (field, u) in &urls {
+        let fetchable =
+            u.starts_with("http://") || u.starts_with("https://") || u.starts_with("data:");
+        if !fetchable {
+            return Err(format!(
+                "video media '{field}' is not fetchable by the provider ({u}) — \
+                 the image stage produced no remote URL; use a URL reference or \
+                 re-run the image stage"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A concrete engine error carrying the concrete-cause rule (E4).
@@ -185,7 +228,7 @@ impl ProviderEngine {
         }
     }
 
-    /// Production wiring: 10 s poll cadence + 30/60/120 s 503 backoff.
+    /// Production wiring: 10 s poll cadence + steady 15 s 503 backoff.
     pub fn default_wiring(
         db: Database,
         media_root: Arc<dyn Fn() -> Option<std::path::PathBuf> + Send + Sync>,
@@ -422,7 +465,7 @@ impl ProviderEngine {
         on_progress(0.0);
         on_event("image request in flight");
 
-        // 429 rate-limited → bounded backoff retry (30/60/120 s ladder), not a
+        // 429 rate-limited → steady 15 s backoff retry, not a
         // hard failure. 503 (any provider cause — queue-full, maintenance,
         // upstream gateway unavailable) is likewise TRANSIENT by definition:
         // it means the provider cannot serve the request right now, not that
@@ -453,7 +496,7 @@ impl ProviderEngine {
                     .backoff_secs
                     .get(backoff_idx.min(self.backoff_secs.len() - 1))
                     .copied()
-                    .unwrap_or(120);
+                    .unwrap_or(15);
                 backoff_idx += 1;
                 let label = if st == 429 {
                     "rate-limited (429)"
@@ -748,8 +791,9 @@ impl ProviderEngine {
     }
 
     /// Async video stage: POST create -> poll -> download -> `output.json`
-    /// (docs/provider-engine-tasks.md, Phase D steps 3-5). Progress:
-    /// 0 -> 0.5 on job accepted -> 1 on success.
+    /// (docs/provider-engine-tasks.md, Phase D steps 3-5). Progress is
+    /// monotonic: 0.45 creating -> 0.51–0.53 backoff rungs (rate-limited
+    /// band) -> 0.54–0.90 provider render -> 0.9 download -> 1.0 done.
     async fn run_video_stage(
         &self,
         input: &EngineInput,
@@ -787,6 +831,15 @@ impl ProviderEngine {
             );
             EngineError::Failure(e)
         })?;
+        // Fail fast on non-fetchable media (local paths) before burning a
+        // multi-minute render on a guaranteed provider 4xx.
+        assert_media_fetchable(&payload).map_err(|e| {
+            log::error!(
+                "[Generation] video task {} media precheck failed: {e}",
+                input.task_id
+            );
+            EngineError::Failure(e)
+        })?;
 
         let base = slot.base_url.trim().trim_end_matches('/');
         let create_url = format!("{base}{}", spec.endpoint);
@@ -801,15 +854,18 @@ impl ProviderEngine {
         //    failing the stage on the first occurrence. A 503 that is NOT
         //    transient (e.g. an explicit `maintenance` code) is a real
         //    failure and stops here with the concrete body.
+        let mut last_pub = 0.0f32;
         let mut backoff_idx = 0usize;
         let create_resp = loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
             }
             // First attempt: mark the stage as "creating" so the modal shows
-            // motion instead of a frozen 0.0 bar.
+            // motion instead of a frozen 0.0 bar. 0.45 sits below the
+            // rate-limited band (>0.5) — creating is not yet rate-limited.
             if backoff_idx == 0 {
-                on_progress(0.51);
+                last_pub = last_pub.max(0.45);
+                on_progress(last_pub);
             }
             let (status, resp) = self
                 .http
@@ -838,16 +894,17 @@ impl ProviderEngine {
                 .backoff_secs
                 .get(backoff_idx.min(self.backoff_secs.len() - 1))
                 .copied()
-                .unwrap_or(120);
+                .unwrap_or(15);
             backoff_idx += 1;
             // Live state line: the modal shows "<cause> — retry in N s"
             // instead of a frozen bar while the provider is unavailable
             // (the full 503 body stays in the redacted log, not here).
             on_event(&format!("{label} — retry in {delay} s"));
             // Publish the in-backoff state so the stage row shows the amber
-            // rate-limited hint (0.51 = first rung of the ladder band, the
-            // registry maps 0.51–0.53 to `RateLimited`).
-            on_progress(0.51 + 0.01 * (backoff_idx as f32).min(3.0));
+            // rate-limited hint. Ladder rungs 0.51–0.53 map to `RateLimited`
+            // in the registry; capped at 0.53 so the 4th+ rung stays in-band.
+            last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
+            on_progress(last_pub);
             self.log_entry(
                 input,
                 &secrets,
@@ -929,7 +986,8 @@ impl ProviderEngine {
             log::error!("[Generation] video task {} failed: {}", input.task_id, msg);
             EngineError::Failure(msg)
         })?;
-        on_progress(0.5);
+        last_pub = last_pub.max(0.50);
+        on_progress(last_pub);
         on_event("job created — rendering");
         log::info!(
             "[Generation] video task {} job created ({})",
@@ -938,31 +996,21 @@ impl ProviderEngine {
         );
 
         // 3) Poll until terminal. 503 queue-full and 429 rate-limited both
-        // back off; cancel aborts.
+        // back off on the 30/60/120 s ladder; cancel aborts. A TRANSIENT
+        // transport failure (network blip, DNS, connection reset) is NOT
+        // fatal: it is logged and retried on the same ladder — only three
+        // CONSECUTIVE transport failures abort the task.
         //
-        // 429 handling is critical: the provider's poll endpoint is shared
-        // with the create endpoint and rate-limits aggressively. The poller
-        // must not hammer it at full cadence — each 429 walks the 30/60/120 s
-        // backoff ladder (same schedule as 503s). The ladder only resets on
-        // a clean 200 `in_progress` poll AND only after a full backoff-delay
-        // has elapsed, so an alternating 429/200 pattern can no longer lock
-        // the poller into a perpetual 30 s stall.
+        // 429/503 backoff: the ladder resets after 3 consecutive clean 200
+        // polls (`clean_polls`), so a 429/200/429 pattern escalates instead
+        // of stalling at 30 s, but sustained recovery re-arms the ladder.
         //
         // Live progress: the provider's poll responses carry a `progress`
-        // field (0–100) for in-flight video jobs. We publish it (clamped,
-        // blended with the job-created milestone) so the UI's top bar and
-        // the video stage row move during the multi-minute render instead of
-        // sitting still at the 0.5 "job created" value.
-        // 3) Poll until terminal. 503 queue-full and 429 rate-limited both
-        // back off; cancel aborts. A TRANSIENT transport failure (network
-        // blip, DNS, connection reset) is NOT fatal: it is logged to the
-        // redacted request log (diagnostic) and retried on the same
-        // 30/60/120 s backoff ladder, so a single hiccup no longer kills a
-        // multi-minute render. Only after three consecutive transport
-        // failures does the task abort with the last concrete error.
+        // field (0–100). We publish it scaled into the 0.54–0.90 band so the
+        // UI's top bar moves during the multi-minute render. All progress
+        // values are monotonically non-decreasing (tracked via `last_pub`).
         let mut backoff_idx = 0usize;
-        let mut saw_429 = false;
-        let mut last_published = 0.5f32;
+        let mut clean_polls = 0usize;
         let mut transport_failures = 0usize;
         const MAX_TRANSPORT_FAILURES: usize = 3;
         let final_body = loop {
@@ -987,13 +1035,16 @@ impl ProviderEngine {
                 .await
             {
                 Ok((503, body)) => {
+                    transport_failures = 0;
                     let delay = self
                         .backoff_secs
                         .get(backoff_idx.min(self.backoff_secs.len() - 1))
                         .copied()
-                        .unwrap_or(120);
+                        .unwrap_or(15);
                     backoff_idx += 1;
-                    saw_429 = false;
+                    clean_polls = 0;
+                    last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
+                    on_progress(last_pub);
                     self.log_entry(input, &secrets, &json!({
                         "stage": "video-poll-503",
                         "backoff": delay,
@@ -1014,19 +1065,19 @@ impl ProviderEngine {
                     continue;
                 }
                 Ok((429, body)) => {
-                    // Rate-limited: walk the 30/60/120 s ladder. `saw_429`
-                    // tracks whether the previous poll also hit 429 — the
-                    // ladder index only resets on a clean `in_progress` 200
-                    // that arrives at least one full backoff-delay after the
-                    // last 429, so a 429/200/429 pattern escalates instead
-                    // of stalling at the first rung.
+                    // Rate-limited: retry on the steady 15 s schedule. `clean_polls`
+                    // tracks consecutive clean 200s since the last 429/503 —
+                    // the ladder resets only after 3 clean polls in a row, so
+                    // a 429/200/429 pattern escalates instead of stalling at
+                    // the first rung, but sustained recovery re-arms it.
+                    transport_failures = 0;
                     let delay = self
                         .backoff_secs
                         .get(backoff_idx.min(self.backoff_secs.len() - 1))
                         .copied()
-                        .unwrap_or(120);
+                        .unwrap_or(15);
                     backoff_idx += 1;
-                    saw_429 = true;
+                    clean_polls = 0;
                     self.log_entry(input, &secrets, &json!({
                         "stage": "video-poll-429",
                         "backoff": delay,
@@ -1040,7 +1091,9 @@ impl ProviderEngine {
                     );
                     // Publish the in-backoff state live so the modal shows
                     // "waiting for provider window" instead of a frozen bar.
-                    on_progress(0.5 + (0.01 * (backoff_idx as f32).min(3.0)));
+                    // Capped at 0.53 so the 4th+ rung stays in the band.
+                    last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
+                    on_progress(last_pub);
                     on_event(&format!("rate-limited — retry in {} s", delay));
                     if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
                         return Err(EngineError::Cancelled);
@@ -1077,30 +1130,31 @@ impl ProviderEngine {
                             break body;
                         }
                         _ => {
-                            // Clean in_progress 200: only reset the ladder if
-                            // the last poll was NOT a 429 (i.e. we had a real
-                            // gap of successful polls). This prevents the
-                            // alternating 429/200 pattern from perpetually
-                            // resetting to the 30 s rung.
-                            if !saw_429 {
+                            transport_failures = 0;
+                            // Clean in_progress 200: count consecutive clean
+                            // polls. After 3 in a row, reset the backoff
+                            // ladder — the provider has recovered. A
+                            // 429/200/429 pattern (only 1 clean poll between
+                            // 429s) does NOT reset, so the ladder escalates
+                            // instead of stalling at the 30 s rung.
+                            clean_polls += 1;
+                            if clean_polls >= 3 {
                                 backoff_idx = 0;
+                                clean_polls = 0;
                             }
-                            // The provider's own job progress (0–100) when it
-                            // reports one — publish it live so the UI's top bar
-                            // and the video stage row move during the render.
-                            // The value is clamped into the 0.5–0.9 band so it
-                            // blends with the 0.5 "job created" milestone and
-                            // never collides with the 1.0 completion marker.
+                            // The provider's own job progress (0–100) —
+                            // publish it live so the UI's top bar moves during
+                            // the multi-minute render. Scaled into the
+                            // 0.54–0.90 band (above the 0.51–0.53 backoff
+                            // band) so a clean poll always exits
+                            // rate-limited state.
                             let provider_pct = body
                                 .get("progress")
                                 .and_then(|v| v.as_f64())
                                 .map(|p| (p.clamp(0.0, 100.0) / 100.0) as f32);
                             if let Some(pct) = provider_pct {
-                                let published = (0.5 + 0.4 * pct).min(0.9);
-                                if published > last_published {
-                                    on_progress(published);
-                                    last_published = published;
-                                }
+                                last_pub = last_pub.max((0.54 + 0.36 * pct).min(0.9));
+                                on_progress(last_pub);
                             }
                             // Live state line: "rendering N%" (or "in progress"
                             // when the provider doesn't report a percentage).
@@ -1135,7 +1189,7 @@ impl ProviderEngine {
                         .backoff_secs
                         .get(transport_failures - 1)
                         .copied()
-                        .unwrap_or(120);
+                        .unwrap_or(15);
                     self.log_entry(input, &secrets, &json!({
                         "stage": "video-poll-transport-error",
                         "error": e.clone(),
@@ -1170,7 +1224,8 @@ impl ProviderEngine {
         };
 
         // 4) Final video URL (defensive key check; live-verified in Phase F).
-        on_progress(0.9); // job completed, downloading artifact next
+        last_pub = last_pub.max(0.9); // job completed, downloading artifact next
+        on_progress(last_pub);
         on_event("downloading video");
         let video_url = final_body
             .get("video_url")

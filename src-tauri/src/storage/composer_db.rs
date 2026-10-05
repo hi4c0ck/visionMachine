@@ -19,8 +19,32 @@ impl Database {
         match row {
             Some(row) => {
                 let config_json: String = row.get("config_json");
-                let config: ComposerConfig = serde_json::from_str(&config_json)
+                let mut config: ComposerConfig = serde_json::from_str(&config_json)
                     .map_err(|e| format!("Failed to parse composer config: {}", e))?;
+                // Invariant: the composer's id is the session's id — the
+                // frontend keys session objects by it. Normalize here so
+                // legacy rows that carried a stray uuid self-heal on read
+                // instead of orphaning the session from its load path.
+                config.id = session_id.to_string();
+                // The sessions table is authoritative for the display name:
+                // a rename goes through update_session (sessions.name),
+                // while this row's embedded name only catches up on the
+                // next save_composer. Without the override, re-selecting a
+                // renamed session re-hydrated the store/tree from the stale
+                // composer name and the rename visibly reverted. (Missing
+                // session row — an orphaned composer — keeps the composer's
+                // own name.)
+                let session_name: Option<String> =
+                    sqlx::query("SELECT name FROM sessions WHERE id = ?")
+                        .bind(session_id)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|r| r.try_get::<String, _>("name").ok());
+                if let Some(name) = session_name {
+                    config.name = name;
+                }
                 Ok(config)
             }
             None => {

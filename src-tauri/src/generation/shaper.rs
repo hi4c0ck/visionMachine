@@ -360,16 +360,54 @@ fn media_cap(spec: &ModelSpecWire, keyframes: bool) -> usize {
     }
 }
 
+/// Translate a logical wire name ("keyframe"/"reference"/"text") to the
+/// model-specific `mode` value the provider route expects (catalog
+/// `media.wireModes`, keyed by the frontend mode names — logical
+/// "keyframe" maps to the "keyframes" key). Absent mapping → the logical
+/// name itself, which is exactly the 2.5-route wire vocabulary.
+fn wire_mode_value<'a>(spec: &'a ModelSpecWire, logical: &'a str) -> &'a str {
+    let key = if logical == "keyframe" {
+        "keyframes"
+    } else {
+        logical
+    };
+    spec.media
+        .as_ref()
+        .and_then(|m| m.wire_modes.as_ref())
+        .and_then(|w| w.get(key))
+        .map(|s| s.as_str())
+        .unwrap_or(logical)
+}
+
 fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     let mode_wire = seconds_mode_wire(spec, ctx);
+    // Model-specific wire value (V2.0 legacy route: ti2vid/keyframes/
+    // multi_reference); absent mapping keeps the 2.5-route names.
+    let mode = wire_mode_value(spec, mode_wire);
     // Dual mode (paid 2.5 family): keyframe AND reference media are sent
     // simultaneously; the wire `mode` still comes from the flag/content rule.
     let dual = spec.media.as_ref().and_then(|m| m.dual).unwrap_or(false);
+    // V2.0 legacy-route wire contract (live probes 2026-10-04): the media
+    // image list rides the top-level `image` field (string when one,
+    // array when many) — NOT `images[]`, which the legacy validator
+    // ignores (400 "param: image"). Floors: below `min_refs` the
+    // multi_reference wire value is unusable, below `min_keyframes` the
+    // keyframes wire value is unusable — both fall back to the text-mode
+    // wire value; a single image/keyframe (if any) rides the field as a
+    // string.
+    let legacy = spec.media.as_ref().and_then(|m| m.image_field.as_deref()) == Some("image");
+    let field = if legacy { "image" } else { "images" };
+    let min_refs = spec.media.as_ref().and_then(|m| m.min_refs).unwrap_or(0);
+    let min_keyframes = spec
+        .media
+        .as_ref()
+        .and_then(|m| m.min_keyframes)
+        .unwrap_or(0);
 
     let mut payload = json!({
         "model": spec.id,
         "prompt": ctx.prompt,
-        "mode": mode_wire,
+        "mode": mode,
         "seconds": format_seconds(ctx.length_frames, ctx.fps, spec.limits.seconds),
         "n": 1,
     });
@@ -398,11 +436,29 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
             .map(|u| &u.primary)
             .take(cap)
             .collect();
-        if !kfs.is_empty() {
-            payload["first_frame"] = json!(kfs[0]);
-        }
-        if kfs.len() > 1 {
-            payload["last_frame"] = json!(kfs[1]);
+        if legacy && !dual && mode_wire == "keyframe" {
+            // Legacy keyframes wire contract: `mode=keyframes` needs the
+            // `image` list at/above the floor (v2.0: ≥2 — live 400
+            // 2026-10-04 "requires image as a list of at least 2 items");
+            // below it, downgrade to the text-mode wire value and let a
+            // single keyframe (if any) ride the field as a string.
+            if (kfs.len() as u32) < min_keyframes {
+                if let Some(single) = kfs.first() {
+                    payload[field] = json!(single);
+                }
+                payload["mode"] = json!(wire_mode_value(spec, "text"));
+            } else if kfs.len() == 1 {
+                payload[field] = json!(kfs[0]);
+            } else if !kfs.is_empty() {
+                payload[field] = json!(kfs);
+            }
+        } else {
+            if !kfs.is_empty() {
+                payload["first_frame"] = json!(kfs[0]);
+            }
+            if kfs.len() > 1 {
+                payload["last_frame"] = json!(kfs[1]);
+            }
         }
     }
     if send_reference {
@@ -414,8 +470,17 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
             .take(cap)
             .map(|u| u.primary.clone())
             .collect();
-        if !imgs.is_empty() {
-            payload["images"] = json!(imgs);
+        if !dual && mode_wire == "reference" && (imgs.len() as u32) < min_refs {
+            // Single (or no) settled reference: text-mode wire value; the
+            // one image (if any) rides the field as a string.
+            if let Some(single) = imgs.first().cloned() {
+                payload[field] = json!(single);
+            }
+            payload["mode"] = json!(wire_mode_value(spec, "text"));
+        } else if legacy && imgs.len() == 1 {
+            payload[field] = json!(&imgs[0]);
+        } else if !imgs.is_empty() {
+            payload[field] = json!(imgs);
         }
     }
 
@@ -579,6 +644,10 @@ mod tests {
                 max_refs: Some(3),
                 max_audios: None,
                 max_videos: None,
+                wire_modes: None,
+                min_refs: None,
+                min_keyframes: None,
+                image_field: None,
             });
         })
     }
@@ -664,6 +733,10 @@ mod tests {
                 max_refs: Some(5),
                 max_audios: Some(3),
                 max_videos: None,
+                wire_modes: None,
+                min_refs: None,
+                min_keyframes: None,
+                image_field: None,
             });
         })
     }
@@ -840,6 +913,10 @@ mod tests {
                 max_refs: None,
                 max_audios: None,
                 max_videos: None,
+                wire_modes: None,
+                min_refs: None,
+                min_keyframes: None,
+                image_field: None,
             });
         });
         let p2 = shape_request(&kf_only, &c).unwrap();
@@ -868,6 +945,10 @@ mod tests {
                 max_refs: None,
                 max_audios: None,
                 max_videos: None,
+                wire_modes: None,
+                min_refs: None,
+                min_keyframes: None,
+                image_field: None,
             });
         });
         let c = ctx(|c| {
@@ -905,6 +986,10 @@ mod tests {
                 max_refs: Some(8),
                 max_audios: Some(3),
                 max_videos: Some(1),
+                wire_modes: None,
+                min_refs: None,
+                min_keyframes: None,
+                image_field: None,
             });
         });
         let c = ctx(|c| {
@@ -936,6 +1021,104 @@ mod tests {
         assert_eq!(p2["mode"], "reference");
         assert_eq!(p2["first_frame"], "https://a.com/k1.png");
         assert_eq!(p2["images"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn seconds_v2_wire_modes_translate_logical_names() {
+        // V2.0 legacy route: same seconds shape, different mode-name family
+        // (live 400 repro: the shaper emitted "text"/"keyframe"/"reference",
+        // the route wants ti2vid/keyframes/multi_reference).
+        let v2 = spec("video-job-seconds", |m| {
+            m.id = "agnes-video-v2.0".into();
+            m.limits.seconds = Some([4.0, 12.0]);
+            m.supports_seed = Some(true);
+            let mut wire = std::collections::HashMap::new();
+            wire.insert("keyframes".to_string(), "keyframes".to_string());
+            wire.insert("reference".to_string(), "multi_reference".to_string());
+            wire.insert("text".to_string(), "ti2vid".to_string());
+            m.media = Some(ModelSpecMedia {
+                modes: vec!["keyframes".into(), "reference".into()],
+                dual: None,
+                shared_array: None,
+                max_keyframes: Some(2),
+                max_refs: Some(5),
+                max_audios: Some(3),
+                max_videos: None,
+                wire_modes: Some(wire),
+                min_refs: Some(2),
+                min_keyframes: Some(2),
+                image_field: Some("image".into()),
+            });
+        });
+        // Text-only -> ti2vid (the exact 400 repro), no media fields.
+        let p = shape_request(&v2, &ctx(|_| {})).unwrap();
+        assert_eq!(p["mode"], "ti2vid");
+        assert!(p.get("first_frame").is_none());
+        assert!(p.get("images").is_none());
+
+        // 2 keyframes: at the keyframes floor -> `keyframes`; the legacy
+        // route carries them under `image` (array), NOT `images[]` or
+        // first/last_frame.
+        let c = ctx(|c| {
+            c.upstream = vec![
+                up("keyframe", "k1", "https://a.com/k1.png"),
+                up("keyframe", "k2", "https://a.com/k2.png"),
+            ];
+        });
+        let p2 = shape_request(&v2, &c).unwrap();
+        assert_eq!(p2["mode"], "keyframes");
+        assert_eq!(p2["image"].as_array().unwrap().len(), 2);
+        assert_eq!(p2["image"][0], "https://a.com/k1.png");
+        assert_eq!(p2["image"][1], "https://a.com/k2.png");
+        assert!(p2.get("images").is_none());
+        assert!(p2.get("first_frame").is_none());
+        assert!(p2.get("last_frame").is_none());
+
+        // 1 subject: below the multi_reference floor (minRefs 2, live 400
+        // repro) -> fall back to ti2vid; the image rides `image` as a
+        // string, `images[]` stays absent.
+        let c3 = ctx(|c| c.upstream = vec![up("subject", "s1", "https://a.com/s1.png")]);
+        let p3 = shape_request(&v2, &c3).unwrap();
+        assert_eq!(p3["mode"], "ti2vid");
+        assert_eq!(p3["image"], "https://a.com/s1.png");
+        assert!(p3.get("images").is_none());
+        assert!(p3.get("first_frame").is_none());
+
+        // 2 subjects: at the floor -> multi_reference; the legacy route
+        // carries the list under `image` (array), NOT `images[]` (live
+        // probe 2026-10-04: 200 on `image`, 400 on `images`).
+        let c4 = ctx(|c| {
+            c.upstream = vec![
+                up("subject", "s1", "https://a.com/s1.png"),
+                up("subject", "s2", "https://a.com/s2.png"),
+            ];
+        });
+        let p4 = shape_request(&v2, &c4).unwrap();
+        assert_eq!(p4["mode"], "multi_reference");
+        assert_eq!(p4["image"].as_array().unwrap().len(), 2);
+        assert!(p4.get("images").is_none());
+
+        // 1 keyframe: below the keyframes floor (minKeyframes 2, live 400
+        // repro 2026-10-04) -> fall back to ti2vid; the keyframe rides
+        // `image` as a string.
+        let c5 = ctx(|c| c.upstream = vec![up("keyframe", "k1", "https://a.com/k1.png")]);
+        let p5 = shape_request(&v2, &c5).unwrap();
+        assert_eq!(p5["mode"], "ti2vid");
+        assert_eq!(p5["image"], "https://a.com/k1.png");
+        assert!(p5.get("images").is_none());
+        assert!(p5.get("first_frame").is_none());
+        assert!(p5.get("last_frame").is_none());
+
+        // Keyframes flag with no keyframe content -> text wire value
+        // (ti2vid), no media fields at all.
+        let c6 = ctx(|c| {
+            c.media_mode = Some("keyframes".into());
+            c.upstream = vec![];
+        });
+        let p6 = shape_request(&v2, &c6).unwrap();
+        assert_eq!(p6["mode"], "ti2vid");
+        assert!(p6.get("image").is_none());
+        assert!(p6.get("first_frame").is_none());
     }
 
     #[test]

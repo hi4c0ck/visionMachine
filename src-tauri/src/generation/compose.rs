@@ -746,6 +746,10 @@ pub fn compose_session_video(
             return Err(ComposeError::SourceMissing(s.label.clone()));
         }
     }
+    // Archive the session's previous wired video (session.mp4 →
+    // session-video/archive/) BEFORE the stale-clear below removes it, so
+    // the session keeps its final-video history instead of overwriting.
+    crate::generation::archive_previous_session_video(out_path);
     std::fs::create_dir_all(manifest_dir)
         .map_err(|e| ComposeError::SourceMissing(format!("manifest dir: {e}")))?;
 

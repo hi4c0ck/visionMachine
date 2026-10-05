@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine};
@@ -74,6 +74,45 @@ impl MediaRootResolver {
     }
 }
 
+/// Acquire a std lock without panic cascades. A panic on any task thread
+/// while holding one of these locks poisons the mutex; a plain
+/// `.lock().unwrap()` would then make every later caller — including the
+/// main-thread close guard (`active_task_count` in `lib.rs`) — panic, which
+/// kills the winit event loop and leaves the window unresponsive AND
+/// unclosable (the "frozen screen" report). Recovering via `into_inner`
+/// keeps the whole tree alive instead.
+fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => {
+            log::error!("[Generation] recovering a poisoned mutex; continuing");
+            p.into_inner()
+        }
+    }
+}
+
+/// Poison-tolerant read lock (same rationale as `resilient_lock`).
+fn resilient_read<T>(m: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    match m.read() {
+        Ok(g) => g,
+        Err(p) => {
+            log::error!("[Generation] recovering a poisoned rwlock (read); continuing");
+            p.into_inner()
+        }
+    }
+}
+
+/// Poison-tolerant write lock (same rationale as `resilient_lock`).
+fn resilient_write<T>(m: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    match m.write() {
+        Ok(g) => g,
+        Err(p) => {
+            log::error!("[Generation] recovering a poisoned rwlock (write); continuing");
+            p.into_inner()
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TaskRegistry {
     tasks: Arc<Mutex<HashMap<String, ManagedTask>>>,
@@ -130,19 +169,19 @@ impl TaskRegistry {
 
     /// Register a concrete engine (the provider/LLM system plugs in later).
     pub fn set_engine(&self, engine: Arc<dyn GenerationEngine>) {
-        *self.engine.lock().unwrap() = Some(engine);
+        *resilient_lock(&self.engine) = Some(engine);
     }
 
     /// Wire the UI event sink (the `emit_to` closure from `lib.rs`). Called
     /// once at startup; before that, emission is a no-op so the registry
     /// stays usable in tests.
     pub fn set_event_sink(&self, f: impl Fn(GenTaskEvent) + Send + Sync + 'static) {
-        *self.sink.write().unwrap() = Some(Arc::new(f));
+        *resilient_write(&self.sink) = Some(Arc::new(f));
     }
 
     /// Forward an event to the UI (no-op when no sink is wired).
     fn emit(&self, event: GenTaskEvent) {
-        if let Some(sink) = self.sink.read().unwrap().as_ref() {
+        if let Some(sink) = resilient_read(&self.sink).as_ref() {
             sink(event);
         }
     }
@@ -151,7 +190,7 @@ impl TaskRegistry {
     /// emit); otherwise coalesce rapid progress ticks to at most one per
     /// `EMIT_THROTTLE_MS`.
     fn emit_update(&self, task_id: &str, force: bool) {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         let entry = match tasks.get_mut(task_id) {
             Some(e) => e,
             None => return,
@@ -206,13 +245,21 @@ impl TaskRegistry {
             // A settled previewRemoteUrl survives a restart and marks the
             // piece as already-available (the next video run consumes it
             // without regenerating). A queued force-regen (status-dot click)
-            // overrides that so the piece is re-made on the next run.
-            if !kf.force_regen
+            // overrides that so the piece is re-made on the next run. A
+            // missing local artifact overrides it too: if the file the
+            // preview points at no longer exists on disk (e.g. a session
+            // copy whose media tree was cleaned up), the stale provider URL
+            // can no longer be trusted to feed the video stage — the piece
+            // stays Pending and is regenerated with a fresh artifact pair.
+            let generated = ty != "url";
+            if generated
+                && !kf.force_regen
                 && kf
                     .preview_remote_url
                     .as_deref()
                     .filter(|u| !u.is_empty())
                     .is_some()
+                && settled_piece_on_disk(&kf.preview_local_path)
             {
                 stage.status = StageStatus::Ready;
                 stage.progress = 1.0;
@@ -231,13 +278,19 @@ impl TaskRegistry {
                 ready,
             );
             // A settled previewRemoteUrl survives a restart and marks the piece
-            // as already-available; a queued force-regen overrides it.
-            if !sr.force_regen
+            // as already-available; a queued force-regen overrides it, and so
+            // does a missing local artifact (same rule as the keyframe
+            // above). Legacy refs (empty kind) default to `url` and never
+            // carry a generated preview.
+            let is_url = sr.kind.is_empty() || sr.kind == "url";
+            if !is_url
+                && !sr.force_regen
                 && sr
                     .preview_remote_url
                     .as_deref()
                     .filter(|u| !u.is_empty())
                     .is_some()
+                && settled_piece_on_disk(&sr.preview_local_path)
             {
                 stage.status = StageStatus::Ready;
                 stage.progress = 1.0;
@@ -343,7 +396,7 @@ impl TaskRegistry {
         }
 
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = resilient_lock(&self.tasks);
             let active = tasks
                 .values()
                 .filter(|t| matches!(t.view.status, TaskStatus::Queued | TaskStatus::Running))
@@ -378,7 +431,7 @@ impl TaskRegistry {
             .await
         {
             // keep memory and DB consistent
-            self.tasks.lock().unwrap().remove(&view.task_id);
+            resilient_lock(&self.tasks).remove(&view.task_id);
             return Err(e);
         }
         // Best-effort: the in-memory view is the live source; the column only
@@ -423,7 +476,7 @@ impl TaskRegistry {
     /// finalized since the last poll must not error the caller — e.g. the
     /// close-guard's cancel-all-then-quit flow).
     pub fn cancel(&self, task_id: &str) -> Result<(), String> {
-        let tasks = self.tasks.lock().unwrap();
+        let tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get(task_id) {
             if !entry.view.status.is_terminal() {
                 entry.cancel.store(true, Ordering::Release);
@@ -436,7 +489,7 @@ impl TaskRegistry {
     /// "cancel all active tasks" path needs the whole registry, not just the
     /// one task the progress modal happens to watch.
     pub fn cancel_all(&self) -> usize {
-        let tasks = self.tasks.lock().unwrap();
+        let tasks = resilient_lock(&self.tasks);
         let mut cancelled = 0;
         for entry in tasks.values() {
             if !entry.view.status.is_terminal() {
@@ -451,7 +504,7 @@ impl TaskRegistry {
     /// in `lib.rs` uses this: closing while > 0 would cancel the provider
     /// jobs, so the frontend warns the user before allowing it.
     pub fn active_task_count(&self) -> usize {
-        let tasks = self.tasks.lock().unwrap();
+        let tasks = resilient_lock(&self.tasks);
         tasks
             .values()
             .filter(|t| !t.view.status.is_terminal())
@@ -463,7 +516,7 @@ impl TaskRegistry {
     async fn run_task(&self, task_id: String) {
         // The engine slot is wired at startup (Phase D); if a task lands here
         // without one, fail fast with a real error instead of simulating.
-        if self.engine.lock().unwrap().is_none() {
+        if resilient_lock(&self.engine).is_none() {
             log::error!(
                 "[Generation] run task {}: no engine configured, failing fast",
                 task_id
@@ -480,7 +533,7 @@ impl TaskRegistry {
             }
 
             let next = {
-                let tasks = self.tasks.lock().unwrap();
+                let tasks = resilient_lock(&self.tasks);
                 let entry = match tasks.get(&task_id) {
                     Some(e) => e,
                     None => {
@@ -522,7 +575,7 @@ impl TaskRegistry {
 
             self.patch_stage(&task_id, i, StageStatus::Generating, None, None, None);
 
-            let engine = self.engine.lock().unwrap().clone().unwrap();
+            let engine = resilient_lock(&self.engine).clone().unwrap();
             let progress = Arc::new(Mutex::new(0.0f32));
             let task_id_for_live = task_id.clone();
             let registry_for_live = self.clone();
@@ -604,7 +657,7 @@ impl TaskRegistry {
                         out.remote_url.clone(),
                         None,
                     );
-                    self.patch_progress(&task_id, *progress.lock().unwrap());
+                    self.patch_progress(&task_id, *resilient_lock(&progress));
                     if stage.kind == StageKind::Video {
                         self.patch_output(&task_id, &local);
                     }
@@ -630,7 +683,7 @@ impl TaskRegistry {
 
     async fn finish_done(&self, task_id: &str) {
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = resilient_lock(&self.tasks);
             if let Some(entry) = tasks.get_mut(task_id) {
                 entry.view.status = TaskStatus::Done;
                 // A done task IS complete — the last engine progress tick can
@@ -653,7 +706,7 @@ impl TaskRegistry {
 
     async fn finish_cancelled(&self, task_id: &str) {
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = resilient_lock(&self.tasks);
             if let Some(entry) = tasks.get_mut(task_id) {
                 if !entry.view.status.is_terminal() {
                     for stage in &mut entry.view.stages {
@@ -681,7 +734,7 @@ impl TaskRegistry {
     /// production — the provider engine is wired at startup, Phase D.)
     async fn finish_fail_fast(&self, task_id: &str) {
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = resilient_lock(&self.tasks);
             if let Some(entry) = tasks.get_mut(task_id) {
                 for stage in &mut entry.view.stages {
                     if stage.status == StageStatus::Pending {
@@ -704,7 +757,7 @@ impl TaskRegistry {
 
     async fn abort_with_error(&self, task_id: &str, failed_idx: usize, message: String) {
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = resilient_lock(&self.tasks);
             if let Some(entry) = tasks.get_mut(task_id) {
                 for (i, stage) in entry.view.stages.iter_mut().enumerate() {
                     if i == failed_idx {
@@ -743,7 +796,7 @@ impl TaskRegistry {
         error: Option<String>,
     ) {
         {
-            let mut tasks = self.tasks.lock().unwrap();
+            let mut tasks = resilient_lock(&self.tasks);
             if let Some(entry) = tasks.get_mut(task_id) {
                 if let Some(stage) = entry.view.stages.get_mut(idx) {
                     stage.status = status;
@@ -765,7 +818,7 @@ impl TaskRegistry {
     }
 
     fn patch_progress(&self, task_id: &str, value: f32) {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get_mut(task_id) {
             entry.view.stages.iter_mut().for_each(|s| {
                 s.progress = s.progress.max(value);
@@ -782,7 +835,7 @@ impl TaskRegistry {
     /// "provider load could be broken" after a long 503/429 run; when the
     /// stage leaves the band, clear it.
     fn patch_stage_progress(&self, task_id: &str, idx: usize, status: StageStatus, value: f32) {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get_mut(task_id) {
             if let Some(stage) = entry.view.stages.get_mut(idx) {
                 let in_backoff = value > 0.5 && value <= 0.53;
@@ -808,7 +861,7 @@ impl TaskRegistry {
     /// full request/response detail stays in the redacted log (E1).
     fn patch_stage_event(&self, task_id: &str, idx: usize, line: &str) {
         let now = now_unix_ms();
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get_mut(task_id) {
             if let Some(stage) = entry.view.stages.get_mut(idx) {
                 stage.last_event = Some(line.to_string());
@@ -822,7 +875,7 @@ impl TaskRegistry {
     }
 
     fn patch_output(&self, task_id: &str, path: &str) {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get_mut(task_id) {
             entry.view.output_path = Some(path.to_string());
         }
@@ -893,7 +946,7 @@ impl TaskRegistry {
             primary,
             local_path: local,
         };
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get_mut(task_id) {
             if let Some(slot) = entry.upstream_outputs.get_mut(idx) {
                 *slot = Some(up);
@@ -911,7 +964,7 @@ impl TaskRegistry {
     }
 
     fn refresh_progress(&self, task_id: &str) {
-        let mut tasks = self.tasks.lock().unwrap();
+        let mut tasks = resilient_lock(&self.tasks);
         if let Some(entry) = tasks.get_mut(task_id) {
             if !entry.view.stages.is_empty() {
                 let sum: f32 = entry.view.stages.iter().map(|s| s.progress).sum();
@@ -949,6 +1002,18 @@ impl TaskRegistry {
 /// consumes the remote URL directly; generated pieces carry their prompt /
 /// image type / reference URL. The video stage's plan entry carries the pipe
 /// media mode + frame count for the shaper.
+/// A generated (txt2img/img2img) piece is skippable only while its local
+/// artifact still exists on disk. A missing local file (e.g. a session copy
+/// whose media tree was cleaned up) means the settled `preview_remote_url`
+/// can no longer be trusted to feed the video stage — the piece must
+/// regenerate and mint a fresh local + remote pair.
+fn settled_piece_on_disk(preview_local_path: &Option<String>) -> bool {
+    preview_local_path
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .is_some_and(|p| std::path::Path::new(p).exists())
+}
+
 fn build_stage_plan(
     pipe: &Pipe,
     stages: &[GenerationStageView],
@@ -1000,13 +1065,19 @@ fn build_stage_plan(
                         if k.force_regen {
                             return false;
                         }
-                        let has_url =
-                            (k.kind.is_empty() || k.kind == "url") && k.image_src.is_some();
-                        let has_preview = k
-                            .preview_remote_url
-                            .as_deref()
-                            .filter(|u| !u.is_empty())
-                            .is_some();
+                        let is_url = k.kind.is_empty() || k.kind == "url";
+                        let has_url = is_url && k.image_src.is_some();
+                        // Mirror build_stages' Ready rule: a generated piece
+                        // pre-seeds the video stage only while its local
+                        // artifact exists; a stale local file means the piece
+                        // was left Pending and record_upstream feeds the
+                        // fresh output instead.
+                        let has_preview = !is_url
+                            && k.preview_remote_url
+                                .as_deref()
+                                .filter(|u| !u.is_empty())
+                                .is_some()
+                            && settled_piece_on_disk(&k.preview_local_path);
                         has_url || has_preview
                     })
                     .map(|k| {
@@ -1072,13 +1143,16 @@ fn build_stage_plan(
                         if s.force_regen {
                             return false;
                         }
-                        let has_url =
-                            (s.kind.is_empty() || s.kind == "url") && !s.image_url.is_empty();
-                        let has_preview = s
-                            .preview_remote_url
-                            .as_deref()
-                            .filter(|u| !u.is_empty())
-                            .is_some();
+                        let is_url = s.kind.is_empty() || s.kind == "url";
+                        let has_url = is_url && !s.image_url.is_empty();
+                        // Mirror build_stages' Ready rule (see the keyframe
+                        // pre-seed above).
+                        let has_preview = !is_url
+                            && s.preview_remote_url
+                                .as_deref()
+                                .filter(|u| !u.is_empty())
+                                .is_some()
+                            && settled_piece_on_disk(&s.preview_local_path);
                         has_url || has_preview
                     })
                     .map(|s| {
@@ -1386,6 +1460,60 @@ mod tests {
             stages.len(),
             "stage ids must be unique (frontend keys the list on them)"
         );
+    }
+
+    #[test]
+    fn build_stages_stales_settled_piece_when_local_artifact_missing() {
+        // A generated piece with a settled preview is skippable only while
+        // its local artifact exists on disk. A session copy whose media tree
+        // was cleaned up dangles: the stale provider URL must not feed the
+        // video stage — the piece regenerates instead.
+        let mut pipe = fixture_pipe();
+        pipe.keyframes[1].preview_remote_url = Some("https://prov/k2.png".into());
+        pipe.keyframes[1].preview_local_path = Some(
+            std::env::temp_dir()
+                .join("vm-registry-stale-missing.png")
+                .to_string_lossy()
+                .into_owned(),
+        );
+
+        let live =
+            std::env::temp_dir().join(format!("vm-registry-live-{}.png", std::process::id()));
+        std::fs::File::create(&live).expect("create live preview file");
+        let mut s1 = pipe.subject_references[0].clone();
+        s1.preview_remote_url = Some("https://prov/s1.png".into());
+        s1.preview_local_path = Some(live.to_string_lossy().into_owned());
+        pipe.subject_references = vec![s1];
+
+        let stages = TaskRegistry::build_stages("t1", &pipe);
+        assert_eq!(
+            stages[0].status,
+            StageStatus::Ready,
+            "url keyframe stays ready"
+        );
+        assert_eq!(
+            stages[1].status,
+            StageStatus::Pending,
+            "settled keyframe with missing local file stays Pending"
+        );
+        assert_eq!(
+            stages[2].status,
+            StageStatus::Ready,
+            "settled subject with a local artifact is Ready"
+        );
+
+        // The pre-seed mirrors the same rule: the stale keyframe is not fed
+        // to the video stage, the live subject is.
+        let (_, upstream) = build_stage_plan(&pipe, &stages);
+        assert!(
+            upstream[1].is_none(),
+            "stale keyframe must not pre-seed the video stage"
+        );
+        assert!(
+            upstream[2].is_some(),
+            "live subject pre-seeds the video stage"
+        );
+        let _ = std::fs::remove_file(&live);
     }
 
     #[tokio::test]

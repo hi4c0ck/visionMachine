@@ -62,7 +62,10 @@
   const overallPct = $derived(Math.round(overall * 100));
 
   $effect(() => {
-    if (currentTaskId) expanded[currentTaskId] = true;
+    // Auto-expand the current pipe. Guarded: writing a state key inside the
+    // effect that reads it is a re-entrancy footgun — only write when the
+    // value actually flips, so the effect can never re-trigger itself.
+    if (currentTaskId && !expanded[currentTaskId]) expanded[currentTaskId] = true;
   });
 
   async function toggle(pipe: PipeRow) {

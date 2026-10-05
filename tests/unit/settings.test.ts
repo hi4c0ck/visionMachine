@@ -4,7 +4,7 @@
  * http(s)-only URLs, key masking, and the shareable-log redaction rule (P5/P6).
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { GenerationLogEntry, Settings } from '../../src/types';
+import type { GenerationLogEntry, ModelSpec, Settings } from '../../src/types';
 import {
   DEFAULT_SETTINGS,
   normalizeSettings,
@@ -50,6 +50,34 @@ describe('normalizeSettings', () => {
     // Garbage slots reseed from the kind's default slot (Agnes seed).
     expect(out.providers.text.preset).toBe('agnes');
     expect(out.providers.text.model).toBe('agnes-2.5-flash');
+  });
+
+  it('keeps a stored legacy v2.0 video model (it ships the 2.5 config now)', () => {
+    const out = normalizeSettings({
+      providers: {
+        video: { preset: 'agnes', baseUrl: 'https://apihub.agnes-ai.com', apiKey: 'sk-x', model: 'agnes-video-v2.0' },
+      },
+    });
+    // v2.0 is a first-class model again (legacy ID, 2.5-series engine config)
+    // — a stored slot must NOT be migrated away from it.
+    expect(out.providers.video.model).toBe('agnes-video-v2.0');
+    // The rest of the slot survives normalization untouched.
+    expect(out.providers.video.apiKey).toBe('sk-x');
+    expect(out.providers.video.preset).toBe('agnes');
+  });
+
+  it('migrates an unknown model id to the generable default, keeps paid/pending as stored', () => {
+    // Paid 2.5 is intentional user data (Q3) — the generation gate, not the
+    // migrator, keeps it out of runs.
+    const paid = normalizeSettings({
+      providers: { video: { preset: 'agnes', baseUrl: 'https://apihub.agnes-ai.com', model: 'agnes-video-2.5' } },
+    });
+    expect(paid.providers.video.model).toBe('agnes-video-2.5');
+    // Unknown agnes model id → falls back to the generable default.
+    const unknown = normalizeSettings({
+      providers: { video: { preset: 'agnes', baseUrl: 'https://apihub.agnes-ai.com', model: 'agnes-video-v0.9' } },
+    });
+    expect(unknown.providers.video.model).toBe('agnes-video-2.5-flash');
   });
 
   it('alwaysNewSeed: legacy blobs default true, explicit false is kept', () => {
@@ -334,7 +362,7 @@ describe('catalog', () => {
   });
 
   it('ships concrete Agnes specs — the P2 placeholders are filled', () => {
-    expect(AGNES_PRESET.models.every((m) => !m.pending)).toBe(true);
+    expect(AGNES_PRESET.models.every((m: ModelSpec) => !m.pending)).toBe(true);
     const cv = getModel(CUSTOM_PRESET, 'custom-video');
     expect(cv?.pending).toBe(true); // custom async video shape still unknown
     expect(getModel(CUSTOM_PRESET, 'custom-text')?.pending).toBeFalsy();
@@ -346,14 +374,27 @@ describe('catalog', () => {
     expect(getModel(AGNES_PRESET, 'agnes-image-2.5-flash')?.readOnly).toBeUndefined();
   });
 
+  it('ships v2.0 on the 2.5 config (legacy ID, 2026-10-04 decision)', () => {
+    const v2 = getModel(AGNES_PRESET, 'agnes-video-v2.0');
+    expect(v2?.requestFormat).toBe('video-job-seconds');
+    expect(v2?.limits.seconds).toEqual([4, 12]);
+    expect(v2?.limits.resolutions).toEqual(['720P']);
+    expect(v2?.media?.modes).toEqual(['keyframes', 'reference']);
+    expect(v2?.media?.maxRefs).toBe(5);
+  });
+
   it('carries per-model media + seconds limits for the pipe UI (Q7)', () => {
     const flash = getModel(AGNES_PRESET, 'agnes-video-2.5-flash');
     expect(flash?.limits.seconds).toEqual([4, 12]);
     expect(flash?.media?.modes).toEqual(['keyframes', 'reference']);
     expect(flash?.supportsSeed).toBe(true);
     const v2 = getModel(AGNES_PRESET, 'agnes-video-v2.0');
-    expect(v2?.media?.sharedArray).toBe(true);
-    expect(v2?.limits.maxFrames).toBe(441);
+    // v2.0 ships the 2.5 config (2026-10-04) — no legacy frames shape,
+    // no shared keyframes/subjects array.
+    expect(v2?.requestFormat).toBe('video-job-seconds');
+    expect(v2?.media?.sharedArray).toBeUndefined();
+    expect(v2?.limits.maxFrames).toBeUndefined();
+    expect(v2?.media?.modes).toEqual(['keyframes', 'reference']);
     const paid = getModel(AGNES_PRESET, 'agnes-video-2.5');
     expect(paid?.media?.dual).toBe(true);
   });

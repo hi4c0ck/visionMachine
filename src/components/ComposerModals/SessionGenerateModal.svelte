@@ -15,8 +15,7 @@
 		orientation: Orientation;
 	}
 
-	/** Copy + auto-compose icons (inline SVGs — no icon dependency in the app). */
-	const COPY_ICON = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>`;
+	/** Inline icons — no icon dependency in the app. */
 	const CHECK_ICON = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5"/></svg>`;
 
 	/** Per-pipe Q/C run-local values keyed by pipe id. */
@@ -34,9 +33,6 @@
 		onOrientationChange,
 		onPipeQChange,
 		onPipeCChange,
-		/** "Save As": copy the session (media tree included) and redirect this
-		 *  run at the copy. Resolves to the new session's pipes to regenerate. */
-		onSaveAs,
 	} = $props<{
 		open: boolean;
 		session: SessionData;
@@ -55,25 +51,14 @@
 		onOrientationChange?: (o: string) => void;
 		onPipeQChange?: (pipeId: string, q: number) => void;
 		onPipeCChange?: (pipeId: string, c: number) => void;
-		onSaveAs?: () => Promise<void> | void;
 	}>();
 
 	let policy = $state<'stop' | 'continue'>('stop');
 	let autoCompose = $state(true);
 	let busy = $state(false);
-	let savingAs = $state(false);
 	/** When ticked, confirm additionally persists the edits to the session
 	 *  (store setters). Default OFF: edits are run-scoped only. */
 	let applyToSession = $state(false);
-	/** "Save As" ran: suppress the open-change effect re-seeding so the local
-	 *  run-local edits (fps/res/orientation, Q/C) survive the session swap and
-	 *  apply to the COPY instead of being reset to the copy's values. */
-	let saveAsDone = $state(false);
-	/** Pre-copy Q/C map, re-keyed to the copy's new pipe ids when the copy
-	 *  resolves (the backend re-mints every piece id in pipe order). */
-	let preCopyParams: PipeParamState | null = null;
-	/** Pipe ids captured before the copy; consumed once by the re-key effect. */
-	let oldPipeIdsRef: string[] | null = null;
 
 	// ── Run-local stats (seeded from the open session; NEVER written back
 	//    until Confirm with applyToSession ticked) ──
@@ -82,7 +67,6 @@
 	let orientation = $state<Orientation>(session.orientation);
 	$effect(() => {
 		if (!open) return;
-		if (saveAsDone) return; // session swapped to the copy — keep the run-local edits
 		fps = session.fps;
 		resolution = session.resolution;
 		orientation = session.orientation;
@@ -105,30 +89,7 @@
 	let pipeParamsLocal = $state<PipeParamState>({});
 	$effect(() => {
 		if (!open) return;
-		if (saveAsDone) return; // the copy re-mints the pipe ids; keep the
-		// edits the user typed before the copy instead of losing them.
 		pipeParamsLocal = Object.fromEntries(pipes.map((p: PipeRow) => [p.id, { q: p.qValue, c: p.cValue }]));
-	});
-	// Re-key: when the copy's re-minted pipe ids arrive (pipes prop updates
-	// after handleCopySession swaps selectedSessionId + loadSession resolves),
-	// map the captured pre-copy Q/C onto the new ids by pipe position
-	// (Pipe::rekeyed preserves order: old index i → new index i).
-	$effect(() => {
-		if (!saveAsDone || !preCopyParams || !oldPipeIdsRef) return;
-		const preCopy = preCopyParams; // capture — const narrows for the closure
-		const oldIds = oldPipeIdsRef;
-		const newIds = pipes.map((p: PipeRow) => p.id);
-		if (newIds.length === oldIds.length && newIds[0] !== oldIds[0]) {
-			// The pipes prop switched to the copy's re-minted ids — re-key now.
-			pipeParamsLocal = Object.fromEntries(
-				newIds.map((newId: string, i: number) => [
-					newId,
-					preCopy[oldIds[i]] ?? { q: pipes[i].qValue, c: pipes[i].cValue },
-				]),
-			);
-			preCopyParams = null;
-			oldPipeIdsRef = null;
-		}
 	});
 	/** The Q/C diff map: only pipes whose local value differs from the row
 	 *  value, and only the values that changed. Empty → null on the wire. */
@@ -154,15 +115,31 @@
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
 
+	// Reseed at most once per distinct model/preset config. The self-heal
+	// check below READS the model arrays + models, and a plain run reassigns
+	// those $state arrays on every pass — Svelte re-invalidates this very
+	// effect until it aborts with `effect_update_depth_exceeded` (the
+	// "frozen window / modal never appears" symptom). The key guard makes
+	// re-runs no-ops; as a bonus the user's own select picks no longer snap
+	// back to the settings default.
+	let modelSeedKey = $state<string | null>(null);
 	$effect(() => {
 		if (!open) return;
 		const s = getSettings();
+		const key = [s.providers.image.model, s.providers.video.model, s.providers.image.preset, s.providers.video.preset].join('|');
+		if (modelSeedKey === key) return;
+		modelSeedKey = key;
 		imageModel = s.providers.image.model;
 		videoModel = s.providers.video.model;
 		const ip = getPreset(s.providers.image.preset);
 		const vp = getPreset(s.providers.video.preset);
 		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly);
 		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly);
+		// Self-heal: a saved default that is no longer selectable (read-only /
+		// unknown) must not leave the select empty — fall back to the first
+		// generable model of the kind.
+		if (!imageModels.some((m) => m.id === imageModel)) imageModel = imageModels.find((m) => !m.pending)?.id ?? imageModel;
+		if (!videoModels.some((m) => m.id === videoModel)) videoModel = videoModels.find((m) => !m.pending)?.id ?? videoModel;
 		if (s.generationDefaults.alwaysNewSeed) seed = Math.floor(Math.random() * 100000);
 	});
 
@@ -237,34 +214,6 @@
 		}
 	}
 
-	async function saveAs() {
-		if (savingAs || busy || !onSaveAs) return;
-		savingAs = true;
-		try {
-			// Capture the typed Q/C by pipe position BEFORE the copy re-mints
-			// every pipe id (Pipe::rekeyed preserves order, so index i of
-			// the old array maps to index i of the new one).
-			const oldPipeIds = pipes.map((p: PipeRow) => p.id);
-			preCopyParams = {
-				...pipeParamsLocal,
-				...Object.fromEntries(
-					pipes.map((p: PipeRow, i: number) => [p.id, { q: p.qValue, c: p.cValue }]),
-				),
-			};
-			await onSaveAs();
-			// The session prop now points at the copy; keep every run-local
-			// edit (stats + Q/C) targeting it instead of re-seeding.
-			// The copy's re-minted pipe ids arrive with the next pipes prop
-			// update — the $effect below re-keys preCopyParams onto them.
-			saveAsDone = true;
-			oldPipeIdsRef = oldPipeIds;
-		} catch (e) {
-			flashToast(e instanceof Error ? e.message : String(e), 'error');
-		} finally {
-			savingAs = false;
-		}
-	}
-
 	async function confirm() {
 		if (busy || !canStart) return;
 		busy = true;
@@ -331,17 +280,6 @@
 					</div>
 
 					<div class="sg-pane sg-controls">
-						<!-- ── Save As (duplicates the session + its media, re-targets THIS run at the copy) ── -->
-						{#if onSaveAs}
-							<div class="saveas-card" role="group" aria-label="Save As">
-								<button class="saveas-btn" type="button" onclick={saveAs} disabled={savingAs || busy}
-									title="Duplicates this session (pipes + media) and re-targets this run at the copy — the original stays untouched.">
-									{@html COPY_ICON}<span>{savingAs ? APP_CONSTANTS.strings.sessionSaveAsCopying : APP_CONSTANTS.strings.sessionSaveAsCopy}</span>
-								</button>
-								<p class="saveas-hint">Run on a duplicate instead — originals, media and last-gen state stay untouched.</p>
-							</div>
-						{/if}
-
 						<!-- ── Models (per-run override, seeded from global settings) ── -->
 						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionModels}</span>
 						<div class="gen-grid">
@@ -539,49 +477,6 @@
 		white-space: nowrap;
 	}
 
-	/* Right pane: the Save-As card is explained, not just a mystery button. */
-	.saveas-card {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		padding: 10px 12px;
-		border: 1px dashed var(--border-color, #3f3f46);
-		border-radius: 8px;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-	}
-
-	.saveas-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		align-self: flex-start;
-		padding: 6px 11px;
-		font-size: 12px;
-		font-weight: 500;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		color: var(--text-secondary, #a1a1aa);
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 6px;
-		cursor: pointer;
-		transition: border-color 0.15s ease, color 0.15s ease;
-	}
-
-	.saveas-btn:hover:not(:disabled) {
-		border-color: var(--accent-color, #ff3e00);
-		color: var(--text-primary, #fff);
-	}
-
-	.saveas-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.saveas-hint {
-		margin: 0;
-		font-size: 11px;
-		line-height: 1.4;
-		color: var(--text-muted, #71717a);
-	}
 
 	/* Narrow viewports: stack the panes back into the classic single column. */
 	@media (max-width: 640px) {

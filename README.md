@@ -82,6 +82,13 @@ in the side panel, ready to open again:
   <img src="img/projects-panel.gif" alt="The projects and sessions panel" width="320">
 </p>
 
+**Provider settings** — where a provider's base URL + API key live
+(Settings → Providers; the built-in free Agnes presets need no key):
+
+<p align="center">
+  <img src="img/provider-settings.gif" alt="Navigating to Settings → Providers" width="300">
+</p>
+
 Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
 
 ## Try it in 5 minutes

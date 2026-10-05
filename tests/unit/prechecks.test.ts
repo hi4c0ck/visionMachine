@@ -80,6 +80,36 @@ describe('pipePrechecks — spec gates', () => {
     const c = pipePrechecks(pipeWith(), sessionWith(), img, secondsSpec());
     expect(c.map((c) => c.code)).toContain('spec-pending');
   });
+
+  it('blocks read-only (paid) video specs', () => {
+    const paid = { ...secondsSpec({ id: 'agnes-video-2.5' }), readOnly: true };
+    const c = pipePrechecks(pipeWith(), sessionWith(), null, paid);
+    const hit = c.find((x) => x.code === 'spec-locked');
+    expect(hit).toBeTruthy();
+    expect(hit!.message).toContain('read-only');
+
+    // A generable spec (even with media rules) stays clean.
+    const ok = pipePrechecks(
+      pipeWith(),
+      sessionWith(),
+      null,
+      secondsSpec({ media: { modes: ['keyframes', 'reference'], maxKeyframes: 2, maxRefs: 5 } }),
+    );
+    expect(ok.map((x) => x.code)).not.toContain('spec-locked');
+
+    // The legacy v2.0 ID is generable again (it ships the 2.5 config) —
+    // no spec-locked conflict.
+    const v2 = pipePrechecks(pipeWith(), sessionWith(), null, secondsSpec({ id: 'agnes-video-v2.0' }));
+    expect(v2.map((x) => x.code)).not.toContain('spec-locked');
+  });
+
+  it('blocks read-only image specs too', () => {
+    const img = { ...framesSpec({ id: 'img-paid', kind: 'image', requestFormat: 'image-gen' }), readOnly: true };
+    const c = pipePrechecks(pipeWith(), sessionWith(), img, secondsSpec());
+    const hit = c.find((x) => x.code === 'spec-locked');
+    expect(hit).toBeTruthy();
+    expect(hit!.message).toContain('img-paid');
+  });
 });
 
 describe('pipePrechecks — frames model (8n+1 / overflow / fps)', () => {
@@ -134,9 +164,9 @@ describe('pipePrechecks — media caps (E4)', () => {
     });
     const ok = pipePrechecks(
       pipeWith({
-        keyframes: [1, 2].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        keyframes: [1, 2].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', imageSrc: `https://x/k${i}.png`, status: 'pending' })),
         subjectReferences: [
-          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+          { id: 's1', imageUrl: 'https://x/s1.png', useFrames: false, visible: true, type: 'url' },
         ],
       }),
       sess,
@@ -147,9 +177,9 @@ describe('pipePrechecks — media caps (E4)', () => {
 
     const over = pipePrechecks(
       pipeWith({
-        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', imageSrc: `https://x/k${i}.png`, status: 'pending' })),
         subjectReferences: [
-          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+          { id: 's1', imageUrl: 'https://x/s1.png', useFrames: false, visible: true, type: 'url' },
         ],
       }),
       sess,
@@ -168,9 +198,9 @@ describe('pipePrechecks — media caps (E4)', () => {
     // refs are deleted instead of parked), so any ref in the array counts.
     const c = pipePrechecks(
       pipeWith({
-        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', imageSrc: `https://x/k${i}.png`, status: 'pending' })),
         subjectReferences: [
-          { id: 's1', imageUrl: '', useFrames: false, visible: false, type: 'url' },
+          { id: 's1', imageUrl: 'https://x/s1.png', useFrames: false, visible: false, type: 'url' },
         ],
       }),
       sess,
@@ -182,9 +212,9 @@ describe('pipePrechecks — media caps (E4)', () => {
     // 2 keyframes + 1 subject = 3 ≤ cap 3 → no conflict.
     const c2 = pipePrechecks(
       pipeWith({
-        keyframes: [1, 2].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        keyframes: [1, 2].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', imageSrc: `https://x/k${i}.png`, status: 'pending' })),
         subjectReferences: [
-          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+          { id: 's1', imageUrl: 'https://x/s1.png', useFrames: false, visible: true, type: 'url' },
         ],
       }),
       sess,
@@ -201,7 +231,7 @@ describe('pipePrechecks — media caps (E4)', () => {
     const c = pipePrechecks(
       pipeWith({
         mediaMode: 'keyframes',
-        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', status: 'pending' })),
+        keyframes: [1, 2, 3].map((i) => ({ id: `k${i}`, frame: 0, slotIndex: i as 1 | 2 | 3, type: 'url', imageSrc: `https://x/k${i}.png`, status: 'pending' })),
       }),
       sess,
       null,
@@ -218,8 +248,8 @@ describe('pipePrechecks — media caps (E4)', () => {
       pipeWith({
         mediaMode: 'reference',
         subjectReferences: [
-          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
-          { id: 's2', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+          { id: 's1', imageUrl: 'https://x/s1.png', useFrames: false, visible: true, type: 'url' },
+          { id: 's2', imageUrl: 'https://x/s2.png', useFrames: false, visible: true, type: 'url' },
         ],
       }),
       sess,
@@ -232,8 +262,8 @@ describe('pipePrechecks — media caps (E4)', () => {
   it('no media rules → no caps', () => {
     const c = pipePrechecks(
       pipeWith({
-        keyframes: Array.from({ length: 9 }, (_, i) => ({ id: `k${i}`, frame: 0, slotIndex: 1 as 1 | 2 | 3, type: 'url', status: 'pending' })),
-        subjectReferences: Array.from({ length: 7 }, (_, i) => ({ id: `s${i}`, imageUrl: '', useFrames: false, visible: true, type: 'url' })),
+        keyframes: Array.from({ length: 9 }, (_, i) => ({ id: `k${i}`, frame: 0, slotIndex: 1 as 1 | 2 | 3, type: 'url', imageSrc: `https://x/k${i}.png`, status: 'pending' })),
+        subjectReferences: Array.from({ length: 7 }, (_, i) => ({ id: `s${i}`, imageUrl: `https://x/s${i}.png`, useFrames: false, visible: true, type: 'url' })),
       }),
       sess,
       null,
@@ -321,6 +351,101 @@ describe('pipePrechecks — txt2img prompt rule (O1)', () => {
       secondsSpec({ media: { modes: ['keyframes', 'reference'], maxRefs: 2 } }),
     );
     expect(c.some((x) => x.message === 'subject s1 has no reference image — set a URL or switch to txt2img')).toBe(true);
+  });
+});
+
+describe('pipePrechecks — missing media sources (pre-seed gap)', () => {
+  const sess = sessionWith();
+  const kfSpec = secondsSpec({ media: { modes: ['keyframes', 'reference'] } });
+
+  it('flags url keyframes without a source image in keyframes mode', () => {
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'keyframes',
+        keyframes: [{ id: 'k1', frame: 0, slotIndex: 1, type: 'url', status: 'pending' }],
+      }),
+      sess,
+      null,
+      kfSpec,
+    );
+    expect(c.map((x) => x.message)).toContain('keyframe 1 (url) has no image — set a source URL');
+  });
+
+  it('does not flag a settled url keyframe (preview present)', () => {
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'keyframes',
+        keyframes: [
+          { id: 'k1', frame: 0, slotIndex: 1, type: 'url', status: 'pending', previewRemoteUrl: 'https://cdn/k1.png' },
+        ],
+      }),
+      sess,
+      null,
+      kfSpec,
+    );
+    expect(c).toEqual([]);
+  });
+
+  it('flags img2img keyframes without a reference image', () => {
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'keyframes',
+        keyframes: [{ id: 'k1', frame: 0, slotIndex: 1, type: 'img2img', prompt: 'x', status: 'pending' }],
+      }),
+      sess,
+      null,
+      kfSpec,
+    );
+    expect(c.map((x) => x.message)).toContain(
+      'keyframe 1 (img2img) has no reference image — set a reference URL or switch to txt2img',
+    );
+  });
+
+  it('skips keyframe source checks in reference mode (keyframes inert)', () => {
+    const c = pipePrechecks(
+      pipeWith({
+        mediaMode: 'reference',
+        keyframes: [{ id: 'k1', frame: 0, slotIndex: 1, type: 'url', status: 'pending' }],
+        subjectReferences: [
+          { id: 's1', imageUrl: 'https://x/s1.png', useFrames: false, visible: true, type: 'url' },
+        ],
+      }),
+      sess,
+      null,
+      kfSpec,
+    );
+    expect(c.filter((x) => x.message.startsWith('keyframe 1 (url)'))).toHaveLength(0);
+    expect(c).toEqual([]);
+  });
+
+  it('flags empty url subjects in sharedArray mode', () => {
+    const spec = framesSpec({ media: { modes: ['keyframes'], sharedArray: true, maxKeyframes: 3, maxRefs: 3 } });
+    const c = pipePrechecks(
+      pipeWith({
+        subjectReferences: [
+          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url' },
+        ],
+      }),
+      sess,
+      null,
+      spec,
+    );
+    expect(c.map((x) => x.message)).toContain('subject s1 has no reference image — set a URL or switch to txt2img');
+  });
+
+  it('does not flag a settled sharedArray subject (preview present)', () => {
+    const spec = framesSpec({ media: { modes: ['keyframes'], sharedArray: true, maxKeyframes: 3, maxRefs: 3 } });
+    const c = pipePrechecks(
+      pipeWith({
+        subjectReferences: [
+          { id: 's1', imageUrl: '', useFrames: false, visible: true, type: 'url', previewRemoteUrl: 'https://cdn/s1.png' },
+        ],
+      }),
+      sess,
+      null,
+      spec,
+    );
+    expect(c).toEqual([]);
   });
 });
 

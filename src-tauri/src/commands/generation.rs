@@ -75,12 +75,19 @@ async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str)
             return Some(trimmed);
         }
     }
-    // 3. Default: <appData>/com.visionmachine.desktop/media/<session_id>.
-    if let Some(d) = dirs::data_local_dir() {
+    // 3. Default: the user's VisionMachine catalog container with a profile
+    //    layer — <home>/VisionMachine/<profile>/Projects (the same shape the
+    //    frontend project-creation default uses). User content belongs in
+    //    the user's catalog, not in %LOCALAPPDATA%.
+    let profile = profile_name_for_session(db, session_id)
+        .await
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    if let Some(home) = dirs::home_dir() {
         return Some(
-            d.join("com.visionmachine.desktop")
-                .join("media")
-                .join(session_id)
+            home.join("VisionMachine")
+                .join(sanitize_dir_name(&profile))
+                .join("Projects")
                 .to_string_lossy()
                 .into_owned(),
         );
@@ -88,11 +95,55 @@ async fn resolve_media_root(db: &crate::storage::db::Database, session_id: &str)
     Some(
         std::env::temp_dir()
             .join("visionmachine")
-            .join("media")
-            .join(session_id)
+            .join("Projects")
             .to_string_lossy()
             .into_owned(),
     )
+}
+
+/// The profile that owns the session's project (sessions → projects →
+/// profiles.name). None when the chain is broken (legacy rows without a
+/// profile) — callers fall back to "default".
+async fn profile_name_for_session(
+    db: &crate::storage::db::Database,
+    session_id: &str,
+) -> Option<String> {
+    sqlx::query(
+        "SELECT pr.name FROM sessions s \
+              JOIN projects p ON p.id = s.project_id \
+              JOIN profiles pr ON pr.id = p.profile_id \
+              WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+    .flatten()
+}
+
+/// Filesystem-safe name for a directory layer (profile names may carry
+/// spaces; only the Windows-reserved characters are replaced). Shared with
+/// the frontend project-creation default so both sides build the same
+/// `<home>/VisionMachine/<profile>/Projects` shape.
+pub fn sanitize_dir_name(s: &str) -> String {
+    let cleaned: String = s
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "default".to_string()
+    } else {
+        cleaned
+    }
 }
 
 #[derive(Deserialize)]
@@ -962,6 +1013,27 @@ async fn media_roots(db: &crate::storage::db::Database) -> Vec<std::path::PathBu
     }
     if let Some(d) = dirs::data_local_dir() {
         roots.push(d.join("com.visionmachine.desktop").join("media"));
+    }
+    // User catalog containers (the resolve_media_root fallback, one layer
+    // per profile) — a reader must allow what the writer can produce.
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(rows) = sqlx::query("SELECT name FROM profiles")
+            .fetch_all(&db.pool)
+            .await
+        {
+            for r in rows {
+                if let Ok(Some(n)) = r.try_get::<Option<String>, _>(0) {
+                    let n = n.trim().to_string();
+                    if !n.is_empty() {
+                        roots.push(
+                            home.join("VisionMachine")
+                                .join(sanitize_dir_name(&n))
+                                .join("Projects"),
+                        );
+                    }
+                }
+            }
+        }
     }
     roots
 }
