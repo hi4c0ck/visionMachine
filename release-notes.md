@@ -1,11 +1,13 @@
 # VisionMachine v0.7.6
 
 ### Generation
-- Agnes Video V2.0: the "image as a list of at least 2 items" 400 is
-  gone; pipes with less media than the model's minimum now ship as a
-  text-to-video job with a one-line note instead of failing
-- 503 "video queue full": the poller probes the queue every ~15 s
-  instead of the old single 2-minute wait
+- Agnes Video V2.0 is marked obsolete: the provider has retired it
+  and it now works only on legacy terms (runs on the 2.5-series
+  engine); the catalog shows it as such
+- 503 "video queue full": instead of the old single 2-minute wait,
+  the poller probes the queue every ~15 s, so a run joins the queue
+  the moment a slot frees and the progress view shows the retry state
+  instead of looking frozen
 - Prechecks: paid models are blocked from a run, and media pieces
   without a source image are flagged before it starts
 - Settings self-heal: a stored model id the catalog no longer knows
@@ -15,17 +17,14 @@
 ### Sessions
 - Rename: Enter saves and unfocuses; the new name no longer reverts on
   re-select
-- "Copy session & run there" carries your in-flight edits over to the
-  copy
 - A composed session video now survives an app restart
-- Closing the window mid-run asks first; "keep working" no longer kills
-  the running tasks, and a wedged preview recovers instead of staying
-  un-closeable
+- Closing the window mid-run asks first; "keep working" no longer
+  kills the running tasks, and a wedged preview recovers instead of
+  staying un-closeable
 
 ### UI
 - Session generation modal: two-pane — scrollable pipe list left, run
   controls right
-- Footer now reads "Horizones Machines"
 
 # VisionMachine v0.7.5
 
