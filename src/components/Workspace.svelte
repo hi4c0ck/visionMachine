@@ -2591,18 +2591,22 @@
 						<span class="gen-pill-text">Generation failed</span>
 					{:else if activeTask && anyTaskActive}
 						<!-- Compact, status-driven: the pill shows the live
-						     request status (newest in-flight stage event —
-						     "queue full — retry in 30 s", "rendering 42%"…),
-						     not a raw task id (noise; the details live in
-						     the progress modal). "Running…" until the engine
-						     reports. Capped width, no reserved empty slot. -->
+					     request status (newest in-flight stage event —
+					     "queue full — retry in 30 s", "rendering 42%"…),
+					     not a raw task id (noise; the details live in
+					     the progress modal). "Running…" until the engine
+					     reports. Fixed-width box: the pill never resizes
+					     while a task is live (the jump was the flicker). -->
 						<span
 							class="gen-pill-live"
 							class:gen-pill-live-idle={!pillLiveLine}
-							title="Latest engine state — click to open the progress modal"
+							title={pillLiveLine ? `${pillLiveLine} — click to open the progress modal` : 'Latest engine state — click to open the progress modal'}
 						>{pillLiveLine ?? 'Running…'}</span>
 					{:else if groupActive}
-						<span class="gen-pill-text">Session running</span>
+						<!-- Group liveness between pipe tasks: the SAME
+						     fixed-width running box (neutral), so the pill
+						     never shrinks mid session generation. -->
+						<span class="gen-pill-live gen-pill-live-idle">Session running</span>
 					{:else if activeTask}
 						<span class="gen-pill-text">Generation finished</span>
 					{/if}
@@ -2727,10 +2731,16 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		/* Content-sized with a cap: the pill hugs its (short) status text;
-		   long 503 backoff lines clip with an ellipsis instead of
-		   stretching the capsule. No reserved empty slot. */
-		max-width: 160px;
+		/* Fixed-width box shared by every RUNNING state — "Running…", progress
+		   lines, 503/429 backoff lines, and "Session running" (group branch).
+		   The capsule must never resize mid-task: the edge jumping between a
+		   short line ("rendering 42%") and a long one ("queue full — retry
+		   in 15 s") was the perceived flicker. 28ch = the width of
+		   "rate-limited — retry in 15 s"; rarer longer lines ellipsize
+		   (full text in the hover title + the progress modal). Terminal
+		   states stay content-sized — a one-off settle, not a loop. */
+		min-width: 28ch;
+		max-width: 28ch;
 	}
 	/* The "Running…" placeholder (no engine event yet) reads neutral; a
 	   real engine status keeps the warning tint. */
