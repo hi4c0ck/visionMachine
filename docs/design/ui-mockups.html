@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VisionMachine — UI/UX Design Kit · v0.7.6</title>
+<style>
+  :root{
+    --bg:#1e1e1e; --panel:#2b2b2b; --panel2:#252525; --line:#3a3a3a;
+    --text:#e0e0e0; --sub:#9a9a9a; --faint:#666;
+    --gold:#e8a820; --blue:#5b9bd5; --green:#64c878; --red:#dc5050; --orange:#e68c3c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:"Segoe UI",system-ui,Arial,sans-serif;line-height:1.55;}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 22px 80px;}
+  header.hero{padding:26px 0 10px;border-bottom:1px solid var(--line);margin-bottom:8px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:.3px}
+  h1 .vm{color:var(--gold)}
+  .sub{color:var(--sub);font-size:15px;max-width:820px}
+  .meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;color:var(--faint);font-size:13px}
+  .meta span{background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:4px 12px}
+  nav{position:sticky;top:0;z-index:20;background:#1e1e1eee;backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line);margin:14px 0 4px}
+  nav .links{display:flex;gap:6px;flex-wrap:wrap;padding:10px 22px}
+  nav a{color:var(--sub);text-decoration:none;font-size:13px;padding:6px 11px;border-radius:8px;transition:.15s}
+  nav a:hover{color:var(--text);background:var(--panel)}
+  section{margin:38px 0}
+  h2{font-size:21px;margin:0 0 4px;color:var(--gold)}
+  .lede{color:var(--sub);font-size:14px;margin:0 0 16px}
+  .ref{font-size:12px;color:var(--faint);font-family:Consolas,monospace}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px}
+  figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  figure img{display:block;width:100%;height:auto;background:#2b2b2b}
+  figcaption{padding:12px 14px;border-top:1px solid var(--line)}
+  figcaption b{color:var(--text);font-size:14px}
+  figcaption p{margin:5px 0 0;color:var(--sub);font-size:13px}
+  figcaption .tag{display:inline-block;margin-top:8px;font-size:11px;color:var(--faint);
+    font-family:Consolas,monospace;background:var(--panel2);padding:2px 8px;border-radius:5px}
+  .note{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--gold);
+    border-radius:8px;padding:12px 16px;color:var(--sub);font-size:13px;margin:14px 0}
+  .note b{color:var(--text)}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:11px;
+    vertical-align:middle}
+  .pill.p0{background:#3a2a10;color:var(--gold)}
+  .pill.p1{background:#10303a;color:var(--blue)}
+  .pill.dec{background:#2a3a14;color:var(--green)}
+  .pill.ref{background:#3a1a1a;color:var(--orange)}
+  footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
+  a.anchor{color:var(--blue);text-decoration:none;font-size:12px}
+  a.anchor:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>VisionMachine <span class="vm">UI/UX Design Kit</span></h1>
+  <p class="sub">Макеты, построенные на реальном коде v0.7.6: зоны, состояния, открытые репорты и нереализованный функционал из
+  <code>docs/design/ux-task-brief.md</code>. Каждый мокап ссылается на номер раздела брейфа.</p>
+  <div class="meta">
+    <span>release v0.7.6</span>
+    <span>12 mockups</span>
+    <span>4.2 states kit</span>
+    <span>3 themes</span>
+    <span>cross-linked HTML</span>
+  </div>
+</header>
+
+<nav>
+  <div class="links">
+    <a href="#real">Real UI</a>
+    <a href="#workspace">Workspace</a>
+    <a href="#p0">P0 screens</a>
+    <a href="#p1">P1 features</a>
+    <a href="#decisions">Decisions §7</a>
+    <a href="#states">States kit 4.2</a>
+    <a href="#themes">Themes</a>
+    <a href="#index">Index</a>
+  </div>
+</nav>
+
+<div class="note" id="real">
+  <b>Референс реального UI (задача #4).</b> Снимки текущего приложения из <code>img/</code>:
+  <a class="anchor" href="../../img/screenshot-composer.png">screenshot-composer.png</a>,
+  <a class="anchor" href="../../img/projects-panel.png">projects-panel.png</a>,
+  плюс GIF <code>composer-preview.gif</code>, <code>provider-settings.gif</code>.
+  Пер-тема Playwright-пайплайн (п.10 верификация) остаётся отдельным шагом — здесь используется
+  существующий референс, чтобы дека была самодостаточной.
+</div>
+
+<section id="workspace">
+  <h2>0 · Workspace (реальный layout)</h2>
+  <p class="lede">Базовая композиция экрана: filmstrip-превью, PROJECTS слева, Pipe-композер в центре, FOCUS-панель справа. <span class="ref">§3</span></p>
+  <div class="grid">
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-workspace-mockup.png" alt="workspace">
+      <figcaption>
+        <b>Workspace composition</b>
+        <p>Точный layout из screenshot-composer: carousel, дерево r1/promo, Pipe 1 с keyframes и color-tag timeline, generate-карточка.</p>
+        <span class="tag">brief §3</span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="p0">
+  <h2><span class="pill p0">P0</span> Блокеры-скрины</h2>
+  <p class="lede">Стабильность и прозрачность состояний — ближайший спринт.</p>
+  <div class="grid">
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-progress-modal.png" alt="progress modal">
+      <figcaption><b>Progress Modal — 4 pipe states + pill</b>
+        <p>done / generating / 503 queued / failed, each with human reason + fix-CTA; group bar; CompactPipesProgress pill.</p>
+        <span class="tag">§5.7.3 · P0</span></figcaption>
+    </figure>
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-projects-states.png" alt="projects states">
+      <figcaption><b>Projects Panel — row states + anti-intercept rename</b>
+        <p>active / generating / has_video / stale; click-zone ≠ rename-zone (pencil hover-only).</p>
+        <span class="tag">§5.3 · P0</span></figcaption>
+    </figure>
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-top-panel-ar.png" alt="top panel AR">
+      <figcaption><b>Top Panel — fixed 320px, AR letterbox, source switcher</b>
+        <p>16:9 / 9:16 / 1:1 into one slot; Pipe/Session toggle; crossfade ≤200ms; 503 error card.</p>
+        <span class="tag">§5.4 · P0</span></figcaption>
+    </figure>
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-empty-composer.png" alt="empty composer">
+      <figcaption><b>Empty Composer — next-action CTA</b>
+        <p>Checklist of what's missing + one primary button; precheck panel "Blocked · N issues"; media-mode indicator.</p>
+        <span class="tag">§5.5 · P0</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="p1">
+  <h2><span class="pill p1">P1</span> Фичи [Р]</h2>
+  <p class="lede">Принятые требования — ближайшие 2 спринта.</p>
+  <div class="grid">
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-settings.png" alt="settings">
+      <figcaption><b>Settings — Check + ffmpeg 3 states + catalog</b>
+        <p>Provider card configured/key-needed/401; "Check now" pre-flight; ffmpeg bundled/user/not-found; free/paid badges.</p>
+        <span class="tag">§5.8 · P1</span></figcaption>
+    </figure>
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-copy-session.png" alt="copy session">
+      <figcaption><b>Copy Session v2 — full tooling dialog</b>
+        <p>Copy structure, skip artifacts/videos; fresh UUIDs; media slots "needs filling"; progress + cancel + errors.</p>
+        <span class="tag">§6.1 [Р]</span></figcaption>
+    </figure>
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-history-archive.png" alt="history archive">
+      <figcaption><b>Session Video History / Archive</b>
+        <p>Recompose auto-archives; restore/open/delete; version limit + eviction; current-v# indicator on compose.</p>
+        <span class="tag">§6.2 [Р]</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="decisions">
+  <h2><span class="pill dec">Decision</span> §7 варианты для ревью</h2>
+  <p class="lede">Каждое — 3 варианта с плюсами/минусами и черновым вердиктом.</p>
+  <div class="grid">
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-progress-3-options.png" alt="progress options">
+      <figcaption><b>Generation progress — 3 display options</b>
+        <p>Modal / compact panel / pill. Draft verdict: compact panel default + expandable modal on demand.</p>
+        <span class="tag">§7 · Decision</span></figcaption>
+    </figure>
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-focus-mode-3.png" alt="focus mode options">
+      <figcaption><b>Focus mode — 3 behaviors</b>
+        <p>Panel collapse / dim overlay / "scene". Must satisfy: self-explaining + edge indicator + Esc exit.</p>
+        <span class="tag">§7 · Decision</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="states">
+  <h2>4.2 · Component states kit</h2>
+  <p class="lede">6 типов элементов × 9 состояний + ruler. Обязательный охват в ките.</p>
+  <div class="grid">
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-states-matrix.png" alt="states matrix">
+      <figcaption><b>States matrix</b>
+        <p>button / input / row / card / modal / pill × default, hover, active, focus-visible, disabled, loading, error, success, empty.</p>
+        <span class="tag">§4.2 · kit</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="themes">
+  <h2>4.1 / 6.12 · Themes audit</h2>
+  <p class="lede">Sprockets-текстура + направление теней как токен; 3 схемы на одном компоненте.</p>
+  <div class="grid">
+    <figure>
+      <img src="../../.agnes/artifacts/images/vm-themes.png" alt="themes">
+      <figcaption><b>Themes — JetBrains Dark / Sprockets Noir / Aurora Slate</b>
+        <p>Same button/card/row in 3 schemes; shadow direction = theme token; contrast ≥ AA; texture only on chrome.</p>
+        <span class="tag">§4.1/6.12</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="index">
+  <h2>Index</h2>
+  <div class="grid">
+    <figure style="background:transparent;border:none"><figcaption style="border:0">
+      <b>All mockups (12)</b>
+      <p>
+        01 <a class="anchor" href="../../.agnes/artifacts/images/vm-workspace-mockup.png">workspace</a><br>
+        02 <a class="anchor" href="../../.agnes/artifacts/images/vm-progress-modal.png">progress modal</a><br>
+        03 <a class="anchor" href="../../.agnes/artifacts/images/vm-projects-states.png">projects states</a><br>
+        04 <a class="anchor" href="../../.agnes/artifacts/images/vm-top-panel-ar.png">top panel AR</a><br>
+        05 <a class="anchor" href="../../.agnes/artifacts/images/vm-empty-composer.png">empty composer</a><br>
+        06 <a class="anchor" href="../../.agnes/artifacts/images/vm-settings.png">settings</a><br>
+        07 <a class="anchor" href="../../.agnes/artifacts/images/vm-copy-session.png">copy session v2</a><br>
+        08 <a class="anchor" href="../../.agnes/artifacts/images/vm-history-archive.png">history / archive</a><br>
+        09 <a class="anchor" href="../../.agnes/artifacts/images/vm-progress-3-options.png">progress 3 options</a><br>
+        10 <a class="anchor" href="../../.agnes/artifacts/images/vm-focus-mode-3.png">focus mode 3 options</a><br>
+        11 <a class="anchor" href="../../.agnes/artifacts/images/vm-states-matrix.png">states matrix</a><br>
+        12 <a class="anchor" href="../../.agnes/artifacts/images/vm-themes.png">themes</a>
+      </p>
+    </figcaption></figure>
+  </div>
+</section>
+
+<footer>
+  VisionMachine · UI/UX Design Kit · source <code>docs/design/ux-task-brief.md</code> · images in <code>../../.agnes/artifacts/images/</code> ·
+  open this file in a browser — all links are relative and portable.
+</footer>
+
+</div>
+</body>
+</html>
