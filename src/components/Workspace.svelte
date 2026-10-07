@@ -126,8 +126,9 @@
 		if (!url) return false;
 		previewIsSessionVideo = true;
 		previewVideo = { url, label };
+		previewMediaPath = path;
 		toolsSessionVideo = { url, label };
-		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label };
+		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label, path };
 		return true;
 	}
 	// Flip the top-panel ownership back off the session video when the user
@@ -141,7 +142,7 @@
 	// Last successfully composed session video, keyed to the session it was
 	// composed for. Persists across top-panel preview switches so the
 	// tool-panel "Open in preview" can re-attach it on demand.
-	let lastComposedSessionVideo = $state<{ sessionId: string; url: string; label: string } | null>(null);
+	let lastComposedSessionVideo = $state<{ sessionId: string; url: string; label: string; path: string } | null>(null);
 	// Re-attach the composed session video to the top panel (the tool-panel
 	// "Open in preview" affordance). Restores the full-session frame space
 	// after the user switched the top panel to a single pipe clip. No-op when
@@ -151,7 +152,31 @@
 		if (previewVideo?.url === lastComposedSessionVideo.url) return;
 		previewIsSessionVideo = true;
 		previewVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		previewMediaPath = lastComposedSessionVideo.path;
 		toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+	}
+	// 2f: a composed session video exists for the CURRENT session while the
+	// top panel shows a single-pipe clip — surface the "Open in preview"
+	// restore pill in the top panel (and keep the tool-panel button). A
+	// record from another session must not light the pill: that is the
+	// same cross-session leak the restore path guards against above.
+	const sessionVideoDetached = $derived(
+		!!lastComposedSessionVideo &&
+		lastComposedSessionVideo.sessionId === selectedSessionId &&
+		!previewIsSessionVideo
+	);
+	// Play outside (2a+): open the currently-attached preview's on-disk file
+	// in the OS's default player. The backend command re-validates the path
+	// against the media roots (same guard as read_media_file) and spawns the
+	// platform opener. Browser/dev: no backend → affordance stays hidden.
+	async function handlePlayOutside() {
+		if (!isTauri() || !previewMediaPath) return;
+		try {
+			await invoke('open_media_in_player', { input: { path: previewMediaPath } });
+			flashToast('Opened in system player', 'info');
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
 	}
 	async function restoreSelectedPreview(session: SessionData | null) {
 		const sid = session?.id;
@@ -192,6 +217,7 @@
 		if (previewIsSessionVideo || toolsSessionVideo || (lastComposedSessionVideo && lastComposedSessionVideo.sessionId !== sid)) {
 			previewVideo = null;
 			previewIsSessionVideo = false;
+			previewMediaPath = null;
 			toolsSessionVideo = null;
 			lastComposedSessionVideo = null;
 		}
@@ -202,6 +228,7 @@
 		if (previewVideo) return;
 		previewVideo = null;
 		previewIsSessionVideo = false;
+		previewMediaPath = null;
 		const savedPipeId = lastPreviewPipeBySession.get(sid);
 		// Prefer the previously-selected pipe (if it still has a video);
 		// otherwise fall back to the first pipe with a last-gen video.
@@ -212,7 +239,10 @@
 			session.pipes.find((p) => p.lastGeneration?.videoPath);
 		if (!pipe?.lastGeneration?.videoPath) return;
 		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
-		if (url) previewVideo = { url, label: pipe.name };
+		if (url) {
+			previewVideo = { url, label: pipe.name };
+			previewMediaPath = pipe.lastGeneration.videoPath;
+		}
 	}
 
 	$effect(() => {
@@ -389,6 +419,12 @@
 	// double-apply the terminal side-effects.
 	let terminalHandled = new Set<string>();
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
+	// The on-disk path of the file currently attached to the top-panel preview
+	// (the source of `previewVideo`'s blob URL). "Play outside" hands this to
+	// the backend's default-player opener — the blob URL itself is useless to
+	// an OS player, so the path travels alongside it. null = nothing attached
+	// (or a non-file source) → the play-outside affordance is hidden.
+	let previewMediaPath = $state<string | null>(null);
 	// Portable generation log entry for the active task (Phase 4): the
 	// progress modal shows WHICH model made each piece. Attached synchronously
 	// when the watch starts, so the modal has the run's state from the moment
@@ -2250,9 +2286,13 @@
 		}
 		previewVideo = null;
 		previewIsSessionVideo = false;
+		previewMediaPath = null;
 		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
 			.then((url) => {
-				if (url) previewVideo = { url, label: pipe.name };
+				if (url) {
+					previewVideo = { url, label: pipe.name };
+					previewMediaPath = pipe.lastGeneration?.videoPath ?? null;
+				}
 			})
 			.catch((e) => {
 				// Media read failed (path moved / not under a media root): keep
@@ -2355,10 +2395,14 @@
 		totalFrames={totalFrames}
 		carouselFrame={selectedFrame ?? 0}
 		videoAspect={videoAspect}
+		isSessionVideo={previewIsSessionVideo}
+		sessionVideoDetached={sessionVideoDetached}
 		oncarouselSelect={(f) => (selectedFrame = f)}
 		onframeSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
+		onplayoutside={handlePlayOutside}
+		onopensessionpreview={openSessionPreview}
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}

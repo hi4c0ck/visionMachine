@@ -107,6 +107,22 @@ const APP_CONSTANTS = {
     frameNextDisabled: 'At the last frame',
     promptCopied: 'Prompt copied',
     openInPreview: 'Open in preview',
+
+    // Top-panel playback cluster (2a/2b)
+    playbackControls: 'Playback controls',
+    loopHint: 'Loop playback',
+    speedLabel: 'Playback speed',
+    scrubLabel: 'Seek position',
+    playOutside: 'Play outside',
+    playOutsideHint: 'Open in the system video player',
+    sessionVideoBadgeHint: 'Composed full-session video',
+    openSessionPreviewHint: 'Show the composed session video in the top panel',
+
+    // Keyboard layer (2e)
+    kbShortcutsHint: 'Keyboard shortcuts',
+    kbStep: 'step 8 frames',
+    kbPlay: 'play / pause',
+    kbEsc: 'exit carousel',
     
     // Modals
     addKeyframe: 'Add Keyframe Image',
