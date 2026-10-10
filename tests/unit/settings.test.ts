@@ -90,6 +90,25 @@ describe('normalizeSettings', () => {
         .generationDefaults.alwaysNewSeed,
     ).toBe(true);
   });
+
+  it('carousel block: defaults seed immersiveSnaps on + autoScroll off', () => {
+    expect(normalizeSettings(undefined).carousel).toEqual({
+      immersiveSnaps: true,
+      autoScroll: 'off',
+    });
+  });
+
+  it('carousel block: keeps explicit values, reseeds junk', () => {
+    // Explicit false disables immersive snaps; only an explicit false does.
+    expect(normalizeSettings({ carousel: { immersiveSnaps: false } }).carousel.immersiveSnaps).toBe(false);
+    expect(normalizeSettings({ carousel: { immersiveSnaps: 'junk' as unknown as boolean } }).carousel.immersiveSnaps).toBe(true);
+    // autoScroll only accepts the known modes.
+    expect(normalizeSettings({ carousel: { autoScroll: 'fast' } }).carousel.autoScroll).toBe('fast');
+    expect(normalizeSettings({ carousel: { autoScroll: 'steady' } }).carousel.autoScroll).toBe('steady');
+    expect(normalizeSettings({ carousel: { autoScroll: 'nope' as unknown as string } }).carousel.autoScroll).toBe('off');
+    // Legacy blob with no carousel block reseeds full defaults.
+    expect(normalizeSettings({}).carousel).toEqual({ immersiveSnaps: true, autoScroll: 'off' });
+  });
 });
 
 describe('validateHttpUrl', () => {

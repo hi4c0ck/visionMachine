@@ -177,6 +177,8 @@ export interface Settings {
   providers: Record<ProviderKind, ProviderSlot>;
   /** Local tooling (Phase: ffmpeg locator). Never in logs (P6). */
   tools: ToolsBlock;
+  /** Top-panel carousel treatment (profile-preset bound). */
+  carousel: CarouselBlock;
 }
 
 /** Local tooling overrides. `ffmpegPath` is the tiny-variant escape hatch:
@@ -184,6 +186,28 @@ export interface Settings {
  *  system $PATH. Absent/empty = not used. */
 export interface ToolsBlock {
   ffmpegPath: string;
+}
+
+/**
+ * Top-panel frame-carousel block. Persisted under the PROFILE PRESET: the
+ * carousel's [i] toggle and [>]/[>>] auto-scroll radios mirror these values
+ * (and Settings → Tools edits the same copy), so the profile preset is the
+ * single source of truth — switching profiles switches the carousel
+ * treatment with it.
+ */
+export type AutoScrollMode = 'off' | 'steady' | 'fast';
+
+export interface CarouselBlock {
+  /**
+   * "Immersive Snaps": the receding-front dissolve treatment (media reveal +
+   * accent wave). Off = plain strip, no dissolve effect.
+   */
+  immersiveSnaps: boolean;
+  /**
+   * Automatic frame scrolling: 'steady' = consistent slow pace; 'fast' =
+   * fast snaps between stops with a 0.8s idle at each snap.
+   */
+  autoScroll: AutoScrollMode;
 }
 
 // ── Generation log (portable: NO keys, NO raw local paths — P5) ────────────

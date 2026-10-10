@@ -152,6 +152,99 @@
 	// is always clean (user requirement: never mask the underneath frame).
 	let moveDir = 0;
 
+	// ── Immersive Snaps (profile-preset bound) ────────────────────────────
+	// [i] toggle + [>]/[>>] auto-scroll radios. Values MIRROR the profile
+	// preset (Settings → Tools "Immersive" section): a settings commit
+	// re-syncs them here, and a click here commits the same copy back.
+	import { getSettings, setOnSettingsChange, unregisterSettingsChange, updateSettings } from '$lib/settings/store';
+	import { onMount } from 'svelte';
+	let immersive = $state<boolean>(getSettings().carousel.immersiveSnaps);
+	let autoScroll = $state<'off' | 'steady' | 'fast'>(getSettings().carousel.autoScroll);
+
+	// Settings store re-sync: a profile switch or a Settings-modal commit
+	// replaces the carousel block — mirror it locally. The auto-advance
+	// $effect below is keyed on both values, so a re-sync re-arms it.
+	const onImmersiveSettingsSync = () => {
+		immersive = getSettings().carousel.immersiveSnaps;
+		autoScroll = getSettings().carousel.autoScroll;
+	};
+	setOnSettingsChange(onImmersiveSettingsSync);
+	onMount(() => () => unregisterSettingsChange(onImmersiveSettingsSync));
+
+	function toggleImmersive() {
+		immersive = !immersive;
+		updateSettings((s) => {
+			s.carousel.immersiveSnaps = immersive;
+		});
+	}
+
+	function setAutoScroll(mode: 'off' | 'steady' | 'fast') {
+		// Radio semantics: clicking the already-active mode turns BOTH off.
+		autoScroll = autoScroll === mode ? 'off' : mode;
+		updateSettings((s) => {
+			s.carousel.autoScroll = autoScroll;
+		});
+	}
+
+	// ── Auto-advance engine ([>] steady / [>>] fast+idle) ─────────────────
+	// A simple self-rescheduling timer that steps the shared frame forward
+	// while the mode is armed. MANUAL interaction (drag, wheel, ‹/› step,
+	// nav buttons) only PAUSES it — a cooldown is recorded and the engine
+	// resumes on the next tick; it is never torn down (dragging stays
+	// possible, it just pauses auto mode).
+	//   [>]  STEADY — consistent slow pace: one step every ~2.2s, no dwell.
+	//   [>>] FAST   — quick snap to the next stop, then a 0.8s idle dwell
+	//                at each snap before the next snap (the "stays idle"
+	//                beat the user asked for).
+	const STEADY_TICK_MS = 2200; // [>] steady slow cadence
+	const FAST_IDLE_MS = 800; // [>>] dwell at each snap
+	const FAST_TICK_MS = 300 + FAST_IDLE_MS; // [>>] snap glide (~300ms) + idle
+	const MANUAL_PAUSE_MS = 1500; // manual move → resume only after this cooldown
+	let lastManualAt = 0;
+
+	function pauseAuto() {
+		lastManualAt = performance.now();
+	}
+
+	$effect(() => {
+		const mode = autoScroll;
+		void totalFrames;
+		if (mode === 'off') return;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout> | null = null;
+		const TICK = mode === 'fast' ? FAST_TICK_MS : STEADY_TICK_MS;
+
+		function fire() {
+			if (cancelled) return;
+			// Pointer owns the strip — hold the tick and re-poll quickly.
+			if (dragActive) {
+				timer = setTimeout(fire, 300);
+				return;
+			}
+			// A manual move happened — pause until its cooldown is over,
+			// then resume from wherever the user left the strip.
+			const sinceManual = performance.now() - lastManualAt;
+			if (sinceManual < MANUAL_PAUSE_MS) {
+				timer = setTimeout(fire, Math.max(60, MANUAL_PAUSE_MS - sinceManual + 60));
+				return;
+			}
+			const target = centerFrame + STEP;
+			if (target >= totalFrames) {
+				// End of the strip: park and RE-POLL, so a manual back-step
+				// re-arms the engine without a mode toggle.
+				timer = setTimeout(fire, 600);
+				return;
+			}
+			onframeSelect?.(target);
+			timer = setTimeout(fire, TICK);
+		}
+		timer = setTimeout(fire, TICK);
+		return () => {
+			cancelled = true;
+			if (timer) clearTimeout(timer);
+		};
+	});
+
 	// Sinusoidal ease-in-out tween of the visual center. The new front card
 	// (which was the settled neighbor before the switch) glides toward the
 	// center at a constant SIN pace for most of the move, then the last
@@ -476,6 +569,7 @@
 				// leaves the strip bounds (touch / mouse alike).
 				dragged = true;
 				dragActive = true;
+				pauseAuto();
 				anchorStep = centerFrame / STEP;
 				liveCommitStep = Math.round(anchorStep);
 				// preventDefault suppresses the native media drag / text-select
@@ -507,7 +601,10 @@
 	/** Park the live center on the currently-committed step. */
 	function commitLiveFrame() {
 		const target = snapCarouselFrame(liveCommitStep * STEP, totalFrames, STEP);
-		if (target !== centerFrame) onframeSelect?.(target);
+		if (target !== centerFrame) {
+			pauseAuto();
+			onframeSelect?.(target);
+		}
 	}
 
 	function endDrag(event: PointerEvent) {
@@ -533,8 +630,9 @@
 
 	function step(deltaCards: number) {
 		if (deltaCards === 0) return;
+		pauseAuto();
 		const next = snapCarouselFrame(centerFrame + deltaCards * STEP, totalFrames, STEP);
-		onframeSelect?.(next);
+		if (next !== centerFrame) onframeSelect?.(next);
 	}
 
 	function wheelMove(event: WheelEvent) {
@@ -639,11 +737,11 @@
 		//  - ACCENT (subtle ~0.1 at the switch): the accent shimmer painted
 		//    through the wave-grain texture. Drives the .fc-wave-tint layer.
 		// The arriving/upcoming card is NEVER masked in either channel.
-		const reveal = carouselDissolveReveal(d, moveDir);
-		const accent = carouselDissolveOpacity(d, moveDir);
+		const reveal = immersive ? carouselDissolveReveal(d, moveDir) : 0;
+		const accent = immersive ? carouselDissolveOpacity(d, moveDir) : 0;
 		// The mask opens from the center-facing edge of the receding card.
 		const dissolveDir = carouselDissolveDirF(d, moveDir);
-		return "left:calc(50% + " + x + "px - " + (CARD_W / 2) + "px);width:" + CARD_W + "px;transform:scale(" + scale.toFixed(4) + ");transform-origin:50% 100%;opacity:" + opacity.toFixed(3) + ";z-index:" + z + ";--fc-tint-bg:" + cardTintBg(d) + ";--fc-dissolve-op:" + reveal.toFixed(3) + ";--fc-wave-op:" + accent.toFixed(3) + ";--fc-dissolve-dir:" + dissolveDir + ";filter:blur(" + blur.toFixed(2) + "px);box-shadow:0 0 " + (22 * glow).toFixed(1) + "px " + (5 * glow).toFixed(1) + "px var(--accent-glow, rgba(255, 62, 0, 0.25));";
+		return "left:calc(50% + " + x + "px - " + (CARD_W / 2) + "px);width:" + CARD_W + "px;transform:scale(" + scale.toFixed(4) + ");transform-origin:50% 100%;opacity:" + opacity.toFixed(3) + ";z-index:" + z + ";--fc-tint-bg:" + cardTintBg(d) + ";--fc-dissolve-op:" + reveal.toFixed(3) + ";--fc-wave-op:" + accent.toFixed(3) + ";--fc-dissolve-dir:" + dissolveDir + ";filter:blur(" + blur.toFixed(2) + "px);box-shadow:0 0 " + (22 * glow).toFixed(1) + "px " + (5 * glow).toFixed(1) + "px var(--accent-glow, rgba(255, 62, 0, 0.25));";  
 	}
 </script>
 
@@ -718,6 +816,51 @@
 			<div class="fc-glass-shine" aria-hidden="true"></div>
 		</div>
 
+	<!-- Immersive cluster (top-left): [i] toggles the dissolve treatment
+		 (gray = off, accent = on); to its right, two radio-grouped auto-scroll
+		 buttons [>] (steady slow) and [>>] (fast snaps + 0.8s idle). A click
+		 on the active radio turns both off. All mirror the profile preset
+		 (Settings → Tools "Immersive"). stopPropagation keeps the strip sweep
+		 from adopting these clicks. -->
+	<div class="fc-immersive" role="group" aria-label={APP_CONSTANTS.strings.autoScroll}>
+		<button
+			class="fc-imm-btn fc-i"
+			class:fc-imm-on={immersive}
+			onclick={(e) => { e.stopPropagation(); toggleImmersive(); }}
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointermove={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onwheel={(e) => e.stopPropagation()}
+			aria-pressed={immersive}
+			aria-label={APP_CONSTANTS.strings.immersiveSnaps}
+			title={APP_CONSTANTS.strings.immersiveSnapsHint}
+		>i</button>
+		<span class="fc-imm-gap" aria-hidden="true"></span>
+		<button
+			class="fc-imm-btn"
+			class:fc-imm-on={autoScroll === 'steady'}
+			onclick={(e) => { e.stopPropagation(); setAutoScroll('steady'); }}
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointermove={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onwheel={(e) => e.stopPropagation()}
+			aria-pressed={autoScroll === 'steady'}
+			aria-label={APP_CONSTANTS.strings.autoScrollSteady}
+			title={APP_CONSTANTS.strings.autoScrollSteady}
+		>›</button>
+		<button
+			class="fc-imm-btn"
+			class:fc-imm-on={autoScroll === 'fast'}
+			onclick={(e) => { e.stopPropagation(); setAutoScroll('fast'); }}
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointermove={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onwheel={(e) => e.stopPropagation()}
+			aria-pressed={autoScroll === 'fast'}
+			aria-label={APP_CONSTANTS.strings.autoScrollFast}
+			title={APP_CONSTANTS.strings.autoScrollFast}
+		>››</button>
+	</div>
 	<!-- Prev / next: advance the shared frame by ±STEP on the grid.
 		 stopPropagation keeps the strip's pointer/wheel handlers from
 		 seeing button presses, so a click here is a clean click. -->
@@ -1159,6 +1302,59 @@
 	@keyframes fc-wave-breathe {
 		0%, 100% { opacity: calc(var(--fc-wave-op, 0) * 0.72); }
 		50%      { opacity: calc(var(--fc-wave-op, 0) * 1.0); }
+	}
+
+	/* Immersive cluster (top-left): [i] toggle + [>]/[>>] auto-scroll radios.
+	   Gray when off/active-none, accent when on — analog to the playback ctl.
+	*/
+	.fc-immersive {
+		position: absolute;
+		top: 8px;
+		left: 8px;
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		z-index: 21;
+	}
+
+	.fc-imm-btn {
+		width: 26px;
+		height: 26px;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: var(--bg-tertiary);
+		color: var(--text-secondary);
+		font-size: 0.95rem;
+		line-height: 1;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+	}
+
+	/* The bold "i" information toggle: a heavy serif italic reads as "i". */
+	.fc-imm-btn.fc-i {
+		font-family: Georgia, "Times New Roman", serif;
+		font-weight: 800;
+		font-style: italic;
+		font-size: 1.05rem;
+	}
+
+	/* Enabled / active: accent color + glow (analog to ctl-btn.active). */
+	.fc-imm-btn.fc-imm-on {
+		color: var(--accent-color, #ff3e00);
+		border-color: var(--accent-color, #ff3e00);
+		background: color-mix(in srgb, var(--accent-color, #ff3e00) 14%, var(--bg-tertiary));
+		box-shadow: 0 0 10px var(--accent-glow, rgba(255, 62, 0, 0.25));
+	}
+
+	.fc-imm-btn:hover {
+		background: var(--bg-hover);
+	}
+
+	.fc-imm-gap {
+		width: 8px;
 	}
 
 </style>
