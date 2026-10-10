@@ -1,5 +1,6 @@
-<script lang="ts">
-	/**
+///<reference types="svelte" />
+;
+/**
 	 * Top-panel frame carousel (plan B2/B3): a nested horizontal card stack
 	 * `[ [[]] ]` — a concrete front frame flanked by 2 overlapped, lower
 	 * cards on each side showing the nearest frames on the 8n grid. The
@@ -19,9 +20,9 @@
 	 *    cards fall out of focus.
 	 *  - At rest the settled front card gets a subtle breathing halo.
 	 */
-	import { untrack } from 'svelte';
-	import { APP_CONSTANTS } from '$constants';
-	import {
+import { untrack } from 'svelte';
+import { APP_CONSTANTS } from '$constants';
+import {
 		FrameSource,
 		CAROUSEL_STEP,
 		carouselCardScaleF,
@@ -30,11 +31,9 @@
 		carouselBackTintF,
 		carouselFwdDimF,
 		carouselGlowF,
+		carouselLiftF,
 		carouselBlurF,
 		carouselDissolveOpacity,
-		carouselDissolveDirF,
-		carouselDissolveReveal,
-		carouselStackTuckF,
 		snapCarouselFrame,
 		carouselCardWidth,
 		carouselDragPxPerStep,
@@ -42,17 +41,7 @@
 		type ThumbDiag
 	} from '$lib/frameDecoder';
 
-	let {
-		video,
-		videoEl = $bindable(),
-		totalFrames,
-		fps = 24,
-		frame,
-		videoAspect = null,
-		stripH = 180,
-		onframeSelect,
-		onexit
-	} = $props<{
+;type $$ComponentProps = {
 		/** The same media shown in the top panel — center card plays it. */
 		video: { url: string; label: string };
 		/**
@@ -86,7 +75,24 @@
 		onframeSelect?: (frame: number) => void;
 		/** Exit carousel mode (back to full-screen playback). */
 		onexit?: () => void;
-	}>();
+	};function $$render() {
+
+	
+	
+	
+	
+
+	let {
+		video,
+		videoEl = $bindable(),
+		totalFrames,
+		fps = 24,
+		frame,
+		videoAspect = null,
+		stripH = 180,
+		onframeSelect,
+		onexit
+	} = $props</*Ωignore_startΩ*/$$ComponentProps/*Ωignore_endΩ*/>()/*Ωignore_startΩ*/;videoEl;/*Ωignore_endΩ*/;
 
 	// Measured media dimensions, mirrored off the source's capture <video> by
 	// the poll effect further down. Declared here (above CARD_W) so the card
@@ -145,40 +151,27 @@
 	let dragActive = $state(false); // moveDrag owns visualStep while true
 	let visualStepInitialized = false; // first chase run parks instantly
 	let tweenRAF = 0; // active requestAnimationFrame handle
-	// Which direction the LAST strip move ran: 1 = forward (centerFrame↑,
-	// the old front recedes to the LEFT, d<0), -1 = backward (centerFrame↓,
-	// old front recedes to the RIGHT, d>0), 0 = idle. Only the RECEDING
-	// (old-front) card gets the dissolve grain; the ARRIVING/upcoming frame
-	// is always clean (user requirement: never mask the underneath frame).
-	let moveDir = 0;
 
-	// Sinusoidal ease-in-out tween of the visual center. The new front card
-	// (which was the settled neighbor before the switch) glides toward the
-	// center at a constant SIN pace for most of the move, then the last
-	// segment decelerates — reading as if the frame is being "placed
-	// precisely" into the center slot (user: "the last part of movement
-	// slowly ... like we place it in accurate way"). A sine ease-in-out is
-	// symmetric: slow start, fast middle, slow settle, so the grab (lift)
-	// and place feel deliberate. It carries the semi-state THROUGH the
-	// switch point (|d| = 0.5) so the receding card's dissolve actually
+	// Ease-out-cubic tween of the visual center. It carries the semi-state
+	// THROUGH the switch point (|d| = 0.5) so the accent dissolve actually
 	// ramps. A plain CSS transition never recomputes the JS dissolve vars,
 	// which is why a snapped (integer) visualStep kept the wash invisible.
-	function tweenVisualStep(from: number, to: number, dir: number) {
+	function tweenVisualStep(from: number, to: number) {
 		cancelAnimationFrame(tweenRAF);
 		if (from === to) { visualStep = to; return; }
-		moveDir = dir;
 		const start = performance.now();
-		const DUR = 300;
+		const DUR = 260;
 		const tick = (now: number) => {
 			const p = Math.min(1, (now - start) / DUR);
-			// Sinusoidal ease-in-out: fast middle, slow "precise place" tail.
-			const e = (1 - Math.cos(Math.PI * p)) / 2;
+			const e = 1 - Math.pow(1 - p, 3); // ease-out cubic
 			visualStep = from + (to - from) * e;
 			if (p < 1) tweenRAF = requestAnimationFrame(tick);
 			else { visualStep = to; tweenRAF = 0; }
 		};
 		tweenRAF = requestAnimationFrame(tick);
 	}
+
+
 
 	// External moves (frame-step buttons, wheel, nav arrows, ruler) land as
 	// a new `frame` prop → chase the new grid stop; the cards' CSS transition
@@ -204,10 +197,7 @@
 				visualStep = target; // mount: park instantly
 				visualStepInitialized = true;
 			} else {
-				// moveDir: +1 forward (old front recedes left, d<0),
-				// -1 backward (old front recedes right, d>0).
-				const dir = target > from ? 1 : -1;
-				tweenVisualStep(from, target, dir);
+				tweenVisualStep(from, target);
 			}
 		}
 	});
@@ -489,11 +479,6 @@
 		// 1:1 tracking: the strip position is the anchor + pointer travel in
 		// steps (LEFT drag = forward/next, i.e. travel dx<0 → steps>0).
 		visualStep = anchorStep - dx / DRAG_PX_PER_STEP;
-		// v6: name the sweep direction so the RECEDING front (the one that
-		// was the anchor before this drag) gets the grain wash and the
-		// UPCOMING frame stays clean. travel dx<0 → forward (+1), dx>0 →
-		// backward (-1). At the exact anchor the wash is off (0).
-		moveDir = visualStep > anchorStep ? 1 : visualStep < anchorStep ? -1 : 0;
 		// Live-commit the shared selection as each step boundary is crossed
 		// (wheel-like, one step per DRAG_PX_PER_STEP of travel) so the ruler
 		// and step buttons stay in sync during the sweep.
@@ -516,18 +501,14 @@
 		if (!dragActive) return; // never adopted → it was a click; nothing to do
 		// Release: commit where the FLOAT position rests (rounded to the
 		// nearest grid stop) so the frame settles where the pointer did, not
-		// where it snapped back to. The within-step remainder glides home on
-		// the sine tween below instead of jumping.
+		// where it snapped back to. Snapping the strip back to that stop and
+		// re-enabling the transition happen in the same render, so the
+		// within-step remainder glides home instead of jumping.
 		const target = Math.round(visualStep);
 		liveCommitStep = target;
 		commitLiveFrame();
 		dragActive = false;
-		// v6: do NOT snap visualStep here. The chase $effect (which keys on
-		// the new centerFrame + dragActive=false) runs the sine "place
-		// precisely" settle tween from the float rest position to the target
-		// step, and it sets moveDir to the settle direction. The receding
-		// old front keeps its grain wash through the whole settle; the
-		// arriving new front stays clean.
+		visualStep = target;
 		try { (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId); } catch { /* released */ }
 	}
 
@@ -606,16 +587,10 @@
 	function cardStyleByDistance(d: number): string {
 		const scale = carouselCardScaleF(d);
 		if (scale <= 0) return 'display:none;';
-		// v8: horizontal "brick interlock" tuck — the card rests EXACTLY at
-		// its ladder offset at every integer stop, but drifts slightly toward
-		// the deck center mid-switch (peaks at |d|=0.5) and snaps back out on
-		// the last few steps. Purely horizontal (0 at the front d=0 and rest):
-		// a right-side card (d>0) tucks leftward, a left-side card tucks right.
-		const tuck = carouselStackTuckF(d, CARD_W);
-		const xRaw = carouselCardX(d, CARD_W);
-		const x = tuck > 0 ? (d > 0 ? xRaw - tuck : xRaw + tuck) : xRaw;
+		const x = carouselCardX(d, CARD_W);
 		const opacity = carouselCardOpacityF(d);
 		const z = Math.max(1, 10 - Math.round(Math.abs(d)));
+		const lift = carouselLiftF(d);
 		const glow = carouselGlowF(d);
 		const blur = carouselBlurF(d);
 		// The card's OWN box-shadow carries the accent glow so it paints OUTSIDE
@@ -625,540 +600,57 @@
 		// fronts mid-move, 0 a step away — so the departing front's glow
 		// dissolves as the arriving front's rises, and both ride the card's
 		// box-shadow transition on a commit.
-		// v6: the dissolve belongs ONLY to the RECEDING (old-front) card, and
-		// opens toward the deck center so the grain reveals the UPCOMING frame
-		// settling into the slot the old front is leaving. The arriving /
-		// upcoming card is NEVER masked (user requirement). moveDir names which
-		// side just receded: +1 forward (old front left, d<0), -1 backward
-		// (old front right, d>0), 0 idle.
-		// v8: TWO independent dissolve channels, both receding-only (moveDir)
-		// and both 0 at the idle rest position (no effect without a drag):
-		//  - REVEAL (strong ~0.7 at the switch): how much of the receding
-		//    front's OWN media goes transparent so the UPCOMING frame settling
-		//    behind it is genuinely visible through the grain. Drives the mask.
-		//  - ACCENT (subtle ~0.1 at the switch): the accent shimmer painted
-		//    through the wave-grain texture. Drives the .fc-wave-tint layer.
-		// The arriving/upcoming card is NEVER masked in either channel.
-		const reveal = carouselDissolveReveal(d, moveDir);
-		const accent = carouselDissolveOpacity(d, moveDir);
-		// The mask opens from the center-facing edge of the receding card.
-		const dissolveDir = carouselDissolveDirF(d, moveDir);
-		return "left:calc(50% + " + x + "px - " + (CARD_W / 2) + "px);width:" + CARD_W + "px;transform:scale(" + scale.toFixed(4) + ");transform-origin:50% 100%;opacity:" + opacity.toFixed(3) + ";z-index:" + z + ";--fc-tint-bg:" + cardTintBg(d) + ";--fc-dissolve-op:" + reveal.toFixed(3) + ";--fc-wave-op:" + accent.toFixed(3) + ";--fc-dissolve-dir:" + dissolveDir + ";filter:blur(" + blur.toFixed(2) + "px);box-shadow:0 0 " + (22 * glow).toFixed(1) + "px " + (5 * glow).toFixed(1) + "px var(--accent-glow, rgba(255, 62, 0, 0.25));";
+		// Continuous dissolve (v4, receding-only): a RECEDING card (d<0)
+		// fades to true transparency through the dither grains — the mask is
+		// on the card's MEDIA only, so the accent border + glow stay solid
+		// and the frame UNDERNEATH is never masked — and gains a granular
+		// accent wave-tint (.fc-wave-tint, wavy shine/shadow). Arriving
+		// cards (d>=0) and every rest stop stay fully clean.
+		const dissolveOp = carouselDissolveOpacity(d); // non-zero only when d < 0
+		// For a left-side (receding) card the wash/accent open on the
+		// center-facing edge: dir 'to right' → ramp solid on the outer
+		// (left) edge, transparent toward the deck center.
+		const dissolveDir = 'to right';
+		return "left:calc(50% + " + x + "px - " + (CARD_W / 2) + "px);width:" + CARD_W + "px;transform:translateY(" + (-lift).toFixed(2) + "px) scale(" + scale.toFixed(4) + ");transform-origin:50% 100%;opacity:" + opacity.toFixed(3) + ";z-index:" + z + ";--fc-tint-bg:" + cardTintBg(d) + ";--fc-dissolve-op:" + dissolveOp.toFixed(3) + ";--fc-dissolve-dir:" + dissolveDir + ";filter:blur(" + blur.toFixed(2) + "px);box-shadow:0 0 " + (22 * glow).toFixed(1) + "px " + (5 * glow).toFixed(1) + "px var(--accent-glow, rgba(255, 62, 0, 0.25));";
 	}
-</script>
+;
+async () => {
 
-	<div
-		class="fc-strip"
-		class:fc-dragging={dragActive}
-		class:fc-settled={videoAtRest}
-
-		style:--fc-card-w={`${CARD_W}px`}
-		role="group"
-		aria-label={APP_CONSTANTS.strings.frameCarousel}
-		onpointerdown={beginDrag}
-		onpointermove={moveDrag}
-		onpointerup={endDrag}
-		onpointercancel={endDrag}
-		onwheel={wheelMove}
-		ondragstart={(event) => event.preventDefault()}
-		style:cursor={dragActive ? 'grabbing' : 'ew-resize'}
-	>
-		<!-- Reusable card POOL: 9 slots (offsets -4..4), always mounted.
-			 7 slots hold the visible dip (±3); ±4 are the hot-preload ring —
-			 decoded off-screen so a 1–2 frame move never waits on a decode.
-			 Each slot re-points to its frame index as the window slides (or
-			 null past the media bounds → hidden); no card DOM is ever created
-			 or destroyed during a sweep. A card is a thumbnail at ALL positions;
-			 the live <video> lives in the fixed layer below, cross-fading over
-			 the center slot when the strip is at rest. -->
-		{#each POOL as offset (offset)}
-			{@const f = poolFrames[offset + HOT] ?? null}
-			<div class="fc-card" class:fc-center={f !== null && f === centerFrame} style={f === null ? 'display:none;' : cardStyleByDistance(offset - (visualStep - centerFrame / STEP))}>
-				<div class="fc-thumb-placeholder" class:fc-thumb-placeholder-warn={f !== null && !thumbs[f] && (thumbDiag === 'failed' || thumbDiag === 'unsupported' || (mediaDurFrames !== null && f > mediaDurFrames))} aria-hidden="true">{f !== null ? slotPlaceholder(f) : ''}</div>
-				{#if f !== null && thumbs[f]}
-					<canvas class="fc-thumb" use:drawThumbnail={thumbs[f]} aria-label="{APP_CONSTANTS.strings.frameLabel} {f}"></canvas>
-				{/if}
-				<!-- Stacked veils: a blue-grey "past" tint on backwards cards,
-				 a warm "future" dim on forwards cards, driven by --fc-tint-bg
-				 (transparent at the front card). -->
-				<div class="fc-tint-overlay" aria-hidden="true"></div>
-				<!-- Granular accent wave-tint on the receding edge: accent
-				 gradient through the wave-grain texture (shine/shadow),
-				 opacity = --fc-dissolve-op (0 on clean cards). -->
-				<div class="fc-wave-tint" aria-hidden="true"></div>
-				<!-- Liquid-glass shine: a subtle top-edge highlight + inner
-				 glow that makes every card read as a translucent glass pane
-				 over the dark background (Vecteezy-style glassmorphism).
-				 Always present, not driven by --fc-dissolve-op. -->
-				<div class="fc-glass-shine" aria-hidden="true"></div>
-				{#if f !== null}
-					<span class="fc-frame-label">{f} · {(f / fps).toFixed(1)}s</span>
-				{/if}
-			</div>
-		{/each}
-
-		<!-- The live <video>, pinned at the strip's center (CARD_W × full
-				 height, bottom-aligned like a card). It renders ONCE — never
-				 re-parented between frames — and cross-fades: while the strip
-				 is in motion or the seek hasn't settled, the center card's
-				 thumbnail shows through instead. pointer-events:none so a
-				 drag started over it still sweeps the frames. -->
-		<div class="fc-video-layer" class:fc-video-hidden={!showVideo}>
-			<video
-				bind:this={videoEl}
-				class="fc-video"
-				src={video.url}
-				muted
-				playsinline
-				oncanplay={() => (videoReady = true)}
-				onloadeddata={() => (videoReady = true)}
-				onseeked={() => (seekSettled = true)}
-				style="pointer-events:none"
-			></video>
-			<div class="fc-glass-shine" aria-hidden="true"></div>
-		</div>
-
-	<!-- Prev / next: advance the shared frame by ±STEP on the grid.
-		 stopPropagation keeps the strip's pointer/wheel handlers from
-		 seeing button presses, so a click here is a clean click. -->
-	<button
-		class="fc-nav fc-prev"
-		onclick={(e) => { e.stopPropagation(); step(-1); }}
-		onpointerdown={(e) => e.stopPropagation()}
-		onpointermove={(e) => e.stopPropagation()}
-		onpointerup={(e) => e.stopPropagation()}
-		onwheel={(e) => e.stopPropagation()}
-		disabled={centerFrame <= 0}
-		aria-label={APP_CONSTANTS.strings.frameNavPrev}
-		title={APP_CONSTANTS.strings.framePrevDisabled}
-	>‹</button>
-	<button
-		class="fc-nav fc-next"
-		onclick={(e) => { e.stopPropagation(); step(1); }}
-		onpointerdown={(e) => e.stopPropagation()}
-		onpointermove={(e) => e.stopPropagation()}
-		onpointerup={(e) => e.stopPropagation()}
-		onwheel={(e) => e.stopPropagation()}
-		disabled={centerFrame >= totalFrames - 1 - STEP}
-		aria-label={APP_CONSTANTS.strings.frameNavNext}
-		title={APP_CONSTANTS.strings.frameNextDisabled}
-	>›</button>
-
-	<!-- Exit carousel: the strip owns the top panel while active, so the
-		 toggle back to playback lives HERE — it's unreachable otherwise
-		 (the playback-mode toggle only renders in the other branch). -->
-	<button
-		class="fc-exit"
-		onclick={(e) => { e.stopPropagation(); onexit?.(); }}
-		onpointerdown={(e) => e.stopPropagation()}
-		onpointermove={(e) => e.stopPropagation()}
-		onpointerup={(e) => e.stopPropagation()}
-		onwheel={(e) => e.stopPropagation()}
-		aria-label={APP_CONSTANTS.strings.frameCarouselToPlayback}
-		title={APP_CONSTANTS.strings.frameCarouselToPlayback}
-	>⨯</button>
-</div>
-
-<style>
-	.fc-strip {
-		position: relative;
-		width: 100%;
-		height: 100%;
-		overflow: hidden;
-		background: var(--bg-primary);
-		/* LMB hold+move on the strip is a frame sweep (like the 2-finger
-			touch drag), not a native image/video grab or text selection.
-			The cursor reads as a horizontal-scroll affordance, not "move". */
-		user-select: none;
-		-webkit-user-drag: none;
-		touch-action: pan-x;
-		overscroll-behavior: contain;
-		-webkit-touch-callout: none;
-		cursor: ew-resize;
-	}
-
-	.fc-card {
-		position: absolute;
-		bottom: 0;
-		height: 100%;
-		border-radius: 8px;
-		overflow: hidden;
-		border: 1px solid var(--border);
-		/* Transparent body (not #000): when the media grain-dissolves, the
-			 card UNDERNEATH shows through the holes. The border and glow
-			 are on this element and are NOT masked, so the frame stays
-			 crisp while only the image content dissolves. */
-		background: transparent;
-		/* Continuous dip motion: the card's box is a fixed CARD_W × full-height
-			 slot pinned to the strip; the dip is expressed as transform:scale
-			 (around 50% 100% so cards stay bottom-anchored) plus a left offset.
-			 Both ride the compositor / layout without re-flowing siblings. While
-			 a drag is in flight (.fc-dragging) the transition is removed so the
-			 pointer owns the position 1:1. */
-		/* No CSS transition: the rAF tween (tweenVisualStep) and the 1:1 drag
-			 pointer drive every card's geometry per-frame, so a CSS transition
-			 here would double-animate and fight the tween. */
-	}
-
-	.fc-strip.fc-dragging .fc-card {
-		transition: none;
-	}
-
-	/* v9b: glide the accent switch - the front card's accent BORDER color
-	   previously snapped when the .fc-center class flipped, making the
-	   center read 'jumpy'. Easing border-color over ~220ms fades the new
-	   center's accent frame in smoothly. Only border-color is transitioned;
-	   geometry (transform/opacity/box-shadow) stays rAF-driven. */
-	.fc-card {
-		transition: border-color 220ms ease;
-	}
-
-	.fc-card.fc-center {
-		border-color: var(--accent-color, #ff3e00);
-	}
-
-	/* The blue-grey "past" / warm "future" veil, painted over the thumbnail
-		 from the card's --fc-tint-bg (transparent at the front). Its own
-		 background transition keeps the tint smooth across a commit. */
-	.fc-tint-overlay {
-		position: absolute;
-		inset: 0;
-		background: var(--fc-tint-bg, transparent);
-		pointer-events: none;
-		transition: background-color 260ms cubic-bezier(0.22, 1, 0.36, 1);
-	}
-
-	/* Idle / breathing: when the strip is settled at a rest stop (fc-settled)
-		 the front card's accent halo gently pulses, so the panel reads as
-		 "alive" while scrubbing has stopped. Applied to the live <video>
-		 layer (the settled front) and to the thumbnail center card fallback.
-		 A soft ambient spotlight lifts the strip's mood from flat-dark. */
-	@keyframes fc-breathe {
-		0%, 100% { box-shadow: 0 0 18px 2px var(--accent-glow, rgba(255, 62, 0, 0.25)); }
-		50%      { box-shadow: 0 0 30px 7px var(--accent-glow, rgba(255, 62, 0, 0.25)); }
-	}
-	.fc-strip.fc-settled .fc-video-layer:not(.fc-video-hidden),
-	.fc-strip.fc-settled .fc-card.fc-center {
-		animation: fc-breathe 3.4s ease-in-out infinite;
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.fc-strip.fc-settled .fc-video-layer,
-		.fc-strip.fc-settled .fc-card.fc-center {
-			animation: none;
+	 { svelteHTML.createElement("div", {                       "class":`fc-strip`,"role":`group`,"aria-label":APP_CONSTANTS.strings.frameCarousel,"onpointerdown":beginDrag,"onpointermove":moveDrag,"onpointerup":endDrag,"onpointercancel":endDrag,"onwheel":wheelMove,"ondragstart":(event) => event.preventDefault(),});dragActive;videoAtRest;__sveltets_2_ensureType(String, Number, `${CARD_W}px`);__sveltets_2_ensureType(String, Number, dragActive ? 'grabbing' : 'ew-resize');
+		
+		   for(let offset of __sveltets_2_ensureArray(POOL)){offset;
+			const f = poolFrames[offset + HOT] ?? null;
+			 { svelteHTML.createElement("div", {    "class":`fc-card`,"style":f === null ? 'display:none;' : cardStyleByDistance(offset - (visualStep - centerFrame / STEP)),});f !== null && f === centerFrame;
+				 { svelteHTML.createElement("div", {    "class":`fc-thumb-placeholder`,"aria-hidden":`true`,});f !== null && !thumbs[f] && (thumbDiag === 'failed' || thumbDiag === 'unsupported' || (mediaDurFrames !== null && f > mediaDurFrames));f !== null ? slotPlaceholder(f) : ''; }
+				if(f !== null && thumbs[f]){
+					 {const $$action_0 = __sveltets_2_ensureAction(drawThumbnail(svelteHTML.mapElementTag('canvas'),(thumbs[f])));{ svelteHTML.createElement("canvas", __sveltets_2_union($$action_0), {     "class":`fc-thumb`,"aria-label":`${APP_CONSTANTS.strings.frameLabel} ${f}`,}); }}
+				}
+				
+				 { svelteHTML.createElement("div", {   "class":`fc-tint-overlay`,"aria-hidden":`true`,}); }
+				
+				 { svelteHTML.createElement("div", {   "class":`fc-wave-tint`,"aria-hidden":`true`,}); }
+				if(f !== null){
+					 { svelteHTML.createElement("span", { "class":`fc-frame-label`,});f;  (f / fps).toFixed(1);  }
+				}
+			 }
 		}
-	}
 
-	/* The live <video>: a fixed CARD_W × full-height slot pinned to the strip
-		 center, cross-fading over the center card's thumbnail. It is the ONLY
-		 <video> in the carousel — frame commits animate card transforms, the
-		 element itself never moves, so the source is never reloaded. */
-	.fc-video-layer {
-		position: absolute;
-		bottom: 0;
-		left: 50%;
-		width: var(--fc-card-w, 170px);
-		transform: translateX(-50%);
-		height: 100%;
-		border-radius: 8px;
-		overflow: hidden;
-		z-index: 11;
-		transition: opacity 180ms ease;
-	}
+		
+		 { svelteHTML.createElement("div", {  "class":`fc-video-layer`,});!showVideo;
+			 { const $$_video2 = svelteHTML.createElement("video", {                "class":`fc-video`,"src":video.url,"muted":true,"playsinline":true,"oncanplay":() => (videoReady = true),"onloadeddata":() => (videoReady = true),"onseeked":() => (seekSettled = true),"style":`pointer-events:none`,});videoEl = $$_video2; }
+		 }
 
-	.fc-video-layer:not(.fc-video-hidden) {
-		border: 1px solid var(--accent-color, #ff3e00);
-		box-shadow: 0 0 18px var(--accent-glow, rgba(255, 62, 0, 0.25));
-	}
+	
+	 { svelteHTML.createElement("button", {                   "class":`fc-nav fc-prev`,"onclick":(e) => { e.stopPropagation(); step(-1); },"onpointerdown":(e) => e.stopPropagation(),"onpointermove":(e) => e.stopPropagation(),"onpointerup":(e) => e.stopPropagation(),"onwheel":(e) => e.stopPropagation(),"disabled":centerFrame <= 0,"aria-label":APP_CONSTANTS.strings.frameNavPrev,"title":APP_CONSTANTS.strings.framePrevDisabled,});  }
+	 { svelteHTML.createElement("button", {                   "class":`fc-nav fc-next`,"onclick":(e) => { e.stopPropagation(); step(1); },"onpointerdown":(e) => e.stopPropagation(),"onpointermove":(e) => e.stopPropagation(),"onpointerup":(e) => e.stopPropagation(),"onwheel":(e) => e.stopPropagation(),"disabled":centerFrame >= totalFrames - 1 - STEP,"aria-label":APP_CONSTANTS.strings.frameNavNext,"title":APP_CONSTANTS.strings.frameNextDisabled,});  }
 
-	.fc-video-layer.fc-video-hidden {
-		opacity: 0;
-		pointer-events: none;
-	}
+	
+	 { svelteHTML.createElement("button", {                 "class":`fc-exit`,"onclick":(e) => { e.stopPropagation(); onexit?.(); },"onpointerdown":(e) => e.stopPropagation(),"onpointermove":(e) => e.stopPropagation(),"onpointerup":(e) => e.stopPropagation(),"onwheel":(e) => e.stopPropagation(),"aria-label":APP_CONSTANTS.strings.frameCarouselToPlayback,"title":APP_CONSTANTS.strings.frameCarouselToPlayback,});  }
+ }
 
-	/* Glass shine on the live video layer (front card when settled) */
-	.fc-video-layer .fc-glass-shine {
-		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		pointer-events: none;
-		/* Neutral white specular only — NO accent color wash at the settled
-		   center (the user wants the stable front to read clean). The accent
-		   border + halo stay on the card's border/box-shadow, not this layer. */
-		background:
-			linear-gradient(
-				to bottom,
-				rgba(255, 255, 255, 0.16) 0%,
-				rgba(255, 255, 255, 0.04) 10%,
-				transparent 30%
-			),
-			linear-gradient(
-				to top,
-				rgba(255, 255, 255, 0.06) 0%,
-				transparent 12%
-			);
-	}
 
-	/* True-transparency dissolve (v6, receding-only): the RECEDING front's
-		 MEDIA is masked (not the card box), so the accent border + glow stay
-		 solid and the UPCOMING frame UNDERNEATH is never dithered. The wash
-		 peaks ~0.1 alpha at the switch distance and is 0 at both rest stops,
-		 so the settled center reads clean. Two layers, unioned (add /
-		 source-over):
-		   1) Directional ramp — solid white from the outer edge up to
-		      (1 − dissolve-op) × 100%, then transparent toward the deck
-		      center. At rest (dissolve-op=0) the ramp is fully white →
-		      media fully opaque.
-		   2) Dither texture — stretched to 100%×100% so the grain density
-		      matches the frame size.
-		 --fc-dissolve-op is driven per-frame by the rAF tween and is >0 on
-		 ONLY the receding side (named by moveDir); the arriving side stays
-		 clean. */
-	/* v9: the media REVEAL is a clean, SMOOTH directional gradient — NO grain
-	   baked into this channel. The receding front's own media fades to
-	   transparent from its outer edge toward the deck center, so the UPCOMING
-	   frame settling behind it shows through a smooth, pristine gradient
-	   (the idea: "we see the upcoming frame through the transparency of the
-	   center one"). Because the grain texture used to live here, the SOLID
-	   part of the center card was mottled and the frame behind read as
-	   "affected" — that's gone now. The grain/structure is moved to the
-	   accent-wave layer below, which is purely additive (screen blend) so it
-	   never touches the reveal. An eased ramp (white 0 → 55%, then fade to
-	   transparent 100%) keeps the edge soft instead of a hard band. */
-	.fc-card .fc-thumb,
-	.fc-card .fc-thumb-placeholder {
-		/* v9: clean SMOOTH media reveal — directional white→transparent
-		   gradient, NO grain baked in. At rest (op=0) the white stop is at
-		   100% → card fully opaque. Mid-switch it retreats to (1-op)*100%,
-		   opening the center-facing edge so the UPCOMING frame behind shows
-		   through a smooth, pristine gradient. Grain/structure lives in the
-		   accent-wave layer below (purely additive), never here. */
-		-webkit-mask-image:
-			linear-gradient(var(--fc-dissolve-dir, to right),
-			  white 0%,
-			  white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
-			  transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%));
-		mask-image:
-			linear-gradient(var(--fc-dissolve-dir, to right),
-			  white 0%,
-			  white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
-			  transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%));
-		-webkit-mask-size: 100% 100%;
-		mask-size: 100% 100%;
-		-webkit-mask-repeat: no-repeat;
-		mask-repeat: no-repeat;
-	}
-
-	/* v9: ACCENT WAVE - the structured sheen on the receding edge. Two
-	   mask layers INTERSECTED (mask-composite: intersect):
-	     1) a soft directional ramp - keeps the sheen inside the dissolve
-	        zone (transparent on the outer side, opaque toward center);
-	     2) the SQUARED/stepped grain texture, OFFSET so its rows undulate
-	        instead of tiling flat - this is the 'accent wave' structure
-	        (neo squared-mask aesthetic). The accent gradient supplies the
-	   color; the intersection carves the structure. Screen-blended so it
-	   GLOWS over the frame rather than dulling it. Driven by --fc-wave-op
-	   (0 at rest, peak at the switch), so it is purely a mid-move effect
-	   and never tints the clean upcoming frame behind. */
-	.fc-wave-tint {
-		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		/* Accent color, brightest at the center-facing dissolve edge. */
-		background: linear-gradient(
-			var(--fc-dissolve-dir, to right),
-			transparent 0%,
-			color-mix(in srgb, var(--accent-color, #ff6b35) 45%, transparent) 42%,
-			var(--accent-color, #ff6b35) 100%
-		);
-		opacity: var(--fc-wave-op, 0);
-		pointer-events: none;
-		mix-blend-mode: screen;
-	/* Layer 1 = soft ramp; Layer 2 = squared grain, offset (18px 6px) so
-		   the stepped rows read as a wave. Intersected = structured sheen. */
-	/* Layer 1 clips the accent wave to the receding card's SOLID media
-	   (white where opaque, transparent where the .fc-thumb reveal opens) so
-	   the sheen never paints over the transparent zone or the upcoming
-	   frame behind. Same directional ramp + --fc-dissolve-op as reveal. */
-	-webkit-mask-image:
-		linear-gradient(var(--fc-dissolve-dir, to right),
-			white 0%,
-			white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
-			transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%)),
-		url('/icons/fc-wave-mask.png');
-	mask-image:
-		linear-gradient(var(--fc-dissolve-dir, to right),
-			white 0%,
-			white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
-			transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%)),
-		url('/icons/fc-wave-mask.png');
-	-webkit-mask-size: 100% 100%, 100% 100%;
-	mask-size: 100% 100%, 100% 100%;
-	-webkit-mask-repeat: no-repeat, repeat;
-	mask-repeat: no-repeat, repeat;
-	-webkit-mask-position: 0 0, 18px 6px;
-	mask-position: 0 0, 18px 6px;
-	-webkit-mask-composite: source-in;
-	mask-composite: intersect;
-		animation: fc-wave-breathe 1.4s ease-in-out infinite;
-	}
-
-	/* Liquid-glass shine (Vecteezy glassmorphism): a subtle top-edge white
-		 highlight + inner glow that makes every card read as a translucent
-		 glass pane over the dark background. Always present, very low opacity
-		 so it doesn't overpower the frame content. The top highlight mimics
-		 light hitting the curved top edge of a glass block. */
-	.fc-glass-shine {
-		position: absolute;
-		inset: 0;
-		border-radius: inherit;
-		pointer-events: none;
-		background:
-			/* Top-edge specular highlight (light hitting the glass top) */
-			linear-gradient(
-				to bottom,
-				rgba(255, 255, 255, 0.18) 0%,
-				rgba(255, 255, 255, 0.04) 12%,
-				transparent 30%
-			),
-			/* Subtle inner bottom glow (glass thickness effect) */
-			linear-gradient(
-				to top,
-				rgba(255, 255, 255, 0.06) 0%,
-				transparent 15%
-			);
-		/* Accent tint on the top edge when the card is the front (fc-center) */
-	}
-
-	/* Neutral white specular on the front card too — NO accent color wash at
-	   the settled center. The accent reads through the border + box-shadow
-	   halo only, so the media content stays clean at rest. */
-	.fc-card.fc-center .fc-glass-shine {
-		background:
-			linear-gradient(
-				to bottom,
-				rgba(255, 255, 255, 0.16) 0%,
-				rgba(255, 255, 255, 0.04) 10%,
-				transparent 30%
-			),
-			linear-gradient(
-				to top,
-				rgba(255, 255, 255, 0.06) 0%,
-				transparent 12%
-			);
-	}
-
-	.fc-video,
-	.fc-thumb,
-	.fc-thumb-placeholder {
-		position: absolute;
-		inset: 0;
-		width: 100%;
-		height: 100%;
-		object-fit: fill;
-		display: block;
-		/* Pointer events bubble to the strip handler, so a drag that starts
-			 on the center card or a thumbnail still sweeps frames. Disable
-			 the native draggable grab on the media elements. */
-		-webkit-user-drag: none;
-		user-select: none;
-	}
-
-	/* The placeholder sits UNDER the thumbnail canvas (which only mounts
-		 once the decode lands) and fills the card while the bitmap is in
-		 flight — so a thumbnail appearing never re-lays-out the card.
-		 The warn variant marks KNOWN-failure states (out of range / decode
-		 failed / unsupported) so the user isn't left staring at an ellipsis. */
-	.fc-thumb-placeholder {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		color: var(--text-muted);
-		font-size: 1.4rem;
-		background: var(--bg-tertiary);
-	}
-
-	.fc-thumb-placeholder-warn {
-		font-size: 0.62rem;
-		font-family: 'JetBrains Mono', monospace;
-		color: var(--text-muted);
-		letter-spacing: 0.02em;
-	}
-
-	.fc-frame-label {
-		position: absolute;
-		bottom: 4px;
-		left: 50%;
-		transform: translateX(-50%);
-		font-size: 9px;
-		font-family: 'JetBrains Mono', monospace;
-		color: var(--text-secondary);
-		background: rgba(0, 0, 0, 0.6);
-		padding: 1px 6px;
-		border-radius: 3px;
-		white-space: nowrap;
-	}
-
-	.fc-nav {
-		position: absolute;
-		top: 50%;
-		transform: translateY(-50%);
-		width: 30px;
-		height: 54px;
-		border-radius: 8px;
-		border: 1px solid var(--border);
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-		font-size: 1.3rem;
-		cursor: pointer;
-		z-index: 20;
-	}
-
-	.fc-prev { left: 8px; }
-	.fc-next { right: 8px; }
-
-	.fc-nav:disabled {
-		opacity: 0.35;
-		cursor: default;
-	}
-
-	.fc-nav:hover:not(:disabled) {
-		background: var(--bg-hover);
-	}
-
-	/* Exit-carousel button: top-right of the strip, the only way out while the
-		 carousel owns the top panel. Reads as "close this view", not a frame
-		 control, so it's set apart from the prev/next nav buttons. */
-	.fc-exit {
-		position: absolute;
-		top: 8px;
-		right: 8px;
-		width: 26px;
-		height: 26px;
-		border-radius: 6px;
-		border: 1px solid var(--border);
-		background: var(--bg-tertiary);
-		color: var(--text-secondary);
-		font-size: 0.8rem;
-		line-height: 1;
-		cursor: pointer;
-		z-index: 21;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.fc-exit:hover {
-		background: var(--bg-hover);
-		color: var(--text-primary);
-		border-color: var(--accent-color, #ff3e00);
-	}
-
-	/* v9b: subtle accent breathing - a ~1.4s opacity pulse gives the wave
-	   sheen amplitude so the transition reads as 'powered by accent color',
-	   not a flat static wash. Scales the base --fc-wave-op by 0.72..1.0. */
-	@keyframes fc-wave-breathe {
-		0%, 100% { opacity: calc(var(--fc-wave-op, 0) * 0.72); }
-		50%      { opacity: calc(var(--fc-wave-op, 0) * 1.0); }
-	}
-
-</style>
+};
+return { props: {} as any as $$ComponentProps, exports: {}, bindings: __sveltets_$$bindings('videoEl'), slots: {}, events: {} }}
+const FrameCarousel__SvelteComponent_ = __sveltets_2_fn_component($$render());
+/*Ωignore_startΩ*/type FrameCarousel__SvelteComponent_ = ReturnType<typeof FrameCarousel__SvelteComponent_>;
+/*Ωignore_endΩ*/export default FrameCarousel__SvelteComponent_;

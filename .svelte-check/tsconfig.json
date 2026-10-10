@@ -1,0 +1,91 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDirs": [
+      "..",
+      "svelte"
+    ],
+    "allowArbitraryExtensions": true,
+    "noEmit": true,
+    "incremental": false,
+    "tsBuildInfoFile": "tsbuildinfo.json",
+    "paths": {
+      "$types": [
+        "../src/types",
+        "./svelte/src/types"
+      ],
+      "$types/*": [
+        "../src/types/*",
+        "./svelte/src/types/*"
+      ],
+      "$lib": [
+        "../src/lib",
+        "./svelte/src/lib"
+      ],
+      "$lib/*": [
+        "../src/lib/*",
+        "./svelte/src/lib/*"
+      ],
+      "$constants": [
+        "../src/constants",
+        "./svelte/src/constants"
+      ],
+      "$constants/*": [
+        "../src/constants/*",
+        "./svelte/src/constants/*"
+      ]
+    }
+  },
+  "files": [
+    "../node_modules/svelte-check/dist/src/svelte-shims-v4.d.ts",
+    "../node_modules/svelte-check/dist/src/svelte-jsx-v4.d.ts"
+  ],
+  "include": [
+    "../src/**/*.ts",
+    "../src/**/*.svelte",
+    "../*.ts",
+    "../*.svelte",
+    "svelte/src/**/*.ts",
+    "svelte/src/**/*.d.svelte.ts",
+    "svelte/*.ts",
+    "svelte/*.d.svelte.ts"
+  ],
+  "exclude": [
+    "../src/App.svelte",
+    "../test-results/FrameCarousel-pre-1to1.svelte",
+    "../src/components/ComposerPanel.svelte",
+    "../src/components/ErrorHandler.svelte",
+    "../src/components/Footer.svelte",
+    "../src/components/Frame.svelte",
+    "../src/components/FrameCarousel.svelte",
+    "../src/components/FrameRuler.svelte",
+    "../src/components/ProfilePanel.svelte",
+    "../src/components/ProjectsPanel.svelte",
+    "../src/components/PromptIcon.svelte",
+    "../src/components/ToolsPanel.svelte",
+    "../src/components/WelcomeAccounts.svelte",
+    "../src/components/WelcomeDeleteModal.svelte",
+    "../src/components/Workspace.svelte",
+    "../src/components/ComposerMenus/AddTrackMenu.svelte",
+    "../src/components/ComposerMenus/TagSelectorMenu.svelte",
+    "../src/components/ComposerRows/KeyframesRow.svelte",
+    "../src/components/ComposerRows/PipeHeader.svelte",
+    "../src/components/ComposerRows/SubjectRefsRow.svelte",
+    "../src/components/ComposerTimeline/TimelineSection.svelte",
+    "../src/components/Settings/ProviderCard.svelte",
+    "../src/components/Settings/ProviderStatus.svelte",
+    "../src/components/Settings/SettingsDefaults.svelte",
+    "../src/components/Settings/SettingsModal.svelte",
+    "../src/components/Settings/ToolsSettings.svelte",
+    "../src/components/ComposerModals/CompactPipesProgress.svelte",
+    "../src/components/ComposerModals/GenerateModal.svelte",
+    "../src/components/ComposerModals/GenerationProgressModal.svelte",
+    "../src/components/ComposerModals/GlobalPromptModal.svelte",
+    "../src/components/ComposerModals/KeyframeModal.svelte",
+    "../src/components/ComposerModals/PipeLengthModal.svelte",
+    "../src/components/ComposerModals/SegmentModal.svelte",
+    "../src/components/ComposerModals/SessionGenerateModal.svelte",
+    "../src/components/ComposerModals/SubjectRefModal.svelte",
+    "../src/components/ComposerModals/TagPromptModal.svelte"
+  ]
+}

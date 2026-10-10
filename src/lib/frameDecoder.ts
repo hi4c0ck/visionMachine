@@ -36,8 +36,26 @@ export const CAROUSEL_STRIP_H = 180;
 /** Fixed card width (px) used when no video aspect is known. */
 export const CAROUSEL_FALLBACK_CARD_W = 170;
 
-/** Neighbor cards overlap this fraction of the previous card's width. */
-export const CAROUSEL_OVERLAP = 0.55;
+/**
+ * Deck-tuck ladder: horizontal offset of the card at grid distance 0..4, in
+ * card-width units — [0, 0.55, 0.87, 1.13, 1.35]. The ±1 card tucks UNDER
+ * the front card (only 45% of its width peeks out), and every further card
+ * steps out a little less, so the visible slivers shrink down the deck: a
+ * nested `[ [[]] ]` cascade, not a side-by-side row.
+ */
+export const CAROUSEL_DECK_OFFSET_LADDER = [0, 0.55, 0.87, 1.13, 1.35];
+
+/** Display-scale ladder matching the offsets: [1.0, 0.76, 0.64, 0.55, 0]. */
+export const CAROUSEL_DECK_SCALE_LADDER = [1.0, 0.76, 0.64, 0.55, 0];
+
+/** Piecewise-linear read of a ladder at a (clamped) float position. */
+function deckLerp(ladder: number[], pos: number): number {
+  const n = ladder.length - 1;
+  const p = Math.max(0, Math.min(pos, n));
+  const lo = Math.floor(p);
+  const hi = Math.min(lo + 1, n);
+  return ladder[lo] + (ladder[hi] - ladder[lo]) * (p - lo);
+}
 
 /**
  * Card width in px for the given video aspect (width/height), at the
@@ -58,11 +76,11 @@ export function carouselCardWidth(
 
 /**
  * Pixel width of horizontal drag movement per carousel step.
- * One step advances the strip by one card width, folded by the neighbor
- * overlap. No rubber-banding: pointer travel maps 1:1 to strip movement.
+ * One step tucks the first neighbor (offset 0.55 × cardW) under the front
+ * card. No rubber-banding: pointer travel maps 1:1 to strip movement.
  */
-export function carouselDragPxPerStep(cardW: number, overlap: number = CAROUSEL_OVERLAP): number {
-  return Math.round(cardW * (1 + (1 - overlap)));
+export function carouselDragPxPerStep(cardW: number): number {
+  return Math.round(cardW * CAROUSEL_DECK_OFFSET_LADDER[1]);
 }
 
 /**
@@ -689,17 +707,17 @@ export function carouselWindow(
 }
 
 /**
- * Display scale for a card `delta` steps from center (the "dip"):
- * 0 → 1.0, ±1 → 0.85, ±2 → 0.7, ±3 → 0.55, otherwise 0 (hidden).
+ * Display scale for a card `delta` steps from center (the deck cascade):
+ * 0 → 1.0, ±1 → 0.76, ±2 → 0.64, ±3 → 0.55, otherwise 0 (hidden).
  */
 export function carouselCardScale(delta: number): number {
   switch (Math.abs(delta)) {
     case 0:
       return 1.0;
     case 1:
-      return 0.85;
+      return 0.76;
     case 2:
-      return 0.7;
+      return 0.64;
     case 3:
       return 0.55;
     default:
@@ -708,34 +726,33 @@ export function carouselCardScale(delta: number): number {
 }
 
 /**
- * Continuous dip scale for a card `d` steps from the *visual* center, where
- * `d` is a FLOAT (the semi-state between grid stops — mid-drag, or mid
- * transition between centers). Piecewise-linear through the same
- * breakpoints as the discrete dip (0→1.0, 1→0.85, 2→0.7, 3→0.55, 4→0), so
- * resting positions look identical to `carouselCardScale` but intermediate
- * positions are smooth: a card 0.5 steps from center reads 0.925, not the
- * discrete 0.85 or 1.0. Beyond |d| ≥ 4 the card is hidden (0).
+ * Continuous deck-cascade scale for a card `d` steps from the *visual*
+ * center, where `d` is a FLOAT (the semi-state between grid stops — mid-drag,
+ * or mid transition between centers). Piecewise-linear through the
+ * CAROUSEL_DECK_SCALE_LADDER, so resting positions look identical to
+ * `carouselCardScale` but intermediate positions are smooth: a card 0.5 steps
+ * from center reads 0.88, not the discrete 0.76 or 1.0. Beyond |d| ≥ 4 the
+ * card is hidden (0).
  */
 export function carouselCardScaleF(d: number): number {
   const a = Math.abs(d);
   if (a >= 4) return 0;
-  if (a < 1) return 1 - 0.15 * a;
-  if (a < 2) return 0.85 - 0.15 * (a - 1);
-  if (a < 3) return 0.7 - 0.15 * (a - 2);
-  return 0.55 - 0.55 * (a - 3);
+  return deckLerp(CAROUSEL_DECK_SCALE_LADDER, a);
 }
 
 /**
  * Horizontal offset (px, signed: negative = left of the strip center) of a
- * card `d` steps from the *visual* center (float). Matches the discrete
- * layout at integer stops — the first neighbor sits one full card-width out,
- * each further neighbor folds by `OVERLAP` — but interpolates linearly
- * between stops so mid-transition positions are continuous. At |d| ≥ 4 the
- * offset keeps the formula (the card is hidden anyway).
+ * card `d` steps from the *visual* center (float). Follows the
+ * CAROUSEL_DECK_OFFSET_LADDER — the first neighbor tucks UNDER the front
+ * card (offset 0.55 × cardW vs its 0.76 scale, so its wider body hides behind
+ * the front and only its edge peeks out), and each further card steps out a
+ * little less, shrinking the visible sliver down the deck. Interpolates
+ * linearly between stops so mid-transition positions are continuous. At
+ * |d| ≥ 4 the offset keeps the formula (the card is hidden anyway).
  */
-export function carouselCardX(d: number, cardW: number, overlap: number): number {
+export function carouselCardX(d: number, cardW: number): number {
   const a = Math.abs(d);
-  const x = a < 1 ? cardW * a : cardW * (1 + (a - 1) * (1 - overlap));
+  const x = cardW * deckLerp(CAROUSEL_DECK_OFFSET_LADDER, Math.min(a, 4));
   return d < 0 ? -x : x;
 }
 
@@ -749,4 +766,239 @@ export function carouselCardOpacityF(d: number): number {
   if (a <= 3) return 1;
   if (a >= 4) return 0;
   return 1 - (a - 3);
+}
+
+// ── Stacked-treatment layer (horizontal nested `[ [[]] ]` depth) ───────────
+// Everything below is driven by the SAME float distance `d` that drives the
+// dip geometry (negative = backwards cards on the left, positive = forwards
+// cards on the right), so mid-transition (semi-state) positions interpolate
+// every treatment smoothly with no discrete state. All are continuous.
+
+/** Peak vertical "grab" lift (px) of the dissolve arc. */
+export const CAROUSEL_DISSOLVE_LIFT_PX = 8;
+
+/**
+ * Blue-grey "past frames" overlay strength (0..1) for BACKWARDS cards (d<0):
+ * 0 at the center, ramping to 0.45 by the first back resting position (d=-1)
+ * and growing 0.10 per further step, capped at 0.7. Forward cards read 0.
+ * Continuous in d, so the departing front card (d crossing 0→-1) gains the
+ * tint exactly as it loses the front position.
+ */
+export function carouselBackTintF(d: number): number {
+  if (d >= 0) return 0;
+  const back = -d;
+  const tint = 0.45 * Math.min(back, 1) + Math.max(0, back - 1) * 0.1;
+  return Math.min(0.7, tint);
+}
+
+/**
+ * Warm-neutral "future frames" dim (0..1) for FORWARDS cards (d>0): symmetric
+ * to the backwards ramp but softer (0.25 at d=1, growing 0.10/step, capped at
+ * 0.45). Backwards cards read 0.
+ */
+export function carouselFwdDimF(d: number): number {
+  if (d <= 0) return 0;
+  const dim = 0.25 * Math.min(d, 1) + Math.max(0, d - 1) * 0.1;
+  return Math.min(0.45, dim);
+}
+
+/**
+ * Accent glow strength (0..1) for the front-card treatment: 1 at the center,
+ * decaying linearly to 0 by |d| = 1, so during a move the OUTGOING front's
+ * glow and the INCOMING front's glow cross-fade at 0.5 / 0.5 mid-transition.
+ */
+export function carouselGlowF(d: number): number {
+  return Math.max(0, 1 - Math.abs(d));
+}
+
+/**
+ * "Grab-and-place" lift: a pulse peaking at |d| = 0.5 (mid-transition) and
+ * settling to 0 at BOTH resting positions (|d| = 0 and |d| = 1), so the
+ * departing/arriving front cards arc slightly upward while crossing the
+ * center and rest flat again. Symmetric in d (forward and backward moves
+ * look the same, matching the reference sheets).
+ */
+export function carouselLiftF(d: number): number {
+  const a = Math.abs(d);
+  if (a >= 1) return 0;
+  return CAROUSEL_DISSOLVE_LIFT_PX * (1 - Math.abs(2 * a - 1));
+}
+
+/**
+ * Depth blur (px): the front area (|d| < 0.5) stays sharp, receding cards
+ * blur up to a 3px cap. Continuous; |d| ≥ 3.5 clamps at the cap.
+ */
+export function carouselBlurF(d: number): number {
+  const a = Math.max(0, Math.abs(d) - 0.5);
+  return Math.min(3, a * 1.2);
+}
+
+/**
+ * Continuous dissolve strength (0..1) for a card at float distance `d` from
+ * the visual center — a single bump: 0 at the resting front (`|d| = 0`),
+ * peaking at 1 on the "switch" midpoint (`|d| = 0.5`), back to 0 at the
+ * settled neighbor (`|d| = 1`), and 0 beyond. Driven by the card's SIGNED
+ * float distance, so it reads the same on the receding (d<0) and arriving
+ * (d>0) sides of the front. This powers the accent-wash overlay on every
+ * card: the wash ramps up as the front card approaches the switch and ramps
+ * back down once it settles — a smooth, continuous effect with no discrete
+ * state branch and no spurious wash on the far (barely-visible) cards.
+ */
+/**
+ * Continuous dissolve strength (0..1) for a card at float distance `d` from
+ * the visual center — a WIDE trapezoid that stays elevated through the whole
+ * move (not a narrow pulse at the switch point):
+ *   |d| in [0, 0.5] → ramps 0 → 0.5
+ *   |d| in [0.5, 1] → stays at 1 (full wash through the commit)
+ *   |d| ≥ 1         → 0 (far cards never wash)
+ * Driven by the SIGNED float distance, so it reads the same on the
+ * receding (d<0) and arriving (d>0) sides of the front. The rAF tween
+ * (visualStep) sweeps `d` continuously through 0.5, which is where this
+ * function stays at 1 — the wash lingers for the entire 260 ms move.
+ */
+/**
+ * Continuous dissolve strength (0..1) for a card at float distance `d` from
+ * the visual center — a trapezoid that LINGERS through the whole move (B),
+ * not a narrow pulse at the switch point:
+ *   |d| in [0.0, 0.5] → ramps 0 → 1
+ *   |d| in [0.5, 1.0] → stays at 1 (full wash through the commit)
+ *   |d| in [1.0, 1.5] → ramps 1 → 0
+ *   |d| >= 1.5        → 0 (far cards never wash)
+ * Every boundary is continuous, so a card settling at |d| = 1 (the receding
+ * neighbor) holds the wash and a card arriving from |d| = 1 clears it only
+ * once it reaches the front (|d| = 0). The rAF tween sweeps `d` through 0.5
+ * continuously, which is where this function plateaus — so the dissolve is
+ * present for most of the 260 ms move.
+ */
+/**
+ * Continuous dissolve strength (0..1) for a card at signed float distance
+ * `d` from the visual center — SYMMETRIC (both receding d<0 and arriving d>0
+ * sides), so the effect is visible regardless of scroll direction:
+ *   |d| in [0, 0.25]   → ramps 0 → 1 (front card gains the wash as it moves)
+ *   |d| in [0.25,0.75] → stays at 1  (wash lingers through the commit)
+ *   |d| in [0.75, 1]   → ramps 1 → 0 (clears before settling into the
+ *                                    neighbor rest stop, so the frame
+ *                                    underneath stays unmasked)
+ *   |d| >= 1          → 0
+ *
+ * The rAF tween (visualStep) sweeps the crossing card through |d|: 0 → 0.5 →
+ * 1 over 260 ms; the wash is visible from the first quarter of the move and
+ * gone by the time the card is a settled neighbor. Both the departing front
+ * (d<0, left side) and the arriving front (d>0, right side) dissolve
+ * symmetrically, so left-scroll and right-scroll look identical.
+ */
+/**
+ * v6: the dissolve belongs to the card that is currently the FRONT, and it
+ * recedes in the direction of motion — i.e. it leaves on the side it is
+ * moving TOWARD, and the mask opens toward that side.
+ *
+ * `receding` = the motion direction at the moment the move started:
+ *  - forward (next / drag-left): the old front recedes to the LEFT side
+ *    (d<0) and its wash opens toward center → 'to right'.
+ *  - backward (prev / drag-right): the old front recedes to the RIGHT side
+ *    (d>0) and its wash opens toward center → 'to left'.
+ *
+ * The NEW front (the card arriving from the opposite side) is NEVER
+ * masked — the user explicitly asked for the upcoming/underneath frame to
+ * stay clean. Every settled card stays clean (op=0 at rest stops).
+ */
+/**
+ * v6: the dissolve belongs ONLY to the receding (old-front) card, and it
+ * opens toward the deck center so the grain reveals the UPCOMING frame
+ * settling into the slot the old front is leaving. The arriving/upcoming
+ * card (the one on the opposite side) is NEVER masked.
+ *
+ * `moveDir` records which way the strip just moved:
+ *   +1 = forward (centerFrame↑): the old front recedes to the LEFT (d<0).
+ *   -1 = backward (centerFrame↓): the old front recedes to the RIGHT (d>0).
+ *    0 = idle / settled: no wash anywhere (rest stops stay clean).
+ *
+ * So a card only gets the wash when it is on the receding side that
+ * `moveDir` names; everything else (arriving front, settled neighbors,
+ * idle) returns 0.
+ */
+export function carouselDissolveOpacity(d: number, moveDir: number): number {
+  if (moveDir === 0) return 0;
+  // Forward move → old front on the LEFT (d<0). Backward → RIGHT (d>0).
+  // The opposite (arriving) side never washes.
+  if (moveDir > 0 ? d >= 0 : d <= 0) return 0;
+  const a = Math.abs(d);
+  if (a >= 1) return 0;
+  // v9b: BUMPED ACCENT PEAK — the accent wave needs to read as a visible
+  // "powered by accent" effect. PEAK = 0.9 at the switch, plus a subtle
+  // CSS breathing pulse (see .fc-wave-tint keyframe) so the sheen has
+  // amplitude and feels alive during the move.
+  const PEAK = 0.9;
+  return PEAK * Math.sin(Math.PI * a);
+}
+
+/**
+ * v6: which way the receding card's media-dissolve opens is set by the
+ * MOTION (`moveDir`), not the card's side — the wash always grows from the
+ * deck CENTER outward, so the grainy "edge reveal" shows the frame settling
+ * behind the receding front:
+ *
+ *  - forward move  (moveDir>0): the old front recedes LEFT; its mask opens
+ *    toward the center (right) → 'to right'.
+ *  - backward move (moveDir<0): the old front recedes RIGHT; its mask opens
+ *    toward the center (left) → 'to left'.
+ *
+ * The `d` argument is kept only for call-site clarity; it does not affect the
+ * result, because every card on a strip shares one `moveDir`, and the wash
+ * (`--fc-dissolve-op`) is non-zero on exactly the receding card, so its edge
+ * direction is the only one that is ever visible.
+ */
+export function carouselDissolveDirF(_d: number, moveDir: number): 'to right' | 'to left' {
+  if (moveDir < 0) return 'to left'; // backward: receding front opens toward center (left)
+  return 'to right';                 // forward / idle: receding front opens toward center (right)
+}
+
+/**
+ * v8: the MEDIA-dissolve REVEAL — how much of the receding front's own media
+ * goes transparent, so the UPCOMING frame settling behind it is genuinely
+ * visible through the grain ("noticeable transparent to see upcoming frame").
+ *
+ * Same receding gate + sin-bump shape as carouselDissolveOpacity, but peaking
+ * far HIGHER (0.7 at the switch midpoint) so the reveal reads clearly. 0 at
+ * BOTH rest stops, so the idle center + settled neighbors stay fully opaque
+ * (no effect with no drag). The receding gate is identical: only the
+ * moveDir-named receding side ever reveals; the arriving/upcoming card is
+ * never masked.
+ */
+export function carouselDissolveReveal(d: number, moveDir: number): number {
+  if (moveDir === 0) return 0;
+  if (moveDir > 0 ? d >= 0 : d <= 0) return 0;
+  const a = Math.abs(d);
+  if (a >= 1) return 0;
+  // Strong, SMOOTH reveal: the receding front's media fades to transparent on
+  // a clean directional gradient (NO grain in this channel), so the UPCOMING
+  // frame behind it reads pristine — not mottled. The grain structure lives
+  // in the separate accent-wave layer, never in this reveal. PEAK ~0.85 opens
+  // ~3/4 of the card at the switch so the frame UNDERNEATH (its border +
+  // edge) is clearly visible.
+  const PEAK = 0.85;
+  return PEAK * Math.sin(Math.PI * a);
+}
+
+/**
+ * v8: horizontal "brick interlock" tuck (px, POSITIVE = toward the deck
+ * center) for a card at float distance `d` from the visual center.
+ *
+ * The card rests EXACTLY at its ladder offset at every integer stop (the
+ * "accurate place" the user wants — no drift on the final slot), but tucks
+ * slightly INSIDE during the transit between stops, peaking at |d|=0.5 (the
+ * switch midpoint). This is the horizontal `[ [[ ]] ]` interlock: the
+ * crossing card drifts toward center mid-descent, then snaps back out to its
+ * exact rest offset on the last few steps. Purely horizontal — no vertical
+ * motion. 0 at |d|>=1.5 (far cards are already scaled away).
+ */
+export function carouselStackTuckF(d: number, cardW: number): number {
+  const a = Math.abs(d);
+  // The interlock is a single inward pulse between the front and its first
+  // neighbor: 0 at BOTH rest stops (a=0 and a=1), peaking at the switch
+  // midpoint (a=0.5). Beyond the first neighbor (a>=1) far cards are already
+  // small and tucked, so they never tuck again.
+  if (a >= 1) return 0;
+  const P = 0.15 * cardW; // how far inside the card drifts at the peak
+  return P * Math.sin(Math.PI * a);
 }
