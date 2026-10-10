@@ -186,20 +186,20 @@
 		});
 	}
 
-	// ── Auto-advance engine ([>] steady / [>>] fast+idle) ─────────────────
-	// A simple self-rescheduling timer that steps the shared frame forward
-	// while the mode is armed. MANUAL interaction (drag, wheel, ‹/› step,
-	// nav buttons) only PAUSES it — a cooldown is recorded and the engine
-	// resumes on the next tick; it is never torn down (dragging stays
-	// possible, it just pauses auto mode).
-	//   [>]  STEADY — consistent slow pace: one step every ~2.2s, no dwell.
-	//   [>>] FAST   — quick snap to the next stop, then a 0.8s idle dwell
-	//                at each snap before the next snap (the "stays idle"
-	//                beat the user asked for).
-	const STEADY_TICK_MS = 2200; // [>] steady slow cadence
+	// ── Auto-advance engine ([>] steady roll / [>>] fast+idle) ──────
+	// — [>] STEADY: a CONSTANT-VELOCITY continuous roll. It owns visualStep
+	//   directly: the strip glides forward at a fixed pace (no snapping) and
+	//   each grid stop is committed the moment it is crossed, so the card
+	//   content + live video track the rolling center — a film-transport.
+	// — [>>] FAST: a quick snap to the next stop, then a 0.8s idle dwell
+	//   at each snap before the next snap (the "stays idle" beat).
+	// MANUAL interaction (drag, wheel, ‹/› step, nav buttons) only PAUSES:
+	// a cooldown is recorded, the strip glides back to where the user left
+	// it, and the engine resumes from there — it is never torn down.
+	const STEADY_RATE = 0.5; // [>] steps per second (constant-velocity roll)
 	const FAST_IDLE_MS = 800; // [>>] dwell at each snap
 	const FAST_TICK_MS = 300 + FAST_IDLE_MS; // [>>] snap glide (~300ms) + idle
-	const MANUAL_PAUSE_MS = 1500; // manual move → resume only after this cooldown
+	const MANUAL_PAUSE_MS = 1500; // manual move → resume only after this
 	let lastManualAt = 0;
 
 	function pauseAuto() {
@@ -211,37 +211,100 @@
 		void totalFrames;
 		if (mode === 'off') return;
 		let cancelled = false;
-		let timer: ReturnType<typeof setTimeout> | null = null;
-		const TICK = mode === 'fast' ? FAST_TICK_MS : STEADY_TICK_MS;
 
-		function fire() {
-			if (cancelled) return;
-			// Pointer owns the strip — hold the tick and re-poll quickly.
-			if (dragActive) {
-				timer = setTimeout(fire, 300);
-				return;
+		// —— FAST: snap to the next stop, dwell 0.8s at each snap. ——
+		if (mode === 'fast') {
+			let timer: ReturnType<typeof setTimeout> | null = null;
+			function fire() {
+				if (cancelled) return;
+				if (dragActive) { timer = setTimeout(fire, 300); return; }
+				const sinceManual = performance.now() - lastManualAt;
+				if (sinceManual < MANUAL_PAUSE_MS) {
+					timer = setTimeout(fire, Math.max(60, MANUAL_PAUSE_MS - sinceManual + 60));
+					return;
+				}
+				const target = centerFrame + STEP;
+				if (target >= totalFrames) { timer = setTimeout(fire, 600); return; }
+				onframeSelect?.(target);
+				timer = setTimeout(fire, FAST_TICK_MS);
 			}
-			// A manual move happened — pause until its cooldown is over,
-			// then resume from wherever the user left the strip.
-			const sinceManual = performance.now() - lastManualAt;
-			if (sinceManual < MANUAL_PAUSE_MS) {
-				timer = setTimeout(fire, Math.max(60, MANUAL_PAUSE_MS - sinceManual + 60));
-				return;
-			}
-			const target = centerFrame + STEP;
-			if (target >= totalFrames) {
-				// End of the strip: park and RE-POLL, so a manual back-step
-				// re-arms the engine without a mode toggle.
-				timer = setTimeout(fire, 600);
-				return;
-			}
-			onframeSelect?.(target);
-			timer = setTimeout(fire, TICK);
+			timer = setTimeout(fire, FAST_TICK_MS);
+			return () => { cancelled = true; if (timer) clearTimeout(timer); };
 		}
-		timer = setTimeout(fire, TICK);
+
+		// —— STEADY: constant-velocity roll. ——
+		// This loop is the SOLE owner of visualStep while steady is armed
+		// (the chase $effect below stands down for steady). Three phases:
+		//   · advancing — visualStep += STEADY_RATE * dt (a straight line,
+		//      no snap); the crossed grid stop is committed each time it is
+		//      reached so the card content + live video track the roll.
+		//   · settling  — a manual move set the cooldown: glide visualStep
+		//      back to the user's committed stop, then resume advancing.
+		//   · dragging  — the pointer owns the position; just re-poll.
+		moveDir = 1; // rolling forward
+		let raf = 0;
+		let origin = 0; // advance origin (step units)
+		let originTime = 0;
+		let resync = true; // (re)capture origin at the next free frame
+
+		function tick(now: number) {
+			if (cancelled) return;
+			if (!originTime) {
+				originTime = now;
+				// Mount park: on the very first frame, snap the visual center
+				// to the committed stop so the roll starts from reality.
+				if (!visualStepInitialized) {
+					visualStep = centerFrame / STEP;
+					visualStepInitialized = true;
+				}
+				origin = untrack(() => visualStep);
+			}
+			// Dragging: the pointer moves visualStep itself — hold + re-poll.
+			if (dragActive) {
+				originTime = now; // avoid a dt jump on release
+				raf = requestAnimationFrame(tick);
+				return;
+			}
+			// Manual cooldown: glide back to the stop the user committed to.
+			const sinceManual = now - lastManualAt;
+			if (sinceManual < MANUAL_PAUSE_MS) {
+				const target = centerFrame / STEP;
+				visualStep += (target - visualStep) * 0.18;
+				if (Math.abs(target - visualStep) < 0.001) visualStep = target;
+				resync = true; // resume the advance from where we settled
+				raf = requestAnimationFrame(tick);
+				return;
+			}
+			// Cooldown just cleared — re-capture the advance origin so the
+			// roll continues from the current (possibly settled) position.
+			if (resync) {
+				resync = false;
+				origin = untrack(() => visualStep);
+				originTime = now;
+			}
+			// End of the strip: park at the last stop and keep polling, so a
+			// manual back-step (which sets the cooldown) glides back + re-arms.
+			const maxStop = Math.floor((totalFrames - 1) / STEP) * STEP;
+			const maxStep = maxStop / STEP;
+			const next = origin + STEADY_RATE * ((now - originTime) / 1000);
+			if (next >= maxStep) {
+				visualStep = maxStep;
+				if (maxStop !== centerFrame) onframeSelect?.(maxStop);
+				raf = requestAnimationFrame(tick);
+				return;
+			}
+			// Constant-velocity advance (a straight line — no snapping).
+			visualStep = next;
+			// Commit the grid stop the moment it is crossed, so content tracks.
+			const crossed = Math.floor(next + 1e-6) * STEP;
+			if (crossed > centerFrame && crossed < totalFrames) onframeSelect?.(crossed);
+			raf = requestAnimationFrame(tick);
+		}
+		raf = requestAnimationFrame(tick);
 		return () => {
 			cancelled = true;
-			if (timer) clearTimeout(timer);
+			cancelAnimationFrame(raf);
+			raf = 0;
 		};
 	});
 
@@ -281,6 +344,17 @@
 	$effect(() => {
 		void centerFrame;
 		void dragActive;
+		void autoScroll;
+		// While STEADY auto-scroll is armed, the steady rAF loop owns
+		// visualStep (it drives both the constant-velocity roll and the
+		// stop-commits), so the sine-tween chaser must stand down —
+		// otherwise it would snap the rolling strip back to each committed
+		// stop and fight the transport.
+		if (autoScroll === 'steady') {
+			cancelAnimationFrame(tweenRAF);
+			tweenRAF = 0;
+			return;
+		}
 		if (dragActive) {
 			// A drag owns the position 1:1 — stop any in-flight commit tween
 			// so it doesn't fight the pointer.
