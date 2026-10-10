@@ -757,8 +757,15 @@
 	 */
 	/** The "past frames" veil colour for a card at signed distance `d`. */
 	function cardTintBg(d: number): string {
-		const back = carouselBackTintF(d); // 0 for d >= 0
-		const fwd = carouselFwdDimF(d); // 0 for d <= 0
+		// Steady roll = a constant-velocity transport over a UNIFORM strip.
+		// The past (d<0) / future (d>0) veils read as "already-left" vs
+		// "yet-to-come", which in steady mode flickers on the rolling center
+		// card the instant visualStep leads it into a small negative d.
+		// Hold both to zero in this mode so the roll glides with no per-card
+		// tint step; the veils stay active in idle / fast / manual modes.
+		const steady = autoScroll === 'steady';
+		const back = steady ? 0 : carouselBackTintF(d); // 0 for d >= 0
+		const fwd = steady ? 0 : carouselFwdDimF(d); // 0 for d <= 0
 		// Backwards (d<0) and forwards (d>0) never co-occur; during a move
 		// the crossing cards read a small value of one side only. Pick the
 		// dominant veil so the value fades smoothly to transparent.
