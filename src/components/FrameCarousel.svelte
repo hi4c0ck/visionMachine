@@ -1,12 +1,25 @@
 <script lang="ts">
 	/**
-	 * Top-panel frame carousel (plan B2/B3): a concrete center frame + 2
-	 * overlapped, lower cards on each side showing the nearest frames on the
-	 * 8n grid. The center card is the LIVE <video> element (passed in via
-	 * bind so the playback ⇄ carousel toggle never reloads the source);
-	 * neighbors are WebCodecs-decoded <img> thumbnails. Prev/next advance
-	 * the shared frame selection by CAROUSEL_STEP (8) at a time.
+	 * Top-panel frame carousel (plan B2/B3): a nested horizontal card stack
+	 * `[ [[]] ]` — a concrete front frame flanked by 2 overlapped, lower
+	 * cards on each side showing the nearest frames on the 8n grid. The
+	 * front card is the LIVE <video> element (passed in via bind so the
+	 * playback ⇄ carousel toggle never reloads the source); neighbors are
+	 * WebCodecs-decoded thumbnails. Prev/next advance the shared frame
+	 * selection by CAROUSEL_STEP (8) at a time.
+	 *
+	 * Stacked treatment (driven off the same float distance as the dip, so
+	 * every state interpolates with no discrete branch):
+	 *  - BACKWARDS cards (d<0) gain a blue-grey "past frames" tint + desat.
+	 *  - FORWARDS  cards (d>0) gain a soft warm "future" dim.
+	 *  - The front card's accent glow cross-fades (carouselGlowF) so the
+	 *    departing and arriving fronts hand off at 0.5/0.5 mid-move.
+	 *  - A grab-and-place lift arc (carouselLiftF) peaks at |d|=0.5, and a
+	 *    depth blur (carouselBlurF) keeps the front sharp while receding
+	 *    cards fall out of focus.
+	 *  - At rest the settled front card gets a subtle breathing halo.
 	 */
+	import { untrack } from 'svelte';
 	import { APP_CONSTANTS } from '$constants';
 	import {
 		FrameSource,
@@ -14,6 +27,14 @@
 		carouselCardScaleF,
 		carouselCardX,
 		carouselCardOpacityF,
+		carouselBackTintF,
+		carouselFwdDimF,
+		carouselGlowF,
+		carouselBlurF,
+		carouselDissolveOpacity,
+		carouselDissolveDirF,
+		carouselDissolveReveal,
+		carouselStackTuckF,
 		snapCarouselFrame,
 		carouselCardWidth,
 		carouselDragPxPerStep,
@@ -86,7 +107,6 @@
 	const CARD_W = $derived(
 		carouselCardWidth(stripH, mediaSize ? mediaSize.width / mediaSize.height : videoAspect)
 	);
-	const OVERLAP = 0.55;
 	/** px of horizontal drag per carousel step (1 : 1, no damped rubber-band). */
 	const DRAG_PX_PER_STEP = $derived(carouselDragPxPerStep(CARD_W));
 
@@ -121,8 +141,200 @@
 	// units). `visualStep` chases the committed `centerFrame` with a CSS
 	// transition on the cards' transform, and chases the pointer 1:1 while a
 	// drag is in flight (sub-step, mid-transit positions are legal).
-	let visualStep = $state<number>(0); // synced on mount + chase (see $effect below)
+	let visualStep = $state<number>(0); // continuous strip position, rAF-tweened (not CSS-transitioned)
 	let dragActive = $state(false); // moveDrag owns visualStep while true
+	let visualStepInitialized = false; // first chase run parks instantly
+	let tweenRAF = 0; // active requestAnimationFrame handle
+	// Which direction the LAST strip move ran: 1 = forward (centerFrame↑,
+	// the old front recedes to the LEFT, d<0), -1 = backward (centerFrame↓,
+	// old front recedes to the RIGHT, d>0), 0 = idle. Only the RECEDING
+	// (old-front) card gets the dissolve grain; the ARRIVING/upcoming frame
+	// is always clean (user requirement: never mask the underneath frame).
+	let moveDir = 0;
+
+	// ── Immersive Snaps (profile-preset bound) ────────────────────────────
+	// [i] toggle + [>]/[>>] auto-scroll radios. Values MIRROR the profile
+	// preset (Settings → Tools "Immersive" section): a settings commit
+	// re-syncs them here, and a click here commits the same copy back.
+	import { getSettings, setOnSettingsChange, unregisterSettingsChange, updateSettings } from '$lib/settings/store';
+	import { onMount } from 'svelte';
+	let immersive = $state<boolean>(getSettings().carousel.immersiveSnaps);
+	let autoScroll = $state<'off' | 'steady' | 'fast'>(getSettings().carousel.autoScroll);
+
+	// Settings store re-sync: a profile switch or a Settings-modal commit
+	// replaces the carousel block — mirror it locally. The auto-advance
+	// $effect below is keyed on both values, so a re-sync re-arms it.
+	const onImmersiveSettingsSync = () => {
+		immersive = getSettings().carousel.immersiveSnaps;
+		autoScroll = getSettings().carousel.autoScroll;
+	};
+	setOnSettingsChange(onImmersiveSettingsSync);
+	onMount(() => () => unregisterSettingsChange(onImmersiveSettingsSync));
+
+	function toggleImmersive() {
+		immersive = !immersive;
+		updateSettings((s) => {
+			s.carousel.immersiveSnaps = immersive;
+		});
+	}
+
+	function setAutoScroll(mode: 'off' | 'steady' | 'fast') {
+		// Radio semantics: clicking the already-active mode turns BOTH off.
+		autoScroll = autoScroll === mode ? 'off' : mode;
+		updateSettings((s) => {
+			s.carousel.autoScroll = autoScroll;
+		});
+	}
+
+	// ── Auto-advance engine ([>] steady roll / [>>] fast+idle) ──────
+	// — [>] STEADY: a CONSTANT-VELOCITY continuous roll. It owns visualStep
+	//   directly: the strip glides forward at a fixed pace (no snapping) and
+	//   each grid stop is committed the moment it is crossed, so the card
+	//   content + live video track the rolling center — a film-transport.
+	// — [>>] FAST: a quick snap to the next stop, then a 0.8s idle dwell
+	//   at each snap before the next snap (the "stays idle" beat).
+	// MANUAL interaction (drag, wheel, ‹/› step, nav buttons) only PAUSES:
+	// a cooldown is recorded, the strip glides back to where the user left
+	// it, and the engine resumes from there — it is never torn down.
+	const STEADY_RATE = 0.5; // [>] steps per second (constant-velocity roll)
+	const FAST_IDLE_MS = 800; // [>>] dwell at each snap
+	const FAST_TICK_MS = 300 + FAST_IDLE_MS; // [>>] snap glide (~300ms) + idle
+	const MANUAL_PAUSE_MS = 1500; // manual move → resume only after this
+	let lastManualAt = 0;
+
+	function pauseAuto() {
+		lastManualAt = performance.now();
+	}
+
+	$effect(() => {
+		const mode = autoScroll;
+		void totalFrames;
+		if (mode === 'off') return;
+		let cancelled = false;
+
+		// —— FAST: snap to the next stop, dwell 0.8s at each snap. ——
+		if (mode === 'fast') {
+			let timer: ReturnType<typeof setTimeout> | null = null;
+			function fire() {
+				if (cancelled) return;
+				if (dragActive) { timer = setTimeout(fire, 300); return; }
+				const sinceManual = performance.now() - lastManualAt;
+				if (sinceManual < MANUAL_PAUSE_MS) {
+					timer = setTimeout(fire, Math.max(60, MANUAL_PAUSE_MS - sinceManual + 60));
+					return;
+				}
+				const target = centerFrame + STEP;
+				if (target >= totalFrames) { timer = setTimeout(fire, 600); return; }
+				onframeSelect?.(target);
+				timer = setTimeout(fire, FAST_TICK_MS);
+			}
+			timer = setTimeout(fire, FAST_TICK_MS);
+			return () => { cancelled = true; if (timer) clearTimeout(timer); };
+		}
+
+		// —— STEADY: constant-velocity roll. ——
+		// This loop is the SOLE owner of visualStep while steady is armed
+		// (the chase $effect below stands down for steady). Three phases:
+		//   · advancing — visualStep += STEADY_RATE * dt (a straight line,
+		//      no snap); the crossed grid stop is committed each time it is
+		//      reached so the card content + live video track the roll.
+		//   · settling  — a manual move set the cooldown: glide visualStep
+		//      back to the user's committed stop, then resume advancing.
+		//   · dragging  — the pointer owns the position; just re-poll.
+		moveDir = 1; // rolling forward
+		let raf = 0;
+		let origin = 0; // advance origin (step units)
+		let originTime = 0;
+		let resync = true; // (re)capture origin at the next free frame
+
+		function tick(now: number) {
+			if (cancelled) return;
+			if (!originTime) {
+				originTime = now;
+				// Mount park: on the very first frame, snap the visual center
+				// to the committed stop so the roll starts from reality.
+				if (!visualStepInitialized) {
+					visualStep = centerFrame / STEP;
+					visualStepInitialized = true;
+				}
+				origin = untrack(() => visualStep);
+			}
+			// Dragging: the pointer moves visualStep itself — hold + re-poll.
+			if (dragActive) {
+				originTime = now; // avoid a dt jump on release
+				raf = requestAnimationFrame(tick);
+				return;
+			}
+			// Manual cooldown: glide back to the stop the user committed to.
+			const sinceManual = now - lastManualAt;
+			if (sinceManual < MANUAL_PAUSE_MS) {
+				const target = centerFrame / STEP;
+				visualStep += (target - visualStep) * 0.18;
+				if (Math.abs(target - visualStep) < 0.001) visualStep = target;
+				resync = true; // resume the advance from where we settled
+				raf = requestAnimationFrame(tick);
+				return;
+			}
+			// Cooldown just cleared — re-capture the advance origin so the
+			// roll continues from the current (possibly settled) position.
+			if (resync) {
+				resync = false;
+				origin = untrack(() => visualStep);
+				originTime = now;
+			}
+			// End of the strip: park at the last stop and keep polling, so a
+			// manual back-step (which sets the cooldown) glides back + re-arms.
+			const maxStop = Math.floor((totalFrames - 1) / STEP) * STEP;
+			const maxStep = maxStop / STEP;
+			const next = origin + STEADY_RATE * ((now - originTime) / 1000);
+			if (next >= maxStep) {
+				visualStep = maxStep;
+				if (maxStop !== centerFrame) onframeSelect?.(maxStop);
+				raf = requestAnimationFrame(tick);
+				return;
+			}
+			// Constant-velocity advance (a straight line — no snapping).
+			visualStep = next;
+			// Commit the grid stop the moment it is crossed, so content tracks.
+			const crossed = Math.floor(next + 1e-6) * STEP;
+			if (crossed > centerFrame && crossed < totalFrames) onframeSelect?.(crossed);
+			raf = requestAnimationFrame(tick);
+		}
+		raf = requestAnimationFrame(tick);
+		return () => {
+			cancelled = true;
+			cancelAnimationFrame(raf);
+			raf = 0;
+		};
+	});
+
+	// Sinusoidal ease-in-out tween of the visual center. The new front card
+	// (which was the settled neighbor before the switch) glides toward the
+	// center at a constant SIN pace for most of the move, then the last
+	// segment decelerates — reading as if the frame is being "placed
+	// precisely" into the center slot (user: "the last part of movement
+	// slowly ... like we place it in accurate way"). A sine ease-in-out is
+	// symmetric: slow start, fast middle, slow settle, so the grab (lift)
+	// and place feel deliberate. It carries the semi-state THROUGH the
+	// switch point (|d| = 0.5) so the receding card's dissolve actually
+	// ramps. A plain CSS transition never recomputes the JS dissolve vars,
+	// which is why a snapped (integer) visualStep kept the wash invisible.
+	function tweenVisualStep(from: number, to: number, dir: number) {
+		cancelAnimationFrame(tweenRAF);
+		if (from === to) { visualStep = to; return; }
+		moveDir = dir;
+		const start = performance.now();
+		const DUR = 300;
+		const tick = (now: number) => {
+			const p = Math.min(1, (now - start) / DUR);
+			// Sinusoidal ease-in-out: fast middle, slow "precise place" tail.
+			const e = (1 - Math.cos(Math.PI * p)) / 2;
+			visualStep = from + (to - from) * e;
+			if (p < 1) tweenRAF = requestAnimationFrame(tick);
+			else { visualStep = to; tweenRAF = 0; }
+		};
+		tweenRAF = requestAnimationFrame(tick);
+	}
 
 	// External moves (frame-step buttons, wheel, nav arrows, ruler) land as
 	// a new `frame` prop → chase the new grid stop; the cards' CSS transition
@@ -130,9 +342,41 @@
 	// the position, so this effect stands down. Runs on mount to sync the
 	// initial position too.
 	$effect(() => {
-		if (dragActive) return;
-		const t = centerFrame / STEP;
-		if (t !== visualStep) visualStep = t;
+		void centerFrame;
+		void dragActive;
+		void autoScroll;
+		// While STEADY auto-scroll is armed, the steady rAF loop owns
+		// visualStep (it drives both the constant-velocity roll and the
+		// stop-commits), so the sine-tween chaser must stand down —
+		// otherwise it would snap the rolling strip back to each committed
+		// stop and fight the transport.
+		if (autoScroll === 'steady') {
+			cancelAnimationFrame(tweenRAF);
+			tweenRAF = 0;
+			return;
+		}
+		if (dragActive) {
+			// A drag owns the position 1:1 — stop any in-flight commit tween
+			// so it doesn't fight the pointer.
+			cancelAnimationFrame(tweenRAF);
+			tweenRAF = 0;
+			return;
+		}
+		const target = centerFrame / STEP;
+		// Read the current position without tracking it, so this effect does
+		// NOT re-run on every tween frame (it keys only on centerFrame/dragActive).
+		const from = untrack(() => visualStep);
+		if (from !== target) {
+			if (!visualStepInitialized) {
+				visualStep = target; // mount: park instantly
+				visualStepInitialized = true;
+			} else {
+				// moveDir: +1 forward (old front recedes left, d<0),
+				// -1 backward (old front recedes right, d>0).
+				const dir = target > from ? 1 : -1;
+				tweenVisualStep(from, target, dir);
+			}
+		}
 	});
 
 	// ── Live <video> layer: pinned at the strip center, cross-fading ───────
@@ -216,6 +460,7 @@
 		void fps;
 		thumbs = {};
 		thumbDiag = 'pending';
+
 		mediaDurFrames = null;
 		mediaSize = null;
 		// The live <video> element still shows the old clip (or a 0:00 shell)
@@ -398,6 +643,7 @@
 				// leaves the strip bounds (touch / mouse alike).
 				dragged = true;
 				dragActive = true;
+				pauseAuto();
 				anchorStep = centerFrame / STEP;
 				liveCommitStep = Math.round(anchorStep);
 				// preventDefault suppresses the native media drag / text-select
@@ -411,6 +657,11 @@
 		// 1:1 tracking: the strip position is the anchor + pointer travel in
 		// steps (LEFT drag = forward/next, i.e. travel dx<0 → steps>0).
 		visualStep = anchorStep - dx / DRAG_PX_PER_STEP;
+		// v6: name the sweep direction so the RECEDING front (the one that
+		// was the anchor before this drag) gets the grain wash and the
+		// UPCOMING frame stays clean. travel dx<0 → forward (+1), dx>0 →
+		// backward (-1). At the exact anchor the wash is off (0).
+		moveDir = visualStep > anchorStep ? 1 : visualStep < anchorStep ? -1 : 0;
 		// Live-commit the shared selection as each step boundary is crossed
 		// (wheel-like, one step per DRAG_PX_PER_STEP of travel) so the ruler
 		// and step buttons stay in sync during the sweep.
@@ -424,7 +675,10 @@
 	/** Park the live center on the currently-committed step. */
 	function commitLiveFrame() {
 		const target = snapCarouselFrame(liveCommitStep * STEP, totalFrames, STEP);
-		if (target !== centerFrame) onframeSelect?.(target);
+		if (target !== centerFrame) {
+			pauseAuto();
+			onframeSelect?.(target);
+		}
 	}
 
 	function endDrag(event: PointerEvent) {
@@ -433,20 +687,26 @@
 		if (!dragActive) return; // never adopted → it was a click; nothing to do
 		// Release: commit where the FLOAT position rests (rounded to the
 		// nearest grid stop) so the frame settles where the pointer did, not
-		// where it snapped back to. Snapping the strip back to that stop and
-		// re-enabling the transition happen in the same render, so the
-		// within-step remainder glides home instead of jumping.
+		// where it snapped back to. The within-step remainder glides home on
+		// the sine tween below instead of jumping.
 		const target = Math.round(visualStep);
 		liveCommitStep = target;
 		commitLiveFrame();
 		dragActive = false;
-		visualStep = target;
+		// v6: do NOT snap visualStep here. The chase $effect (which keys on
+		// the new centerFrame + dragActive=false) runs the sine "place
+		// precisely" settle tween from the float rest position to the target
+		// step, and it sets moveDir to the settle direction. The receding
+		// old front keeps its grain wash through the whole settle; the
+		// arriving new front stays clean.
 		try { (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId); } catch { /* released */ }
 	}
 
 	function step(deltaCards: number) {
+		if (deltaCards === 0) return;
+		pauseAuto();
 		const next = snapCarouselFrame(centerFrame + deltaCards * STEP, totalFrames, STEP);
-		onframeSelect?.(next);
+		if (next !== centerFrame) onframeSelect?.(next);
 	}
 
 	function wheelMove(event: WheelEvent) {
@@ -495,20 +755,82 @@
 	 * dip. While a drag is in flight the strip transitions are disabled
 	 * (fc-dragging class) so the pointer owns the position 1:1.
 	 */
-	/** Geometry from a (float) signed step distance — shared by pool cards. */
+	/** The "past frames" veil colour for a card at signed distance `d`. */
+	function cardTintBg(d: number): string {
+		// Steady roll = a constant-velocity transport over a UNIFORM strip.
+		// The past (d<0) / future (d>0) veils read as "already-left" vs
+		// "yet-to-come", which in steady mode flickers on the rolling center
+		// card the instant visualStep leads it into a small negative d.
+		// Hold both to zero in this mode so the roll glides with no per-card
+		// tint step; the veils stay active in idle / fast / manual modes.
+		const steady = autoScroll === 'steady';
+		const back = steady ? 0 : carouselBackTintF(d); // 0 for d >= 0
+		const fwd = steady ? 0 : carouselFwdDimF(d); // 0 for d <= 0
+		// Backwards (d<0) and forwards (d>0) never co-occur; during a move
+		// the crossing cards read a small value of one side only. Pick the
+		// dominant veil so the value fades smoothly to transparent.
+		if (back >= fwd) return back > 0 ? `rgba(84,104,138,${back.toFixed(3)})` : 'transparent';
+		return fwd > 0 ? `rgba(18,14,10,${fwd.toFixed(3)})` : 'transparent';
+	}
+
+	/**
+	 * Full geometry from a (float) signed step distance — shared by pool
+	 * cards. Emits the dip transform/opacity plus the stacked-treatment CSS
+	 * vars (`--fc-tint-bg`), a depth-blur filter, and a card-level accent
+	 * box-shadow. Everything is a smooth function of `d`, so a commit (d
+	 * jumping between two grid stops) rides the card's CSS transition and a
+	 * drag (d tracking the pointer 1:1) stays continuous — no discrete state
+	 * branch anywhere.
+	 */
 	function cardStyleByDistance(d: number): string {
 		const scale = carouselCardScaleF(d);
 		if (scale <= 0) return 'display:none;';
-		const x = carouselCardX(d, CARD_W, OVERLAP);
+		// v8: horizontal "brick interlock" tuck — the card rests EXACTLY at
+		// its ladder offset at every integer stop, but drifts slightly toward
+		// the deck center mid-switch (peaks at |d|=0.5) and snaps back out on
+		// the last few steps. Purely horizontal (0 at the front d=0 and rest):
+		// a right-side card (d>0) tucks leftward, a left-side card tucks right.
+		const tuck = carouselStackTuckF(d, CARD_W);
+		const xRaw = carouselCardX(d, CARD_W);
+		const x = tuck > 0 ? (d > 0 ? xRaw - tuck : xRaw + tuck) : xRaw;
 		const opacity = carouselCardOpacityF(d);
 		const z = Math.max(1, 10 - Math.round(Math.abs(d)));
-		return `left:calc(50% + ${x}px - ${CARD_W / 2}px);width:${CARD_W}px;transform:scale(${scale});transform-origin:50% 100%;opacity:${opacity};z-index:${z};`;
+		const glow = carouselGlowF(d);
+		const blur = carouselBlurF(d);
+		// The card's OWN box-shadow carries the accent glow so it paints OUTSIDE
+		// the border-box and is not clipped by the card's overflow:hidden (a
+		// child glow ring would be). Its radius/spread scale with `glow`
+		// (carouselGlowF): 1 at the resting center, 0.5 on the two crossing
+		// fronts mid-move, 0 a step away — so the departing front's glow
+		// dissolves as the arriving front's rises, and both ride the card's
+		// box-shadow transition on a commit.
+		// v6: the dissolve belongs ONLY to the RECEDING (old-front) card, and
+		// opens toward the deck center so the grain reveals the UPCOMING frame
+		// settling into the slot the old front is leaving. The arriving /
+		// upcoming card is NEVER masked (user requirement). moveDir names which
+		// side just receded: +1 forward (old front left, d<0), -1 backward
+		// (old front right, d>0), 0 idle.
+		// v8: TWO independent dissolve channels, both receding-only (moveDir)
+		// and both 0 at the idle rest position (no effect without a drag):
+		//  - REVEAL (strong ~0.7 at the switch): how much of the receding
+		//    front's OWN media goes transparent so the UPCOMING frame settling
+		//    behind it is genuinely visible through the grain. Drives the mask.
+		//  - ACCENT (subtle ~0.1 at the switch): the accent shimmer painted
+		//    through the wave-grain texture. Drives the .fc-wave-tint layer.
+		// The arriving/upcoming card is NEVER masked in either channel.
+		const reveal = immersive ? carouselDissolveReveal(d, moveDir) : 0;
+		const accent = immersive ? carouselDissolveOpacity(d, moveDir) : 0;
+		// The mask opens from the center-facing edge of the receding card.
+		const dissolveDir = carouselDissolveDirF(d, moveDir);
+		return "left:calc(50% + " + x + "px - " + (CARD_W / 2) + "px);width:" + CARD_W + "px;transform:scale(" + scale.toFixed(4) + ");transform-origin:50% 100%;opacity:" + opacity.toFixed(3) + ";z-index:" + z + ";--fc-tint-bg:" + cardTintBg(d) + ";--fc-dissolve-op:" + reveal.toFixed(3) + ";--fc-wave-op:" + accent.toFixed(3) + ";--fc-dissolve-dir:" + dissolveDir + ";filter:blur(" + blur.toFixed(2) + "px);box-shadow:0 0 " + (22 * glow).toFixed(1) + "px " + (5 * glow).toFixed(1) + "px var(--accent-glow, rgba(255, 62, 0, 0.25));";  
 	}
 </script>
 
 	<div
 		class="fc-strip"
 		class:fc-dragging={dragActive}
+		class:fc-settled={videoAtRest}
+
 		style:--fc-card-w={`${CARD_W}px`}
 		role="group"
 		aria-label={APP_CONSTANTS.strings.frameCarousel}
@@ -535,6 +857,19 @@
 				{#if f !== null && thumbs[f]}
 					<canvas class="fc-thumb" use:drawThumbnail={thumbs[f]} aria-label="{APP_CONSTANTS.strings.frameLabel} {f}"></canvas>
 				{/if}
+				<!-- Stacked veils: a blue-grey "past" tint on backwards cards,
+				 a warm "future" dim on forwards cards, driven by --fc-tint-bg
+				 (transparent at the front card). -->
+				<div class="fc-tint-overlay" aria-hidden="true"></div>
+				<!-- Granular accent wave-tint on the receding edge: accent
+				 gradient through the wave-grain texture (shine/shadow),
+				 opacity = --fc-dissolve-op (0 on clean cards). -->
+				<div class="fc-wave-tint" aria-hidden="true"></div>
+				<!-- Liquid-glass shine: a subtle top-edge highlight + inner
+				 glow that makes every card read as a translucent glass pane
+				 over the dark background (Vecteezy-style glassmorphism).
+				 Always present, not driven by --fc-dissolve-op. -->
+				<div class="fc-glass-shine" aria-hidden="true"></div>
 				{#if f !== null}
 					<span class="fc-frame-label">{f} · {(f / fps).toFixed(1)}s</span>
 				{/if}
@@ -559,8 +894,54 @@
 				onseeked={() => (seekSettled = true)}
 				style="pointer-events:none"
 			></video>
+			<div class="fc-glass-shine" aria-hidden="true"></div>
 		</div>
 
+	<!-- Immersive cluster (top-left): [i] toggles the dissolve treatment
+		 (gray = off, accent = on); to its right, two radio-grouped auto-scroll
+		 buttons [>] (steady slow) and [>>] (fast snaps + 0.8s idle). A click
+		 on the active radio turns both off. All mirror the profile preset
+		 (Settings → Tools "Immersive"). stopPropagation keeps the strip sweep
+		 from adopting these clicks. -->
+	<div class="fc-immersive" role="group" aria-label={APP_CONSTANTS.strings.autoScroll}>
+		<button
+			class="fc-imm-btn fc-i"
+			class:fc-imm-on={immersive}
+			onclick={(e) => { e.stopPropagation(); toggleImmersive(); }}
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointermove={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onwheel={(e) => e.stopPropagation()}
+			aria-pressed={immersive}
+			aria-label={APP_CONSTANTS.strings.immersiveSnaps}
+			title={APP_CONSTANTS.strings.immersiveSnapsHint}
+		>i</button>
+		<span class="fc-imm-gap" aria-hidden="true"></span>
+		<button
+			class="fc-imm-btn"
+			class:fc-imm-on={autoScroll === 'steady'}
+			onclick={(e) => { e.stopPropagation(); setAutoScroll('steady'); }}
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointermove={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onwheel={(e) => e.stopPropagation()}
+			aria-pressed={autoScroll === 'steady'}
+			aria-label={APP_CONSTANTS.strings.autoScrollSteady}
+			title={APP_CONSTANTS.strings.autoScrollSteady}
+		>›</button>
+		<button
+			class="fc-imm-btn"
+			class:fc-imm-on={autoScroll === 'fast'}
+			onclick={(e) => { e.stopPropagation(); setAutoScroll('fast'); }}
+			onpointerdown={(e) => e.stopPropagation()}
+			onpointermove={(e) => e.stopPropagation()}
+			onpointerup={(e) => e.stopPropagation()}
+			onwheel={(e) => e.stopPropagation()}
+			aria-pressed={autoScroll === 'fast'}
+			aria-label={APP_CONSTANTS.strings.autoScrollFast}
+			title={APP_CONSTANTS.strings.autoScrollFast}
+		>››</button>
+	</div>
 	<!-- Prev / next: advance the shared frame by ±STEP on the grid.
 		 stopPropagation keeps the strip's pointer/wheel handlers from
 		 seeing button presses, so a click here is a clean click. -->
@@ -627,25 +1008,68 @@
 		border-radius: 8px;
 		overflow: hidden;
 		border: 1px solid var(--border);
-		background: #000;
+		/* Transparent body (not #000): when the media grain-dissolves, the
+			 card UNDERNEATH shows through the holes. The border and glow
+			 are on this element and are NOT masked, so the frame stays
+			 crisp while only the image content dissolves. */
+		background: transparent;
 		/* Continuous dip motion: the card's box is a fixed CARD_W × full-height
 			 slot pinned to the strip; the dip is expressed as transform:scale
 			 (around 50% 100% so cards stay bottom-anchored) plus a left offset.
 			 Both ride the compositor / layout without re-flowing siblings. While
 			 a drag is in flight (.fc-dragging) the transition is removed so the
 			 pointer owns the position 1:1. */
-		transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1),
-			left 260ms cubic-bezier(0.22, 1, 0.36, 1),
-			opacity 260ms cubic-bezier(0.22, 1, 0.36, 1);
+		/* No CSS transition: the rAF tween (tweenVisualStep) and the 1:1 drag
+			 pointer drive every card's geometry per-frame, so a CSS transition
+			 here would double-animate and fight the tween. */
 	}
 
 	.fc-strip.fc-dragging .fc-card {
 		transition: none;
 	}
 
+	/* v9b: glide the accent switch - the front card's accent BORDER color
+	   previously snapped when the .fc-center class flipped, making the
+	   center read 'jumpy'. Easing border-color over ~220ms fades the new
+	   center's accent frame in smoothly. Only border-color is transitioned;
+	   geometry (transform/opacity/box-shadow) stays rAF-driven. */
+	.fc-card {
+		transition: border-color 220ms ease;
+	}
+
 	.fc-card.fc-center {
 		border-color: var(--accent-color, #ff3e00);
-		box-shadow: 0 0 18px var(--accent-glow, rgba(255, 62, 0, 0.25));
+	}
+
+	/* The blue-grey "past" / warm "future" veil, painted over the thumbnail
+		 from the card's --fc-tint-bg (transparent at the front). Its own
+		 background transition keeps the tint smooth across a commit. */
+	.fc-tint-overlay {
+		position: absolute;
+		inset: 0;
+		background: var(--fc-tint-bg, transparent);
+		pointer-events: none;
+		transition: background-color 260ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+
+	/* Idle / breathing: when the strip is settled at a rest stop (fc-settled)
+		 the front card's accent halo gently pulses, so the panel reads as
+		 "alive" while scrubbing has stopped. Applied to the live <video>
+		 layer (the settled front) and to the thumbnail center card fallback.
+		 A soft ambient spotlight lifts the strip's mood from flat-dark. */
+	@keyframes fc-breathe {
+		0%, 100% { box-shadow: 0 0 18px 2px var(--accent-glow, rgba(255, 62, 0, 0.25)); }
+		50%      { box-shadow: 0 0 30px 7px var(--accent-glow, rgba(255, 62, 0, 0.25)); }
+	}
+	.fc-strip.fc-settled .fc-video-layer:not(.fc-video-hidden),
+	.fc-strip.fc-settled .fc-card.fc-center {
+		animation: fc-breathe 3.4s ease-in-out infinite;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.fc-strip.fc-settled .fc-video-layer,
+		.fc-strip.fc-settled .fc-card.fc-center {
+			animation: none;
+		}
 	}
 
 	/* The live <video>: a fixed CARD_W × full-height slot pinned to the strip
@@ -673,6 +1097,178 @@
 	.fc-video-layer.fc-video-hidden {
 		opacity: 0;
 		pointer-events: none;
+	}
+
+	/* Glass shine on the live video layer (front card when settled) */
+	.fc-video-layer .fc-glass-shine {
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		pointer-events: none;
+		/* Neutral white specular only — NO accent color wash at the settled
+		   center (the user wants the stable front to read clean). The accent
+		   border + halo stay on the card's border/box-shadow, not this layer. */
+		background:
+			linear-gradient(
+				to bottom,
+				rgba(255, 255, 255, 0.16) 0%,
+				rgba(255, 255, 255, 0.04) 10%,
+				transparent 30%
+			),
+			linear-gradient(
+				to top,
+				rgba(255, 255, 255, 0.06) 0%,
+				transparent 12%
+			);
+	}
+
+	/* True-transparency dissolve (v6, receding-only): the RECEDING front's
+		 MEDIA is masked (not the card box), so the accent border + glow stay
+		 solid and the UPCOMING frame UNDERNEATH is never dithered. The wash
+		 peaks ~0.1 alpha at the switch distance and is 0 at both rest stops,
+		 so the settled center reads clean. Two layers, unioned (add /
+		 source-over):
+		   1) Directional ramp — solid white from the outer edge up to
+		      (1 − dissolve-op) × 100%, then transparent toward the deck
+		      center. At rest (dissolve-op=0) the ramp is fully white →
+		      media fully opaque.
+		   2) Dither texture — stretched to 100%×100% so the grain density
+		      matches the frame size.
+		 --fc-dissolve-op is driven per-frame by the rAF tween and is >0 on
+		 ONLY the receding side (named by moveDir); the arriving side stays
+		 clean. */
+	/* v9: the media REVEAL is a clean, SMOOTH directional gradient — NO grain
+	   baked into this channel. The receding front's own media fades to
+	   transparent from its outer edge toward the deck center, so the UPCOMING
+	   frame settling behind it shows through a smooth, pristine gradient
+	   (the idea: "we see the upcoming frame through the transparency of the
+	   center one"). Because the grain texture used to live here, the SOLID
+	   part of the center card was mottled and the frame behind read as
+	   "affected" — that's gone now. The grain/structure is moved to the
+	   accent-wave layer below, which is purely additive (screen blend) so it
+	   never touches the reveal. An eased ramp (white 0 → 55%, then fade to
+	   transparent 100%) keeps the edge soft instead of a hard band. */
+	.fc-card .fc-thumb,
+	.fc-card .fc-thumb-placeholder {
+		/* v9: clean SMOOTH media reveal — directional white→transparent
+		   gradient, NO grain baked in. At rest (op=0) the white stop is at
+		   100% → card fully opaque. Mid-switch it retreats to (1-op)*100%,
+		   opening the center-facing edge so the UPCOMING frame behind shows
+		   through a smooth, pristine gradient. Grain/structure lives in the
+		   accent-wave layer below (purely additive), never here. */
+		-webkit-mask-image:
+			linear-gradient(var(--fc-dissolve-dir, to right),
+			  white 0%,
+			  white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
+			  transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%));
+		mask-image:
+			linear-gradient(var(--fc-dissolve-dir, to right),
+			  white 0%,
+			  white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
+			  transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%));
+		-webkit-mask-size: 100% 100%;
+		mask-size: 100% 100%;
+		-webkit-mask-repeat: no-repeat;
+		mask-repeat: no-repeat;
+	}
+
+	/* v9: ACCENT WAVE - the structured sheen on the receding edge. Two
+	   mask layers INTERSECTED (mask-composite: intersect):
+	     1) a soft directional ramp - keeps the sheen inside the dissolve
+	        zone (transparent on the outer side, opaque toward center);
+	     2) the SQUARED/stepped grain texture, OFFSET so its rows undulate
+	        instead of tiling flat - this is the 'accent wave' structure
+	        (neo squared-mask aesthetic). The accent gradient supplies the
+	   color; the intersection carves the structure. Screen-blended so it
+	   GLOWS over the frame rather than dulling it. Driven by --fc-wave-op
+	   (0 at rest, peak at the switch), so it is purely a mid-move effect
+	   and never tints the clean upcoming frame behind. */
+	.fc-wave-tint {
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		/* Accent color, brightest at the center-facing dissolve edge. */
+		background: linear-gradient(
+			var(--fc-dissolve-dir, to right),
+			transparent 0%,
+			color-mix(in srgb, var(--accent-color, #ff6b35) 45%, transparent) 42%,
+			var(--accent-color, #ff6b35) 100%
+		);
+		opacity: var(--fc-wave-op, 0);
+		pointer-events: none;
+		mix-blend-mode: screen;
+	/* Layer 1 = soft ramp; Layer 2 = squared grain, offset (18px 6px) so
+		   the stepped rows read as a wave. Intersected = structured sheen. */
+	/* Layer 1 clips the accent wave to the receding card's SOLID media
+	   (white where opaque, transparent where the .fc-thumb reveal opens) so
+	   the sheen never paints over the transparent zone or the upcoming
+	   frame behind. Same directional ramp + --fc-dissolve-op as reveal. */
+	-webkit-mask-image:
+		linear-gradient(var(--fc-dissolve-dir, to right),
+			white 0%,
+			white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
+			transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%)),
+		url('/icons/fc-wave-mask.png');
+	mask-image:
+		linear-gradient(var(--fc-dissolve-dir, to right),
+			white 0%,
+			white calc((1 - var(--fc-dissolve-op, 0)) * 100%),
+			transparent calc((1 - var(--fc-dissolve-op, 0)) * 100% + 30%)),
+		url('/icons/fc-wave-mask.png');
+	-webkit-mask-size: 100% 100%, 100% 100%;
+	mask-size: 100% 100%, 100% 100%;
+	-webkit-mask-repeat: no-repeat, repeat;
+	mask-repeat: no-repeat, repeat;
+	-webkit-mask-position: 0 0, 18px 6px;
+	mask-position: 0 0, 18px 6px;
+	-webkit-mask-composite: source-in;
+	mask-composite: intersect;
+		animation: fc-wave-breathe 1.4s ease-in-out infinite;
+	}
+
+	/* Liquid-glass shine (Vecteezy glassmorphism): a subtle top-edge white
+		 highlight + inner glow that makes every card read as a translucent
+		 glass pane over the dark background. Always present, very low opacity
+		 so it doesn't overpower the frame content. The top highlight mimics
+		 light hitting the curved top edge of a glass block. */
+	.fc-glass-shine {
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		pointer-events: none;
+		background:
+			/* Top-edge specular highlight (light hitting the glass top) */
+			linear-gradient(
+				to bottom,
+				rgba(255, 255, 255, 0.18) 0%,
+				rgba(255, 255, 255, 0.04) 12%,
+				transparent 30%
+			),
+			/* Subtle inner bottom glow (glass thickness effect) */
+			linear-gradient(
+				to top,
+				rgba(255, 255, 255, 0.06) 0%,
+				transparent 15%
+			);
+		/* Accent tint on the top edge when the card is the front (fc-center) */
+	}
+
+	/* Neutral white specular on the front card too — NO accent color wash at
+	   the settled center. The accent reads through the border + box-shadow
+	   halo only, so the media content stays clean at rest. */
+	.fc-card.fc-center .fc-glass-shine {
+		background:
+			linear-gradient(
+				to bottom,
+				rgba(255, 255, 255, 0.16) 0%,
+				rgba(255, 255, 255, 0.04) 10%,
+				transparent 30%
+			),
+			linear-gradient(
+				to top,
+				rgba(255, 255, 255, 0.06) 0%,
+				transparent 12%
+			);
 	}
 
 	.fc-video,
@@ -780,4 +1376,66 @@
 		color: var(--text-primary);
 		border-color: var(--accent-color, #ff3e00);
 	}
+
+	/* v9b: subtle accent breathing - a ~1.4s opacity pulse gives the wave
+	   sheen amplitude so the transition reads as 'powered by accent color',
+	   not a flat static wash. Scales the base --fc-wave-op by 0.72..1.0. */
+	@keyframes fc-wave-breathe {
+		0%, 100% { opacity: calc(var(--fc-wave-op, 0) * 0.72); }
+		50%      { opacity: calc(var(--fc-wave-op, 0) * 1.0); }
+	}
+
+	/* Immersive cluster (top-left): [i] toggle + [>]/[>>] auto-scroll radios.
+	   Gray when off/active-none, accent when on — analog to the playback ctl.
+	*/
+	.fc-immersive {
+		position: absolute;
+		top: 8px;
+		left: 8px;
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		z-index: 21;
+	}
+
+	.fc-imm-btn {
+		width: 26px;
+		height: 26px;
+		border-radius: 6px;
+		border: 1px solid var(--border);
+		background: var(--bg-tertiary);
+		color: var(--text-secondary);
+		font-size: 0.95rem;
+		line-height: 1;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+	}
+
+	/* The bold "i" information toggle: a heavy serif italic reads as "i". */
+	.fc-imm-btn.fc-i {
+		font-family: Georgia, "Times New Roman", serif;
+		font-weight: 800;
+		font-style: italic;
+		font-size: 1.05rem;
+	}
+
+	/* Enabled / active: accent color + glow (analog to ctl-btn.active). */
+	.fc-imm-btn.fc-imm-on {
+		color: var(--accent-color, #ff3e00);
+		border-color: var(--accent-color, #ff3e00);
+		background: color-mix(in srgb, var(--accent-color, #ff3e00) 14%, var(--bg-tertiary));
+		box-shadow: 0 0 10px var(--accent-glow, rgba(255, 62, 0, 0.25));
+	}
+
+	.fc-imm-btn:hover {
+		background: var(--bg-hover);
+	}
+
+	.fc-imm-gap {
+		width: 8px;
+	}
+
 </style>

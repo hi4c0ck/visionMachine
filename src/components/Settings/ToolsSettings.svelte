@@ -11,7 +11,7 @@
 		draft,
 		ondraftchange,
 	} = $props<{
-		draft: { tools: { ffmpegPath: string } };
+		draft: { tools: { ffmpegPath: string }; carousel: { immersiveSnaps: boolean; autoScroll: 'off' | 'steady' | 'fast' } };
 		ondraftchange: (m: (d: any) => void) => void;
 	}>();
 
@@ -69,6 +69,18 @@
 		probeLabel = '';
 		flashToast('ffmpeg path cleared', 'info');
 	}
+
+	function setImmersiveSnaps(v: boolean) {
+		ondraftchange((d: any) => {
+			d.carousel = { ...d.carousel, immersiveSnaps: v };
+		});
+	}
+
+	function setAutoScrollMode(mode: 'off' | 'steady' | 'fast') {
+		ondraftchange((d: any) => {
+			d.carousel = { ...d.carousel, autoScroll: mode };
+		});
+	}
 </script>
 
 <div class="tools-settings">
@@ -105,7 +117,56 @@
 	{:else if probeLabel}
 		<div class="probe-line" aria-live="polite">{probeLabel}</div>
 	{/if}
-</div>
+	<div class="tools-divider" role="separator"></div>
+
+	<div class="tools-header">
+		<h4 class="tools-title">Immersive Snaps</h4>
+		<span class="tools-sub">
+			Top-panel carousel treatment. Bound to the profile preset — the [i] / [>] / [>>]
+			buttons in the carousel mirror these values.
+		</span>
+	</div>
+
+	<label class="immersive-check">
+		<input
+			type="checkbox"
+			checked={draft.carousel.immersiveSnaps}
+			onchange={() => setImmersiveSnaps(!draft.carousel.immersiveSnaps)}
+		/>
+		<span>Immersive Snaps — dissolve treatment on frame moves</span>
+	</label>
+	<span class="note">Off = plain strip (no grain / accent wave); on = the accent dissolve.</span>
+
+	<div class="field">
+		<span class="field-label">Auto-scroll</span>
+		<div class="radio-row" role="radiogroup" aria-label="Auto-scroll">
+			<label>
+				<input
+					type="radio" name="immersive-autoscroll"
+					checked={draft.carousel.autoScroll === 'off'}
+					onchange={() => setAutoScrollMode('off')}
+				/>
+				Off — no automatic frame scrolling
+			</label>
+			<label>
+				<input
+					type="radio" name="immersive-autoscroll"
+					checked={draft.carousel.autoScroll === 'steady'}
+					onchange={() => setAutoScrollMode('steady')}
+				/>
+				Steady [>] — consistent slow pace
+			</label>
+			<label>
+				<input
+					type="radio" name="immersive-autoscroll"
+					checked={draft.carousel.autoScroll === 'fast'}
+					onchange={() => setAutoScrollMode('fast')}
+				/>
+				Fast [>>] — quick snaps, 0.8s idle at each
+			</label>
+		</div>
+		<span class="note">Manual drag / wheel / step buttons only PAUSE auto-scroll; it resumes after a short cooldown.</span>
+	</div></div>
 
 <style>
 	.tools-settings {
@@ -200,4 +261,62 @@
 	.probe-err {
 		color: #f87171;
 	}
+
+	.tools-divider {
+		height: 1px;
+		background: var(--border-color, #3f3f46);
+		margin: 4px 0;
+	}
+
+	.immersive-check {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 0.8rem;
+		color: var(--text-secondary, #a1a1aa);
+		cursor: pointer;
+	}
+
+	.immersive-check input {
+		accent-color: var(--accent-color, #ff3e00);
+	}
+
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.field-label {
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: var(--text-secondary, #a1a1aa);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.radio-row {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.radio-row label {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 0.8rem;
+		color: var(--text-secondary, #a1a1aa);
+		cursor: pointer;
+	}
+
+	.radio-row input {
+		accent-color: var(--accent-color, #ff3e00);
+	}
+
+	.note {
+		font-size: 0.68rem;
+		color: var(--text-muted, #71717a);
+	}
+
 </style>

@@ -26,6 +26,10 @@
 		providerLoading = false,
 		onopenprovidersettings,
 		videoAspect = null,
+		isSessionVideo = false,
+		onplayoutside,
+		sessionVideoDetached = false,
+		onopensessionpreview,
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -57,7 +61,7 @@
 		 *  preview strip (frame ticks + playhead). null = nothing to show. */
 		ruler?: { ticks: number[]; total: number; frame: number } | null;
 		/** Render the global ruler strip. Off by default — it opts into a
-		 *  special mode in future development. */
+		 * special mode in future development. */
 		showRuler?: boolean;
 		/** Provider settings for the status chip (Phase 4). null = chip hidden. */
 		providers?: Settings['providers'] | null;
@@ -79,6 +83,24 @@
 		 * null = fall back to the fixed 170px card width.
 		 */
 		videoAspect?: number | null;
+		/**
+		 * The preview is the composed full-session video (all pipes spliced),
+		 * not a single pipe clip. Shows the "SESSION" badge so the two are
+		 * never confused. (2d) */
+		isSessionVideo?: boolean;
+		/**
+		 * "Play outside": open the current preview in the OS's default player
+		 * (VLC / MPV / QuickTime). The parent owns the actual file path + the
+		 * backend call; this just fires the intent. Absent = button hidden.
+		 */
+		onplayoutside?: () => void;
+		/**
+		 * A composed session video exists for this session but the top panel
+		 * is currently showing a single-pipe clip — surface the "Open in
+		 * preview" restore affordance as a pill (2f). */
+		sessionVideoDetached?: boolean;
+		/** Re-attach the composed session video to the top panel (2f). */
+		onopensessionpreview?: () => void;
 	}>();
 
 	const layouts = [
@@ -154,6 +176,14 @@
 			Math.max(0, (carouselFrame ?? 0) + delta * CAROUSEL_FRAME_STEP)
 		);
 		onframeSelect?.(next);
+		// Park the playback-mode <video> on the stepped frame (B4): the
+		// time scrubber + readout below then reflect the step instead of
+		// the video drifting away from the frame the user just picked.
+		// Carousel mode manages its own element position, so never seek
+		// there.
+		if (mode === 'playback' && videoEl && fps !== null && !videoPlaying) {
+			videoEl.currentTime = next / fps;
+		}
 	}
 
 	function toggleMode() {
@@ -169,6 +199,111 @@
 		}
 	}
 
+	// ── Playback control cluster (2a/2b): loop, speed, time scrubber ─────
+	// Operates on the native <video> (videoEl). The discrete frame world
+	// (‹8/8›, arrow keys, frame ruler, carousel) is untouched — the
+	// scrubber is a complementary *time* view of the same media. They
+	// meet in one place: ontimeupdate mirrors the playhead into the shared
+	// frame selection, so the top-right readout + global ruler stay
+	// honest while the video plays.
+	let loopEnabled = $state(false);
+	let playbackRate = $state(1);
+	let videoTime = $state(0);
+	let videoDuration = $state(0);
+	// 0.25× for slow-motion inspection of fast material.
+	const SPEED_OPTIONS = [0.25, 0.5, 1, 1.5, 2];
+	// Progress fill of the bottom-edge scrubber (0–100%). Feeds the CSS
+	// custom property --scrub-pct that paints the hairline's filled part.
+	const scrubPct = $derived(
+		videoDuration > 0 ? `${Math.min(100, (videoTime / videoDuration) * 100).toFixed(2)}%` : '0%'
+	);
+
+	function formatTime(sec: number): string {
+		if (!Number.isFinite(sec) || sec < 0) sec = 0;
+		const m = Math.floor(sec / 60);
+		const s = sec - m * 60;
+		return `${m}:${s.toFixed(1).padStart(4, '0')}`;
+	}
+
+	function applySpeed(value: string) {
+		const rate = Number(value);
+		if (!Number.isFinite(rate) || rate <= 0) return;
+		playbackRate = rate;
+		if (videoEl) videoEl.playbackRate = rate;
+	}
+
+	function toggleLoop() {
+		loopEnabled = !loopEnabled;
+		if (videoEl) videoEl.loop = loopEnabled;
+	}
+
+	// 2b — scrub: seek the native element, mirror into videoTime so the
+	// range input + readout track the pointer 1:1 (ontimeupdate would
+	// fight the drag otherwise).
+	function handleScrub(e: Event) {
+		const el = videoEl;
+		const t = Number((e.currentTarget as HTMLInputElement).value);
+		if (el && Number.isFinite(t)) el.currentTime = t;
+		videoTime = t;
+	}
+
+	// Playhead → shared frame selection. Only in playback mode (the
+	// carousel owns the center frame itself). Clamped to the session's
+	// frame space so the readout/ruler never run past the media.
+	function handleTimeUpdate() {
+		const el = videoEl;
+		if (!el) return;
+		videoTime = el.currentTime;
+		if (fps !== null && totalFrames !== null && mode === 'playback') {
+			const f = Math.min(totalFrames - 1, Math.max(0, Math.round(el.currentTime * fps)));
+			onframeSelect?.(f);
+		}
+	}
+
+	// ── Play outside (2a+) — hand the file to the OS default player. ────
+	// The parent owns the on-disk path + the backend call; the button
+	// only fires the intent.
+	function handlePlayOutside() {
+		onplayoutside?.();
+	}
+
+	// ── 2f — "Open in preview" restore pill. ────────────────────────────
+	// A composed session video exists for this session but the top panel
+	// shows a single-pipe clip: the pill re-attaches the session video.
+	function handleOpenSessionPreview() {
+		onopensessionpreview?.();
+	}
+
+	// ── 2e — keyboard layer (Space / Esc). ─────────────────────────────
+	// Global desktop-first shortcuts (design brief 4.4). Guards: never
+	// steal keys from form controls / buttons (their own semantics win),
+	// and Space only toggles in playback mode with a loaded video.
+	$effect(() => {
+		const videoPresent = video !== null;
+		if (!videoPresent) return;
+		function onKey(e: KeyboardEvent) {
+			const t = e.target as HTMLElement | null;
+			if (
+				t &&
+				(t.tagName === 'INPUT' ||
+					t.tagName === 'TEXTAREA' ||
+					t.tagName === 'SELECT' ||
+					t.tagName === 'BUTTON' ||
+					t.isContentEditable)
+			) {
+				return;
+			}
+			if (e.code === 'Space' && !e.repeat && mode === 'playback' && !videoLoading) {
+				e.preventDefault();
+				toggleVideoPlay();
+			} else if (e.key === 'Escape' && mode === 'carousel') {
+				toggleMode();
+			}
+		}
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
+
 	// `videoLoading` tracks whether the <video> element has finished its first
 	// load. It starts `false`; when the `video` prop first appears (or its url
 	// changes), the $effect below sets it to `true` so the spinner shows while
@@ -179,8 +314,13 @@
 		void video?.url;
 		if (video) {
 			// A fresh preview → show the spinner until the <video> element's
-			// oncanplay fires.
+			// oncanplay fires. Reset the scrubber's time world too — stale
+			// seconds from the previous source would render a bogus
+			// "0:45 / 0:00" readout until the new metadata lands.
+			// (loop/speed are user settings: kept, re-applied on load.)
 			videoLoading = true;
+			videoTime = 0;
+			videoDuration = 0;
 		} else {
 			resetVideoState();
 		}
@@ -261,6 +401,25 @@
 					onframeSelect={(f) => oncarouselSelect?.(f)}
 					onexit={toggleMode}
 				/>
+				<!-- Play outside + the 2f restore pill float over the carousel:
+					 the carousel owns the strip's own nav/exit buttons, so these
+					 sit in the strip's bottom-right / top-right corners. -->
+				{#if onplayoutside}
+					<button
+						class="outside-float"
+						onclick={handlePlayOutside}
+						title={APP_CONSTANTS.strings.playOutsideHint}
+						aria-label={APP_CONSTANTS.strings.playOutside}
+					>
+						↗
+					</button>
+				{/if}
+				{#if sessionVideoDetached}
+					<button class="session-pill" onclick={handleOpenSessionPreview}
+						title={APP_CONSTANTS.strings.openSessionPreviewHint}>
+						▸ {APP_CONSTANTS.strings.openInPreview}
+					</button>
+				{/if}
 			{:else}
 			<div class="frame-video-wrap">
 				<!-- Spinner overlay while the <video> element is still probing.
@@ -278,38 +437,112 @@
 					src={video.url}
 					muted
 					playsinline
+					loop={loopEnabled}
 					oncanplay={() => (videoLoading = false)}
 					onerror={() => (videoLoading = false)}
 					onpause={() => (videoPlaying = false)}
 					onplay={() => (videoPlaying = true)}
 					onended={() => (videoPlaying = false)}
+						ontimeupdate={handleTimeUpdate}
+					onloadedmetadata={() => {
+						videoDuration = videoEl?.duration ?? 0;
+						// Re-apply the user's chosen speed to the fresh element —
+						// a new source resets playbackRate to 1 natively.
+						if (videoEl) videoEl.playbackRate = playbackRate;
+					}}
 				></video>
-				<button
-					class="frame-video-play"
-					onclick={toggleVideoPlay}
-					title={videoPlaying ? 'Pause' : 'Play'}
-					aria-label={videoPlaying ? 'Pause video' : 'Play video'}
-				>
-					{videoPlaying ? '❚❚' : '▶'}
-				</button>
-				{#if carouselReady}
-					<!-- Playback ⇄ carousel toggle (plan B3): sits next to
-						 play/pause, only present when the session's fps +
-						 frame bounds are known. -->
-					<button
-						class="frame-video-mode {mode === 'carousel' ? 'active' : ''}"
-						onclick={toggleMode}
-						title={mode === 'carousel' ? APP_CONSTANTS.strings.frameCarouselToPlayback : APP_CONSTANTS.strings.frameCarouselHint}
-						aria-label={APP_CONSTANTS.strings.frameCarousel}
-					>
-						≣
-					</button>
-				{/if}
-				<span class="frame-video-label">{video.label}</span>
+				<span class="frame-video-label">
+					<!-- 2d: badge distinguishes the composed full-session video
+					     from a single pipe clip in the same preview slot. -->
+					{#if isSessionVideo}
+						<span class="session-badge" title="{APP_CONSTANTS.strings.sessionVideoBadgeHint}">SESSION</span>
+					{/if}
+					{video.label}
+				</span>
 				{#if totalFrames !== null}
 					<!-- Frame position readout (playback mode): the top panel's
 						 frame-step buttons need a visible position to act on. -->
 					<span class="frame-position">{carouselFrame ?? 0} / {totalFrames}</span>
+				{/if}
+				{#if sessionVideoDetached}
+					<!-- 2f: a composed session video exists for this session but
+					     the panel shows a single-pipe clip — the pill restores the
+					     session video without leaving the top panel. -->
+					<button class="session-pill" onclick={handleOpenSessionPreview}
+						title={APP_CONSTANTS.strings.openSessionPreviewHint}>
+						▸ {APP_CONSTANTS.strings.openInPreview}
+					</button>
+				{/if}
+				<!-- 2a/2b cluster, professional composition: a time chip floats
+					 bottom-LEFT, one compact control pill bottom-RIGHT, and the
+					 scrubber is a 3px hairline tied to the panel's very bottom
+					 edge. No background bar — the chips sit directly on the
+					 media with a faint glass tint. The discrete frame world
+					 (‹8/8›, frame ruler, arrow keys) stays exactly as it was. -->
+				<div class="frame-controls" role="group" aria-label={APP_CONSTANTS.strings.playbackControls}>
+					<span class="ctl-time" aria-hidden="true">{formatTime(videoTime)} / {formatTime(videoDuration)}</span>
+					<span class="ctl-cluster">
+						<button class="ctl-btn" class:active={loopEnabled} onclick={toggleLoop}
+							title={APP_CONSTANTS.strings.loopHint} aria-pressed={loopEnabled}>
+							⟳
+						</button>
+						<select class="ctl-speed" value={String(playbackRate)}
+							onchange={(e) => applySpeed(e.currentTarget.value)}
+							title={APP_CONSTANTS.strings.speedLabel} aria-label={APP_CONSTANTS.strings.speedLabel}>
+							{#each SPEED_OPTIONS as s}
+								<option value={String(s)}>{s}×</option>
+							{/each}
+						</select>
+						{#if onplayoutside}
+							<button class="ctl-btn" onclick={handlePlayOutside}
+								title={APP_CONSTANTS.strings.playOutsideHint} aria-label={APP_CONSTANTS.strings.playOutside}>
+								↗
+							</button>
+						{/if}
+						{#if carouselReady}
+							<!-- Playback ⇄ carousel toggle (plan B3): moved into the
+								 control cluster, still gated on known fps + frame
+								 bounds. -->
+							<button
+								class="ctl-btn {mode === 'carousel' ? 'active' : ''}"
+								onclick={toggleMode}
+								title={mode === 'carousel' ? APP_CONSTANTS.strings.frameCarouselToPlayback : APP_CONSTANTS.strings.frameCarouselHint}
+								aria-label={APP_CONSTANTS.strings.frameCarousel}
+							>
+								≣
+							</button>
+						{/if}
+						<button
+							class="ctl-btn ctl-play"
+							onclick={toggleVideoPlay}
+							title={videoPlaying ? 'Pause' : 'Play'}
+							aria-label={videoPlaying ? 'Pause video' : 'Play video'}
+						>
+							{videoPlaying ? '❚❚' : '▶'}
+						</button>
+					</span>
+				</div>
+				<!-- 2b scrubber: a full-width 3px hairline tied to the panel's
+					 bottom edge. The <input> is an invisible 14px hit strip
+					 (keyboard-operable, native thumb/track hidden); the visible
+					 line + hover dot are decorative layers driven by
+					 --scrub-pct. Idle state is a quiet hairline; the accent
+					 dot only materialises on hover/focus. -->
+				<input
+					class="ctl-scrub"
+					type="range"
+					min="0"
+					max={videoDuration || 0}
+					step="0.01"
+					value={videoTime}
+					oninput={handleScrub}
+					aria-label={APP_CONSTANTS.strings.scrubLabel}
+					style:--scrub-pct={scrubPct}
+					disabled={videoDuration === 0}
+				/>
+				{#if videoDuration > 0}
+					<span class="ctl-scrub-line" style:--scrub-pct={scrubPct} aria-hidden="true"></span>
+					<span class="ctl-scrub-dot" style:--scrub-pct={scrubPct} aria-hidden="true"></span>
 				{/if}
 			</div>
 			{/if}
@@ -358,6 +591,18 @@
 			{#if providers && providerStatus && onopenprovidersettings}
 				<ProviderStatus {providers} providerStatus={providerStatus} loading={providerLoading} onopen={onopenprovidersettings} />
 			{/if}
+
+			<!-- 2e: keyboard layer discoverability — a quiet hint affordance that
+				 lists the top-panel shortcuts on hover/focus. CSS-only popover;
+				 a real <button> so it is focusable + screen-reader labelled. -->
+			<button type="button" class="kb-hint" aria-label={APP_CONSTANTS.strings.kbShortcutsHint}>
+				⌨
+				<span class="kb-pop" role="tooltip">
+					<span class="kb-row"><b>← / →</b> {APP_CONSTANTS.strings.kbStep}</span>
+					<span class="kb-row"><b>Space</b> {APP_CONSTANTS.strings.kbPlay}</span>
+					<span class="kb-row"><b>Esc</b> {APP_CONSTANTS.strings.kbEsc}</span>
+				</span>
+			</button>
 		</div>
 
 		{#if userName}
@@ -534,33 +779,254 @@
 		to { transform: rotate(360deg); }
 	}
 
-	.frame-video-play {
+	/* ── Playback control cluster (2a/2b) — quiet, professional composition ── */
+	/* A small time chip bottom-LEFT, one compact control pill bottom-RIGHT,
+	   and a 3px hairline scrubber pinned to the panel's very bottom edge.
+	   No background bar, no gradient: the chips float over the media with
+	   a faint glass tint; the scrubber shows only a quiet line at idle —
+	   the thumb materialises on hover. */
+	.frame-controls {
 		position: absolute;
-		bottom: 8px;
-		right: 8px;
-		width: 30px;
-		height: 30px;
-		border-radius: 50%;
-		border: 1px solid var(--border);
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
+		left: 0;
+		right: 0;
+		bottom: 10px; /* just above the 10px scrubber hit strip */
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 0 10px;
+		z-index: 6;
+		/* The row itself never blocks: media click/drag passes through the
+		   gap between the two chips; only the chips take input. */
+		pointer-events: none;
+	}
+	.frame-controls > * {
+		pointer-events: auto;
+	}
+
+	.ctl-time {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 0.62rem;
+		color: rgba(255, 255, 255, 0.78);
+		background: rgba(0, 0, 0, 0.35);
+		border-radius: 4px;
+		padding: 2px 7px;
+		white-space: nowrap;
+		backdrop-filter: blur(4px);
+	}
+
+	.ctl-cluster {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		padding: 2px 4px;
+		background: rgba(0, 0, 0, 0.35);
+		border-radius: 8px;
+		backdrop-filter: blur(4px);
+	}
+
+	/* 2b scrubber: a 10px hit strip pinned to the panel's bottom edge.
+	   It is a pure overlay on the video (transparent element background,
+	   z-index above the <video>) — the whiteness you saw was the TRACK
+	   COLOR itself: a 30%-white line over the black letterbox reads as a
+	   plain white strip no matter how "low" the opacity. So:
+	   IDLE   — 4px line, accent fill up to --scrub-pct, then a
+	            SEMI-TRANSPARENT DARK track (black 45%): invisible-ish on
+	            the letterbox, a quiet dark glass line over picture.
+	   HOVER  — YouTube behaviour: the bar brightens (track → 35% white),
+	            grows 4px → 6px, and the soft thumb appears. */
+	.ctl-scrub {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		width: 100%;
+		height: 10px;
+		margin: 0;
+		padding: 0;
+		z-index: 7;
+		-webkit-appearance: none;
+		appearance: none;
+		border: none;
+		border-radius: 2px;
+		background-color: transparent;
 		cursor: pointer;
-		font-size: 0.7rem;
+		background-image: linear-gradient(to right,
+			var(--accent-color, #59b5ff) 0%,
+			var(--accent-color, #59b5ff) var(--scrub-pct, 0%),
+			rgba(0, 0, 0, 0.45) var(--scrub-pct, 0%),
+			rgba(0, 0, 0, 0.45) 100%);
+		background-repeat: no-repeat;
+		background-size: 100% 4px;
+		background-position: left bottom;
+	}
+	/* YouTube: on hover the bar brightens to a translucent white and grows
+	   (4px → 6px); the soft thumb also fades in (rules below). */
+	.ctl-scrub:hover {
+		background-size: 100% 6px;
+		background-image: linear-gradient(to right,
+			var(--accent-color, #59b5ff) 0%,
+			var(--accent-color, #59b5ff) var(--scrub-pct, 0%),
+			rgba(255, 255, 255, 0.35) var(--scrub-pct, 0%),
+			rgba(255, 255, 255, 0.35) 100%);
+	}
+	.ctl-scrub:disabled {
+		background-image: none;
+		cursor: default;
+	}
+	.ctl-scrub:focus {
+		outline: none;
+	}
+	.ctl-scrub::-webkit-slider-runnable-track {
+		height: 10px;
+		background: transparent;
+		border: none;
+	}
+	.ctl-scrub::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		appearance: none;
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		/* YouTube-style soft handle: a semi-transparent white radial
+		   gradient that fades to transparent at the edge — no hard
+		   border, no gray disc. */
+		background: radial-gradient(circle at 50% 50%,
+			rgba(255, 255, 255, 0.9) 0%,
+			rgba(255, 255, 255, 0.45) 45%,
+			rgba(255, 255, 255, 0) 72%);
+		border: none;
+		box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+		opacity: 0;
+		transition: opacity 120ms ease;
+		cursor: pointer;
+	}
+	.ctl-scrub:hover::-webkit-slider-thumb,
+	.ctl-scrub:active::-webkit-slider-thumb,
+	.ctl-scrub:focus-visible::-webkit-slider-thumb {
+		opacity: 1;
+	}
+	.ctl-scrub::-moz-range-track {
+		height: 10px;
+		background: transparent;
+		border: none;
+	}
+	.ctl-scrub::-moz-range-thumb {
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		background: radial-gradient(circle at 50% 50%,
+			rgba(255, 255, 255, 0.9) 0%,
+			rgba(255, 255, 255, 0.45) 45%,
+			rgba(255, 255, 255, 0) 72%);
+		border: none;
+		box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+		opacity: 0;
+		transition: opacity 120ms ease;
+		cursor: pointer;
+	}
+	.ctl-scrub:hover::-moz-range-thumb,
+	.ctl-scrub:active::-moz-range-thumb,
+	.ctl-scrub:focus-visible::-moz-range-thumb {
+		opacity: 1;
+	}
+
+	.ctl-btn {
+		width: 22px;
+		height: 22px;
+		border-radius: 5px;
+		border: none;
+		background: transparent;
+		color: rgba(255, 255, 255, 0.7);
+		cursor: pointer;
+		font-size: 0.72rem;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		flex-shrink: 0;
+		transition: background-color 120ms ease, color 120ms ease;
+	}
+	.ctl-btn:hover {
+		background: rgba(255, 255, 255, 0.1);
+		color: #fff;
+	}
+	.ctl-btn.active {
+		color: var(--accent-color, #ff3e00);
+	}
+	.ctl-play {
+		font-size: 0.66rem;
 	}
 
-	.frame-video-play:hover {
+	.ctl-speed {
+		height: 22px;
+		padding: 0 3px;
+		background: transparent;
+		color: rgba(255, 255, 255, 0.7);
+		border: none;
+		border-radius: 5px;
+		font-size: 0.62rem;
+		font-family: 'JetBrains Mono', monospace;
+		cursor: pointer;
+		flex-shrink: 0;
+	}
+	.ctl-speed:hover {
+		background: rgba(255, 255, 255, 0.1);
+		color: #fff;
+	}
+	.ctl-speed:focus {
+		outline: none;
+	}
+	.ctl-speed option {
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+	}
+
+	/* 2d — "SESSION" badge on the preview label: the composed full-session
+	   video is visually distinguished from a single-pipe clip in the slot. */
+	.session-badge {
+		display: inline-block;
+		font-size: 0.55rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		color: #fff;
+		background: var(--accent-color, #ff3e00);
+		padding: 1px 5px;
+		border-radius: 3px;
+		margin-right: 6px;
+		vertical-align: middle;
+	}
+
+	/* 2f — "Open in preview" restore pill: a composed session video exists
+	   but the panel shows a pipe clip. Sits under the top-right readout / exit
+	   button, in both modes. */
+	.session-pill {
+		position: absolute;
+		top: 34px;
+		right: 8px;
+		z-index: 5;
+		padding: 4px 10px;
+		font-size: 0.68rem;
+		font-family: inherit;
+		border: 1px solid var(--accent-color, #ff3e00);
+		border-radius: 12px;
+		background: rgba(0, 0, 0, 0.55);
+		color: var(--text-primary);
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	.session-pill:hover {
 		background: var(--bg-hover);
 	}
 
-	/* Carousel toggle: mirrors the play button, one icon to the left of it
-	   (plan B3). The two buttons stack in the same corner. */
-	.frame-video-mode {
+	/* Play-outside float for carousel mode (in playback mode the button lives
+	   in the control bar). Bottom-right of the strip; the carousel's own
+	   nav/exit buttons use the vertical-center sides and top-right, so there
+	   is no collision. */
+	.outside-float {
 		position: absolute;
 		bottom: 8px;
-		right: 44px;
+		right: 8px;
+		z-index: 22;
 		width: 30px;
 		height: 30px;
 		border-radius: 50%;
@@ -573,14 +1039,66 @@
 		align-items: center;
 		justify-content: center;
 	}
-
-	.frame-video-mode:hover {
+	.outside-float:hover {
 		background: var(--bg-hover);
 	}
 
-	.frame-video-mode.active {
-		border-color: var(--accent-color, #ff3e00);
-		color: var(--accent-color, #ff3e00);
+	/* 2e — keyboard-shortcut hint: a quiet affordance in the top panel's
+	   bottom bar; hover/focus reveals a CSS-only popover listing the keys. */
+	.kb-hint {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 26px;
+		height: 26px;
+		border-radius: 5px;
+		border: 1px solid var(--border);
+		background: transparent;
+		color: var(--text-muted);
+		font-size: 0.8rem;
+		cursor: help;
+		outline: none;
+		padding: 0;
+	}
+	.kb-hint:hover,
+	.kb-hint:focus {
+		color: var(--text-primary);
+		border-color: var(--border-light, var(--border));
+	}
+	.kb-pop {
+		visibility: hidden;
+		opacity: 0;
+		position: absolute;
+		bottom: calc(100% + 8px);
+		left: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 8px 10px;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+		white-space: nowrap;
+		transition: opacity 120ms ease;
+		pointer-events: none;
+		z-index: 50;
+	}
+	.kb-hint:hover .kb-pop,
+	.kb-hint:focus .kb-pop {
+		visibility: visible;
+		opacity: 1;
+	}
+	.kb-row {
+		font-size: 0.68rem;
+		color: var(--text-secondary);
+		font-family: 'JetBrains Mono', monospace;
+	}
+	.kb-row b {
+		color: var(--text-primary);
+		font-weight: 700;
+		margin-right: 6px;
 	}
 
 	/* Frame position readout (playback mode): top-right of the preview strip,

@@ -345,6 +345,7 @@ pub fn run() {
             commands::generation::compose_session_video,
             commands::generation::cancel_session_video_composition,
             commands::generation::read_media_file,
+            commands::generation::open_media_in_player,
             commands::generation::reveal_media_folder,
             // Settings & provider system (Phase 1)
             commands::settings::get_settings,

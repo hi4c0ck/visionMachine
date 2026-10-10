@@ -14,7 +14,8 @@ import { describe, it, expect } from 'vitest';
 import {
   CAROUSEL_STRIP_H,
   CAROUSEL_FALLBACK_CARD_W,
-  CAROUSEL_OVERLAP,
+  CAROUSEL_DECK_OFFSET_LADDER,
+  CAROUSEL_DECK_SCALE_LADDER,
   carouselCardWidth,
   carouselDragPxPerStep,
   thumbnailIntrinsic,
@@ -33,8 +34,9 @@ describe('carousel constants', () => {
     expect(CAROUSEL_FALLBACK_CARD_W).toBe(170);
   });
 
-  it('overlap folds neighbors 45% inward (0.55)', () => {
-    expect(CAROUSEL_OVERLAP).toBeCloseTo(0.55, 5);
+  it('deck offset ladder tucks the first neighbor under the front (0.55 cardW)', () => {
+    expect(CAROUSEL_DECK_OFFSET_LADDER).toEqual([0, 0.55, 0.87, 1.13, 1.35]);
+    expect(CAROUSEL_DECK_SCALE_LADDER).toEqual([1.0, 0.76, 0.64, 0.55, 0]);
   });
 });
 
@@ -82,24 +84,13 @@ describe('carouselCardWidth', () => {
 
 // ── carouselDragPxPerStep ────────────────────────────────────────────────────
 describe('carouselDragPxPerStep', () => {
-  it('folds one step by the neighbor overlap', () => {
-    // 170px card: round(170 × (1 + 0.45)) = round(246.5) = 247 (round-half-up in
-    // JS is not exact for .5 — Math.round(246.5) = 247).
-    expect(carouselDragPxPerStep(170)).toBe(247);
-    // 101px card (9:16 portrait): round(101 × 1.45) = round(146.45) = 146.
-    expect(carouselDragPxPerStep(101)).toBe(146);
-    // 320px card (16:9 landscape): round(320 × 1.45) = round(464) = 464.
-    expect(carouselDragPxPerStep(320)).toBe(464);
-  });
-
-  it('respects a custom overlap (one step = cardW × (1 + (1 − overlap)))', () => {
-    // No overlap → one step = two card widths (cards butt against each other
-    // with no tuck, so advancing one step moves a full card + the gap).
-    expect(carouselDragPxPerStep(200, 0)).toBe(400);
-    // 50% overlap → one step = 1.5 × card width.
-    expect(carouselDragPxPerStep(200, 0.5)).toBe(300);
-    // Default 0.55 overlap → one step = 1.45 × card width.
-    expect(carouselDragPxPerStep(200)).toBe(290);
+  it('tucks one step by the first-neighbor deck offset', () => {
+    // 170px card: round(170 × 0.55) = round(93.5) = 94 (Math.round half-up).
+    expect(carouselDragPxPerStep(170)).toBe(94);
+    // 101px card (9:16 portrait): round(101 × 0.55) = round(55.55) = 56.
+    expect(carouselDragPxPerStep(101)).toBe(56);
+    // 320px card (16:9 landscape): round(320 × 0.55) = round(176) = 176.
+    expect(carouselDragPxPerStep(320)).toBe(176);
   });
 });
 
@@ -139,28 +130,28 @@ describe('thumbnailIntrinsic', () => {
 
 // ── integrated: card width → dip offset still consistent ────────────────────
 describe('carouselCardX with aspect-driven card width', () => {
-  it('first neighbor sits one full card-width out, for any aspect', () => {
+  it('first neighbor tucks UNDER the front card (0.55 cardW out), for any aspect', () => {
     const W = carouselCardWidth(180, 9 / 16); // 101
-    expect(carouselCardX(1, W, CAROUSEL_OVERLAP)).toBeCloseTo(W, 5);
-    expect(carouselCardX(-1, W, CAROUSEL_OVERLAP)).toBeCloseTo(-W, 5);
+    expect(carouselCardX(1, W)).toBeCloseTo(W * 0.55, 5);
+    expect(carouselCardX(-1, W)).toBeCloseTo(-W * 0.55, 5);
   });
 
-  it('far neighbors fold inward by the overlap fraction', () => {
+  it('far neighbors step out a little less each time (shrinking sliver)', () => {
     const W = carouselCardWidth(180, 16 / 9); // 320
-    expect(carouselCardX(2, W, CAROUSEL_OVERLAP)).toBeCloseTo(
-      W * (1 + (1 - CAROUSEL_OVERLAP)),
-      5,
-    );
-    expect(carouselCardX(3, W, CAROUSEL_OVERLAP)).toBeCloseTo(
-      W * (1 + 2 * (1 - CAROUSEL_OVERLAP)),
-      5,
+    expect(carouselCardX(2, W)).toBeCloseTo(W * 0.87, 5);
+    expect(carouselCardX(3, W)).toBeCloseTo(W * 1.13, 5);
+    // Each further card steps out less than the previous: the visible sliver
+    // shrinks down the deck → the nested `[ [[]] ]` cascade.
+    expect(carouselCardX(1, W) - 0).toBeGreaterThan(0);
+    expect(carouselCardX(2, W) - carouselCardX(1, W)).toBeLessThan(
+      carouselCardX(1, W) - 0,
     );
   });
 
-  it('dip scale + opacity are aspect-independent (pure fns of distance)', () => {
+  it('deck scale + opacity are aspect-independent (pure fns of distance)', () => {
     // Same values regardless of card width — only position scales with W.
     expect(carouselCardScaleF(0)).toBe(1);
-    expect(carouselCardScaleF(1)).toBeCloseTo(0.85, 5);
+    expect(carouselCardScaleF(1)).toBeCloseTo(0.76, 5);
     expect(carouselCardScaleF(4)).toBe(0);
     expect(carouselCardOpacityF(3)).toBe(1);
     expect(carouselCardOpacityF(4)).toBe(0);

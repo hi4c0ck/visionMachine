@@ -126,8 +126,9 @@
 		if (!url) return false;
 		previewIsSessionVideo = true;
 		previewVideo = { url, label };
+		previewMediaPath = path;
 		toolsSessionVideo = { url, label };
-		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label };
+		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label, path };
 		return true;
 	}
 	// Flip the top-panel ownership back off the session video when the user
@@ -141,7 +142,7 @@
 	// Last successfully composed session video, keyed to the session it was
 	// composed for. Persists across top-panel preview switches so the
 	// tool-panel "Open in preview" can re-attach it on demand.
-	let lastComposedSessionVideo = $state<{ sessionId: string; url: string; label: string } | null>(null);
+	let lastComposedSessionVideo = $state<{ sessionId: string; url: string; label: string; path: string } | null>(null);
 	// Re-attach the composed session video to the top panel (the tool-panel
 	// "Open in preview" affordance). Restores the full-session frame space
 	// after the user switched the top panel to a single pipe clip. No-op when
@@ -151,7 +152,31 @@
 		if (previewVideo?.url === lastComposedSessionVideo.url) return;
 		previewIsSessionVideo = true;
 		previewVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+		previewMediaPath = lastComposedSessionVideo.path;
 		toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
+	}
+	// 2f: a composed session video exists for the CURRENT session while the
+	// top panel shows a single-pipe clip — surface the "Open in preview"
+	// restore pill in the top panel (and keep the tool-panel button). A
+	// record from another session must not light the pill: that is the
+	// same cross-session leak the restore path guards against above.
+	const sessionVideoDetached = $derived(
+		!!lastComposedSessionVideo &&
+		lastComposedSessionVideo.sessionId === selectedSessionId &&
+		!previewIsSessionVideo
+	);
+	// Play outside (2a+): open the currently-attached preview's on-disk file
+	// in the OS's default player. The backend command re-validates the path
+	// against the media roots (same guard as read_media_file) and spawns the
+	// platform opener. Browser/dev: no backend → affordance stays hidden.
+	async function handlePlayOutside() {
+		if (!isTauri() || !previewMediaPath) return;
+		try {
+			await invoke('open_media_in_player', { input: { path: previewMediaPath } });
+			flashToast('Opened in system player', 'info');
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
 	}
 	async function restoreSelectedPreview(session: SessionData | null) {
 		const sid = session?.id;
@@ -192,6 +217,7 @@
 		if (previewIsSessionVideo || toolsSessionVideo || (lastComposedSessionVideo && lastComposedSessionVideo.sessionId !== sid)) {
 			previewVideo = null;
 			previewIsSessionVideo = false;
+			previewMediaPath = null;
 			toolsSessionVideo = null;
 			lastComposedSessionVideo = null;
 		}
@@ -202,6 +228,7 @@
 		if (previewVideo) return;
 		previewVideo = null;
 		previewIsSessionVideo = false;
+		previewMediaPath = null;
 		const savedPipeId = lastPreviewPipeBySession.get(sid);
 		// Prefer the previously-selected pipe (if it still has a video);
 		// otherwise fall back to the first pipe with a last-gen video.
@@ -212,7 +239,10 @@
 			session.pipes.find((p) => p.lastGeneration?.videoPath);
 		if (!pipe?.lastGeneration?.videoPath) return;
 		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
-		if (url) previewVideo = { url, label: pipe.name };
+		if (url) {
+			previewVideo = { url, label: pipe.name };
+			previewMediaPath = pipe.lastGeneration.videoPath;
+		}
 	}
 
 	$effect(() => {
@@ -389,6 +419,12 @@
 	// double-apply the terminal side-effects.
 	let terminalHandled = new Set<string>();
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
+	// The on-disk path of the file currently attached to the top-panel preview
+	// (the source of `previewVideo`'s blob URL). "Play outside" hands this to
+	// the backend's default-player opener — the blob URL itself is useless to
+	// an OS player, so the path travels alongside it. null = nothing attached
+	// (or a non-file source) → the play-outside affordance is hidden.
+	let previewMediaPath = $state<string | null>(null);
 	// Portable generation log entry for the active task (Phase 4): the
 	// progress modal shows WHICH model made each piece. Attached synchronously
 	// when the watch starts, so the modal has the run's state from the moment
@@ -650,14 +686,26 @@
 	let settingsTab = $state<'defaults' | 'providers' | 'tools'>('defaults');
 
 	const anyTaskActive = $derived((activeTask !== null && !isTerminalTaskStatus(activeTask.status)) || groupLivenessActive);
-	// Live engine-state line for the minimized pill (e.g. "queue full — retry in 120 s"): the newest lastEvent across the task's stages. Without this a task waiting on the provider's queue is visually indistinguishable from a stuck one — the pill read a static "Generation running" while the backoff ladder worked.
+	// Live engine-state line for the minimized pill (e.g. "queue full —
+	// retry in 120 s"): the newest lastEvent, preferring IN-FLIGHT stages
+	// (generating / rate-limited) over finished ones. The preference matters
+	// for stability: "newest timestamp across ALL stages" can flip between
+	// a finished stage's stale line and the active stage's current line on
+	// consecutive polls — that flip was the pill's fast blink. Without any
+	// in-flight event the pill shows the neutral "Running…" placeholder.
 	const pillLiveLine = $derived.by(() => {
 		if (!activeTask || !anyTaskActive) return null;
-		let latest: { ev: string; at: number } | null = null;
+		let inFlight: { ev: string; at: number } | null = null;
+		let newest: { ev: string; at: number } | null = null;
 		for (const s of activeTask.stages) {
-			if (s.lastEvent && s.lastEventAt && (!latest || s.lastEventAt > latest.at)) latest = { ev: s.lastEvent, at: s.lastEventAt };
+			if (!s.lastEvent || !s.lastEventAt) continue;
+			const cand = { ev: s.lastEvent, at: s.lastEventAt };
+			if (s.status === 'generating' || s.status === 'rate-limited') {
+				if (!inFlight || cand.at > inFlight.at) inFlight = cand;
+			}
+			if (!newest || cand.at > newest.at) newest = cand;
 		}
-		return latest?.ev ?? null;
+		return (inFlight ?? newest)?.ev ?? null;
 	});
 	const generatePipe = $derived.by(() => {
 		if (!generateModalPipeId || !selectedSession) return null;
@@ -1928,7 +1976,7 @@
 	}
 
 	/** Watch a task: subscribe to the backend state-machine events (primary,
-	 *  low latency) AND keep the 1 s poll as a fallback in case an event is
+	 *  low latency) AND keep a 5 s poll as a fallback in case an event is
 	 *  dropped (webview reloaded, tab backgrounded). Both drive the same
 	 *  `activeTask` view; terminal side-effects apply once via `reconcileTerminal`. */
 	function startWatchingTask(taskId: string, initialView?: GenerationTaskView | null) {
@@ -1948,10 +1996,14 @@
 		// has state (stage list + progress) from the moment it opens instead of
 		// waiting for the first refresh/event round-trip.
 		void refreshActiveTask();
+		// Fallback-only poll (backend events are the primary signal): a 5 s
+		// cadence is plenty for "did the event stream die" recovery, and it
+		// stops the pill/modal re-rendering every second.
 		poller = pollTask({
 			taskId,
 			fetchTask: fetchGenerationTask,
 			onTick: onTaskTick,
+			intervalMs: 5000,
 		});
 		subscribeGenTask((ev) => {
 			if (ev.taskId !== activeTaskId) return;
@@ -1975,7 +2027,7 @@
 		poller = null;
 	}
 
-	/** Fallback tick (1 s poll): drive `activeTask` the same way events do. */
+	/** Fallback tick (5 s poll): drive `activeTask` the same way events do. */
 	function onTaskTick(view: GenerationTaskView) {
 		activeTask = view;
 		if (view.requestLog) lastTaskView = view;
@@ -2234,9 +2286,13 @@
 		}
 		previewVideo = null;
 		previewIsSessionVideo = false;
+		previewMediaPath = null;
 		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
 			.then((url) => {
-				if (url) previewVideo = { url, label: pipe.name };
+				if (url) {
+					previewVideo = { url, label: pipe.name };
+					previewMediaPath = pipe.lastGeneration?.videoPath ?? null;
+				}
 			})
 			.catch((e) => {
 				// Media read failed (path moved / not under a media root): keep
@@ -2339,10 +2395,14 @@
 		totalFrames={totalFrames}
 		carouselFrame={selectedFrame ?? 0}
 		videoAspect={videoAspect}
+		isSessionVideo={previewIsSessionVideo}
+		sessionVideoDetached={sessionVideoDetached}
 		oncarouselSelect={(f) => (selectedFrame = f)}
 		onframeSelect={(f) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
+		onplayoutside={handlePlayOutside}
+		onopensessionpreview={openSessionPreview}
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
@@ -2530,14 +2590,25 @@
 					{:else if pillTerminal === 'error'}
 						<span class="gen-pill-text">Generation failed</span>
 					{:else if activeTask && anyTaskActive}
-						<span class="gen-pill-text">Generation running · {activeTask.taskId.slice(0, 8)}</span>
-						{#if pillLiveLine}
-							<span class="gen-pill-live" title="Latest engine state — click to open the progress modal">{pillLiveLine}</span>
-						{/if}
+						<!-- Compact, status-driven: the pill shows the live
+					     request status (newest in-flight stage event —
+					     "queue full — retry in 30 s", "rendering 42%"…),
+					     not a raw task id (noise; the details live in
+					     the progress modal). "Running…" until the engine
+					     reports. Fixed-width box: the pill never resizes
+					     while a task is live (the jump was the flicker). -->
+						<span
+							class="gen-pill-live"
+							class:gen-pill-live-idle={!pillLiveLine}
+							title={pillLiveLine ? `${pillLiveLine} — click to open the progress modal` : 'Latest engine state — click to open the progress modal'}
+						>{pillLiveLine ?? 'Running…'}</span>
 					{:else if groupActive}
-						<span class="gen-pill-text">Session generation running</span>
+						<!-- Group liveness between pipe tasks: the SAME
+						     fixed-width running box (neutral), so the pill
+						     never shrinks mid session generation. -->
+						<span class="gen-pill-live gen-pill-live-idle">Session running</span>
 					{:else if activeTask}
-						<span class="gen-pill-text">Generation finished · {activeTask.taskId.slice(0, 8)}</span>
+						<span class="gen-pill-text">Generation finished</span>
 					{/if}
 				</button>
 			{/if}
@@ -2641,7 +2712,7 @@
 		height: 8px;
 		border-radius: 50%;
 		background: var(--accent-color, #ff3e00);
-		animation: gen-pill-pulse 1.4s ease-in-out infinite;
+		animation: gen-pill-pulse 3s ease-in-out infinite;
 	}
 	.gen-pill-done .gen-pill-dot {
 		background: #22c55e;
@@ -2660,10 +2731,27 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-		max-width: 260px;
+		/* Fixed-width box shared by every RUNNING state — "Running…", progress
+		   lines, 503/429 backoff lines, and "Session running" (group branch).
+		   The capsule must never resize mid-task: the edge jumping between a
+		   short line ("rendering 42%") and a long one ("queue full — retry
+		   in 15 s") was the perceived flicker. 28ch = the width of
+		   "rate-limited — retry in 15 s"; rarer longer lines ellipsize
+		   (full text in the hover title + the progress modal). Terminal
+		   states stay content-sized — a one-off settle, not a loop. */
+		min-width: 28ch;
+		max-width: 28ch;
 	}
+	/* The "Running…" placeholder (no engine event yet) reads neutral; a
+	   real engine status keeps the warning tint. */
+	.gen-pill-live-idle {
+		color: var(--text-muted, #a1a1aa);
+	}
+	/* Slow, subtle breathing: the pill sits in the corner while the user
+	   works — a fast blink reads like a fault indicator. 3s with a narrow
+	   0.7↔1 range keeps "alive" without "blinking". */
 	@keyframes gen-pill-pulse {
-		0%, 100% { opacity: 0.5; }
+		0%, 100% { opacity: 0.7; }
 		50% { opacity: 1; }
 	}
 

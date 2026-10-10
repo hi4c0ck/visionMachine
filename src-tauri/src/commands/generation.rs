@@ -976,6 +976,61 @@ pub async fn read_media_file(
     std::fs::read(&requested).map_err(|e| format!("read {}: {e}", requested.display()))
 }
 
+/// Open a media-tree artifact (a generated or composed video) in the OS's
+/// default player — the top panel's "play outside" affordance. Same
+/// media-root guard as `read_media_file` (no arbitrary paths escape the
+/// media trees), then hand the path to the platform opener: `start` on
+/// Windows, `open` on macOS, `xdg-open` elsewhere. The spawn is fire-and-
+/// forget like `reveal_dir_in_explorer`; a player that fails to start
+/// surfaces the OS error, not a silent no-op.
+#[tauri::command]
+pub async fn open_media_in_player(
+    input: ReadMediaFileInput,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let requested = std::path::PathBuf::from(input.path.trim());
+    let inside_root = {
+        let db = &state.db.lock().await;
+        let roots = media_roots(db).await;
+        roots.iter().any(|root| requested.starts_with(root))
+    };
+    if !inside_root {
+        return Err(format!(
+            "path not inside a known media root: {}",
+            input.path
+        ));
+    }
+    if !requested.is_file() {
+        return Err(format!("media file not found: {}", input.path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // `start` needs the shell; a bare Command::new("start") would fail.
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "start", "", &requested.to_string_lossy()])
+            .spawn()
+            .map_err(|e| format!("failed to open default player: {e}"))?;
+        Ok(input.path)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg(&requested)
+            .spawn()
+            .map_err(|e| format!("failed to open default player: {e}"))?;
+        Ok(input.path)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(&requested)
+            .spawn()
+            .map_err(|e| format!("failed to open default player: {e}"))?;
+        Ok(input.path)
+    }
+}
+
 /// All known media roots: the session `directory_path` trees (0009 — the
 /// highest-precedence root `resolve_media_root` uses, and where a session's
 /// composed video + generated artifacts land when the user picked a session

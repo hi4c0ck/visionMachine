@@ -8,6 +8,8 @@
 //   redactLog guarantees keys + raw local paths never sit in a log entry.
 
 import type {
+  AutoScrollMode,
+  CarouselBlock,
   GenerationLogEntry,
   Orientation,
   ProviderKind,
@@ -54,6 +56,11 @@ export const DEFAULT_SETTINGS: Settings = {
     // Local ffmpeg override (tiny-variant escape hatch). Empty by default:
     // the backend then resolves bundled → system $PATH.
     ffmpegPath: '',
+  },
+  carousel: {
+    // Immersive Snaps (dissolve treatment) ships ON; auto-scroll ships OFF.
+    immersiveSnaps: true,
+    autoScroll: 'off',
   },
 };
 
@@ -110,6 +117,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const g = (r.generationDefaults ?? {}) as Settings['generationDefaults'];
   const prov = (r.providers ?? {}) as Settings['providers'];
   const t = (r.tools ?? {}) as Partial<Settings['tools']>;
+  const c = (r.carousel ?? {}) as Partial<CarouselBlock>;
   return {
     profile: {
       displayName: typeof p.displayName === 'string' ? p.displayName : base.profile.displayName,
@@ -135,6 +143,16 @@ export function normalizeSettings(raw: unknown): Settings {
       // Local tooling: free string, but a path that is not obviously a path
       // (empty/whitespace-only) is dropped so the locator can fall through.
       ffmpegPath: typeof t.ffmpegPath === 'string' ? t.ffmpegPath.trim() : '',
+    },
+    // Profile-preset carousel treatment. Legacy blobs without the block
+    // reseed defaults (immersiveSnaps: true, autoScroll: 'off').
+    carousel: {
+      // Absent = keep the default (true); only an explicit false disables.
+      immersiveSnaps: c.immersiveSnaps !== false,
+      autoScroll:
+        c.autoScroll === 'steady' || c.autoScroll === 'fast'
+          ? c.autoScroll
+          : base.carousel.autoScroll,
     },
   };
 }
