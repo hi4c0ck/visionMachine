@@ -328,9 +328,31 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   // Keyframe operations
-  async addKeyframe(sessionId: string, pipeId: string, slotIndex: number, frame: number, type: 'url' | 'txt2img' | 'img2img', value: string, referenceUrl?: string): Promise<ServiceResult> {
+  async addKeyframe(
+    sessionId: string,
+    pipeId: string,
+    slotIndex: number,
+    frame: number,
+    type: 'url' | 'txt2img' | 'img2img',
+    value: string,
+    referenceUrl?: string,
+    id?: string,
+    previewLocalPath?: string,
+    previewRemoteUrl?: string,
+  ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
-    const result = await s.keyframes.add(sessionId, pipeId, slotIndex, frame, type, value, referenceUrl);
+    const result = await s.keyframes.add(
+      sessionId,
+      pipeId,
+      slotIndex,
+      frame,
+      type,
+      value,
+      referenceUrl,
+      id,
+      previewLocalPath,
+      previewRemoteUrl,
+    );
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }
@@ -359,9 +381,24 @@ class ComposerStoreImpl implements ComposerStore {
     frameEnd?: number,
     type?: KeyframeType,
     prompt?: string,
+    id?: string,
+    previewLocalPath?: string,
+    previewRemoteUrl?: string,
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
-    const result = await s.subjectRefs.add(sessionId, pipeId, imageUrl, useFrames, frameStart, frameEnd, type, prompt);
+    const result = await s.subjectRefs.add(
+      sessionId,
+      pipeId,
+      imageUrl,
+      useFrames,
+      frameStart,
+      frameEnd,
+      type,
+      prompt,
+      id,
+      previewLocalPath,
+      previewRemoteUrl,
+    );
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }

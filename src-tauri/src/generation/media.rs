@@ -193,6 +193,41 @@ pub fn session_generation_dirs(
         .map_err(|e| format!("create {}: {e}", task_images.display()))?;
     Ok((task, task_images))
 }
+/// Per-piece standalone generation history tree:
+///
+/// ```text
+/// <sessionRoot>/<pipe-name>/pieces/
+///   keyframes/<refId>/
+///     <unixMs>-<seq>.png    # one file per generation, never overwritten
+///     history.jsonl         # append-only manifest (newest last)
+///   subjects/<refId>/
+///     ...
+/// ```
+///
+/// Deliberately separate from the task-scoped `<pipe>/<task>/images/<refId>.png`
+/// layout (which the full-pipe video run overwrites per task): this is a
+/// piece's OWN accumulating history, so regenerating a keyframe/subject from
+/// its modal appends a new artifact + manifest line instead of erasing the
+/// previous generations. `safe_dir_name` on every layer keeps a crafted id
+/// from escaping the tree.
+pub fn piece_history_dirs(
+    session_root: &std::path::Path,
+    pipe_name: &str,
+    kind: &str,
+    ref_id: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let safe_pipe = safe_dir_name(pipe_name);
+    let safe_kind = safe_dir_name(kind);
+    let safe_ref = safe_dir_name(ref_id);
+    let dir = session_root
+        .join(&safe_pipe)
+        .join("pieces")
+        .join(&safe_kind)
+        .join(&safe_ref);
+    fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    Ok((dir.clone(), dir.join("history.jsonl")))
+}
+
 /// Reject path-traversal characters in ref/task ids so a crafted id can
 /// never escape the media tree.
 pub fn safe_dir_name(id: &str) -> String {
@@ -253,14 +288,29 @@ pub fn write_json(path: &std::path::Path, doc: &serde_json::Value) -> Result<(),
 }
 
 /// Append a redacted request/response line to the task `request.log`.
+///
+/// Each line carries TWO timestamp fields so the log reads properly in a
+/// viewer / editor:
+///   - `ts`      : epoch SECONDS (machine-readable; kept for stable sorting
+///                 and any tooling that already parses the numeric form).
+///   - `tsLocal` : human-readable LOCAL wall-clock `YYYY-MM-DD HH:MM:SS.mmm`
+///                 — the format a user actually wants when reading the log.
+/// Both are set from the SAME instant so they never drift.
 pub fn append_request_log(
     path: &std::path::Path,
     entry: &serde_json::Value,
     secrets: &[&str],
 ) -> Result<(), String> {
+    let now = chrono::Local::now();
+    let ts_local = now.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
     let redacted = redact(
         secrets,
-        &serde_json::json!({ "ts": chrono_secs(), "entry": entry }).to_string(),
+        &serde_json::json!({
+            "ts": now.timestamp(),
+            "tsLocal": ts_local,
+            "entry": entry,
+        })
+        .to_string(),
     );
     use std::io::Write;
     let mut f = fs::OpenOptions::new()
@@ -269,13 +319,6 @@ pub fn append_request_log(
         .open(path)
         .map_err(|e| format!("open {}: {e}", path.display()))?;
     writeln!(f, "{redacted}").map_err(|e| format!("append {}: {e}", path.display()))
-}
-
-fn chrono_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

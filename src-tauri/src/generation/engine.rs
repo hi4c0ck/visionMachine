@@ -114,6 +114,28 @@ pub struct StageOutput {
     pub remote_url: Option<String>,
 }
 
+/// A standalone single-piece image generation — the keyframe / subject modal
+/// "Generate" button. Unlike the sequential task runner this is a fire-and-return
+/// image POST: shape one request, materialize the artifact into a caller-chosen
+/// path, and let the caller append it to the piece's own on-disk history. It is
+/// deliberately NOT part of `run`'s stage loop.
+#[derive(Debug, Clone)]
+pub struct PieceGeneration {
+    /// Resolved image-model spec (the frontend catalog's wire mirror).
+    pub spec: ModelSpecWire,
+    /// Per-piece context the image shaper consumes (prompt / reference /
+    /// resolution / orientation / seed). The shaper ignores the video-only
+    /// fields.
+    pub ctx: crate::generation::shaper::StageContext,
+    /// Provider profile that owns the image API slots (`None` = default).
+    pub profile_id: Option<String>,
+    /// Where the artifact is written (the caller already computed the
+    /// append-only, never-overwritten destination path).
+    pub dest: std::path::PathBuf,
+    /// Best-effort redacted request/response log target. `None` = skip logging.
+    pub request_log: Option<std::path::PathBuf>,
+}
+
 pub trait GenerationEngine: Send + Sync {
     /// Run one stage to completion or failure.
     /// `cancel` is polled for user cancellation; `on_progress` reports 0.0..=1.0;
@@ -131,4 +153,22 @@ pub trait GenerationEngine: Send + Sync {
         on_progress: &'a (dyn Fn(f32) + Sync),
         on_event: &'a (dyn Fn(&str) + Sync),
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<StageOutput, String>> + Send + 'a>>;
+    /// Standalone single-piece image generation (the modal's "Generate").
+    /// Provider engines implement this; engines without image support return
+    /// an Err from the default body so the caller surfaces a concrete failure.
+    fn generate_piece<'a>(
+        &'a self,
+        req: &PieceGeneration,
+        on_progress: &'a (dyn Fn(f32) + Sync),
+        on_event: &'a (dyn Fn(&str) + Sync),
+    ) -> BoxFuture<'a, Result<StageOutput, String>> {
+        let _ = (req, on_progress, on_event);
+        Box::pin(async move {
+            Err("this engine does not support standalone piece generation".to_string())
+        })
+    }
 }
+
+/// A boxed future returned by an engine stage / piece run.
+pub type BoxFuture<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

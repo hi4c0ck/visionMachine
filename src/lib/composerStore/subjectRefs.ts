@@ -41,6 +41,9 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     frameEnd?: number,
     type?: KeyframeType,
     prompt?: string,
+    id?: string,
+    previewLocalPath?: string,
+    previewRemoteUrl?: string,
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
@@ -50,14 +53,22 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     const errors = validateSubjectPreset(presetType, imageUrl, prompt ?? '');
     if (errors.length > 0) return { errors };
 
+    // A standalone "Generate" may have produced an artifact before this ref
+    // was saved — carry the preview pair onto the record (the chip shows a
+    // thumbnail; the video stage carries the right source).
+    const preview: Partial<SubjectReference> = {};
+    if (previewLocalPath?.trim()) preview.previewLocalPath = previewLocalPath;
+    if (previewRemoteUrl?.trim()) preview.previewRemoteUrl = previewRemoteUrl;
+
     const ref: SubjectReference = {
-      id: crypto.randomUUID(),
+      id: id ?? crypto.randomUUID(),
       imageUrl: presetType === 'url' ? imageUrl.trim() : imageUrl.trim(),
       type: presetType,
       ...(prompt !== undefined ? { prompt } : {}),
       status: 'pending',
       useFrames,
       visible: true,
+      ...preview,
       ...(useFrames && frameStart !== undefined && frameEnd !== undefined ? {
         frameStart: snapTo8(frameStart),
         frameEnd: Math.min(snapTo8(frameEnd), pipe.lengthFrames - 1),

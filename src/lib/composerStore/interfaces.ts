@@ -93,6 +93,11 @@ export interface KeyframeService {
     type: 'url' | 'txt2img' | 'img2img',
     value: string,
     referenceUrl?: string,
+    /** Stable piece id (lets a pre-save "Generate" reuse the same history). */
+    id?: string,
+    /** Pre-save standalone generation artifact (local + remote preview). */
+    previewLocalPath?: string,
+    previewRemoteUrl?: string,
   ): Promise<ServiceResult>;
   remove(sessionId: string, pipeId: string, keyframeId: string): Promise<ServiceResult>;
   move(sessionId: string, pipeId: string, keyframeId: string, newFrame: number): Promise<ServiceResult>;
@@ -112,6 +117,11 @@ export interface SubjectReferenceService {
     type?: KeyframeType,
     /** Prompt for txt2img / img2img */
     prompt?: string,
+    /** Stable piece id (lets a pre-save "Generate" reuse the same history). */
+    id?: string,
+    /** Pre-save standalone generation artifact (local + remote preview). */
+    previewLocalPath?: string,
+    previewRemoteUrl?: string,
   ): Promise<ServiceResult>;
   remove(sessionId: string, pipeId: string, refId: string): Promise<ServiceResult>;
   toggle(sessionId: string, pipeId: string, refId: string): Promise<ServiceResult>;

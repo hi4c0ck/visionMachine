@@ -1,3 +1,29 @@
+# VisionMachine v0.7.7
+
+### New: generate images for keyframes and subjects
+- You can now generate an image for a keyframe or subject right from its
+  modal — type a prompt (or pick a reference for img2img), hit Generate,
+  and the result previews in place. Every generation is kept, so you can
+  flip back through earlier attempts and pick one to keep.
+- A small ⛶ icon on each preview opens the image in your system's default
+  viewer.
+
+### Top panel and playback
+- A new top-panel cluster gives you transport controls plus "play outside"
+  (opens the current preview in your system player).
+- Frame carousel: an Immersive Snaps toggle (`[i]`) plus two auto-scroll
+  speeds (`[>]` steady, `[>>]` fast) — steady is a constant-velocity roll
+  so cards no longer snap or flicker.
+
+### Stability and generation flow
+- The running-generation pill is now compact and status-driven, and it
+  shows the same percentage as the progress modal — no more "10 % here,
+  80 % there".
+- A URL pasted into a keyframe's URL field no longer leaks into the
+  prompt field when you switch modes.
+- Generation logs now carry a human-readable timestamp next to the
+  machine-readable one.
+
 # VisionMachine v0.7.6
 
 ### Generation

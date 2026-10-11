@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::generation::{
     ComposeError, EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView,
-    ModelSpecWire, SourceVideo, TaskStatus,
+    ModelSpecWire, PieceGeneration, StageContext, SourceVideo, TaskStatus,
 };
 use crate::AppState;
 
@@ -576,6 +576,276 @@ pub async fn cancel_all_generation(state: State<'_, AppState>) -> Result<usize, 
 /// is live cancels the provider job, so the user is warned first.
 pub async fn generation_active_task_count(state: State<'_, AppState>) -> Result<usize, String> {
     Ok(state.generation.registry.active_task_count())
+}
+
+// ── Standalone single-piece image generation + on-disk history ──────────────
+// The keyframe / subject modal "Generate" button: fire one image POST, write
+// the artifact into the piece's OWN append-only history tree
+// (`<session>/<pipe>/pieces/<kind>/<refId>/`), and append a manifest line.
+// Regenerating appends a NEW artifact + line — it never erases a previous
+// generation (deliberately separate from the task-scoped <pipe>/<task>/
+// images dir, which the full-pipe video run overwrites per task).
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PieceGenerationInput {
+    pub session_id: String,
+    pub pipe_id: String,
+    /// The piece's stable reference id (keyframe id / subject ref id).
+    pub ref_id: String,
+    /// "keyframe" | "subject" — drives the history sub-tree.
+    #[serde(default)]
+    pub kind: String,
+    /// Piece image preset: "txt2img" | "img2img" (the modal's mode).
+    #[serde(default)]
+    pub image_type: Option<String>,
+    /// The piece's own prompt (txt2img / img2img).
+    pub prompt: String,
+    /// img2img reference image URL.
+    #[serde(default)]
+    pub reference_url: Option<String>,
+    /// Reproducibility seed (sent only when the spec supports it).
+    #[serde(default)]
+    pub seed: Option<i64>,
+    /// Provider profile that owns the image API slots.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    /// Resolved image-model spec (frontend catalog → wire mirror).
+    #[serde(default)]
+    pub image_spec: Option<ModelSpecWire>,
+}
+
+/// One piece-history manifest entry (newest last).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PieceHistoryEntry {
+    pub ts: i64,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    pub local_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+}
+
+/// The next unique destination under a piece-history dir: `<unixMs>.png`,
+/// bumping the counter if a same-millisecond collision exists.
+fn next_piece_dest(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let base = format!("{ms}");
+    let mut seq = 0u32;
+    loop {
+        let name = if seq == 0 {
+            format!("{base}.png")
+        } else {
+            format!("{base}-{seq}.png")
+        };
+        let path = dir.join(&name);
+        if !path.exists() {
+            return Ok(path);
+        }
+        seq += 1;
+        if seq > 10_000 {
+            return Err(format!("no free piece-history name under {}", dir.display()));
+        }
+    }
+}
+
+/// Standalone single-piece image generation (the modal "Generate" button).
+#[tauri::command]
+pub async fn generate_piece_image(
+    input: PieceGenerationInput,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let engine = state
+        .generation
+        .registry
+        .engine()
+        .ok_or_else(|| "generation engine not configured".to_string())?;
+
+    // The piece-history tree lives under the SAME session root the task
+    // flow uses, so the read allowlist (`media_roots`) already covers it.
+    let media_root = {
+        let db = &state.db.lock().await;
+        match resolve_media_root(db, &input.session_id).await {
+            Some(r) if !r.trim().is_empty() => r,
+            _ => return Err("no media root resolved for this session".into()),
+        }
+    };
+    let composer = {
+        let db = &state.db.lock().await;
+        db.get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?
+    };
+    let pipe_name = composer
+        .pipes
+        .iter()
+        .find(|p| p.id == input.pipe_id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| input.pipe_id.clone());
+
+    // Session root for the tree = <mediaRoot>/<session-name>/ (mirror the
+    // task flow, so pieces/ sits beside the pipe's images/ + task dirs).
+    let session_root = std::path::Path::new(&media_root)
+        .join(safe_session_name(&composer.name));
+    let kind = if input.kind.eq_ignore_ascii_case("subject") {
+        "subjects"
+    } else {
+        "keyframes"
+    };
+    let (piece_dir, _manifest) =
+        crate::generation::piece_history_dirs(&session_root, &pipe_name, kind, &input.ref_id)
+            .map_err(|e| format!("piece history dir: {e}"))?;
+    let dest = next_piece_dest(&piece_dir)?;
+
+    let spec = input
+        .image_spec
+        .clone()
+        .ok_or_else(|| "no resolved image model spec".to_string())?;
+    let ctx = StageContext {
+        prompt: input.prompt.clone(),
+        length_frames: 0,
+        fps: composer.fps,
+        resolution: composer.resolution.clone(),
+        orientation: composer.orientation.clone(),
+        c_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.c_value).unwrap_or(0.0),
+        q_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.q_value).unwrap_or(0),
+        seed: input.seed,
+        source_kind: kind.to_string(),  // "keyframes" | "subjects"
+        source_id: input.ref_id.clone(),
+        image_type: input.image_type.clone(),
+        reference_url: input.reference_url.clone(),
+        media_mode: None,
+        upstream: Vec::new(),
+    };
+    let req = PieceGeneration {
+        spec: spec.clone(),
+        ctx: ctx.clone(),
+        profile_id: input.profile_id.clone(),
+        dest: dest.clone(),
+        request_log: Some(piece_dir.join("request.log")),
+    };
+
+    let out = engine
+        .generate_piece(&req, &|_p| {}, &|_line| {})
+        .await
+        .map_err(|e| {
+            log::error!("[PieceGen] generate failed: {e}");
+            e
+        })?;
+
+    // Append the manifest line (append-only history — never overwrite).
+    let entry = PieceHistoryEntry {
+        ts: now_unix_ms(),
+        model: spec.id.clone(),
+        seed: input.seed,
+        prompt: Some(ctx.prompt.clone()),
+        local_path: out.local_path.clone(),
+        remote_url: out.remote_url.clone(),
+    };
+    crate::generation::append_jsonl(
+        &piece_dir.join("history.jsonl"),
+        &serde_json::json!({
+            "ts": entry.ts,
+            "model": entry.model,
+            "seed": entry.seed,
+            "prompt": entry.prompt,
+            "localPath": entry.local_path,
+            "remoteUrl": entry.remote_url,
+        }),
+    )
+    .map_err(|e| format!("append piece history: {e}"))?;
+
+    Ok(serde_json::json!({
+        "localPath": out.local_path,
+        "remoteUrl": out.remote_url,
+        "historyPath": piece_dir.join("history.jsonl").to_string_lossy(),
+        "pieceDir": piece_dir.to_string_lossy(),
+    }))
+}
+
+/// Input for the `list_piece_history` command.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListPieceHistoryInput {
+    pub session_id: String,
+    pub pipe_id: String,
+    pub ref_id: String,
+    /// "keyframe" | "subject".
+    pub kind: String,
+}
+
+/// List a piece's on-disk generation history (newest first).
+#[tauri::command]
+pub async fn list_piece_history(
+    input: ListPieceHistoryInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<PieceHistoryEntry>, String> {
+    let media_root = {
+        let db = &state.db.lock().await;
+        match resolve_media_root(db, &input.session_id).await {
+            Some(r) if !r.trim().is_empty() => r,
+            _ => return Ok(Vec::new()),
+        }
+    };
+    let composer = {
+        let db = &state.db.lock().await;
+        db.get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?
+    };
+    let pipe_name = composer
+        .pipes
+        .iter()
+        .find(|p| p.id == input.pipe_id)
+        .map(|p| p.name.clone())
+        .unwrap_or(input.pipe_id.clone());
+    let kind_dir = if input.kind.eq_ignore_ascii_case("subject") {
+        "subjects"
+    } else {
+        "keyframes"
+    };
+    let session_root = std::path::Path::new(&media_root)
+        .join(safe_session_name(&composer.name));
+    let (_piece_dir, manifest) =
+        crate::generation::piece_history_dirs(
+            &session_root,
+            &pipe_name,
+            kind_dir,
+            &input.ref_id,
+        )
+        .ok()
+        .unwrap_or_else(|| {
+            let fallback = session_root
+                .join(crate::generation::safe_dir_name(&pipe_name))
+                .join("pieces")
+                .join(kind_dir)
+                .join(crate::generation::safe_dir_name(&input.ref_id));
+            let _ = std::fs::create_dir_all(&fallback);
+            (fallback.clone(), fallback.join("history.jsonl"))
+        });
+    let text = match std::fs::read_to_string(&manifest) {
+        Ok(t) => t,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut entries: Vec<PieceHistoryEntry> = text
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            if t.is_empty() {
+                return None;
+            }
+            serde_json::from_str::<PieceHistoryEntry>(t).ok()
+        })
+        .collect();
+    entries.sort_by(|a, b| b.ts.cmp(&a.ts)); // newest first
+    Ok(entries)
 }
 
 // ── Session video composition (A5: pipes' last-gen videos → one file) ──────

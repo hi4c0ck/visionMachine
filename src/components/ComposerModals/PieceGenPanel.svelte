@@ -1,0 +1,487 @@
+<script lang="ts">
+	// Standalone image generation + on-disk preview for a single keyframe /
+	// subject piece — embedded by KeyframeModal and SubjectRefModal.
+	//
+	//  - A "Generate" button fires ONE image POST (txt2img or img2img) through
+	//    the provider engine and materializes the artifact into the piece's
+	//    OWN append-only history tree (<session>/<pipe>/pieces/<kind>/<refId>/),
+	//    so regenerating NEVER erases a previous generation.
+	//  - Previews: for img2img BOTH the source (reference) and the generated
+	//    image are shown; for txt2img just the generated image.
+	//  - A history strip lists the piece's prior on-disk generations; clicking
+	//    one switches the "generated" preview to that artifact.
+	import { getSettings } from '$lib/settings/store';
+	import { modelsFor, getPreset } from '$lib/settings/catalog';
+	import { toMediaUrl } from '$lib/mediaUrl';
+	import { flashToast } from '$lib/flashToast';
+	import {
+		generatePiece,
+		listPieceHistory,
+		type PieceHistoryEntry,
+		type PieceKind,
+	} from '$lib/pieceGeneration';
+	import type { ModelSpec } from '$types';
+	import { invoke, isTauri } from '@tauri-apps/api/core';
+
+	let {
+		kind,
+		refId,
+		sessionId,
+		pipeId,
+		imageType,
+		prompt,
+		referenceUrl,
+		onGenerated,
+	} = $props<{
+		kind: PieceKind;
+		refId: string;
+		sessionId: string;
+		pipeId: string;
+		/** "txt2img" | "img2img" (the modal's current preset mode). */
+		imageType?: string;
+		prompt: string;
+		/** img2img reference image URL (the "source" preview). */
+		referenceUrl?: string;
+		/** Fires after a successful generation with (localPath, remoteUrl). */
+		onGenerated?: (localPath: string, remoteUrl: string | null) => void;
+	}>();
+
+	const isImg2Img = $derived(imageType === 'img2img');
+
+	let imageModels = $state<ModelSpec[]>([]);
+	let imageModel = $state('');
+	let busy = $state(false);
+	// Seed at most once per distinct model/preset config. Without this guard
+	// the effect below reassigns the imageModels $state array (a fresh
+	// reference) on every pass, and Svelte 5 re-invalidates this very effect
+	// until it aborts with `effect_update_depth_exceeded` (the same bug
+	// GenerateModal guards against — the "modal frozen / never appears"
+	// symptom). The key guard makes re-runs no-ops; a changed settings config
+	// still re-seeds.
+	// Note: no cleanup resetting this. On re-mount the $state re-initializes
+	// to null, so a new piece re-seeds; the persistent key is what breaks the
+	// re-invalidation loop on same-mount re-runs (a cleanup that nulled it on
+	// re-run would re-trigger the seed forever).
+	let imageModelSeedKey = $state<string | null>(null);
+
+	// The currently-shown "generated" preview (default = the newest on-disk).
+	// `generatedUrl` is the WebView blob URL; `generatedPath` is the on-disk
+	// media path so the "open in viewer" icon can hand it to the OS opener
+	// (a blob URL is useless to an OS viewer — same split the top panel uses).
+	let generatedUrl = $state<string | null>(null);
+	let generatedPath = $state<string | null>(null);
+	let sourceUrl = $state<string | null>(null);
+	let sourcePath = $state<string | null>(null);
+	let history = $state<PieceHistoryEntry[]>([]);
+	let historyThumbs = $state<(string | null)[]>([]);
+
+	// Seed the image-model picker from the profile's default (mirrors
+	// GenerateModal): read-only / pending models are filtered out.
+	$effect(() => {
+		const s = getSettings();
+		const key = [s.providers.image.model, s.providers.image.preset].join('|');
+		if (imageModelSeedKey === key) return;
+		imageModelSeedKey = key;
+		const ip = getPreset(s.providers.image.preset);
+		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
+		imageModel = s.providers.image.model;
+		if (!imageModels.some((m) => m.id === imageModel))
+			imageModel = imageModels.find((m) => !m.pending)?.id ?? imageModel;
+	});
+
+	function isRemote(v?: string | null): boolean {
+		return !!v && /^https?:\/\//i.test(v.trim());
+	}
+
+	/** Open a preview image in the OS's default viewer. A REMOTE url is
+	 *  handed to the browser (a new tab); a LOCAL media path goes through the
+	 *  backend's `open_media_in_player` command (the blob URL the <img> uses is
+	 *  useless to an OS viewer, so the on-disk path travels instead). The same
+	 *  command works for images and video — it just spawns the platform opener. */
+	async function openInViewer(localPath: string | null, displayUrl: string | null) {
+		if (!localPath) {
+			// No on-disk path (e.g. a remote reference with no local artifact):
+			// fall back to opening the display URL in a new browser tab.
+			if (displayUrl) {
+				if (isRemote(displayUrl)) window.open(displayUrl, '_blank', 'noopener,noreferrer');
+				else window.open(displayUrl, '_blank');
+			}
+			return;
+		}
+		if (!isTauri()) return;
+		try {
+			await invoke('open_media_in_player', { input: { path: localPath } });
+			flashToast('Opened in system viewer', 'info');
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
+	}
+
+	/** Resolve a displayable URL for the img2img source (reference) image.
+	 *  Also records the on-disk path when the source is a local media path so
+	 *  the "open in viewer" icon has a real file to hand to the OS opener. */
+	async function refreshSource() {
+		if (!referenceUrl) {
+			sourceUrl = null;
+			sourcePath = null;
+			return;
+		}
+		const remote = isRemote(referenceUrl);
+		sourceUrl = remote ? referenceUrl : await toMediaUrl(referenceUrl);
+		sourcePath = remote ? null : referenceUrl;
+	}
+
+	function thumbUrl(entry: PieceHistoryEntry): Promise<string | null> {
+		return entry.localPath ? toMediaUrl(entry.localPath) : Promise.resolve(null);
+	}
+
+	/** Load the piece's on-disk history and preview the newest artifact. */
+	async function loadHistory() {
+		const entries = await listPieceHistory(sessionId, pipeId, refId, kind);
+		history = entries;
+		historyThumbs = await Promise.all(entries.map((e) => thumbUrl(e)));
+		await refreshSource();
+		const newest = entries[0];
+		if (newest?.localPath) {
+			generatedPath = newest.localPath;
+			generatedUrl = await toMediaUrl(newest.localPath);
+		}
+	}
+
+	// Load when the modal opens for a given piece.
+	$effect(() => {
+		if (refId) void loadHistory();
+	});
+
+	/** A history thumb was clicked — preview that generation. */
+	function selectGeneration(entry: PieceHistoryEntry, idx: number) {
+		// `historyThumbs[idx]` is the already-resolved `toMediaUrl` cache entry
+		// for this generation; fall back to re-resolving for a missing local.
+		generatedPath = entry.localPath ?? null;
+		void (entry.localPath ? toMediaUrl(entry.localPath) : Promise.resolve(null)).then(
+			(u) => (generatedUrl = u ?? historyThumbs[idx] ?? null),
+		);
+	}
+
+	async function doGenerate() {
+		if (busy || !prompt.trim()) return;
+		busy = true;
+		try {
+			const res = await generatePiece({
+				sessionId,
+				pipeId,
+				refId,
+				kind,
+				imageType,
+				prompt,
+				referenceUrl,
+				imageModel: imageModel || undefined,
+			});
+			// The fresh artifact becomes the current "generated" preview + the
+			// newest history entry (its row is also on disk via the manifest).
+			const freshUrl = await toMediaUrl(res.localPath);
+			generatedPath = res.localPath;
+			generatedUrl = freshUrl;
+			historyThumbs = [freshUrl ?? '', ...historyThumbs];
+			history = [
+				{
+					ts: Date.now(),
+					model: imageModel,
+					seed: null,
+					prompt,
+					localPath: res.localPath,
+					remoteUrl: res.remoteUrl,
+				},
+				...history,
+			];
+			await refreshSource();
+			onGenerated?.(res.localPath, res.remoteUrl);
+			flashToast('Image generated', 'info');
+		} catch (e) {
+			console.error('[PieceGenPanel] generate failed:', e);
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		} finally {
+			busy = false;
+		}
+	}
+</script>
+
+<section class="piece-gen" aria-label="Image generation">
+	<div class="pg-controls">
+		<label class="pg-select">
+			<span>Image model</span>
+			<select
+				value={imageModel}
+				onchange={(e) => (imageModel = e.currentTarget.value)}
+				disabled={busy}
+				aria-label="Image model"
+			>
+				{#each imageModels as m (m.id)}
+					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (pending)' : ''}</option>
+				{/each}
+			</select>
+		</label>
+		<button class="pg-generate" onclick={doGenerate} disabled={busy || !prompt.trim()}>
+			{busy ? 'Generating…' : 'Generate'}
+		</button>
+	</div>
+
+	{#if isImg2Img}
+		<div class="pg-preview-pair">
+			<figure class="pg-preview">
+				<figcaption>Source</figcaption>
+				{#if sourceUrl}
+					<div class="pg-imgwrap">
+						<img src={sourceUrl} alt="Source image" />
+						<button class="pg-open" onclick={() => openInViewer(sourcePath, sourceUrl)} title="Open in viewer" aria-label="Open source image in viewer">⛶</button>
+					</div>
+				{:else}
+					<div class="pg-empty">No source</div>
+				{/if}
+			</figure>
+			<figure class="pg-preview">
+				<figcaption>Generated</figcaption>
+				{#if generatedUrl}
+					<div class="pg-imgwrap">
+						<img src={generatedUrl} alt="Generated image" />
+						<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+					</div>
+				{:else}
+					<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
+				{/if}
+			</figure>
+		</div>
+	{:else}
+		<figure class="pg-preview pg-preview-single">
+			<figcaption>Generated</figcaption>
+			{#if generatedUrl}
+				<div class="pg-imgwrap">
+					<img src={generatedUrl} alt="Generated image" />
+					<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+				</div>
+			{:else}
+				<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
+			{/if}
+		</figure>
+	{/if}
+
+	{#if history.length > 0}
+		<div class="pg-history">
+			<span class="pg-history-label">History ({history.length})</span>
+			<div class="pg-history-thumbs">
+				{#each history as h, i (h.localPath + ':' + h.ts)}
+					<button
+						class="pg-thumb"
+						class:pg-thumb-active={generatedUrl === historyThumbs[i]}
+						onclick={() => selectGeneration(h, i)}
+						title="{h.model}{h.ts ? ' · ' + new Date(h.ts).toLocaleString() : ''}"
+						aria-label="Preview generation"
+					>
+						{#if historyThumbs[i]}
+							<img src={historyThumbs[i]} alt="Generation {i + 1}" />
+						{:else}
+							<span class="pg-thumb-empty">…</span>
+						{/if}
+					</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
+</section>
+
+<style>
+	.piece-gen {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		margin-top: 12px;
+		padding-top: 12px;
+		border-top: 1px dashed var(--border-color);
+	}
+
+	.pg-controls {
+		display: flex;
+		gap: 8px;
+		align-items: flex-end;
+	}
+
+	.pg-select {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.pg-select span {
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: var(--text-secondary);
+	}
+
+	.pg-select select {
+		width: 100%;
+		padding: 9px 11px;
+		font-size: 0.85rem;
+		color: var(--text-primary);
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+	}
+
+	.pg-select select:focus {
+		outline: none;
+		border-color: var(--accent-color);
+	}
+
+	.pg-generate {
+		flex: none;
+		padding: 10px 18px;
+		font-size: 13px;
+		cursor: pointer;
+		border: none;
+		border-radius: 6px;
+		background: var(--accent-color);
+		color: var(--text-inverse, #fff);
+		transition: opacity 0.15s ease;
+	}
+
+	.pg-generate:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.pg-preview-pair {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 10px;
+	}
+
+	.pg-preview {
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 5px;
+	}
+
+	.pg-preview-single {
+		max-width: 240px;
+	}
+
+	.pg-preview figcaption {
+		font-size: 0.68rem;
+		font-weight: 600;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.pg-preview img,
+	.pg-empty {
+		width: 100%;
+		aspect-ratio: 16 / 9;
+		object-fit: cover;
+		border-radius: 6px;
+		border: 1px solid var(--border-color);
+		background: var(--bg-tertiary);
+	}
+
+	.pg-preview img {
+		display: block;
+	}
+
+	/* Positioning context for the open-in-viewer icon overlay. */
+	.pg-imgwrap {
+		position: relative;
+	}
+
+	.pg-imgwrap img {
+		display: block;
+		width: 100%;
+	}
+
+	/* Small corner icon that opens the image in the OS default viewer.
+	   Reveal-on-hover keeps the thumbnail uncluttered; it's still reachable
+	   when shown. */
+	.pg-open {
+		position: absolute;
+		top: 4px;
+		right: 4px;
+		width: 22px;
+		height: 22px;
+		padding: 0;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		background: color-mix(in srgb, var(--bg-secondary, #14141f) 82%, transparent);
+		color: var(--text-secondary, #a1a1aa);
+		font-size: 11px;
+		line-height: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+	}
+
+	.pg-imgwrap:hover .pg-open,
+	.pg-open:focus-visible {
+		opacity: 1;
+	}
+
+	.pg-open:hover {
+		color: var(--text-primary, #fff);
+		border-color: var(--accent-color, #ff3e00);
+	}
+
+	.pg-empty {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.75rem;
+		color: var(--text-muted);
+	}
+
+	.pg-history {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.pg-history-label {
+		font-size: 0.68rem;
+		font-weight: 600;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.pg-history-thumbs {
+		display: flex;
+		gap: 6px;
+		overflow-x: auto;
+		padding-bottom: 4px;
+	}
+
+	.pg-thumb {
+		flex: none;
+		width: 56px;
+		height: 40px;
+		padding: 0;
+		border: 2px solid var(--border-color);
+		border-radius: 5px;
+		overflow: hidden;
+		cursor: pointer;
+		background: var(--bg-tertiary);
+	}
+
+	.pg-thumb-active {
+		border-color: var(--accent-color);
+	}
+
+	.pg-thumb img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+</style>
