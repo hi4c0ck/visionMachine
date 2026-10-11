@@ -21,6 +21,7 @@
 		type PieceKind,
 	} from '$lib/pieceGeneration';
 	import type { ModelSpec } from '$types';
+	import { invoke, isTauri } from '@tauri-apps/api/core';
 
 	let {
 		kind,
@@ -64,8 +65,13 @@
 	let imageModelSeedKey = $state<string | null>(null);
 
 	// The currently-shown "generated" preview (default = the newest on-disk).
+	// `generatedUrl` is the WebView blob URL; `generatedPath` is the on-disk
+	// media path so the "open in viewer" icon can hand it to the OS opener
+	// (a blob URL is useless to an OS viewer — same split the top panel uses).
 	let generatedUrl = $state<string | null>(null);
+	let generatedPath = $state<string | null>(null);
 	let sourceUrl = $state<string | null>(null);
+	let sourcePath = $state<string | null>(null);
 	let history = $state<PieceHistoryEntry[]>([]);
 	let historyThumbs = $state<(string | null)[]>([]);
 
@@ -87,13 +93,42 @@
 		return !!v && /^https?:\/\//i.test(v.trim());
 	}
 
-	/** Resolve a displayable URL for the img2img source (reference) image. */
+	/** Open a preview image in the OS's default viewer. A REMOTE url is
+	 *  handed to the browser (a new tab); a LOCAL media path goes through the
+	 *  backend's `open_media_in_player` command (the blob URL the <img> uses is
+	 *  useless to an OS viewer, so the on-disk path travels instead). The same
+	 *  command works for images and video — it just spawns the platform opener. */
+	async function openInViewer(localPath: string | null, displayUrl: string | null) {
+		if (!localPath) {
+			// No on-disk path (e.g. a remote reference with no local artifact):
+			// fall back to opening the display URL in a new browser tab.
+			if (displayUrl) {
+				if (isRemote(displayUrl)) window.open(displayUrl, '_blank', 'noopener,noreferrer');
+				else window.open(displayUrl, '_blank');
+			}
+			return;
+		}
+		if (!isTauri()) return;
+		try {
+			await invoke('open_media_in_player', { input: { path: localPath } });
+			flashToast('Opened in system viewer', 'info');
+		} catch (e) {
+			flashToast(e instanceof Error ? e.message : String(e), 'error');
+		}
+	}
+
+	/** Resolve a displayable URL for the img2img source (reference) image.
+	 *  Also records the on-disk path when the source is a local media path so
+	 *  the "open in viewer" icon has a real file to hand to the OS opener. */
 	async function refreshSource() {
 		if (!referenceUrl) {
 			sourceUrl = null;
+			sourcePath = null;
 			return;
 		}
-		sourceUrl = isRemote(referenceUrl) ? referenceUrl : await toMediaUrl(referenceUrl);
+		const remote = isRemote(referenceUrl);
+		sourceUrl = remote ? referenceUrl : await toMediaUrl(referenceUrl);
+		sourcePath = remote ? null : referenceUrl;
 	}
 
 	function thumbUrl(entry: PieceHistoryEntry): Promise<string | null> {
@@ -107,7 +142,10 @@
 		historyThumbs = await Promise.all(entries.map((e) => thumbUrl(e)));
 		await refreshSource();
 		const newest = entries[0];
-		if (newest?.localPath) generatedUrl = await toMediaUrl(newest.localPath);
+		if (newest?.localPath) {
+			generatedPath = newest.localPath;
+			generatedUrl = await toMediaUrl(newest.localPath);
+		}
 	}
 
 	// Load when the modal opens for a given piece.
@@ -119,6 +157,7 @@
 	function selectGeneration(entry: PieceHistoryEntry, idx: number) {
 		// `historyThumbs[idx]` is the already-resolved `toMediaUrl` cache entry
 		// for this generation; fall back to re-resolving for a missing local.
+		generatedPath = entry.localPath ?? null;
 		void (entry.localPath ? toMediaUrl(entry.localPath) : Promise.resolve(null)).then(
 			(u) => (generatedUrl = u ?? historyThumbs[idx] ?? null),
 		);
@@ -141,6 +180,7 @@
 			// The fresh artifact becomes the current "generated" preview + the
 			// newest history entry (its row is also on disk via the manifest).
 			const freshUrl = await toMediaUrl(res.localPath);
+			generatedPath = res.localPath;
 			generatedUrl = freshUrl;
 			historyThumbs = [freshUrl ?? '', ...historyThumbs];
 			history = [
@@ -191,7 +231,10 @@
 			<figure class="pg-preview">
 				<figcaption>Source</figcaption>
 				{#if sourceUrl}
-					<img src={sourceUrl} alt="Source image" />
+					<div class="pg-imgwrap">
+						<img src={sourceUrl} alt="Source image" />
+						<button class="pg-open" onclick={() => openInViewer(sourcePath, sourceUrl)} title="Open in viewer" aria-label="Open source image in viewer">⛶</button>
+					</div>
 				{:else}
 					<div class="pg-empty">No source</div>
 				{/if}
@@ -199,7 +242,10 @@
 			<figure class="pg-preview">
 				<figcaption>Generated</figcaption>
 				{#if generatedUrl}
-					<img src={generatedUrl} alt="Generated image" />
+					<div class="pg-imgwrap">
+						<img src={generatedUrl} alt="Generated image" />
+						<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+					</div>
 				{:else}
 					<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
 				{/if}
@@ -209,7 +255,10 @@
 		<figure class="pg-preview pg-preview-single">
 			<figcaption>Generated</figcaption>
 			{#if generatedUrl}
-				<img src={generatedUrl} alt="Generated image" />
+				<div class="pg-imgwrap">
+					<img src={generatedUrl} alt="Generated image" />
+					<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+				</div>
 			{:else}
 				<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
 			{/if}
@@ -338,6 +387,50 @@
 
 	.pg-preview img {
 		display: block;
+	}
+
+	/* Positioning context for the open-in-viewer icon overlay. */
+	.pg-imgwrap {
+		position: relative;
+	}
+
+	.pg-imgwrap img {
+		display: block;
+		width: 100%;
+	}
+
+	/* Small corner icon that opens the image in the OS default viewer.
+	   Reveal-on-hover keeps the thumbnail uncluttered; it's still reachable
+	   when shown. */
+	.pg-open {
+		position: absolute;
+		top: 4px;
+		right: 4px;
+		width: 22px;
+		height: 22px;
+		padding: 0;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		background: color-mix(in srgb, var(--bg-secondary, #14141f) 82%, transparent);
+		color: var(--text-secondary, #a1a1aa);
+		font-size: 11px;
+		line-height: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+	}
+
+	.pg-imgwrap:hover .pg-open,
+	.pg-open:focus-visible {
+		opacity: 1;
+	}
+
+	.pg-open:hover {
+		color: var(--text-primary, #fff);
+		border-color: var(--accent-color, #ff3e00);
 	}
 
 	.pg-empty {

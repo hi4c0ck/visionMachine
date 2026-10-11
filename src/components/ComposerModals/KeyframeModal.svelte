@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { PipeRow, PipeKeyframe } from '$types';
 	import { addKeyframe as addKeyframeAction } from '$lib/composerStore';
-import PieceGenPanel from './PieceGenPanel.svelte';
+	import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
 
@@ -26,7 +26,11 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	import '../composer-modal.css';
 
 	let kfType = $state<'url' | 'txt2img' | 'img2img'>('url');
-	let kfValue = $state('');
+	// url mode and the prompt modes are INDEPENDENT fields: a URL pasted into
+	// the url section must NOT bleed into the txt2img/img2img prompt box when
+	// the user flips the mode tabs (previously one shared `kfValue`).
+	let kfUrl = $state('');
+	let kfPrompt = $state('');
 	// img2img carries two independent fields: the reference image and the prompt.
 	let kfReferenceUrl = $state('');
 	let kfFrame = $state(0);
@@ -45,7 +49,8 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 		const existing = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === editingSlot);
 		if (existing) {
 			kfType = existing.type;
-			kfValue = existing.imageSrc ?? existing.prompt ?? '';
+			kfUrl = existing.imageSrc ?? '';
+			kfPrompt = existing.prompt ?? '';
 			kfReferenceUrl = existing.referenceUrl ?? '';
 			kfFrame = existing.frame;
 			kfRefId = existing.id;
@@ -53,7 +58,8 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			kfGenRemote = existing.previewRemoteUrl ?? '';
 		} else {
 			kfType = 'url';
-			kfValue = '';
+			kfUrl = '';
+			kfPrompt = '';
 			kfReferenceUrl = '';
 			kfFrame = snapTo8(pipe.keyframes.length > 0 ? pipe.keyframes[0].frame : 0);
 			kfRefId = `kf-slot${editingSlot}`;
@@ -65,11 +71,16 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	// url needs a URL; txt2img needs a prompt; img2img needs both.
 	const kfValid = $derived(
 		kfType === 'url'
-			? kfValue.trim().length > 0
+			? kfUrl.trim().length > 0
 			: kfType === 'txt2img'
-				? kfValue.trim().length > 0
-				: kfReferenceUrl.trim().length > 0 && kfValue.trim().length > 0,
+				? kfPrompt.trim().length > 0
+				: kfReferenceUrl.trim().length > 0 && kfPrompt.trim().length > 0,
 	);
+
+	// The value that's ACTIVE for the current mode: the URL field in url mode,
+	// the prompt field in the generation modes. This is what gets persisted
+	// (imageSrc vs prompt) and validated.
+	const kfActiveValue = $derived(kfType === 'url' ? kfUrl : kfPrompt);
 
 	async function confirm() {
 		if (!sessionId || editingSlot === null) return;
@@ -80,7 +91,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			editingSlot,
 			kfFrame,
 			kfType,
-			kfValue,
+			kfActiveValue,
 			kfType === 'img2img' ? kfReferenceUrl : undefined,
 			// Stable piece id + the pre-save generation preview (local + remote).
 			kfRefId || undefined,
@@ -93,7 +104,8 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			return;
 		}
 		open = false;
-		kfValue = '';
+		kfUrl = '';
+		kfPrompt = '';
 		kfReferenceUrl = '';
 		// upsert keeps the id stable — resolve it and let the caller re-check
 		const savedKf = pipe.keyframes.find((k: PipeKeyframe) => k.slotIndex === editingSlot);
@@ -120,12 +132,12 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				{#if kfType === 'url'}
 					<div class="modal-field">
 						<label id="kf-url-label">Image URL</label>
-						<input type="text" bind:value={kfValue} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />
+						<input type="text" bind:value={kfUrl} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />
 					</div>
 				{:else if kfType === 'txt2img'}
 					<div class="modal-field">
 						<label id="kf-prompt-label">Prompt</label>
-						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-prompt-label"></textarea>
+						<textarea bind:value={kfPrompt} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-prompt-label"></textarea>
 					</div>
 				{:else if kfType === 'img2img'}
 					<div class="modal-field">
@@ -134,7 +146,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 					</div>
 					<div class="modal-field">
 						<label id="kf-img2img-prompt-label">Prompt</label>
-						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-img2img-prompt-label"></textarea>
+						<textarea bind:value={kfPrompt} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-img2img-prompt-label"></textarea>
 					</div>
 				{/if}
 
@@ -145,7 +157,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 						sessionId={sessionId}
 						pipeId={pipe.id}
 						imageType={kfType}
-						prompt={kfValue}
+						prompt={kfPrompt}
 						referenceUrl={kfType === 'img2img' ? kfReferenceUrl : undefined}
 						onGenerated={(l, r) => { kfGenLocal = l; kfGenRemote = r ?? ''; }}
 					/>

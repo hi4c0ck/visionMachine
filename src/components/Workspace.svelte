@@ -471,18 +471,33 @@
 			if (!gid || groupStale) { stopGroupPoll(); return; }
 			void fetchGenerationGroup(gid).then((g) => {
 				if (gid !== activeGroupId) return; // a new group took over
-				groupProgress = g.progress ?? 0;
 				// Merge the live per-pipe progress so the compact rows +
 				// status chips track the exact stage state, not just terminals.
+				// The backend's `p.progress` only advances at PIPE-TERMINAL
+				// (0.0 while a pipe is in flight), so merging it blindly would
+				// CLOBBER the live task's accurate progress — the "minimized
+				// shows 10% while the modal shows 80%" bug. Adopt the backend
+				// value only when it is ahead (terminal / higher); otherwise
+				// keep the live value.
 				const merged: Record<string, GenerationTaskView> = { ...groupTaskViews };
 				for (const p of g.pipes) {
 					if (!p?.pipeId) continue;
 					const task = groupTaskViews[p.pipeId];
-					if (task && p.taskId && p.taskId === task.taskId && p.progress !== undefined) {
-						merged[p.pipeId] = { ...task, progress: p.progress };
+					if (!task) continue;
+					if (p.taskId && p.taskId === task.taskId && p.progress !== undefined) {
+						merged[p.pipeId] = { ...task, progress: Math.max(task.progress ?? 0, p.progress) };
 					}
 				}
 				groupTaskViews = merged;
+				// Recompute the "Overall" bar from the LIVE per-pipe views. The
+				// backend's `g.progress` is a terminal-only average (per-pipe
+				// values sit at 0 until each pipe finishes), so trusting it
+				// makes the Overall bar lag badly ("10%") while the live rows
+				// read "80%". Averaging the live views keeps them consistent.
+				const liveVals = Object.values(merged);
+				groupProgress = liveVals.length
+					? liveVals.reduce((a, v) => a + (v.progress ?? 0), 0) / liveVals.length
+					: (g.progress ?? 0);
 				// Keep the pill's live state fresh: mirror the merged pipe view
 				// onto `activeTask` (the event stream only drives it while the
 				// task watcher is armed — a closed/minimized modal would otherwise
@@ -686,6 +701,14 @@
 	let settingsTab = $state<'defaults' | 'providers' | 'tools'>('defaults');
 
 	const anyTaskActive = $derived((activeTask !== null && !isTerminalTaskStatus(activeTask.status)) || groupLivenessActive);
+	// The minimized pill's progress % mirrors the SAME aggregate the modal bar
+	// renders (activeTask.progress) so the two can never disagree. Before this
+	// the pill showed a single in-flight stage's line (e.g. "rendering 10%")
+	// while the modal bar showed the aggregate (~80%) — the "minimized 10% vs
+	// modal 80%" bug. Null = no live aggregate to display.
+	const pillPct = $derived(
+		activeTask && anyTaskActive ? Math.round((activeTask.progress ?? 0) * 100) : null,
+	);
 	// Live engine-state line for the minimized pill (e.g. "queue full —
 	// retry in 120 s"): the newest lastEvent, preferring IN-FLIGHT stages
 	// (generating / rate-limited) over finished ones. The preference matters
@@ -2600,8 +2623,8 @@
 						<span
 							class="gen-pill-live"
 							class:gen-pill-live-idle={!pillLiveLine}
-							title={pillLiveLine ? `${pillLiveLine} — click to open the progress modal` : 'Latest engine state — click to open the progress modal'}
-						>{pillLiveLine ?? 'Running…'}</span>
+							title={pillPct !== null ? `${pillPct}% overall — ${pillLiveLine ?? 'running'} · click to open the progress modal` : (pillLiveLine ? `${pillLiveLine} — click to open the progress modal` : 'Latest engine state — click to open the progress modal')}
+						>{pillPct !== null ? `${pillPct}% · ` : ''}{pillLiveLine ?? 'Running…'}</span>
 					{:else if groupActive}
 						<!-- Group liveness between pipe tasks: the SAME
 						     fixed-width running box (neutral), so the pill
