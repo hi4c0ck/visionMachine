@@ -50,6 +50,18 @@
 	let imageModels = $state<ModelSpec[]>([]);
 	let imageModel = $state('');
 	let busy = $state(false);
+	// Seed at most once per distinct model/preset config. Without this guard
+	// the effect below reassigns the imageModels $state array (a fresh
+	// reference) on every pass, and Svelte 5 re-invalidates this very effect
+	// until it aborts with `effect_update_depth_exceeded` (the same bug
+	// GenerateModal guards against — the "modal frozen / never appears"
+	// symptom). The key guard makes re-runs no-ops; a changed settings config
+	// still re-seeds.
+	// Note: no cleanup resetting this. On re-mount the $state re-initializes
+	// to null, so a new piece re-seeds; the persistent key is what breaks the
+	// re-invalidation loop on same-mount re-runs (a cleanup that nulled it on
+	// re-run would re-trigger the seed forever).
+	let imageModelSeedKey = $state<string | null>(null);
 
 	// The currently-shown "generated" preview (default = the newest on-disk).
 	let generatedUrl = $state<string | null>(null);
@@ -61,6 +73,9 @@
 	// GenerateModal): read-only / pending models are filtered out.
 	$effect(() => {
 		const s = getSettings();
+		const key = [s.providers.image.model, s.providers.image.preset].join('|');
+		if (imageModelSeedKey === key) return;
+		imageModelSeedKey = key;
 		const ip = getPreset(s.providers.image.preset);
 		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
 		imageModel = s.providers.image.model;
