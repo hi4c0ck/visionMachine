@@ -4,6 +4,7 @@
 		addSubjectRef as addSubjectRefAction,
 		updateSubjectRef as updateSubjectRefAction,
 	} from '$lib/composerStore';
+import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 
 	let {
@@ -34,6 +35,14 @@
 	let srUseFrames = $state(false);
 	let srStart = $state(0);
 	let srEnd = $state(8);
+	// Stable piece id for this ref: an existing ref keeps its own id, a new
+	// ref gets a provisional one so a pre-save "Generate" writes to the same
+	// on-disk history the saved ref will own.
+	let srRefId = $state('');
+	// The modal's standalone generation result (previewed live + carried onto
+	// the record at Confirm so the chip shows a thumbnail immediately).
+	let srGenLocal = $state('');
+	let srGenRemote = $state('');
 
 	// Seed values when the modal opens (moved verbatim from openSubjectRefModal)
 	$effect(() => {
@@ -48,6 +57,9 @@
 			srUseFrames = existing.useFrames ?? false;
 			srStart = existing.frameStart ?? 0;
 			srEnd = existing.frameEnd ?? Math.min(8, maxFrames - 1);
+			srRefId = existing.id;
+			srGenLocal = existing.previewLocalPath ?? '';
+			srGenRemote = existing.previewRemoteUrl ?? '';
 		} else {
 			srType = 'url';
 			srImageUrl = '';
@@ -55,6 +67,9 @@
 			srUseFrames = false;
 			srStart = 0;
 			srEnd = Math.min(8, maxFrames - 1);
+			srRefId = `sr-new${Date.now()}`;
+			srGenLocal = '';
+			srGenRemote = '';
 		}
 	});
 
@@ -97,6 +112,10 @@
 				srUseFrames ? srEnd : undefined,
 				srType,
 				srPrompt,
+				// Stable piece id + the pre-save generation preview (local + remote).
+				srRefId || undefined,
+				srGenLocal || undefined,
+				srGenRemote || undefined,
 			);
 		}
 		if (result.errors.length > 0) {
@@ -139,6 +158,18 @@
 						<label id="sr-img2img-prompt-label">Prompt</label>
 						<textarea bind:value={srPrompt} placeholder="Describe the transformation..." class="modal-textarea" aria-labelledby="sr-img2img-prompt-label"></textarea>
 					</div>
+				{/if}
+				{#if srType !== 'url' && srRefId && sessionId}
+					<PieceGenPanel
+						kind="subject"
+						refId={srRefId}
+						sessionId={sessionId}
+						pipeId={pipe.id}
+						imageType={srType}
+						prompt={srPrompt}
+						referenceUrl={srType === 'img2img' ? srImageUrl : undefined}
+						onGenerated={(l, r) => { srGenLocal = l; srGenRemote = r ?? ''; }}
+					/>
 				{/if}
 				<div class="modal-field">
 					<label>

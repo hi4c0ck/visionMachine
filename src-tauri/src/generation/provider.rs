@@ -17,7 +17,9 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::commands::settings::{normalize_settings, ProviderSlot};
-use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine, StageOutput};
+use crate::generation::engine::{
+    BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration, StageOutput,
+};
 use crate::generation::media::{append_jsonl, append_request_log, pipe_media_dirs, write_json};
 use crate::generation::shaper::StageContext;
 use crate::generation::shaper::{shape_request, substitute_poll_template};
@@ -333,6 +335,161 @@ impl GenerationEngine for ProviderEngine {
                     Err(e.message())
                 }
             }
+        })
+    }
+
+    fn generate_piece<'a>(
+        &'a self,
+        req: &PieceGeneration,
+        on_progress: &'a (dyn Fn(f32) + Sync),
+        on_event: &'a (dyn Fn(&str) + Sync),
+    ) -> BoxFuture<'a, Result<StageOutput, String>> {
+        let this = self;
+        let req = req.clone();
+        Box::pin(async move {
+            this.run_piece(&req, on_progress, on_event)
+                .await
+                .map_err(|e| e.message())
+        })
+    }
+}
+
+impl ProviderEngine {
+    /// Standalone single-piece image generation (the keyframe / subject modal
+    /// "Generate" button). Reuses the slot-lookup + shaper + backoff + download
+    /// path of `run_image_stage`, but writes to the caller-chosen `req.dest`
+    /// and (best-effort) appends a redacted request line to `req.request_log`.
+    /// No task registry is involved — the caller owns the on-disk history.
+    async fn run_piece(
+        &self,
+        req: &PieceGeneration,
+        on_progress: &(dyn Fn(f32) + Sync),
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<StageOutput, EngineError> {
+        let spec = &req.spec;
+        // provider_slot reads only `profile_id` off the input, so a minimal
+        // EngineInput carrying just the profile is enough.
+        let input = EngineInput {
+            task_id: "piece".into(),
+            prompt: String::new(),
+            pipe_id: String::new(),
+            pipe_name: None,
+            fps: 0,
+            resolution: String::new(),
+            orientation: String::new(),
+            q_value: 0,
+            c_value: 0.0,
+            media_root: None,
+            image_model: None,
+            video_model: None,
+            seed: None,
+            profile_id: req.profile_id.clone(),
+            image_spec: None,
+            video_spec: None,
+            stage: None,
+            upstream: Vec::new(),
+        };
+        let slot = self.provider_slot(&input, spec.kind.clone()).await?;
+        let payload = shape_request(spec, &req.ctx).map_err(|e| {
+            log::error!("[Piece] payload shape failed: {e}");
+            EngineError::Failure(e)
+        })?;
+        let base = slot.base_url.trim().trim_end_matches('/');
+        let url = format!("{base}{}", spec.endpoint);
+        let secrets: Vec<String> = vec![slot.api_key.trim().to_string()];
+        let secrets_refs: Vec<&str> = secrets.iter().map(|k| k.as_str()).collect();
+
+        on_progress(0.1);
+        on_event("piece image request in flight");
+
+        // 429 / 503 back off on the steady ladder, same as the task image stage.
+        let (status, resp) = {
+            let mut backoff_idx = 0usize;
+            loop {
+                let (st, rs) = self
+                    .http
+                    .post(&url, &payload, slot.api_key.trim(), IMAGE_TIMEOUT)
+                    .await
+                    .map_err(|e| EngineError::Failure(format!("transport: {e}")))?;
+                if st != 429 && st != 503 {
+                    break (st, rs);
+                }
+                let delay = self
+                    .backoff_secs
+                    .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                    .copied()
+                    .unwrap_or(15);
+                backoff_idx += 1;
+                on_event(&format!(
+                    "retrying after {} — in {} s",
+                    if st == 429 { "rate-limited (429)" } else { "unavailable (503)" },
+                    delay
+                ));
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            }
+        };
+        on_progress(0.5);
+        on_event("piece downloading image artifact");
+
+        if status >= 400 {
+            let body = resp.get("error").cloned().unwrap_or(resp);
+            return Err(EngineError::Failure(format!(
+                "piece image generation HTTP {status} ({}): {}",
+                spec.id, body.to_string()
+            )));
+        }
+        let data0 = resp
+            .get("data")
+            .and_then(|d| d.get(0))
+            .cloned()
+            .ok_or_else(|| EngineError::Failure("piece image response missing data[0]".into()))?;
+        let remote_url = data0.get("url").and_then(|u| u.as_str()).map(String::from);
+        let b64 = data0.get("b64_json").and_then(|b| b.as_str()).map(String::from);
+
+        // Best-effort redacted request/response line to the piece log.
+        if let Some(log_path) = &req.request_log {
+            let entry = json!({
+                "stage": "piece-image",
+                "model": spec.id, "seed": req.ctx.seed, "prompt": req.ctx.prompt, "status": status,
+                "response": resp, "request": { "method": "POST", "url": url, "body": payload },
+            });
+            let _ = append_request_log(log_path, &entry, &secrets_refs);
+        }
+
+        // Materialize to the caller-chosen destination.
+        if let Some(parent) = req.dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| EngineError::Failure(format!("create {}: {e}", parent.display())))?;
+        }
+        let remote_url_ret = remote_url.clone();
+        match remote_url {
+            Some(u) => {
+                self.http
+                    .download(&u, &req.dest)
+                    .await
+                    .map_err(|e| {
+                        log::error!("[Piece] download failed {u}: {e}");
+                        EngineError::Failure(format!("piece image download {u}: {e}"))
+                    })?;
+            }
+            None => {
+                let b64 = b64.ok_or_else(|| EngineError::Failure(
+                    "piece image response carried neither url nor b64_json".into(),
+                ))?;
+                use base64::Engine as _;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map_err(|e| EngineError::Failure(format!("piece b64 decode: {e}")))?;
+                std::fs::write(&req.dest, bytes)
+                    .map_err(|e| EngineError::Failure(format!("write {}: {e}", req.dest.display())))?;
+            }
+        }
+        on_progress(1.0);
+        on_event("piece image complete");
+        log::info!("[Piece] ok ({})", req.dest.display());
+        Ok(StageOutput {
+            local_path: req.dest.to_string_lossy().into_owned(),
+            remote_url: remote_url_ret,
         })
     }
 }

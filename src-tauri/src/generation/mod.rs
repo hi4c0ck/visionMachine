@@ -19,18 +19,19 @@ pub use compose::{
     compose_session_video, ComposeCancel, ComposeError, ComposeRegistry, ComposeResult,
     ComposeStartError, SourceVideo,
 };
-pub use engine::{EngineInput, EngineStage, GenerationEngine};
+pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration};
 pub use ffmpeg::{resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
     append_jsonl, append_request_log, archive_previous_session_video,
     clear_session_compose_artifacts, clear_staged_session_clips, is_staged_session_clip,
+    piece_history_dirs,
     pipe_media_dirs, redact, redact_authorization, safe_dir_name, session_generation_dirs,
     session_media_root, write_json, STAGED_CLIP_PREFIX,
 };
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};
 pub use shaper::{
-    clamp_to_range, format_seconds, pick_image_size, pick_ratio, shape_request,
+    clamp_to_range, format_seconds, pick_image_size, pick_ratio, shape_request, StageContext,
     substitute_poll_template, UpstreamOutput,
 };
 pub use specs::{ModelSpecLimits, ModelSpecMedia, ModelSpecWire};

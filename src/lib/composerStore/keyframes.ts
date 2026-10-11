@@ -22,6 +22,9 @@ export class KeyframeServiceImpl implements KeyframeService {
     type: 'url' | 'txt2img' | 'img2img',
     value: string,
     referenceUrl?: string,
+    id?: string,
+    previewLocalPath?: string,
+    previewRemoteUrl?: string,
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
@@ -37,14 +40,12 @@ export class KeyframeServiceImpl implements KeyframeService {
       return { errors: ['Keyframe prompt must not be empty'] };
     }
 
-    const fields: Omit<PipeKeyframe, 'id' | 'slotIndex'> = {
-      frame: snappedFrame,
-      type,
-      imageSrc: type === 'url' ? value : undefined,
-      prompt: type !== 'url' ? value : undefined,
-      referenceUrl: type === 'img2img' ? (referenceUrl ?? undefined) : undefined,
-      status: 'pending',
-    };
+    // A standalone "Generate" in the modal may have produced an artifact BEFORE
+    // the piece was saved. Carry its preview pair onto the record so the chip
+    // shows a thumbnail + the video stage carries the right source.
+    const preview: Partial<PipeKeyframe> = {};
+    if (previewLocalPath?.trim()) preview.previewLocalPath = previewLocalPath;
+    if (previewRemoteUrl?.trim()) preview.previewRemoteUrl = previewRemoteUrl;
 
     // Upsert: editing an existing slot replaces that keyframe instead of
     // stacking a duplicate entry in the same slot. Existing ID preserved.
@@ -64,11 +65,18 @@ export class KeyframeServiceImpl implements KeyframeService {
       existing.type = type;
       existing.frame = snappedFrame;
       existing.status = 'pending';
+      Object.assign(existing, preview);
     } else {
       pipe.keyframes.push({
-        id: crypto.randomUUID(),
+        id: id ?? crypto.randomUUID(),
         slotIndex,
-        ...fields,
+        frame: snappedFrame,
+        type,
+        imageSrc: type === 'url' ? value : undefined,
+        prompt: type !== 'url' ? value : undefined,
+        referenceUrl: type === 'img2img' ? (referenceUrl ?? undefined) : undefined,
+        status: 'pending',
+        ...preview,
       });
     }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PipeRow, PipeKeyframe } from '$types';
 	import { addKeyframe as addKeyframeAction } from '$lib/composerStore';
+import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
 
@@ -29,6 +30,14 @@
 	// img2img carries two independent fields: the reference image and the prompt.
 	let kfReferenceUrl = $state('');
 	let kfFrame = $state(0);
+	// Stable piece id for this slot: an existing keyframe keeps its own id, a
+	// new slot gets a provisional one so a pre-save "Generate" writes to the
+	// same on-disk history the saved piece will own.
+	let kfRefId = $state('');
+	// The modal's standalone generation result (previewed live + carried onto
+	// the record at Confirm so the chip shows a thumbnail immediately).
+	let kfGenLocal = $state('');
+	let kfGenRemote = $state('');
 
 	// Seed values when the modal opens (moved verbatim from openKeyframeModal)
 	$effect(() => {
@@ -39,11 +48,17 @@
 			kfValue = existing.imageSrc ?? existing.prompt ?? '';
 			kfReferenceUrl = existing.referenceUrl ?? '';
 			kfFrame = existing.frame;
+			kfRefId = existing.id;
+			kfGenLocal = existing.previewLocalPath ?? '';
+			kfGenRemote = existing.previewRemoteUrl ?? '';
 		} else {
 			kfType = 'url';
 			kfValue = '';
 			kfReferenceUrl = '';
 			kfFrame = snapTo8(pipe.keyframes.length > 0 ? pipe.keyframes[0].frame : 0);
+			kfRefId = `kf-slot${editingSlot}`;
+			kfGenLocal = '';
+			kfGenRemote = '';
 		}
 	});
 
@@ -67,6 +82,10 @@
 			kfType,
 			kfValue,
 			kfType === 'img2img' ? kfReferenceUrl : undefined,
+			// Stable piece id + the pre-save generation preview (local + remote).
+			kfRefId || undefined,
+			kfGenLocal || undefined,
+			kfGenRemote || undefined,
 		);
 		if (result.errors.length > 0) {
 			flashToast(result.errors[0] || 'Failed to save keyframe');
@@ -117,6 +136,19 @@
 						<label id="kf-img2img-prompt-label">Prompt</label>
 						<textarea bind:value={kfValue} placeholder="Describe the image..." class="modal-textarea" aria-labelledby="kf-img2img-prompt-label"></textarea>
 					</div>
+				{/if}
+
+				{#if kfType !== 'url' && kfRefId && sessionId}
+					<PieceGenPanel
+						kind="keyframe"
+						refId={kfRefId}
+						sessionId={sessionId}
+						pipeId={pipe.id}
+						imageType={kfType}
+						prompt={kfValue}
+						referenceUrl={kfType === 'img2img' ? kfReferenceUrl : undefined}
+						onGenerated={(l, r) => { kfGenLocal = l; kfGenRemote = r ?? ''; }}
+					/>
 				{/if}
 			</div>
 			<div class="modal-footer">

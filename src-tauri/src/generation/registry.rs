@@ -172,6 +172,13 @@ impl TaskRegistry {
         *resilient_lock(&self.engine) = Some(engine);
     }
 
+    /// Expose the concrete engine (the standalone single-piece image flow
+    /// calls `generate_piece` directly, bypassing the sequential task runner).
+    /// `None` before the engine is wired at startup.
+    pub fn engine(&self) -> Option<Arc<dyn GenerationEngine>> {
+        resilient_lock(&self.engine).clone()
+    }
+
     /// Wire the UI event sink (the `emit_to` closure from `lib.rs`). Called
     /// once at startup; before that, emission is a no-op so the registry
     /// stays usable in tests.

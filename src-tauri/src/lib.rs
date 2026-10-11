@@ -342,6 +342,8 @@ pub fn run() {
             commands::generation::cancel_generation,
             commands::generation::cancel_all_generation,
             commands::generation::generation_active_task_count,
+commands::generation::generate_piece_image,
+commands::generation::list_piece_history,
             commands::generation::compose_session_video,
             commands::generation::cancel_session_video_composition,
             commands::generation::read_media_file,
