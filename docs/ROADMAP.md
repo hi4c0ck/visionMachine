@@ -35,6 +35,33 @@ shippable — each links to the doc/component that owns the detail. Anything
 
 ---
 
+## Next release (v0.7.8)
+
+Target items for the version after v0.7.7. Each is small and shippable; the
+linked doc/component owns the detail.
+
+- [ ] **Remove legacy Agnes Video V2.0** — the provider has retired it
+      (v0.7.7 already marks it obsolete / legacy-terms in the catalog). Drop the
+      V2.0 engine path + catalog entries entirely so the 2.5-series is the only
+      video engine. Touch `catalog.ts`, the provider engine's legacy branch, and
+      the obsolete note in `docs/agnes-model-catalog.md`.
+- [ ] **Per-model video size selection** — surface the resolution sets each
+      video provider/model actually supports and let the user pick; validate the
+      chosen size against the model's `limits` and persist it per run. Replaces
+      the hard-coded 480/720/1080p presets. Pairs with the open
+      "Resolution / size selection" item below.
+- [ ] **Tools panel view pass** — redesign the right-panel inspector so the
+      session → pipe → segment → tag context reads clearly: a header showing
+      which entity the settings/inspector currently edits, no silent
+      cross-level writes (add an explicit "apply to pipe" / "apply to session"
+      affordance), and a visual flag on pipe-level values that diverge from the
+      session default.
+- [ ] **Remove frames from keyframe / subject modals** — drop the frame
+      input/preview from `KeyframeModal` / `SubjectRefModal`; the frame position
+      stays owned by the composer, the modals just attach the piece to that slot.
+
+---
+
 ## Release pipeline (GitHub Actions → GitHub Release)
 
 The tag-pushed release flow works end-to-end (`v0.7.4` proves it):
