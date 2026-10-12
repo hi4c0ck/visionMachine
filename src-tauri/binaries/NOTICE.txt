@@ -6,8 +6,8 @@ scripts/build/fetch-ffmpeg.mjs from:
 
   BtbN/FFmpeg-Builds
   https://github.com/BtbN/FFmpeg-Builds
-  release: autobuild-2026-09-23-14-55 (immutable tag)
-  asset:   per-target, e.g. ffmpeg-N-126782-gdc52424419-win64-gpl.zip
+  release: autobuild-2026-10-11-13-04 (immutable tag)
+  asset:   per-target, e.g. ffmpeg-N-127367-gb5902e69c7-win64-gpl.zip
 
 The staged binary is a GPL-enabled build. It is distributed as an executable
 sidecar only in the full build variant. The tiny variant does not bundle it.
