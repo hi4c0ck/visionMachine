@@ -228,6 +228,24 @@ pub fn piece_history_dirs(
     Ok((dir.clone(), dir.join("history.jsonl")))
 }
 
+/// Per-pipe directory for user-sourced image assets (extracted last frames,
+/// locally-picked img2img bases). Distinct from the task-scoped `<pipe>` dirs
+/// and the append-only `pieces/` history: this is a small, pipe-scoped scratch
+/// area for images the user explicitly sourced rather than generated.
+///
+/// ```text
+/// <sessionRoot>/<pipe-name>/user-images/
+///   last-frame-<taskId>.png   # extracted from a prior pipe's last-gen video
+///   local-<refId>-<unixms>.png # a locally-picked img2img base
+/// ```
+pub fn user_image_dir(session_root: &std::path::Path, pipe_name: &str) -> Result<PathBuf, String> {
+    let dir = session_root
+        .join(safe_dir_name(pipe_name))
+        .join("user-images");
+    fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
 /// Reject path-traversal characters in ref/task ids so a crafted id can
 /// never escape the media tree.
 pub fn safe_dir_name(id: &str) -> String {

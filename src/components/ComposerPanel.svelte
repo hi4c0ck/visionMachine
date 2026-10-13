@@ -185,7 +185,12 @@ import { flashToast } from '$lib/flashToast';
 	});
 
 	// ── Focus for the context-sensitive tool panel ─────────────────────────
-	// The panel is the source of truth for composer selection. Pipe selection
+	// Previous pipe in timeline order (for the slot-1 "use last frame" feature).
+	const prevPipe = $derived(
+		activePipe
+			? (pipes.find((p: PipeRow) => p.orderIndex === activePipe.orderIndex - 1) ?? null)
+			: null,
+	);
 	// (clicking a pipe, opening any of its modals/menus) focuses that pipe;
 	// while a tag-prompt edit is in flight the focus refines to that tag.
 	// Segment-level focus happens on segment add/edit (SegmentModal open).
@@ -923,6 +928,7 @@ import { flashToast } from '$lib/flashToast';
 		sessionId={session?.id}
 		maxFrames={totalFrames}
 		editingSlot={editingKeyframeSlot}
+		prevPipe={prevPipe}
 		bind:open={showKeyframeModal}
 		onSaved={(refId) => onRefSaved?.(activePipe?.id ?? '', refId)}
 	/>

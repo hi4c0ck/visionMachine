@@ -19,6 +19,33 @@ allowed to ship in a bundle. Already-staged sidecars are re-verified on every
 stage before reuse, so a stale or locally-swapped binary is re-staged from
 the pinned archive instead of being shipped silently.
 
-This file records provenance and licensing; it is not a substitute for the
-FFmpeg project's full license and source-offer obligations when distributing
-the full installer.
+Licensing
+----------
+FFmpeg is dual-licensed under GPLv2+ / LGPL-2.1+. This staged build is the
+GPL-enabled variant (asset names end in -gpl) and links GPL codec
+dependencies such as x264 and x265, so it is a GPL program. The sidecar is a
+separate, independent program shipped on the same medium as VisionMachine,
+i.e. a GPLv3 "aggregate" (section 5): it does not make VisionMachine's own
+code GPL, but distributing the FFmpeg binary itself carries a GPL
+source-offer duty under section 6.
+
+Source offer (GPL section 6)
+----------------------------
+The corresponding source for this FFmpeg/ffprobe build is offered at no cost
+in accordance with the written source-offer described in
+NOTICE.md ("FFmpeg Source Offer (GPL §6 compliance)"). Summary:
+  - FFmpeg source: https://ffmpeg.org/download.html
+    (Git: https://git.ffmpeg.org/gitweb/ffmpeg.git)
+  - Exact pinned build: BtbN/FFmpeg-Builds, tag autobuild-2026-10-11-13-04,
+    revision N-127367-gb5902e69c7
+    (https://github.com/BtbN/FFmpeg-Builds/releases)
+  - GPL codec dependencies (x264, x265, ...): source from their upstream
+    projects listed on the FFmpeg download page.
+  - The written offer is valid for three years from the distribution date.
+
+This obligation applies only to the full-variant installer, which ships the
+sidecar. The tiny variant ships no FFmpeg binary and carries no such duty.
+
+This file records provenance, licensing, and the source-offer pointer; it is
+not a substitute for the FFmpeg project's full license text. See NOTICE.md
+for the complete statement.

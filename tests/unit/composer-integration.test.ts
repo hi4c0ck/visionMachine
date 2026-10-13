@@ -181,7 +181,7 @@ describe('Composer Integration', () => {
 
       // Independent copies (no shared references).
       expect(copy.id).not.toBe(src.id);
-      expect(copy.name).toBe('Source (copy)');
+      expect(copy.name).toBe('Pipe 2');
       expect(copy.keyframes).toHaveLength(1);
       expect(copy.subjectReferences).toHaveLength(1);
       expect(copy.elements).toHaveLength(1);

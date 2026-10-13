@@ -202,6 +202,59 @@ pub fn resolve_ffmpeg() -> FfmpegAvailability {
     FfmpegAvailability::none()
 }
 
+/// Extract the last decodable frame of a video into a PNG, using the
+/// full-decode + overwrite (`-update 1`) strategy: every decoded frame is
+/// written to the same output file, so the final write is the last frame.
+/// Bulletproof against seek/undecodable-region issues (a tight `-sseof`
+/// window can land mid-GOP and produce a 0-byte output on a successful exit).
+/// Blocking (caller wraps in `spawn_blocking`). Shared by the `extract_pipe_last_frame`
+/// command and the group coordinator's auto-catch so the ffmpeg call lives in
+/// exactly one place. Returns `Ok(())` only when a non-trivial PNG was written.
+pub fn extract_last_frame(
+    ffmpeg: &FfmpegAvailability,
+    src_video: &str,
+    out_png: &Path,
+) -> Result<(), String> {
+    if ffmpeg.source == "none" {
+        return Err("no ffmpeg available (bundled/user/system)".into());
+    }
+    let mut cmd = Command::new(&ffmpeg.path);
+    cmd.args([
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        src_video,
+        "-update",
+        "1",
+        "-q:v",
+        "2",
+        "-y",
+    ]);
+    cmd.arg(out_png);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let result = cmd
+        .output()
+        .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+        return Err(format!("ffmpeg last-frame extract failed: {stderr}"));
+    }
+    if !out_png.is_file() {
+        return Err("ffmpeg succeeded but the frame file is missing".to_string());
+    }
+    // Guard: a corrupt/empty source can make ffmpeg exit 0 yet write a 0-byte
+    // PNG. Treat a file under 100 bytes as a failure.
+    let len = std::fs::metadata(out_png).map(|m| m.len()).unwrap_or(0);
+    if len < 100 {
+        return Err(format!("extracted frame is empty or corrupt ({len} bytes)"));
+    }
+    Ok(())
+}
+
 fn source_label(path: &Path) -> String {
     let s = path.to_string_lossy();
     // Bare name = resolved via $PATH.

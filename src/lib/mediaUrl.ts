@@ -82,13 +82,17 @@ export async function toMediaUrl(path: string | null | undefined): Promise<strin
 }
 
 /**
- * True when the value is a local filesystem path (not a remote http(s) URL).
- * Generated image artifacts are stored as local media-tree paths; remote
- * user-supplied keyframe URLs pass through `<img src>` directly. The WebView
- * can only load local paths through the `read_media_file` media command.
+ * True when the value is a local filesystem path (not a remote http(s) URL
+ * and not an in-memory data URI). Generated image artifacts are stored as
+ * local media-tree paths; remote user-supplied keyframe URLs pass through
+ * `<img src>` directly. A `data:` URI (a locally-picked img2img base or an
+ * extracted last frame) is ALSO in-memory and renders directly in the
+ * WebView — it must NOT be routed through the media-tree IPC, which only
+ * knows media-root paths. The WebView can only load local media paths
+ * through the `read_media_file` media command.
  */
 export function isLocalPath(value: string): boolean {
-  return !/^https?:\/\//i.test(value.trim());
+  return !/^(https?:|data:)/i.test(value.trim());
 }
 
 /** Fetch a media-tree text file (e.g. the redacted `request.log`) as a string. */

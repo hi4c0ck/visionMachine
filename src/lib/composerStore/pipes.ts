@@ -7,7 +7,7 @@ import {
   validatePipeLength,
   validateQValue,
   validateCValue,
-  generatePipeName,
+  nextFreePipeName,
   reindexPipes,
 } from './validators';
 
@@ -21,7 +21,7 @@ export class PipeServiceImpl implements PipeService {
   async add(_sessionId: string): Promise<ServiceResult> {
     const pipe: PipeRow = {
       id: crypto.randomUUID(),
-      name: generatePipeName(this.session.pipes.length),
+      name: nextFreePipeName(this.session.pipes),
       lengthFrames: validatePipeLength(
         this.session.pipes[0]?.lengthFrames ?? 121,
         this.session.resolution,
@@ -80,7 +80,7 @@ export class PipeServiceImpl implements PipeService {
     const newPipe: PipeRow = {
       ...pipe,
       id: crypto.randomUUID(),
-      name: `${pipe.name} (copy)`,
+      name: nextFreePipeName(this.session.pipes),
       orderIndex: this.session.pipes.length,
       keyframes: (pipe.keyframes ?? []).map((kf: any) => ({
         ...kf,

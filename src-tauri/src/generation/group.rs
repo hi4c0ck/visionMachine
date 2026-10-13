@@ -130,6 +130,16 @@ pub struct StartSessionGenerationInput {
     #[serde(default)]
     pub pipe_params:
         Option<std::collections::HashMap<String, crate::commands::generation::PipeParamOverride>>,
+    /// Per-pipe "force first keyframe" toggles, keyed by pipe id. The
+    /// sequential auto-catch watches EACH pipe's own setup: a pipe WITHOUT a
+    /// settled slot-1 keyframe is always filled from the previous pipe's last
+    /// frame (the "create the first keyframe" default). A pipe that already HAS
+    /// a settled slot-1 is left untouched UNLESS its id appears in this map set
+    /// to `true` — then the caught frame overwrites it. The decision is tied
+    /// to each pipe's settled state, not a single global switch. Empty/absent
+    /// = no pipe is forced (pure non-destructive catch).
+    #[serde(default)]
+    pub force_last_frames: std::collections::HashMap<String, bool>,
 }
 fn yes() -> bool {
     true
@@ -535,6 +545,117 @@ impl GroupCoordinator {
         ok
     }
 
+    /// Sequential auto-catch: fill the NEXT pipe's slot-1 keyframe with the
+    /// previous pipe's last frame (a base64 `data:` URI, provider-ready).
+    /// Runs on every pipe advance in a session run; the caller has already
+    /// guarded for a succeeded previous clip. Degrades safely — any failure
+    /// (no ffmpeg, missing source, reference-mode pipe, …) just skips the
+    /// catch and lets the next pipe start as usual; it NEVER blocks the group.
+    ///
+    /// The overwrite decision is tied to THIS pipe's own setup, not a global
+    /// switch: `force` is the value of `force_last_frames[next_pipe_id]`
+    /// (default false). A pipe WITHOUT a settled slot-1 is filled regardless;
+    /// a pipe WITH a settled slot-1 is overwritten only when `force` is true
+    /// (see `Pipe::upsert_slot1_image` / `Pipe::has_settled_slot1`).
+    async fn catch_prev_last_frame(
+        &self,
+        session_id: &str,
+        next_pipe_id: &str,
+        src_video: &str,
+        force: bool,
+    ) {
+        if !std::path::Path::new(src_video).is_file() {
+            return;
+        }
+        let ffmpeg = crate::generation::resolve_ffmpeg();
+        if ffmpeg.source == "none" {
+            log::info!(
+                "[Generation] auto-catch skipped for pipe {next_pipe_id}: no ffmpeg available"
+            );
+            return;
+        }
+        // The next pipe's media mode must actually consume keyframes; in
+        // reference mode slot-1 keyframes are inert, so skip.
+        let media_mode_ok = {
+            let composer = self.db.get_composer(session_id).await.ok();
+            composer
+                .and_then(|c| c.pipes.iter().find(|p| p.id == next_pipe_id).cloned())
+                .map(|p| p.media_mode == "keyframes")
+                .unwrap_or(false)
+        };
+        if !media_mode_ok {
+            return;
+        }
+        // Extract the last frame to a temp PNG, then base64-encode it into the
+        // data URI that gets persisted into the next pipe's slot-1 keyframe.
+        let out_png = std::env::temp_dir().join(format!(
+            "vm-catch-{}-{}.png",
+            next_pipe_id,
+            std::process::id()
+        ));
+        let ffmpeg_clone = ffmpeg.clone();
+        let src = src_video.to_string();
+        let out = out_png.clone();
+        let ext_res =
+            tokio::task::spawn_blocking(move || crate::generation::extract_last_frame(&ffmpeg_clone, &src, &out))
+                .await;
+        let ext_res = match ext_res {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("[Generation] auto-catch extract join failed for {next_pipe_id}: {e}");
+                let _ = std::fs::remove_file(&out_png);
+                return;
+            }
+        };
+        if let Err(e) = ext_res {
+            log::warn!(
+                "[Generation] auto-catch extract failed for {next_pipe_id}: {e} (skipped)"
+            );
+            let _ = std::fs::remove_file(&out_png);
+            return;
+        }
+        let bytes = match std::fs::read(&out_png) {
+            Ok(b) => b,
+            Err(_) => {
+                let _ = std::fs::remove_file(&out_png);
+                return;
+            }
+        };
+        let _ = std::fs::remove_file(&out_png);
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let data_uri = format!("data:image/png;base64,{b64}");
+
+        // Upsert the slot-1 keyframe (non-destructive unless forced) and persist.
+        let mut composer = match self.db.get_composer(session_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[Generation] auto-catch load composer failed for {session_id}: {e}");
+                return;
+            }
+        };
+        let changed = composer
+            .pipes
+            .iter_mut()
+            .find(|p| p.id == next_pipe_id)
+            .map(|p| p.upsert_slot1_image(&data_uri, force))
+            .unwrap_or(false);
+        if !changed {
+            // slot-1 is settled and this pipe was NOT forced → keep it.
+            log::info!(
+                "[Generation] auto-catch for {next_pipe_id}: slot-1 settled (force={force}), kept"
+            );
+            return;
+        }
+        if let Err(e) = self.db.save_composer(&composer).await {
+            log::warn!("[Generation] auto-catch persist failed for {next_pipe_id}: {e}");
+        } else {
+            log::info!(
+                "[Generation] auto-catch: pipe {next_pipe_id} slot-1 ← last frame of previous pipe (force={force})"
+            );
+        }
+    }
+
     /// Persist the pipe's last-generation AND stage its clip into
     /// `session-video/` for this group run, recording the source row.
     ///
@@ -668,6 +789,9 @@ impl GroupCoordinator {
         // record with a missing staged_path and the manifest missing a clip.
         // Best-effort: a failure here only downgrades the run (compose falls
         // back to the originals that `completed_sources` still references).
+        // The just-finished clip (when the pipe succeeded) is the source for
+        // the sequential auto-catch of the NEXT pipe's slot-1 keyframe.
+        let mut finished_source: Option<SourceVideo> = None;
         if event.status == Some(TaskStatus::Done) {
             let source_for_persist = {
                 let m = resilient_lock(&self.state);
@@ -686,15 +810,16 @@ impl GroupCoordinator {
                 .ok()
                 .map(|c| c.name)
                 .unwrap_or_default();
-            if let Some(source) = source_for_persist {
+            if let Some(source) = &source_for_persist {
                 self.record_completed_pipe(
                     &gid,
                     &event.view.session_id,
-                    &source,
+                    source,
                     &composer_name_for_persist,
                 )
                 .await;
             }
+            finished_source = source_for_persist;
         }
         if policy == "stop" && event.status == Some(TaskStatus::Error) {
             self.finish_group(&gid, GroupStatus::Error, event.view.error.clone());
@@ -710,6 +835,13 @@ impl GroupCoordinator {
                     .unwrap_or_default()
             };
             let session_for_fail_event = next_session.clone();
+            // The finished clip (previous pipe's video). The overwrite decision
+            // is read PER PIPE from the run's force map (see
+            // StartSessionGenerationInput::force_last_frames): a pipe without
+            // a settled slot-1 is always filled; a settled one is overwritten
+            // only when this specific pipe's force flag is set.
+            let catch_source = finished_source.clone();
+            let force_last_frames = run_params.force_last_frames.clone();
             tokio::spawn(async move {
                 // Rebuild the run params from the group's stored input so
                 // the follow-up pipe gets the same models/seed/profile/
@@ -735,7 +867,34 @@ impl GroupCoordinator {
                     // truth for the whole group, not per-pipe.
                     run_stats: run_params.run_stats.clone(),
                     pipe_params: run_params.pipe_params.clone(),
+                    // Carry the per-pipe force map so the catch inside this
+                    // spawn can read THIS pipe's flag (start_pipe does not
+                    // need it — the catch runs before start_pipe and persists
+                    // the keyframe).
+                    force_last_frames,
                 };
+                // This pipe's own force flag: the map is the source of truth
+                // (empty / absent = false). The catch is then driven by the
+                // pipe's settled slot-1 check inside upsert_slot1_image.
+                let force_this_pipe = next_input
+                    .force_last_frames
+                    .get(&next)
+                    .copied()
+                    .unwrap_or(false);
+                // Sequential auto-catch: fill the NEXT pipe's slot-1 keyframe
+                // with the previous pipe's last frame BEFORE the next pipe
+                // starts (start_pipe re-reads the composer, so the persisted
+                // keyframe flows straight into its provider run). Never blocks
+                // the group — any failure just skips the catch.
+                if let Some(src) = &catch_source {
+                    this.catch_prev_last_frame(
+                        &next_input.session_id,
+                        &next,
+                        &src.path,
+                        force_this_pipe,
+                    )
+                    .await;
+                }
                 // When the follow-up start FAILS (e.g. "video stage has no
                 // resolved video spec" — the engine rejects the task before it
                 // registers), no pipe-terminal event will ever fire for it, so
@@ -1266,6 +1425,7 @@ mod tests {
                 auto_compose: true,
                 run_stats: None,
                 pipe_params: None,
+                force_last_frames: std::collections::HashMap::new(),
             },
             media_root: None,
             completed_sources: Vec::new(),

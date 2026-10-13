@@ -848,6 +848,260 @@ pub async fn list_piece_history(
     Ok(entries)
 }
 
+// ── User-sourced image assets (extracted last frames + local img2img bases) ──
+//
+// Both features surface a base64 `data:` URI to the modal, which stores it in
+// the existing image fields (`imageSrc` / `referenceUrl` / `imageUrl`). The
+// provider engine already accepts `data:` URIs (`assert_media_fetchable`),
+// so these are provider-ready with zero engine/shaper changes. The extracted
+// frame is ALSO persisted as a PNG under the owning pipe's `user-images/`
+// dir (append-only, keyed by task id) so a re-extract never overwrites the
+// prior snapshot.
+
+/// Input for the `read_user_image` command (a locally-picked img2img base).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadUserImageInput {
+    pub session_id: String,
+    pub pipe_id: String,
+    /// Stable piece reference id (keyframe id / subject ref id) — scopes the
+    /// persisted copy so a re-pick of the same piece never collides.
+    pub ref_id: String,
+    /// Absolute path returned by the Tauri dialog plugin.
+    pub file_path: String,
+}
+
+/// Read a user-picked image file and expose it as a base64 `data:` URI
+/// (the value stored in the img2img reference field). The file is ALSO copied
+/// into the pipe's `user-images/` scratch dir so the media tree keeps a
+/// durable copy independent of the source location. The source is read directly
+/// (no media-root guard — this is a user-selected local file, not an artifact).
+#[tauri::command]
+pub async fn read_user_image(
+    input: ReadUserImageInput,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    const MAX_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB source cap (base64 ≈ 13.3 MiB in the composer JSON)
+
+    let src = std::path::PathBuf::from(input.file_path.trim());
+    if src.as_os_str().is_empty() {
+        return Err("no file selected".to_string());
+    }
+    let meta = std::fs::metadata(&src)
+        .map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    if !meta.is_file() {
+        return Err(format!("not a file: {}", src.display()));
+    }
+    if meta.len() > MAX_BYTES {
+        return Err("image too large (max 25 MiB)".to_string());
+    }
+
+    let mime = mime_from_ext(src.extension().and_then(|e| e.to_str()));
+    let bytes = std::fs::read(&src)
+        .map_err(|e| format!("read {}: {e}", src.display()))?;
+    let data_uri = to_data_uri(&bytes, &mime);
+
+    // Persist a copy under the pipe's user-images dir (best-effort: the data
+    // URI already carries the full image, so a persistence hiccup is not fatal).
+    let user_dir = {
+        let db = &state.db.lock().await;
+        let media_root = match resolve_media_root(db, &input.session_id).await {
+            Some(r) if !r.trim().is_empty() => r,
+            _ => return Ok(serde_json::json!({ "dataUri": data_uri })),
+        };
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        let pipe_name = composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .map(|p| p.name.clone())
+            .unwrap_or(input.pipe_id.clone());
+        let session_root = std::path::Path::new(&media_root)
+            .join(safe_session_name(&composer.name));
+        match crate::generation::user_image_dir(&session_root, &pipe_name) {
+            Ok(d) => d,
+            Err(_) => return Ok(serde_json::json!({ "dataUri": data_uri })),
+        }
+    };
+    let local_path: Option<std::path::PathBuf> =
+        persist_user_image(&user_dir, &input.ref_id, src.extension())
+            .ok()
+            .and_then(|p| std::fs::copy(&src, &p).ok().map(|_| p));
+
+    Ok(serde_json::json!({
+        "dataUri": data_uri,
+        "mimeType": mime,
+        "localPath": local_path,
+    }))
+}
+
+/// Best-effort copy of the picked source into `user-images/`.
+fn persist_user_image(
+    dir: &std::path::Path,
+    ref_id: &str,
+    ext: Option<&std::ffi::OsStr>,
+) -> Result<std::path::PathBuf, String> {
+    let ext = ext
+        .and_then(|e| e.to_str())
+        .filter(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
+        .unwrap_or("png");
+    let name = format!("local-{}-{ms}.{ext}", crate::generation::safe_dir_name(ref_id), ms = now_unix_ms());
+    Ok(dir.join(name))
+}
+
+fn mime_from_ext(ext: Option<&str>) -> String {
+    let lower = ext.map(|e| e.to_ascii_lowercase());
+    match lower.as_deref() {
+        Some("jpg") | Some("jpeg") => "image/jpeg".to_string(),
+        Some("webp") => "image/webp".to_string(),
+        _ => "image/png".to_string(),
+    }
+}
+
+/// base64-encode bytes into a `data:` URI (the value the provider accepts).
+fn to_data_uri(bytes: &[u8], mime: &str) -> String {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    format!("data:{mime};base64,{b64}")
+}
+
+/// Input for the `extract_pipe_last_frame` command.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractPipeLastFrameInput {
+    pub session_id: String,
+    /// The pipe whose immediately-preceding pipe's last-gen video is the source.
+    pub pipe_id: String,
+}
+
+/// Grab the last decodable frame of the PREVIOUS pipe's last-gen video and
+/// expose it as a base64 `data:` URI (stored into the current pipe's slot-1
+/// keyframe). Requires a completed generation on the previous pipe and an
+/// available ffmpeg binary (the tiny variant errors out cleanly).
+#[tauri::command]
+pub async fn extract_pipe_last_frame(
+    input: ExtractPipeLastFrameInput,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let (prev, out_path) = {
+        let db = &state.db.lock().await;
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+
+        // Find the current pipe and its predecessor in timeline order.
+        let current = composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .ok_or_else(|| "pipe not found".to_string())?;
+        // Predecessor in timeline order (order_index - 1); fall back to the
+        // stored array position when order_index is stale or absent.
+        let prev = composer
+            .pipes
+            .iter()
+            .find(|p| p.id != current.id && p.order_index == current.order_index.saturating_sub(1))
+            .or_else(|| {
+                let idx = composer.pipes.iter().position(|p| p.id == current.id)?;
+                composer.pipes.get(idx.saturating_sub(1))
+            })
+            .ok_or_else(|| "no previous pipe to extract a last frame from".to_string())?
+            .clone();
+
+        let video = prev
+            .last_generation
+            .as_ref()
+            .filter(|lg| lg.status == "done")
+            .ok_or_else(|| "previous pipe has no completed generation".to_string())?
+            .video_path
+            .clone();
+        if video.trim().is_empty() {
+            return Err("previous pipe has no last-gen video".to_string());
+        }
+        let src_video = std::path::Path::new(&video);
+        if !src_video.is_file() {
+            return Err(format!(
+                "previous pipe's video not found: {}",
+                video
+            ));
+        }
+
+        let media_root = match resolve_media_root(db, &input.session_id).await {
+            Some(r) if !r.trim().is_empty() => r,
+            _ => return Err("no media root resolved for this session".to_string()),
+        };
+        let session_root =
+            std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
+        let user_dir = crate::generation::user_image_dir(
+            &session_root,
+            &prev.name,
+        )
+        .map_err(|e| format!("user-images dir: {e}"))?;
+
+        let task_id = prev
+            .last_generation
+            .as_ref()
+            .map(|lg| lg.task_id.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "frame".to_string());
+        let out_path = user_dir.join(format!("last-frame-{task_id}.png"));
+
+        (prev, out_path)
+    };
+
+    // Resolve ffmpeg OUTSIDE the DB lock (probing is slow); the tiny variant
+    // errors out cleanly here instead of holding the lock during a probe.
+    let ffmpeg = crate::generation::resolve_ffmpeg();
+    if ffmpeg.source == "none" {
+        return Err(
+            "ffmpeg not available - extract last frame needs a bundled (Full) build, a user path, or a system ffmpeg"
+                .to_string(),
+        );
+    }
+    // The source video path (captured before the move into the worker).
+    let src_video = prev
+        .last_generation
+        .as_ref()
+        .map(|lg| lg.video_path.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_default();
+    if src_video.is_empty() {
+        return Err("previous pipe has no last-gen video".to_string());
+    }
+
+    // Run ffmpeg to extract the last frame (shared helper; blocking worker).
+    // Clone the availability (cheap: three Strings) so the owned value moves
+    // into the `spawn_blocking` future (which requires 'static).
+    let ffmpeg_owned = ffmpeg.clone();
+    let out = out_path.clone();
+    let src = src_video.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::generation::extract_last_frame(&ffmpeg_owned, &src, &out)
+    })
+    .await
+    .map_err(|e| format!("ffmpeg worker: {e}"))?
+    .map_err(|e| {
+        let _ = std::fs::remove_file(&out_path);
+        e
+    })?;
+
+    // Read back the PNG and base64-encode it into the data URI the modal stores.
+    let bytes = std::fs::read(&out_path)
+        .map_err(|e| format!("read extracted frame: {e}"))?;
+    let data_uri = to_data_uri(&bytes, "image/png");
+
+    Ok(serde_json::json!({
+        "dataUri": data_uri,
+        "mimeType": "image/png",
+        "localPath": out_path.to_string_lossy().into_owned(),
+        "sourcePipeName": prev.name.clone(),
+    }))
+}
+
 // ── Session video composition (A5: pipes' last-gen videos → one file) ──────
 
 #[derive(Deserialize)]
@@ -1449,5 +1703,61 @@ mod tests {
         assert_eq!(vspec.id, "agnes-video-2.5-flash");
         assert!(vspec.supports_seed());
         assert_eq!(vspec.limits.seconds, Some([4.0, 12.0]));
+    }
+
+    #[test]
+    fn mime_from_ext_maps_known_and_defaults_png() {
+        assert_eq!(mime_from_ext(Some("jpg")), "image/jpeg");
+        assert_eq!(mime_from_ext(Some("jpeg")), "image/jpeg");
+        assert_eq!(mime_from_ext(Some("webp")), "image/webp");
+        assert_eq!(mime_from_ext(Some("png")), "image/png");
+        // Case-insensitive.
+        assert_eq!(mime_from_ext(Some("JPG")), "image/jpeg");
+        // Unknown / absent -> png default.
+        assert_eq!(mime_from_ext(Some("bmp")), "image/png");
+        assert_eq!(mime_from_ext(None), "image/png");
+    }
+
+    #[test]
+    fn to_data_uri_encodes_standard_base64_with_mime() {
+        // b"i" -> "aQ==" in standard base64.
+        let uri = to_data_uri(b"i", "image/png");
+        assert_eq!(uri, "data:image/png;base64,aQ==");
+        // Empty bytes still produce a well-formed (empty-payload) URI.
+        let empty = to_data_uri(b"", "image/jpeg");
+        assert_eq!(empty, "data:image/jpeg;base64,");
+    }
+
+    #[test]
+    fn persist_user_image_builds_scoped_filename() {
+        let dir = std::env::temp_dir().join(format!("vm_userimg_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+
+        let p = persist_user_image(&dir, "kf-123", Some(std::ffi::OsStr::new("png"))).unwrap();
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("local-kf-123-"), "name={name}");
+        assert!(name.ends_with(".png"), "name={name}");
+        // Scoped under the dir, never escapes it.
+        assert!(p.starts_with(&dir));
+
+        // Traversal in the ref id is neutralized by safe_dir_name.
+        let evil = persist_user_image(&dir, "../evil", Some(std::ffi::OsStr::new("png"))).unwrap();
+        assert!(evil.starts_with(&dir), "escape prevented: {}", evil.display());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_user_image_input_round_trips() {
+        let v: ReadUserImageInput = serde_json::from_value(serde_json::json!({
+            "sessionId": "s",
+            "pipeId": "p",
+            "refId": "r",
+            "filePath": "C:\\x\\y.png"
+        }))
+        .unwrap();
+        assert_eq!(v.session_id, "s");
+        assert_eq!(v.file_path, "C:\\x\\y.png");
     }
 }

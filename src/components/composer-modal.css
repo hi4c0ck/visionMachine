@@ -92,6 +92,48 @@
 	margin-right: 8px;
 }
 
+/* A text input with an action button beside it (URL + "use last frame",
+   img2img reference + "browse local"). The input flexes; the button stays a
+   fixed square on the right. */
+.modal-url-row {
+	display: flex;
+	gap: 6px;
+	align-items: stretch;
+}
+
+.modal-url-row input {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* Small square action button matching the modal input height. */
+.modal-url-row .btn-icon {
+	flex: 0 0 auto;
+	width: 42px;
+	padding: 0;
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	color: var(--text-secondary);
+	font-size: 15px;
+	line-height: 1;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.modal-url-row .btn-icon:hover:not(:disabled) {
+	border-color: var(--accent-color);
+	color: var(--text-primary);
+}
+
+.modal-url-row .btn-icon:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+
 .modal-footer {
 	padding: 16px 20px;
 	border-top: 1px solid var(--border-color);

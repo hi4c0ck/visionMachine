@@ -224,5 +224,24 @@ Check browser console for errors. Common causes:
 
 ## License
 
-GPL-3.0-or-later, with an attribution addendum. © 2026 @Horizones Machines.
-Full text: [LICENSE](LICENSE) · quick guide: [NOTICE.md](NOTICE.md)
+**VisionMachine** is licensed under **GPL-3.0-or-later**, with an attribution
+addendum. © 2026 @Horizones Machines.
+
+Full license text: [LICENSE](LICENSE) · quick guide: [NOTICE.md](NOTICE.md)
+
+### Third-party dependencies & bundled components
+
+Most of the runtime stack is compiled into the app and covered by its own
+permissive license (MIT / Apache-2.0 / BSD). The full-variant installer also
+bundles one standalone third-party program:
+
+| Component | Source | License | Ships in |
+|-----------|--------|---------|----------|
+| FFmpeg + ffprobe (sidecar) | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), tag `autobuild-2026-10-11-13-04` | GPL-2.0-or-later (FFmpeg core, dual LGPL-2.1-or-later; GPL-enabled build incl. x264/x265) | full variant only (tiny variant ships no binary) |
+
+The bundled FFmpeg sidecar is distributed as a separate, unmodified
+executable and carries its own GPL source-offer duty. See the **FFmpeg
+Source Offer (GPL §6 compliance)** section in [NOTICE.md](NOTICE.md) for the
+full source-offer statement, and
+[src-tauri/binaries/NOTICE.txt](src-tauri/binaries/NOTICE.txt) for provenance
+and SHA-256 verification.

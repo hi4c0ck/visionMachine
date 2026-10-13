@@ -110,8 +110,18 @@ export function validateCValue(cValue: number): number {
   return Math.max(0.5, Math.min(15, cValue));
 }
 
-export function generatePipeName(existingCount: number): string {
-  return `Pipe ${existingCount + 1}`;
+/**
+ * Return the next free Pipe-N ordinal that does not collide with any
+ * existing pipe name. Walks forward past any ordinals already taken by
+ * user-renamed pipes. Used when a new pipe (add or duplicate) is appended
+ * to a session pipe list, so the copy of Pipe 1 becomes Pipe 2, and a
+ * copy of Pipe 2 becomes Pipe 3, etc. - instead of cascading copy suffixes.
+ */
+export function nextFreePipeName(pipes: ReadonlyArray<{ name?: string }>): string {
+  const taken = new Set(pipes.map((p) => p.name));
+  let n = pipes.length + 1;
+  while (taken.has(`Pipe ${n}`)) n += 1;
+  return `Pipe ${n}`;
 }
 
 export function reindexPipes(pipes: any[]): void {

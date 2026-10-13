@@ -68,10 +68,14 @@
 	// `generatedUrl` is the WebView blob URL; `generatedPath` is the on-disk
 	// media path so the "open in viewer" icon can hand it to the OS opener
 	// (a blob URL is useless to an OS viewer — same split the top panel uses).
+	// `generatedRemote` is the provider's shareable remote URL for the current
+	// generation (preferred target for the "copy URL" action over the preview).
 	let generatedUrl = $state<string | null>(null);
 	let generatedPath = $state<string | null>(null);
+	let generatedRemote = $state<string | null>(null);
 	let sourceUrl = $state<string | null>(null);
 	let sourcePath = $state<string | null>(null);
+	let sourceRemote = $state<string | null>(null);
 	let history = $state<PieceHistoryEntry[]>([]);
 	let historyThumbs = $state<(string | null)[]>([]);
 
@@ -117,18 +121,51 @@
 		}
 	}
 
+	/** Copy a URL to the clipboard. Prefers the shareable remote URL when one
+	 *  is available, else falls back to the displayed (blob/asset) URL. */
+	async function copyUrl(remote: string | null, display: string | null) {
+		const target = remote ?? display;
+		if (!target) return;
+		try {
+			if (navigator.clipboard?.writeText) {
+				await navigator.clipboard.writeText(target);
+			} else {
+				// Non-secure context fallback (some WebView origins).
+				const ta = document.createElement('textarea');
+				ta.value = target;
+				ta.style.position = 'fixed';
+				ta.style.opacity = '0';
+				document.body.appendChild(ta);
+				ta.select();
+				document.execCommand('copy');
+				document.body.removeChild(ta);
+			}
+			flashToast('URL copied', 'success');
+		} catch {
+			flashToast('Copy failed', 'error');
+		}
+	}
+
 	/** Resolve a displayable URL for the img2img source (reference) image.
 	 *  Also records the on-disk path when the source is a local media path so
-	 *  the "open in viewer" icon has a real file to hand to the OS opener. */
+	 *  the "open in viewer" icon has a real file to hand to the OS opener, and
+	 *  the remote URL so the "copy URL" button copies something shareable. */
 	async function refreshSource() {
 		if (!referenceUrl) {
 			sourceUrl = null;
 			sourcePath = null;
+			sourceRemote = null;
 			return;
 		}
 		const remote = isRemote(referenceUrl);
-		sourceUrl = remote ? referenceUrl : await toMediaUrl(referenceUrl);
-		sourcePath = remote ? null : referenceUrl;
+		const dataUri = /^data:image\//i.test(referenceUrl.trim());
+		// A data: URI (a locally-picked base / extracted last frame) renders
+		// directly in the WebView; only a real media-tree path goes through
+		// the read_media_file IPC (the media root allowlist rejects anything
+		// else, and a data URI is not a path at all).
+		sourceUrl = remote || dataUri ? referenceUrl : await toMediaUrl(referenceUrl);
+		sourcePath = remote || dataUri ? null : referenceUrl;
+		sourceRemote = remote ? referenceUrl : null;
 	}
 
 	function thumbUrl(entry: PieceHistoryEntry): Promise<string | null> {
@@ -144,6 +181,7 @@
 		const newest = entries[0];
 		if (newest?.localPath) {
 			generatedPath = newest.localPath;
+			generatedRemote = newest.remoteUrl ?? null;
 			generatedUrl = await toMediaUrl(newest.localPath);
 		}
 	}
@@ -158,6 +196,7 @@
 		// `historyThumbs[idx]` is the already-resolved `toMediaUrl` cache entry
 		// for this generation; fall back to re-resolving for a missing local.
 		generatedPath = entry.localPath ?? null;
+		generatedRemote = entry.remoteUrl ?? null;
 		void (entry.localPath ? toMediaUrl(entry.localPath) : Promise.resolve(null)).then(
 			(u) => (generatedUrl = u ?? historyThumbs[idx] ?? null),
 		);
@@ -181,6 +220,7 @@
 			// newest history entry (its row is also on disk via the manifest).
 			const freshUrl = await toMediaUrl(res.localPath);
 			generatedPath = res.localPath;
+			generatedRemote = res.remoteUrl ?? null;
 			generatedUrl = freshUrl;
 			historyThumbs = [freshUrl ?? '', ...historyThumbs];
 			history = [
@@ -233,6 +273,9 @@
 				{#if sourceUrl}
 					<div class="pg-imgwrap">
 						<img src={sourceUrl} alt="Source image" />
+						{#if sourceRemote || sourceUrl}
+							<button class="pg-copy" onclick={() => copyUrl(sourceRemote, sourceUrl)} title="Copy URL" aria-label="Copy source image URL">⧉</button>
+						{/if}
 						<button class="pg-open" onclick={() => openInViewer(sourcePath, sourceUrl)} title="Open in viewer" aria-label="Open source image in viewer">⛶</button>
 					</div>
 				{:else}
@@ -244,6 +287,9 @@
 				{#if generatedUrl}
 					<div class="pg-imgwrap">
 						<img src={generatedUrl} alt="Generated image" />
+						{#if generatedRemote || generatedUrl}
+							<button class="pg-copy" onclick={() => copyUrl(generatedRemote, generatedUrl)} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
+						{/if}
 						<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
 					</div>
 				{:else}
@@ -257,6 +303,9 @@
 			{#if generatedUrl}
 				<div class="pg-imgwrap">
 					<img src={generatedUrl} alt="Generated image" />
+					{#if generatedRemote || generatedUrl}
+						<button class="pg-copy" onclick={() => copyUrl(generatedRemote, generatedUrl)} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
+					{/if}
 					<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
 				</div>
 			{:else}
@@ -389,7 +438,7 @@
 		display: block;
 	}
 
-	/* Positioning context for the open-in-viewer icon overlay. */
+	/* Positioning context for the open-in-viewer + copy-URL icon overlays. */
 	.pg-imgwrap {
 		position: relative;
 	}
@@ -399,13 +448,13 @@
 		width: 100%;
 	}
 
-	/* Small corner icon that opens the image in the OS default viewer.
-	   Reveal-on-hover keeps the thumbnail uncluttered; it's still reachable
-	   when shown. */
-	.pg-open {
+	/* Small corner icons over a preview. Reveal-on-hover keeps the thumbnail
+	   uncluttered; they stay reachable when shown. Open = top-right, copy =
+	   top-left so the two never overlap. */
+	.pg-open,
+	.pg-copy {
 		position: absolute;
 		top: 4px;
-		right: 4px;
 		width: 22px;
 		height: 22px;
 		padding: 0;
@@ -423,12 +472,18 @@
 		transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 	}
 
+	.pg-open { right: 4px; }
+	.pg-copy { left: 4px; }
+
 	.pg-imgwrap:hover .pg-open,
-	.pg-open:focus-visible {
+	.pg-imgwrap:hover .pg-copy,
+	.pg-open:focus-visible,
+	.pg-copy:focus-visible {
 		opacity: 1;
 	}
 
-	.pg-open:hover {
+	.pg-open:hover,
+	.pg-copy:hover {
 		color: var(--text-primary, #fff);
 		border-color: var(--accent-color, #ff3e00);
 	}

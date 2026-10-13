@@ -45,6 +45,7 @@
 			stats: SessionGenerateStats,
 			runStats: RunStats | null,
 			pipeParams: Record<string, PipeParamOverride> | null,
+			forceLastFrames: Record<string, boolean> | null,
 		) => Promise<void> | void;
 		onFpsChange?: (fps: number) => void;
 		onResolutionChange?: (res: string) => void;
@@ -55,6 +56,14 @@
 
 	let policy = $state<'stop' | 'continue'>('stop');
 	let autoCompose = $state(true);
+	/** Per-pipe "force first keyframe" toggles, keyed by pipe id. Shown ONLY
+	 *  on pipes that sit after the group's first pipe (they can catch the
+	 *  previous pipe's last frame), run in keyframe mode, AND already own a
+	 *  settled slot-1 keyframe. Ticked → this pipe's settled slot-1 is
+	 *  overwritten by the previous pipe's last frame during the run. Pipes
+	 *  WITHOUT a settled slot-1 are always auto-filled (no toggle needed).
+	 *  The decision is per pipe, never a single global switch. */
+	let forceLastFramesLocal = $state<Record<string, boolean>>({});
 	let busy = $state(false);
 	/** When ticked, confirm additionally persists the edits to the session
 	 *  (store setters). Default OFF: edits are run-scoped only. */
@@ -106,6 +115,42 @@
 		return out;
 	});
 	const hasPipeParamEdits = $derived(Object.keys(pipeParams).length > 0);
+
+	// ── Per-pipe "force first keyframe" — computed from each pipe's OWN setup
+	//    (not a global switch). A force toggle is offered only on a pipe that:
+	//    (a) is not the group's first pipe (nothing to catch before it),
+	//    (b) runs in keyframe mode (slot-1 is consumed), and
+	//    (c) already owns a SETTLED slot-1 keyframe (usable image). Pipes
+	//    that are NOT settled are always auto-filled by the catch — no toggle.
+	//    The toggle state defaults to OFF; it's a deliberate override. ──
+	function settledSlot1(p: PipeRow): boolean {
+		const kf = p.keyframes?.find((k) => k.slotIndex === 1);
+		if (!kf) return false;
+		if ((kf.imageSrc ?? '').trim()) return true;
+		return !!(kf.previewRemoteUrl?.trim() || kf.previewLocalPath?.trim());
+	}
+	/** Pipes eligible for a per-pipe force toggle: not first, keyframe mode,
+	 *  settled slot-1. (The catch fills non-settled pipes automatically.) */
+	const forceEligible = $derived(
+		new Set(
+			pipes
+				.slice(1)
+				.filter((p: PipeRow) => p.mediaMode !== 'reference' && settledSlot1(p))
+				.map((p: PipeRow) => p.id),
+		),
+	);
+	/** The diff the wire carries: only eligible pipes that are ticked. */
+	const forceLastFrames: Record<string, boolean> = $derived.by(() => {
+		const out: Record<string, boolean> = {};
+		for (const [id, on] of Object.entries(forceLastFramesLocal)) {
+			if (on && forceEligible.has(id)) out[id] = true;
+		}
+		return out;
+	});
+	$effect(() => {
+		if (!open) return;
+		forceLastFramesLocal = {};
+	});
 
 	// ── Per-run model override (same pattern as GenerateModal) ──
 	let imageModel = $state('');
@@ -233,7 +278,8 @@
 			}
 			await onConfirm({ imageModel, videoModel }, seed, policy, autoCompose, stats,
 				Object.keys(runStats).length > 0 ? runStats : null,
-				hasPipeParamEdits ? pipeParams : null);
+				hasPipeParamEdits ? pipeParams : null,
+				Object.keys(forceLastFrames).length > 0 ? forceLastFrames : null);
 		} catch (e) {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
 		} finally {
@@ -269,6 +315,13 @@
 											class:changed={local && local.c !== row.pipe.cValue}
 											onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
 									</span>
+									{#if forceEligible.has(row.pipe.id)}
+										<label class="gen-check sg-force" title={APP_CONSTANTS.strings.sessionPipeForceLastFrameHint}>
+											<input type="checkbox" checked={!!forceLastFramesLocal[row.pipe.id]}
+												onchange={(e) => (forceLastFramesLocal = { ...forceLastFramesLocal, [row.pipe.id]: (e.target as HTMLInputElement).checked })} />
+											<span class="sg-force-label">{APP_CONSTANTS.strings.sessionPipeForceLastFrame}</span>
+										</label>
+									{/if}
 									{#if row.conflicts.length}
 										<span class={statusClass('error')}>{row.conflicts[0].message}</span>
 								{:else}
@@ -364,6 +417,9 @@
 									<input type="checkbox" bind:checked={autoCompose} />
 									{APP_CONSTANTS.strings.sessionAutoCompose}
 								</label>
+							</div>
+							<div class="gen-fieldrow">
+								<span class="gen-hint sg-catch-note">{APP_CONSTANTS.strings.sessionCatchLastFrameNote}</span>
 							</div>
 						</div>
 
@@ -519,6 +575,36 @@
 
 	.gen-pipe-params input.changed {
 		border-color: var(--warning-color, #fbbf24);
+	}
+
+	/* Per-pipe "force first keyframe" toggle (shown only on eligible settled
+	   non-first pipes). A compact inline checkbox inside the pipe row. */
+	.sg-pipes .sg-force {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 11px;
+		color: var(--text-muted, #71717a);
+		cursor: pointer;
+		padding: 0;
+	}
+
+	.sg-pipes .sg-force input {
+		width: auto;
+		margin: 0;
+	}
+
+	.sg-pipes .sg-force .sg-force-label {
+		white-space: nowrap;
+	}
+
+	/* Explains the automatic per-pipe catch that runs in the background. */
+	.sg-catch-note {
+		display: block;
+		padding: 8px 10px;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 6px;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 	}
 
 	.gen-check {

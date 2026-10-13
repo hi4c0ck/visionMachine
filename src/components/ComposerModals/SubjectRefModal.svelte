@@ -6,6 +6,8 @@
 	} from '$lib/composerStore';
 import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
+	import { isTauri } from '@tauri-apps/api/core';
+	import { pickImageFile, readUserImage } from '$lib/localImage';
 
 	let {
 		pipe,
@@ -83,6 +85,30 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			: srImageUrl.trim().length > 0 && srPrompt.trim().length > 0,
 	);
 
+	// ── Local file as img2img reference base ──────────────────────────────────
+	// Pick a local image → base64 data URI → stored in `srImageUrl` (the
+	// img2img reference). Also persists a durable copy under the pipe's
+	// user-images dir. The provider accepts data URIs (assert_media_fetchable).
+	let localBusy = $state(false);
+	async function browseLocal() {
+		if (!sessionId || localBusy) return;
+		const path = await pickImageFile();
+		if (!path) return;
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, srRefId || 'local', path);
+			srImageUrl = res.dataUri;
+			srGenLocal = res.localPath || '';
+			srGenRemote = '';
+			flashToast('Local image loaded as reference', 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load local image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
+
 	async function confirm() {
 		if (!sessionId) return;
 		if (!srValid) return;
@@ -151,8 +177,20 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 					</div>
 				{:else}
 					<div class="modal-field">
-						<label id="sr-ref-label">Reference Image URL</label>
-						<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-ref-label" />
+						<label id="sr-ref-label">Reference Image</label>
+						<div class="modal-url-row">
+							<input type="text" bind:value={srImageUrl} placeholder="https://... or pick a file" class="modal-input" aria-labelledby="sr-ref-label" />
+							{#if isTauri()}
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={browseLocal}
+									title="Pick a local image as the img2img base"
+									aria-label="Browse local reference image"
+								>{localBusy ? '…' : '📁'}</button>
+							{/if}
+						</div>
 					</div>
 					<div class="modal-field">
 						<label id="sr-img2img-prompt-label">Prompt</label>

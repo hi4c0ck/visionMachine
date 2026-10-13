@@ -20,13 +20,13 @@ pub use compose::{
     ComposeStartError, SourceVideo,
 };
 pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration};
-pub use ffmpeg::{resolve_ffmpeg, FfmpegAvailability};
+pub use ffmpeg::{extract_last_frame, resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
     append_jsonl, append_request_log, archive_previous_session_video,
     clear_session_compose_artifacts, clear_staged_session_clips, is_staged_session_clip,
     piece_history_dirs,
     pipe_media_dirs, redact, redact_authorization, safe_dir_name, session_generation_dirs,
-    session_media_root, write_json, STAGED_CLIP_PREFIX,
+    session_media_root, user_image_dir, write_json, STAGED_CLIP_PREFIX,
 };
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};

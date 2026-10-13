@@ -4,12 +4,15 @@
 	import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
+	import { isTauri } from '@tauri-apps/api/core';
+	import { pickImageFile, readUserImage, extractPipeLastFrame } from '$lib/localImage';
 
 	let {
 		pipe,
 		sessionId,
 		maxFrames,
 		editingSlot,
+		prevPipe = null,
 		open = $bindable(false),
 		onSaved,
 	} = $props<{
@@ -17,6 +20,10 @@
 		sessionId: string | undefined;
 		maxFrames: number;
 		editingSlot: number | null;
+		/** The pipe just before this one in timeline order — the source of
+		 *  the slot-1 "use last frame" action (its last-gen video's final
+		 *  frame). Null when this is the first pipe. */
+		prevPipe?: PipeRow | null;
 		open: boolean;
 		/** Fires after a successful save so the caller can re-validate the
 		 * reference's URL accessibility (D5 red-out clears on success). */
@@ -82,6 +89,60 @@
 	// (imageSrc vs prompt) and validated.
 	const kfActiveValue = $derived(kfType === 'url' ? kfUrl : kfPrompt);
 
+	// ── User-sourced image assets ────────────────────────────────────────────
+	// "Use last frame" (slot 1 only): grab the previous pipe's last-gen video's
+	// final frame into this keyframe. "Browse local": pick an image file as
+	// the img2img reference base. Both yield a base64 data URI (provider-ready)
+	// and also persist a durable copy under the pipe's user-images dir.
+	let lastFrameBusy = $state(false);
+	let localBusy = $state(false);
+	const canUseLastFrame = $derived(
+		isTauri() &&
+			kfType === 'url' &&
+			editingSlot === 1 &&
+			!!prevPipe &&
+			prevPipe.lastGeneration?.status === 'done' &&
+			(prevPipe.lastGeneration?.videoPath ?? '').trim().length > 0,
+	);
+
+	async function useLastFrame() {
+		if (!sessionId || !prevPipe || lastFrameBusy) return;
+		lastFrameBusy = true;
+		try {
+			const res = await extractPipeLastFrame(sessionId, pipe.id);
+			kfUrl = res.dataUri;
+			// A locally-sourced keyframe's own preview = the source itself.
+			kfGenLocal = res.localPath || '';
+			kfGenRemote = '';
+			flashToast(`Last frame of ${res.sourcePipeName} → keyframe ${editingSlot}`, 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not extract last frame' : msg, 'error');
+		} finally {
+			lastFrameBusy = false;
+		}
+	}
+
+	async function browseLocal() {
+		if (!sessionId || localBusy) return;
+		const path = await pickImageFile();
+		if (!path) return; // cancelled / non-Tauri
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, kfRefId || 'local', path);
+			kfReferenceUrl = res.dataUri;
+			// Keep a live preview of the picked base in the generated panel.
+			kfGenLocal = res.localPath || '';
+			kfGenRemote = '';
+			flashToast('Local image loaded as img2img reference', 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load local image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
+
 	async function confirm() {
 		if (!sessionId || editingSlot === null) return;
 		if (!kfValid) return;
@@ -132,7 +193,19 @@
 				{#if kfType === 'url'}
 					<div class="modal-field">
 						<label id="kf-url-label">Image URL</label>
-						<input type="text" bind:value={kfUrl} placeholder="https://..." class="modal-input" aria-labelledby="kf-url-label" />
+						<div class="modal-url-row">
+							<input type="text" bind:value={kfUrl} placeholder="https://... or a data URI" class="modal-input" aria-labelledby="kf-url-label" />
+							{#if canUseLastFrame}
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={lastFrameBusy}
+									onclick={useLastFrame}
+									title={`Use last frame of ${prevPipe?.name ?? 'previous pipe'} (its last-gen video)`}
+									aria-label="Use previous pipe last frame"
+								>{lastFrameBusy ? '…' : '⏮'}</button>
+							{/if}
+						</div>
 					</div>
 				{:else if kfType === 'txt2img'}
 					<div class="modal-field">
@@ -141,8 +214,20 @@
 					</div>
 				{:else if kfType === 'img2img'}
 					<div class="modal-field">
-						<label id="kf-ref-label">Reference Image URL</label>
-						<input type="text" bind:value={kfReferenceUrl} placeholder="https://..." class="modal-input" aria-labelledby="kf-ref-label" />
+						<label id="kf-ref-label">Reference Image</label>
+						<div class="modal-url-row">
+							<input type="text" bind:value={kfReferenceUrl} placeholder="https://... or pick a file" class="modal-input" aria-labelledby="kf-ref-label" />
+							{#if isTauri()}
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={browseLocal}
+									title="Pick a local image as the img2img base"
+									aria-label="Browse local reference image"
+								>{localBusy ? '…' : '📁'}</button>
+							{/if}
+						</div>
 					</div>
 					<div class="modal-field">
 						<label id="kf-img2img-prompt-label">Prompt</label>
@@ -162,6 +247,7 @@
 						onGenerated={(l, r) => { kfGenLocal = l; kfGenRemote = r ?? ''; }}
 					/>
 				{/if}
+
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
@@ -170,3 +256,4 @@
 		</div>
 	</div>
 {/if}
+

@@ -1644,7 +1644,7 @@
 		showSessionGenerateModal = true;
 	}
 
-	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null) {
+	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null, forceLastFrames: Record<string, boolean> | null) {
 		if (!selectedSession) return;
 		if (groupActive) { flashToast('Session generation is already in progress', 'info'); return; }
 		// Read-only (paid) model gate: the session flow's "continue" policy
@@ -1664,7 +1664,7 @@
 			const pair = resolveSpecs(models.imageModel, models.videoModel);
 			const prompts: Record<string, string> = {};
 			for (const p of selectedSession.pipes) prompts[p.id] = summarizePipe(p, { fps: selectedSession?.fps ?? undefined });
-			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null, runStats: runStats ?? null, pipeParams: pipeParams ?? null });
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null, runStats: runStats ?? null, pipeParams: pipeParams ?? null, forceLastFrames });
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
 			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);

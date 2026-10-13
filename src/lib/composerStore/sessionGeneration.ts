@@ -36,6 +36,14 @@ export interface SessionGenerationInput {
   runStats?: RunStats | null;
   /** Run-scoped per-pipe Q/C diff map (only changed pipes/values). */
   pipeParams?: Record<string, PipeParamOverride> | null;
+  /** Per-pipe "force first keyframe" toggles, keyed by pipe id. The
+   *  sequential auto-catch watches EACH pipe's own setup: a pipe WITHOUT a
+   *  settled slot-1 keyframe is always filled from the previous pipe's last
+   *  frame (the "create the first keyframe" default); a pipe that already HAS
+   *  a settled slot-1 is overwritten only when its id is set true here. The
+   *  decision is per pipe, never a single global switch. Absent/empty = no
+   *  pipe is forced (pure non-destructive catch). */
+  forceLastFrames?: Record<string, boolean> | null;
 }
 export interface SessionGenerationStart { groupId: string; firstTaskId: string; firstView: GenerationTaskView; }
 /** One current-run source record: which pipe's clip fed this run's
@@ -66,7 +74,10 @@ export function buildSessionGenerationPayload(input: SessionGenerationInput) {
     imageSpec: input.imageSpec ?? null, videoSpec: input.videoSpec ?? null,
     // Run-scoped overrides (Option fields on the Rust input — absent/null =
     // "build from the composer/pipe rows", the per-pipe default).
-    runStats: input.runStats ?? null, pipeParams: input.pipeParams ?? null };
+    runStats: input.runStats ?? null, pipeParams: input.pipeParams ?? null,
+    // Per-pipe "force first keyframe" toggles (empty map = pure non-destructive
+    // catch; the backend then keys each pipe off its own settled slot-1).
+    forceLastFrames: input.forceLastFrames ?? {} };
 }
 export async function startSessionGeneration(input: SessionGenerationInput, timeoutMs = 60_000): Promise<SessionGenerationStart> {
   // Bound the wait: a wedged invoke would leave the generate modal stuck in

@@ -49,7 +49,7 @@
 </script>
 
 <div class="pipe-header">
-	<span class="pipe-label">Pipe {idx + 1}</span>
+	<span class="pipe-label">{pipe.name}</span>
 	<span class="pipe-meta">{pipe.lengthFrames}f{durationSec !== null ? ` · ${durationSec.toFixed(2)}s` : ''}</span>
 	<span class="pipe-ops">
 		<button class="btn-icon" onclick={() => onMove(-1)} disabled={idx === 0} title="Move pipe up">↑</button>

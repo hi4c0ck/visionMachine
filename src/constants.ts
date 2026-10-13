@@ -81,6 +81,11 @@ const APP_CONSTANTS = {
     sessionStopPolicy: 'Stop on first error',
     sessionContinuePolicy: 'Continue with healthy pipes',
     sessionAutoCompose: 'Auto-compose session video',
+    sessionPipeForceLastFrame: 'Force last frame',
+    sessionPipeForceLastFrameHint:
+      "Overwrite this pipe's settled first keyframe with the previous pipe's last frame. Pipes without a settled first keyframe are filled automatically.",
+    sessionCatchLastFrameNote:
+      "Each pipe's empty first keyframe is auto-filled with the previous pipe's last frame as they run. Tick \"Force last frame\" on a specific pipe to overwrite its settled first keyframe.",
     sessionCancelAll: 'Cancel all',
     sessionGroupRunning: 'Session generation running',
     sessionGroupStale: 'Generation state is stale — app restarted',

@@ -1,18 +1,22 @@
 #!/usr/bin/env node
-// Single source of truth for critical app metadata: src-tauri/tauri.conf.json
-// (version + productName). It is what the Tauri bundler actually ships with
-// (MSI/exe name, product version, upgrade identifier), so everything else is
-// derived and kept aligned by this script:
+// Single source of truth for app metadata: package.json (version) and
+// src-tauri/tauri.conf.json (productName). Everything else is DERIVED and
+// kept aligned by this script — never edited by hand:
 //
-//   version     → package.json, src-tauri/Cargo.toml, src-tauri/Cargo.lock,
-//                 src/constants.ts (APP_VERSION)
-//   productName → src/constants.ts (appName), tauri.conf.json window title
+//   version     ← package.json   → tauri.conf.json, Cargo.toml,
+//                                   Cargo.lock, src/constants.ts (APP_VERSION)
+//   productName ← tauri.conf.json → constants.ts (appName), tauri.conf.json window title
+//
+// Bumping a release = edit ONE field in package.json, done. The script runs
+// automatically before every desktop build (tauri.conf.json beforeBuildCommand
+// = "npm run build && npm run sync:meta") and via scripts/build/runner.mjs, so
+// the derived files cannot desync the shipped MSI/exe.
 //
 // Intentionally NOT synced (toolchain-coupled identifiers — change manually,
 // deliberately): npm package name ("visionmachine-desktop"), crate name
 // ("vision-machine"), bundle identifier ("com.visionmachine.desktop").
 //
-// Usage: npm run sync:meta  (also auto-runs before every desktop build)
+// Usage: npm run sync:meta
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -20,28 +24,36 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+// ── Sources ────────────────────────────────────────────────────────────────
+const version = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+if (!version) {
+  console.error('[sync-meta] package.json is missing "version" — nothing to sync from.');
+  process.exit(1);
+}
 const confRaw = readFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), 'utf8');
 const conf = JSON.parse(confRaw);
-const version = conf.version;
 const productName = conf.productName;
-
-if (!version || !productName) {
-  console.error('[sync-meta] tauri.conf.json is missing version/productName — nothing to sync from.');
+if (!productName) {
+  console.error('[sync-meta] tauri.conf.json is missing "productName" — cannot derive appName.');
   process.exit(1);
 }
 
+// ── Derived targets ────────────────────────────────────────────────────────
 let confDirty = false;
 let confNext = confRaw;
+confNext = confNext.replace(/"version":\s*"[^"]*"/, `"version": "${version}"`);
 // Keep the window title inside the source file itself consistent with productName.
 const titleMatch = confNext.match(/"title":\s*"[^"]*"/);
 if (titleMatch && titleMatch[0] !== `"title": "${productName}"`) {
   confNext = confNext.replace(titleMatch[0], `"title": "${productName}"`);
-  confDirty = true;
 }
+if (confNext !== confRaw) confDirty = true;
 
 const targets = [
-  ['package.json', (s) => s.replace(/"version":\s*"[^"]*"/, `"version": "${version}"`)],
-  ['src-tauri/Cargo.toml', (s) => s.replace(/^version = "[^"]*"/m, `version = "${version}"`)],
+  [
+    'src-tauri/Cargo.toml',
+    (s) => s.replace(/^version = "[^"]*"/m, `version = "${version}"`),
+  ],
   [
     'src-tauri/Cargo.lock',
     (s) => s.replace(/(name = "vision-machine"\r?\n)version = "[^"]*"/, `$1version = "${version}"`),
@@ -73,7 +85,8 @@ for (const [rel, transform] of targets) {
 
 if (confDirty) {
   writeFileSync(path.join(root, 'src-tauri', 'tauri.conf.json'), confNext);
-  console.log('[sync-meta] updated src-tauri/tauri.conf.json (window title)');
+  updated += 1;
+  console.log('[sync-meta] updated src-tauri/tauri.conf.json');
 }
 
 // Sanity: the Cargo.lock/vision-machine regex must have matched — otherwise
@@ -91,6 +104,6 @@ if (missing > 0) {
 }
 console.log(
   updated === 0 && !confDirty
-    ? `[sync-meta] all in sync with tauri.conf.json v${version} (${productName})`
-    : `[sync-meta] synced v${version} (${productName}) → ${updated + (confDirty ? 1 : 0)} file(s) updated`,
+    ? `[sync-meta] all in sync with package.json v${version} (${productName})`
+    : `[sync-meta] synced v${version} (${productName}) → ${updated} file(s) updated`,
 );

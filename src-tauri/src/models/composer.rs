@@ -326,7 +326,44 @@ fn default_media_mode() -> String {
     "keyframes".into()
 }
 
+/// A keyframe is "settled" when it already carries a usable image: a
+/// non-empty direct source (a remote url or a caught `data:` uri) OR a
+/// settled generated-preview pair. This mirrors the frontend
+/// `refDotState === 'ready'` so the session auto-catch's overwrite decision is
+/// tied to each pipe's OWN settled setup rather than a blanket flag.
+fn keyframe_settled(kf: &Keyframe) -> bool {
+    let has_src = kf
+        .image_src
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if has_src {
+        return true;
+    }
+    kf.preview_remote_url
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        || kf.preview_local_path
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+}
+
 impl Pipe {
+    /// Does this pipe already own a SETTLED slot-1 keyframe (one with a usable
+    /// image)? The session auto-catch inspects this PER PIPE to decide:
+    /// - not settled (or missing) → create the first keyframe from the previous
+    ///   pipe's last frame;
+    /// - settled → overwrite only when the run's force flag is set.
+    pub fn has_settled_slot1(&self) -> bool {
+        self.keyframes
+            .iter()
+            .find(|k| k.slot_index == 1)
+            .map(|k| keyframe_settled(k))
+            .unwrap_or(false)
+    }
+
     pub fn new(name: &str, length_frames: u32) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -342,6 +379,50 @@ impl Pipe {
             last_generation: None,
             media_mode: default_media_mode(),
         }
+    }
+
+    /// Upsert the slot-1 keyframe with a caught last-frame image source
+    /// (a base64 `data:` URI — provider-ready). The decision is tied to THIS
+    /// pipe's own setup, via `has_settled_slot1`:
+    /// - slot-1 NOT settled (missing, or a preset with no usable image yet) →
+    ///   the caught frame is written: a missing slot is created, or an existing
+    ///   non-settled one is repointed. This is the auto-catch "create the
+    ///   first keyframe" default — no force needed.
+    /// - slot-1 IS settled → it is left untouched UNLESS `force` is set for
+    ///   this pipe; when forced, the caught frame overwrites it.
+    /// Returns `true` when a keyframe was written (the caller persists).
+    pub fn upsert_slot1_image(&mut self, image_src: &str, force: bool) -> bool {
+        let settled = self.has_settled_slot1();
+        if settled && !force {
+            // A settled first keyframe is only replaced when the run forces it
+            // for THIS pipe.
+            return false;
+        }
+        if let Some(kf) = self.keyframes.iter_mut().find(|k| k.slot_index == 1) {
+            kf.kind = "url".to_string();
+            kf.image_src = Some(image_src.to_string());
+            kf.reference_url = None;
+            kf.preview_remote_url = None;
+            kf.preview_local_path = None;
+            kf.status = "pending".to_string();
+            kf.force_regen = false;
+            return true;
+        }
+        // No slot-1 yet: create it at frame 0 (the first frame).
+        self.keyframes.push(Keyframe {
+            id: uuid::Uuid::new_v4().to_string(),
+            frame: 0,
+            slot_index: 1,
+            kind: "url".to_string(),
+            image_src: Some(image_src.to_string()),
+            prompt: None,
+            reference_url: None,
+            preview_remote_url: None,
+            preview_local_path: None,
+            status: "pending".to_string(),
+            force_regen: false,
+        });
+        true
     }
 
     /// Clone this pipe with brand-new ids for every level (pipe, keyframes,
@@ -753,5 +834,84 @@ mod tests {
         assert!(!copy.keyframes[0].force_regen);
         assert!(copy.subject_references[0].preview_remote_url.is_none());
         assert_eq!(copy.subject_references[0].status, "pending");
+    }
+
+    // `has_settled_slot1` — the per-pipe readiness check the auto-catch keys
+    // off: a slot-1 with a usable image (direct source or settled preview).
+    #[test]
+    fn has_settled_slot1_tracks_readiness() {
+        // No slot-1 at all -> not settled.
+        let mut p = Pipe::new("P", 121);
+        assert!(!p.has_settled_slot1());
+
+        // An empty slot-1 (pending, no source/preview) -> not settled.
+        let mut empty_kf = Keyframe::new(1, 0);
+        p.keyframes.push(empty_kf);
+        assert!(!p.has_settled_slot1(), "an empty slot-1 is not settled");
+
+        // A slot-1 with a direct source -> settled.
+        let mut settled = Pipe::new("P", 121);
+        let mut skf = Keyframe::new(1, 0);
+        skf.image_src = Some("https://prepared.example/a.png".into());
+        settled.keyframes.push(skf);
+        assert!(settled.has_settled_slot1());
+
+        // A slot-1 with only a settled generated preview -> settled.
+        let mut prev = Pipe::new("P", 121);
+        let mut pkf = Keyframe::new(1, 0);
+        pkf.kind = "txt2img".into();
+        pkf.preview_remote_url = Some("https://host/dragon.png".into());
+        prev.keyframes.push(pkf);
+        assert!(prev.has_settled_slot1(), "a settled generated preview counts");
+    }
+
+    // The session auto-catch upsert, driven PER PIPE by that pipe's own
+    // settled slot-1: non-settled slots are filled by default; a settled slot
+    // is only overwritten when this pipe's force flag is set.
+    #[test]
+    fn upsert_slot1_image_semantics() {
+        let uri = "data:image/png;base64,AAA";
+
+        // Empty pipe: creates slot-1 at frame 0 (not settled -> filled).
+        let mut empty = Pipe::new("P", 121);
+        assert!(empty.upsert_slot1_image(uri, false), "a missing slot-1 must be filled");
+        assert_eq!(empty.keyframes.len(), 1);
+        assert_eq!(empty.keyframes[0].slot_index, 1);
+        assert_eq!(empty.keyframes[0].image_src.as_deref(), Some(uri));
+        assert_eq!(empty.keyframes[0].kind, "url");
+        assert_eq!(empty.keyframes[0].status, "pending");
+
+        // An existing but UNSETTLED slot-1 (a pending txt2img preset with no
+        // source/preview yet) is repointed even without force — that's the
+        // "create the first keyframe" default.
+        let mut unsettled = Pipe::new("P", 121);
+        let mut u_kf = Keyframe::new(1, 0);
+        u_kf.kind = "txt2img".into();
+        u_kf.prompt = Some("a dragon".into());
+        unsettled.keyframes.push(u_kf);
+        assert!(!unsettled.has_settled_slot1());
+        assert!(
+            unsettled.upsert_slot1_image(uri, false),
+            "an unsettled slot-1 is created from the caught frame without force"
+        );
+        assert_eq!(unsettled.keyframes[0].image_src.as_deref(), Some(uri));
+        assert_eq!(unsettled.keyframes[0].kind, "url");
+
+        // A SETTLED slot-1 with force=false is left untouched.
+        let mut prepared = Pipe::new("P", 121);
+        let mut prepared_kf = Keyframe::new(1, 0);
+        prepared_kf.image_src = Some("https://prepared.example/a.png".into());
+        prepared.keyframes.push(prepared_kf);
+        assert!(prepared.has_settled_slot1());
+        assert!(!prepared.upsert_slot1_image(uri, false), "a settled slot-1 must not be clobbered without force");
+        assert_eq!(prepared.keyframes[0].image_src.as_deref(), Some("https://prepared.example/a.png"));
+
+        // The same settled slot-1 with force=true IS repointed to the caught frame.
+        assert!(prepared.upsert_slot1_image(uri, true), "a forced upsert overwrites the settled slot-1");
+        assert_eq!(prepared.keyframes[0].image_src.as_deref(), Some(uri));
+        assert_eq!(prepared.keyframes[0].kind, "url");
+        assert!(prepared.keyframes[0].preview_remote_url.is_none());
+        assert!(prepared.keyframes[0].preview_local_path.is_none());
+        assert_eq!(prepared.keyframes[0].status, "pending");
     }
 }
