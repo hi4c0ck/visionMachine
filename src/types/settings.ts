@@ -179,6 +179,8 @@ export interface Settings {
   tools: ToolsBlock;
   /** Top-panel carousel treatment (profile-preset bound). */
   carousel: CarouselBlock;
+  /** Experimental / opt-in feature gates. */
+  experimental: ExperimentalBlock;
 }
 
 /** Local tooling overrides. `ffmpegPath` is the tiny-variant escape hatch:
@@ -208,6 +210,24 @@ export interface CarouselBlock {
    * fast snaps between stops with a 0.8s idle at each snap.
    */
   autoScroll: AutoScrollMode;
+}
+
+/**
+ * Experimental / opt-in features, off by default. Each master gate controls
+ * whether the corresponding per-pipe / per-run toggles are even offered in the
+ * UI — when the gate is OFF the classic behavior runs and the toggles are
+ * hidden, so the feature is a deliberate opt-in, not a silent default.
+ */
+export interface ExperimentalBlock {
+  /**
+   * "Experimental compose pipes": when ON, the session-video Compose button
+   * and the session-generation auto-compose may drop one 8n+1 keyframe
+   * interval (the model's first-frame settle) off each INTERIOR pipe's clip
+   * head, so the splice lands in stable content instead of a visible cut.
+   * OFF (default) = the classic lossless back-to-back splice (no frames
+   * dropped). Pipe 0 is never trimmed either way (nothing precedes it).
+   */
+  composePipes: boolean;
 }
 
 // ── Generation log (portable: NO keys, NO raw local paths — P5) ────────────

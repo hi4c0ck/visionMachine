@@ -283,6 +283,13 @@ export interface PipeRow {
    *  'keyframes'. Drives keyframes/subject-refs row visibility per the
    *  configured video model's media capabilities. */
   mediaMode?: 'keyframes' | 'reference';
+  /** Experimental "compose pipes" boundary-trim: when ON (and the master
+   *  settings gate experimental.composePipes is on) the session-video compose
+   *  drops one 8n+1 keyframe interval off this pipe's clip head so the
+   *  splice lands in stable content. Absent/legacy rows default to
+   *  false = classic lossless back-to-back splice. Pipe 0 is never offered
+   *  the toggle (nothing precedes it). */
+  trimBoundary?: boolean;
 }
 
 /**

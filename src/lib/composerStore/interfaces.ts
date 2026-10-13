@@ -41,6 +41,8 @@ export interface PipeService {
   /** Switch the pipe's media mode (docs/agnes-model-catalog.md, Q7). Drives
    *  keyframes/subject-refs row visibility per the video model's media caps. */
   setMediaMode(sessionId: string, pipeId: string, mode: 'keyframes' | 'reference'): Promise<ServiceResult>;
+  /** Experimental "compose pipes" boundary-trim switch (per-pipe). */
+  setTrimBoundary(sessionId: string, pipeId: string, on: boolean): Promise<ServiceResult>;
   setLength(sessionId: string, pipeId: string, frames: number): Promise<ServiceResult>;
   getPipe(session: SessionData, pipeId: string): PipeRow | undefined;
 }

@@ -2,8 +2,8 @@
 //! remains in TaskRegistry so the existing task lifecycle and terminal sink
 //! ordering stay authoritative.
 use crate::generation::{
-    compose_session_video, ComposeRegistry, GenerationService, GenerationTaskView, ModelSpecWire,
-    SourceVideo, TaskStatus,
+    compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeRegistry, GenerationService,
+    GenerationTaskView, ModelSpecWire, SourceVideo, TaskStatus,
 };
 use crate::models::composer::LastGeneration;
 use crate::storage::{db::Database, generation_groups_db::GenerationGroupRow};
@@ -140,6 +140,17 @@ pub struct StartSessionGenerationInput {
     /// = no pipe is forced (pure non-destructive catch).
     #[serde(default)]
     pub force_last_frames: std::collections::HashMap<String, bool>,
+    /// Experimental "compose pipes" boundary-trim (group auto-compose): pipe
+    /// id → ON/OFF. A `true` entry drops `BOUNDARY_TRIM_FRAMES` (one 8n+1
+    /// keyframe interval) off that pipe's clip head at compose time; absent
+    /// / `false` keeps the whole clip (classic lossless splice). When ANY
+    /// pipe is ON the auto-compose re-encodes instead of copying, because the
+    /// head-trim needs a per-clip re-time. This is the session-generation
+    /// modal's per-pipe toggle — the mirror of the manual Compose button's
+    /// `ComposeSessionVideoInput.trim_boundary`. Pipe 0 is never offered the
+    /// toggle (there's nothing to trim before it).
+    #[serde(default)]
+    pub trim_boundary: std::collections::HashMap<String, bool>,
 }
 fn yes() -> bool {
     true
@@ -175,6 +186,10 @@ fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> O
             label: pipe_id.to_string(),
             path: path.clone(),
             task_id: event.task_id.clone(),
+            // Group auto-compose: boundary-trim is wired from the group's
+            // StartSessionGenerationInput.trim_frames when present; 0 here
+            // keeps the classic lossless splice for non-trimmed runs.
+            trim_frames: 0,
         })
 }
 
@@ -233,6 +248,19 @@ fn session_compose_out_dir(media_root: &Option<String>, session_name: &str) -> s
             .unwrap_or_else(std::env::temp_dir),
     };
     root.join(&safe).join("session-video")
+}
+
+/// Resolve a per-pipe boundary-trim ON/OFF switch to a concrete head-trim in
+/// frames. A `true` switch trims exactly `BOUNDARY_TRIM_FRAMES` (one 8n+1
+/// keyframe interval); `false` (or an absent entry) trims nothing. Centralized
+/// here so the "8" lives in one backend spot and the UI only ever deals with
+/// the boolean the user actually sees.
+fn boundary_trim_of(on: bool) -> u32 {
+    if on {
+        BOUNDARY_TRIM_FRAMES
+    } else {
+        0
+    }
 }
 
 fn compose_sources(
@@ -872,6 +900,9 @@ impl GroupCoordinator {
                     // need it — the catch runs before start_pipe and persists
                     // the keyframe).
                     force_last_frames,
+                    // Carry the per-pipe experimental boundary-trim so a
+                    // follow-up pipe splices with the same trim choice.
+                    trim_boundary: run_params.trim_boundary.clone(),
                 };
                 // This pipe's own force flag: the map is the source of truth
                 // (empty / absent = false). The catch is then driven by the
@@ -1009,11 +1040,19 @@ impl GroupCoordinator {
                     r.completed_sources.clone(),
                     r.group_sources.clone(),
                     r.media_root.clone(),
+                    r.input.trim_boundary.clone(),
                 )
             })
         };
-        let Some((session_id, auto_compose, group_cancel, sources, group_sources, media_root)) =
-            snapshot
+        let Some((
+            session_id,
+            auto_compose,
+            group_cancel,
+            sources,
+            group_sources,
+            media_root,
+            trim_map,
+        )) = snapshot
         else {
             return;
         };
@@ -1066,7 +1105,12 @@ impl GroupCoordinator {
                 .map(|r| SourceVideo {
                     label: r.pipe_id.clone(),
                     path: r.staged_path.clone(),
-                    task_id: r.task_id.clone(),
+                                    task_id: r.task_id.clone(),
+                    // Apply the experimental per-pipe boundary-trim: the ON/OFF
+                    // map resolves a `true` switch to the fixed one-interval
+                    // head-trim (0 = keep the whole clip). Pipe 0 is never
+                    // offered the toggle, but a stored value still applies.
+                    trim_frames: boundary_trim_of(trim_map.get(&r.pipe_id).copied().unwrap_or(false)),
                 })
                 .collect::<Vec<_>>();
             // Use the staged set only when it covers EVERY pipe that produced
@@ -1085,6 +1129,12 @@ impl GroupCoordinator {
                     .map(|r| r.order_index)
                     .unwrap_or(u32::MAX)
             });
+            // The originals came from `completed_source()` with a 0 trim;
+            // apply the per-pipe experimental boundary-trim by label (= pipe
+            // id) so the fallback path splices the same trimmed clips.
+            for s in fallback.iter_mut() {
+                s.trim_frames = boundary_trim_of(trim_map.get(&s.label).copied().unwrap_or(false));
+            }
             let sources_for_result = if staged_is_complete { staged } else { fallback };
             let registry = this.compose_registry.clone();
             let session_for_result = session_id.clone();
@@ -1426,6 +1476,7 @@ mod tests {
                 run_stats: None,
                 pipe_params: None,
                 force_last_frames: std::collections::HashMap::new(),
+                trim_boundary: std::collections::HashMap::new(),
             },
             media_root: None,
             completed_sources: Vec::new(),
@@ -1451,6 +1502,7 @@ mod tests {
             label: "Pipe 1".into(),
             path: src_path.to_string_lossy().into_owned(),
             task_id: "task-9".into(),
+            trim_frames: 0,
         };
         let staged = stage_source_clip(&out_dir, &source, 0);
         assert!(staged.is_some(), "staging a present clip must succeed");
@@ -1484,6 +1536,7 @@ mod tests {
                 .to_string_lossy()
                 .into_owned(),
             task_id: "task-9".into(),
+            trim_frames: 0,
         };
         assert!(
             stage_source_clip(&out_dir, &source, 0).is_none(),
@@ -1529,6 +1582,7 @@ mod tests {
             label: "Pipe 1".into(),
             path: src.to_string_lossy().into_owned(),
             task_id: "t1".into(),
+            trim_frames: 0,
         };
         let staged = stage_source_clip(&out_dir, &source, 0).unwrap();
         std::fs::write(out_dir.join("concat.txt"), b"stale").unwrap();

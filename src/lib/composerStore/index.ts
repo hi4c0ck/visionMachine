@@ -188,6 +188,13 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
+  async setTrimBoundary(sessionId: string, pipeId: string, on: boolean): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.pipes.setTrimBoundary(sessionId, pipeId, on);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
   // Global element operations
   async addGlobalElement(sessionId: string, pipeId: string, frameStart: number, frameEnd: number): Promise<ServiceResult> {
     const s = this.getService(sessionId);
@@ -607,6 +614,9 @@ class ComposerStoreImpl implements ComposerStore {
             cValue: pipe.cValue,
             mediaMode: pipe.mediaMode ?? 'keyframes',
             orderIndex: pipe.orderIndex,
+            // Experimental compose-pipes boundary-trim switch (per-pipe).
+            // Rust Pipe.trim_boundary defaults false for legacy rows.
+            trimBoundary: pipe.trimBoundary === true,
             // Keyframes: map explicitly — the frontend shape is camelCase
             // while the Rust composer model (ComposerConfig::Keyframe)
             // deserializes with `#[serde(rename_all = "camelCase")]` too,
@@ -720,6 +730,7 @@ export const updateQ = composerStore.updateQ.bind(composerStore);
 export const updateC = composerStore.updateC.bind(composerStore);
 export const setPipeLength = composerStore.setPipeLength.bind(composerStore);
 export const setMediaMode = composerStore.setMediaMode.bind(composerStore);
+export const setTrimBoundary = composerStore.setTrimBoundary.bind(composerStore);
 export const addGlobalElement = composerStore.addGlobalElement.bind(composerStore);
 export const updateGlobalRange = composerStore.updateGlobalRange.bind(composerStore);
 export const toggleGlobalElement = composerStore.toggleGlobalElement.bind(composerStore);

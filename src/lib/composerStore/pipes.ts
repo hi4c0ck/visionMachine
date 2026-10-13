@@ -130,6 +130,19 @@ export class PipeServiceImpl implements PipeService {
     return { errors: [] };
   }
 
+  /** Experimental "compose pipes" boundary-trim switch (per-pipe). Pipe 0
+   * (the timeline head) is never offered the toggle by the UI; even so the
+   * setter is a plain field write — persistence rides the normal save path
+   * (session-io.ts), and the compose-time gate (master settings switch)
+   * decides whether a stored `true` actually trims. */
+  async setTrimBoundary(_sessionId: string, pipeId: string, on: boolean): Promise<ServiceResult> {
+    const pipe = this.getPipe(this.session, pipeId);
+    if (pipe) {
+      pipe.trimBoundary = on;
+    }
+    return { errors: [] };
+  }
+
   async setLength(_sessionId: string, pipeId: string, frames: number): Promise<ServiceResult> {
     const pipe = this.getPipe(this.session, pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };

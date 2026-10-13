@@ -1332,6 +1332,7 @@ mod tests {
             order_index: 0,
             last_generation: None,
             media_mode: "keyframes".into(),
+            trim_boundary: false,
         }
     }
 

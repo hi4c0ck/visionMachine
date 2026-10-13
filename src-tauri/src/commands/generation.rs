@@ -7,8 +7,8 @@ use sqlx::Row;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::generation::{
-    ComposeError, EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView,
-    ModelSpecWire, PieceGeneration, StageContext, SourceVideo, TaskStatus,
+    BOUNDARY_TRIM_FRAMES, ComposeError, EngineInput, FfmpegAvailability, GenerationStageView,
+    GenerationTaskView, ModelSpecWire, PieceGeneration, StageContext, SourceVideo, TaskStatus,
 };
 use crate::AppState;
 
@@ -1111,6 +1111,16 @@ pub struct ComposeSessionVideoInput {
     /// last-gen video, in `order_index` order.
     #[serde(default)]
     pub pipe_ids: Option<Vec<String>>,
+    /// Experimental "compose pipes" boundary-trim: pipe id → ON/OFF. A `true`
+    /// entry drops `BOUNDARY_TRIM_FRAMES` (one 8n+1 keyframe interval) off that
+    /// pipe's clip head so the splice lands in stable content instead of the
+    /// model's settle region. Absent / `false` keeps the whole clip. When ANY
+    /// pipe is ON the compose re-encodes (the lossless copy can't re-time a
+    /// clip). Keyed by pipe id so the per-pipe toggles (KeyframeModal /
+    /// SessionGenerateModal) map 1:1 onto the switch. Pipe 0 is never offered
+    /// the toggle (nothing to trim before it).
+    #[serde(default)]
+    pub trim_boundary: Option<std::collections::HashMap<String, bool>>,
 }
 
 /// Stable error envelope returned as a JSON string because the existing
@@ -1231,6 +1241,21 @@ pub async fn compose_session_video(
                             .as_ref()
                             .map(|l| l.task_id.clone())
                             .unwrap_or_default(),
+                        // Experimental boundary-trim: the per-pipe ON/OFF map
+                        // (a `true` switch) resolves to the fixed one-interval
+                        // head-trim; `false`/absent = 0 = keep the whole clip.
+                        // When all are 0 the lossless-copy path still runs.
+                        trim_frames: if input
+                            .trim_boundary
+                            .as_ref()
+                            .and_then(|m| m.get(p.id.as_str()))
+                            .copied()
+                            .unwrap_or(false)
+                        {
+                            BOUNDARY_TRIM_FRAMES
+                        } else {
+                            0
+                        },
                     })
                 }
             })

@@ -11,7 +11,11 @@
 		draft,
 		ondraftchange,
 	} = $props<{
-		draft: { tools: { ffmpegPath: string }; carousel: { immersiveSnaps: boolean; autoScroll: 'off' | 'steady' | 'fast' } };
+		draft: {
+			tools: { ffmpegPath: string };
+			carousel: { immersiveSnaps: boolean; autoScroll: 'off' | 'steady' | 'fast' };
+			experimental: { composePipes: boolean };
+		};
 		ondraftchange: (m: (d: any) => void) => void;
 	}>();
 
@@ -79,6 +83,12 @@
 	function setAutoScrollMode(mode: 'off' | 'steady' | 'fast') {
 		ondraftchange((d: any) => {
 			d.carousel = { ...d.carousel, autoScroll: mode };
+		});
+	}
+
+	function setComposePipes(v: boolean) {
+		ondraftchange((d: any) => {
+			d.experimental = { ...d.experimental, composePipes: v };
 		});
 	}
 </script>
@@ -166,7 +176,34 @@
 			</label>
 		</div>
 		<span class="note">Manual drag / wheel / step buttons only PAUSE auto-scroll; it resumes after a short cooldown.</span>
-	</div></div>
+	</div>
+
+	<div class="tools-divider" role="separator"></div>
+
+	<div class="tools-header">
+		<h4 class="tools-title">Experimental</h4>
+		<span class="tools-sub">
+			Opt-in changes that are off by default. When a gate is off the classic
+			behavior runs and the related per-pipe toggles are hidden.
+		</span>
+	</div>
+
+	<label class="immersive-check">
+		<input
+			type="checkbox"
+			checked={draft.experimental.composePipes}
+			onchange={() => setComposePipes(!draft.experimental.composePipes)}
+		/>
+		<span>Experimental compose pipes</span>
+	</label>
+	<span class="note">
+		When on, the session-video Compose button and the session-generation
+		auto-compose may drop one 8n+1 keyframe interval off each <b>interior</b>
+		pipe's clip head, so the splice lands in stable content instead of a
+		visible cut. Pipe 1 (the first) is never trimmed. When off, the classic
+		back-to-back lossless splice runs.
+	</span>
+	</div>
 
 <style>
 	.tools-settings {

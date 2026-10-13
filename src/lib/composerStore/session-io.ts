@@ -110,6 +110,10 @@ export class SessionServiceImpl implements SessionService {
       // drops every pipe's generated video path, so the top-panel preview and
       // the pipe inspector's last-gen slot are empty after a session switch.
       lastGeneration: p.lastGeneration ?? null,
+      // Experimental compose-pipes boundary-trim switch: round-trips through
+      // the Rust Pipe.trim_boundary. Absent/legacy rows read as false (the
+      // classic lossless splice), so old sessions never change behavior.
+      trimBoundary: p.trimBoundary === true,
     }));
   }
 

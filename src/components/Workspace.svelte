@@ -22,6 +22,7 @@
 	import { subscribeGenTask } from '$lib/generationEvents';
 	import { isStaleGroup } from '$lib/compactPipes';
 	import { startSessionGeneration, fetchGenerationGroup, fetchLatestGenerationGroupForSession, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
+import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl } from '$lib/mediaUrl';
@@ -1644,7 +1645,7 @@
 		showSessionGenerateModal = true;
 	}
 
-	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null, forceLastFrames: Record<string, boolean> | null) {
+	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null, forceLastFrames: Record<string, boolean> | null, trimBoundary: Record<string, boolean> | null) {
 		if (!selectedSession) return;
 		if (groupActive) { flashToast('Session generation is already in progress', 'info'); return; }
 		// Read-only (paid) model gate: the session flow's "continue" policy
@@ -1664,7 +1665,7 @@
 			const pair = resolveSpecs(models.imageModel, models.videoModel);
 			const prompts: Record<string, string> = {};
 			for (const p of selectedSession.pipes) prompts[p.id] = summarizePipe(p, { fps: selectedSession?.fps ?? undefined });
-			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null, runStats: runStats ?? null, pipeParams: pipeParams ?? null, forceLastFrames });
+			const result = await startSessionGeneration({ sessionId: selectedSession.id, imageModel: models.imageModel, videoModel: models.videoModel, seed, profileId: getProfileId() ?? undefined, failurePolicy, autoCompose, pipeIds: selectedSession.pipes.map((p) => p.id), prompts, imageSpec: pair.image?.spec ?? null, videoSpec: pair.video?.spec ?? null, runStats: runStats ?? null, pipeParams: pipeParams ?? null, forceLastFrames, trimBoundary });
 			showSessionGenerateModal = false;
 			activeGroupId = result.groupId;
 			localStorage.setItem(`visionmachine:generation-group:${selectedSession.id}`, result.groupId);
@@ -1764,13 +1765,23 @@
 		}
 		composing = true;
 		compositionProgress = { phase: 'preparing', progress: 0, detail: 'Preparing sources' };
+		// Experimental "compose pipes" boundary-trim: when the master gate is
+		// on, interior pipes with the per-pipe switch ON have one 8n+1
+		// interval dropped off their clip head (the first pipe is never
+		// trimmed). Empty map = the classic lossless splice.
+		const s = getSettings();
+		const trimMap = buildTrimBoundaryMap(selectedSession.pipes ?? [], s.experimental?.composePipes === true);
+		const hasTrim = Object.values(trimMap).some(Boolean);
 		invoke<{ outputPath: string; ffmpegSource: string; sourcePipes: string[] }>(
 			'compose_session_video',
-			{ input: { session_id: selectedSession.id, pipe_ids: null } },
+			{ input: { session_id: selectedSession.id, pipe_ids: null, trim_boundary: hasTrim ? trimMap : null } },
 		)
 		.then((r) => {
 			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
-			flashToast(APP_CONSTANTS.strings.composeSessionDone, 'success');
+			flashToast(
+				hasTrim ? 'Session video ready (boundary-trimmed)' : APP_CONSTANTS.strings.composeSessionDone,
+				'success',
+			);
 			// Point the top panel at the composed file (served via read_media_file).
 			void attachSessionVideo(r.outputPath, `${selectedSession?.name ?? 'Session'} — video`);
 		})

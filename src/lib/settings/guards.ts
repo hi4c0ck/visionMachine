@@ -10,6 +10,7 @@
 import type {
   AutoScrollMode,
   CarouselBlock,
+  ExperimentalBlock,
   GenerationLogEntry,
   Orientation,
   ProviderKind,
@@ -61,6 +62,11 @@ export const DEFAULT_SETTINGS: Settings = {
     // Immersive Snaps (dissolve treatment) ships ON; auto-scroll ships OFF.
     immersiveSnaps: true,
     autoScroll: 'off',
+  },
+  experimental: {
+    // "Experimental compose pipes" (boundary-trim of interior pipe clips)
+    // ships OFF: the classic lossless back-to-back splice is the default.
+    composePipes: false,
   },
 };
 
@@ -118,6 +124,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const prov = (r.providers ?? {}) as Settings['providers'];
   const t = (r.tools ?? {}) as Partial<Settings['tools']>;
   const c = (r.carousel ?? {}) as Partial<CarouselBlock>;
+  const ex = (r.experimental ?? {}) as Partial<ExperimentalBlock>;
   return {
     profile: {
       displayName: typeof p.displayName === 'string' ? p.displayName : base.profile.displayName,
@@ -153,6 +160,12 @@ export function normalizeSettings(raw: unknown): Settings {
         c.autoScroll === 'steady' || c.autoScroll === 'fast'
           ? c.autoScroll
           : base.carousel.autoScroll,
+    },
+    // Experimental feature gates. Every gate is opt-in: absent / legacy
+    // blobs reseed the default (composePipes: false = classic lossless
+    // splice). Only an explicit `true` turns a gate on.
+    experimental: {
+      composePipes: ex.composePipes === true,
     },
   };
 }

@@ -44,6 +44,12 @@ export interface SessionGenerationInput {
    *  decision is per pipe, never a single global switch. Absent/empty = no
    *  pipe is forced (pure non-destructive catch). */
   forceLastFrames?: Record<string, boolean> | null;
+  /** Experimental "compose pipes" per-pipe boundary-trim switches, keyed by
+   *  pipe id (only the interior pipes that opted in, first pipe excluded).
+   *  Empty/absent = classic lossless splice. The master gate lives in
+   *  settings (experimental.composePipes); this map is what the modal lets
+   *  the user toggle per pipe. */
+  trimBoundary?: Record<string, boolean> | null;
 }
 export interface SessionGenerationStart { groupId: string; firstTaskId: string; firstView: GenerationTaskView; }
 /** One current-run source record: which pipe's clip fed this run's
@@ -77,7 +83,11 @@ export function buildSessionGenerationPayload(input: SessionGenerationInput) {
     runStats: input.runStats ?? null, pipeParams: input.pipeParams ?? null,
     // Per-pipe "force first keyframe" toggles (empty map = pure non-destructive
     // catch; the backend then keys each pipe off its own settled slot-1).
-    forceLastFrames: input.forceLastFrames ?? {} };
+    forceLastFrames: input.forceLastFrames ?? {},
+    // Experimental "compose pipes" boundary-trim: only the ON interior pipes,
+    // keyed by pipe id (first pipe never included). Empty = classic lossless
+    // splice. Maps to the Rust `trim_boundary` (camelCase rename).
+    trimBoundary: input.trimBoundary ?? {} };
 }
 export async function startSessionGeneration(input: SessionGenerationInput, timeoutMs = 60_000): Promise<SessionGenerationStart> {
   // Bound the wait: a wedged invoke would leave the generate modal stuck in

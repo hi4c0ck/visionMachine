@@ -66,6 +66,13 @@ impl ComposeRegistry {
     }
 }
 
+/// Number of leading frames the "experimental compose pipes" boundary-trim
+/// drops off an internal pipe clip so the splice lands in stable content
+/// instead of the model's settle region. One keyframe interval (8 frames) —
+/// the 8n+1 cadence. Pipe 0 is never trimmed; the value is 0 unless the
+/// caller opted that pipe into the experimental trim.
+pub const BOUNDARY_TRIM_FRAMES: u32 = 8;
+
 /// One source clip for the concat (a pipe's last-gen video).
 #[derive(Debug, Clone)]
 pub struct SourceVideo {
@@ -76,6 +83,12 @@ pub struct SourceVideo {
     /// The task that produced this clip (the standalone composer path has no
     /// task of its own and leaves it empty).
     pub task_id: String,
+    /// Leading frames to drop from this clip's head (experimental
+    /// boundary-trim). 0 = keep the whole clip (the lossless-copy path and
+    /// every non-trimmed pipe). When ANY source is >0 the compose falls to
+    /// the re-encode filter path, which is the only one that can re-time
+    /// per-clip without audio.
+    pub trim_frames: u32,
 }
 
 /// Output of a successful compose: the written file + the ffmpeg source.
@@ -163,18 +176,49 @@ pub fn copy_args(manifest_path: &Path, out_path: &Path) -> Vec<String> {
     ]
 }
 
-/// Re-encode fallback args: `-i a -i b … -filter_complex concat=n=N:v=1:a=0[v]
-/// -map [v] -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart out`.
+/// True when the re-encode filter path is REQUIRED: any source asks to drop
+/// leading frames (the lossless copy can't re-time a clip), OR a
+/// copy-trim is impossible for another reason. Used to choose the
+/// experiment's trim path up-front.
+pub fn trim_active(sources: &[SourceVideo]) -> bool {
+    sources.iter().any(|s| s.trim_frames > 0)
+}
+
+/// Re-encode fallback args: `-i a -i b … -filter_complex [0:v]trim=…[v0]…
+/// concat=n=N:v=1:a=0[v] -map [v] -c:v libx264 -preset veryfast -crf 20
+/// -pix_fmt yuv420p -movflags +faststart out`.
+///
+/// When any source has `trim_frames > 0` each clip is head-trimmed via a
+/// `trim=start_frame` filter BEFORE the concat, so the splice lands in the
+/// stable region rather than the model's first-8-frame settle. Audio is
+/// dropped (`a=0`), which is why the trim lives on the re-encode path —
+/// the lossless copy can't re-time without desyncing the audio tail.
 pub fn filter_args(sources: &[SourceVideo], out_path: &Path) -> Vec<String> {
     let n = sources.len();
     let mut args: Vec<String> = Vec::new();
     let mut filter = String::new();
+    let any_trim = trim_active(sources);
     for (i, s) in sources.iter().enumerate() {
         args.push("-i".into());
         args.push(s.path.clone());
-        filter.push_str(&format!("[{i}:v]"));
+        if any_trim {
+            // `trim` start_frame in FRAMES (not seconds) so it's exact
+            // regardless of the source's actual fps / VFR. 0 = no-op on the
+            // un-trimmed clips (pipe 0), real head-trim on the interior ones.
+            let start = s.trim_frames;
+            filter.push_str(&format!("[{i}:v]trim=start_frame={start}[v{i}]"));
+        }
+        // No-trim clips feed the raw [i:v] stream straight into the concat.
     }
-    filter.push_str(&format!("concat=n={n}:v=1:a=0[v]"));
+    // The concat inputs are the labelled pads when trimming (each clip was
+    // re-timed into [v{i}]), or the raw [i:v] stream labels otherwise —
+    // byte-identical to the classic filter for the no-trim case.
+    let concat_inputs: String = if any_trim {
+        (0..n).map(|i| format!("[v{i}]")).collect()
+    } else {
+        (0..n).map(|i| format!("[{i}:v]")).collect()
+    };
+    filter.push_str(&format!("{concat_inputs}concat=n={n}:v=1:a=0[v]"));
     args.extend_from_slice(&[
         "-filter_complex".into(),
         filter,
@@ -418,16 +462,35 @@ pub fn plan_expected_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetad
 /// frame pacing (a source with `nb_frames > duration*fps` gets re-encoded
 /// longer than its container timeline). `expected_duration` here is a
 /// lower-bound check input, not a strict value — see `validate_metadata`.
-pub fn plan_filter_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetadata, String> {
+///
+/// `total_trim` is the number of leading frames the experimental
+/// boundary-trim drops across ALL sources (sum of each `SourceVideo.trim_frames`).
+/// 0 = classic no-trim expectation. When >0 the frame count + duration are
+/// reduced by the trimmed amount so the validator's lower bound still matches
+/// what the re-encode actually emits.
+pub fn plan_filter_metadata(
+    sources: &[VideoMetadata],
+    total_trim: u32,
+) -> Result<ExpectedMetadata, String> {
     let first = sources
         .first()
         .ok_or_else(|| "no source metadata".to_string())?;
+    let full_frames: u64 = sources.iter().map(|s| s.frame_count).sum();
+    let full_duration: f64 = sources.iter().map(|s| s.duration_seconds).sum();
+    // Average per-frame duration across the sources (0 when no frames).
+    let per_frame = if full_frames > 0 {
+        full_duration / full_frames as f64
+    } else {
+        0.0
+    };
+    let trimmed_frames = full_frames.saturating_sub(total_trim as u64);
+    let trimmed_duration = per_frame * trimmed_frames as f64;
     Ok(ExpectedMetadata {
         codec: "h264".into(),
         width: first.width,
         height: first.height,
-        duration_seconds: sources.iter().map(|s| s.duration_seconds).sum(),
-        frame_count: sources.iter().map(|s| s.frame_count).sum(),
+        duration_seconds: trimmed_duration,
+        frame_count: trimmed_frames,
     })
 }
 
@@ -785,32 +848,51 @@ pub fn compose_session_video(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let copy_expected =
-        plan_expected_metadata(&source_metadata).map_err(ComposeError::OutputInvalid)?;
+    let total_trim: u32 = sources.iter().map(|s| s.trim_frames).sum();
     let filter_expected =
-        plan_filter_metadata(&source_metadata).map_err(ComposeError::OutputInvalid)?;
+        plan_filter_metadata(&source_metadata, total_trim).map_err(ComposeError::OutputInvalid)?;
 
-    // 1) Lossless copy.
-    let (code, copy_tail, copy_timeout, copy_cancelled) =
-        run_ffmpeg(ffmpeg, &copy_args(&manifest, out_path), cancel);
-    if copy_cancelled {
-        return Err(ComposeError::Cancelled);
-    }
-    if code == 0 && out_path.is_file() {
-        validate_output(ffmpeg, out_path, &copy_expected, cancel)?;
-        return Ok(ComposeResult {
-            output_path: out_path.to_string_lossy().into_owned(),
-            ffmpeg_source: ffmpeg.source.clone(),
-        });
-    }
-    if copy_timeout {
-        return Err(ComposeError::BothStrategiesFailed {
-            copy_detail: copy_tail,
-            filter_detail: "not attempted after copy timeout".into(),
-        });
+    // 1) Lossless copy — only when NO source is trimmed. The concat demuxer
+    // can't re-time a clip (head-trim requires re-encoding), so the
+    // experimental boundary-trim skips the copy and goes straight to the
+    // re-encode filter path (which also drops audio, keeping the trim clean).
+    //
+    // `copy_detail` / `copy_code` are hoisted to function scope so the
+    // final error report reads the same fields whether the copy was
+    // attempted or skipped.
+    let copy_detail: String;
+    let copy_code: i32;
+    if total_trim == 0 {
+        let copy_expected =
+            plan_expected_metadata(&source_metadata).map_err(ComposeError::OutputInvalid)?;
+        let (code, copy_tail, copy_timeout, copy_cancelled) =
+            run_ffmpeg(ffmpeg, &copy_args(&manifest, out_path), cancel);
+        copy_detail = copy_tail;
+        copy_code = code;
+        if copy_cancelled {
+            return Err(ComposeError::Cancelled);
+        }
+        if code == 0 && out_path.is_file() {
+            validate_output(ffmpeg, out_path, &copy_expected, cancel)?;
+            return Ok(ComposeResult {
+                output_path: out_path.to_string_lossy().into_owned(),
+                ffmpeg_source: ffmpeg.source.clone(),
+            });
+        }
+        if copy_timeout {
+            return Err(ComposeError::BothStrategiesFailed {
+                copy_detail: copy_detail,
+                filter_detail: "not attempted after copy timeout".into(),
+            });
+        }
+    } else {
+        // Trimmed: the manifest path is not used; the filter re-times each
+        // clip. Record the skip so the fallback report is honest.
+        copy_detail = "skipped (experimental boundary-trim forces re-encode)".to_string();
+        copy_code = -1;
     }
 
-    // 2) Re-encode fallback.
+    // 2) Re-encode fallback (and the ONLY path when trim is active).
     let (code2, filter_tail, filter_timeout, filter_cancelled) =
         run_ffmpeg(ffmpeg, &filter_args(sources, out_path), cancel);
     if filter_cancelled {
@@ -825,10 +907,10 @@ pub fn compose_session_video(
     }
 
     Err(ComposeError::BothStrategiesFailed {
-        copy_detail: if code == 0 {
-            "copy exited 0 but output missing".into()
+        copy_detail: if copy_code == 0 {
+            "copy exited 0 but output missing".to_string()
         } else {
-            format!("copy exit {code}: {copy_tail}")
+            format!("copy exit {copy_code}: {copy_detail}")
         },
         filter_detail: if filter_timeout {
             filter_tail
@@ -852,11 +934,13 @@ mod tests {
                 label: "Pipe 1".into(),
                 path: "C:\\proj\\Session\\Pipe 1\\t1\\video.mp4".into(),
                 task_id: "t1".into(),
+                trim_frames: 0,
             },
             SourceVideo {
                 label: "Pipe 2".into(),
                 path: "C:\\proj\\Session\\Pipe 2\\t2\\video.mp4".into(),
                 task_id: "t2".into(),
+                trim_frames: 0,
             },
         ]
     }
@@ -911,6 +995,51 @@ mod tests {
         assert!(s.iter().any(|x| *x == "libx264"));
         assert!(s.iter().any(|x| *x == "yuv420p"));
         assert_eq!(*s.last().unwrap(), "out.mp4");
+    }
+
+    #[test]
+    fn filter_args_trim_drops_leading_frames_per_clip() {
+        let mut srcs = srcs();
+        // The interior pipe drops 8 frames; the first stays whole.
+        srcs[1].trim_frames = BOUNDARY_TRIM_FRAMES;
+        assert!(trim_active(&srcs));
+        let a = filter_args(&srcs, Path::new("out.mp4"));
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
+        let fc = &s[fc_idx + 1];
+        // Each clip is head-trimmed by frame count; pipe 0 trims 0, pipe 1
+        // trims 8. The concat inputs are the labelled pads, not raw [i:v].
+        assert!(fc.contains("[0:v]trim=start_frame=0[v0]"), "fc: {fc}");
+        assert!(fc.contains("[1:v]trim=start_frame=8[v1]"), "fc: {fc}");
+        assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
+    }
+
+    #[test]
+    fn plan_filter_metadata_subtracts_trimmed_frames() {
+        let sources = vec![
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 640,
+                height: 360,
+                duration_seconds: 1.0,
+                frame_count: 24,
+            },
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 640,
+                height: 360,
+                duration_seconds: 2.0,
+                frame_count: 48,
+            },
+        ];
+        // No trim: the classic totals.
+        let full = plan_filter_metadata(&sources, 0).unwrap();
+        assert_eq!(full.frame_count, 72);
+        // Trim 8 frames across the run: the expected output is shorter.
+        let trimmed = plan_filter_metadata(&sources, BOUNDARY_TRIM_FRAMES).unwrap();
+        assert_eq!(trimmed.frame_count, 72 - BOUNDARY_TRIM_FRAMES as u64);
+        // A trimmed run scales duration down by the fraction of frames kept.
+        assert!(trimmed.duration_seconds < full.duration_seconds);
     }
 
     #[test]
@@ -1060,7 +1189,7 @@ mod tests {
             frame_count: 24,
         };
         assert!(validate_metadata(&out_short, &expected).is_err());
-        assert!(plan_filter_metadata(&sources).unwrap().codec == "h264");
+        assert!(plan_filter_metadata(&sources, 0).unwrap().codec == "h264");
     }
 
     #[test]
@@ -1084,6 +1213,7 @@ mod tests {
             label: "X".into(),
             path: "C:\\definitely\\not\\here.mp4".into(),
             task_id: String::new(),
+            trim_frames: 0,
         }];
         let cancel = Arc::new(AtomicBool::new(false));
         let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel);

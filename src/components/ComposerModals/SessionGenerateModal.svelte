@@ -46,6 +46,7 @@
 			runStats: RunStats | null,
 			pipeParams: Record<string, PipeParamOverride> | null,
 			forceLastFrames: Record<string, boolean> | null,
+			trimBoundary: Record<string, boolean> | null,
 		) => Promise<void> | void;
 		onFpsChange?: (fps: number) => void;
 		onResolutionChange?: (res: string) => void;
@@ -64,6 +65,7 @@
 	 *  WITHOUT a settled slot-1 are always auto-filled (no toggle needed).
 	 *  The decision is per pipe, never a single global switch. */
 	let forceLastFramesLocal = $state<Record<string, boolean>>({});
+	let trimBoundaryLocal = $state<Record<string, boolean>>({});
 	let busy = $state(false);
 	/** When ticked, confirm additionally persists the edits to the session
 	 *  (store setters). Default OFF: edits are run-scoped only. */
@@ -150,6 +152,26 @@
 	$effect(() => {
 		if (!open) return;
 		forceLastFramesLocal = {};
+		trimBoundaryLocal = {};
+	});
+
+	// ── Per-pipe "experimental compose pipes" boundary-trim (run-scoped).
+	//    Offered on every INTERIOR pipe (the group's first pipe is never
+	//    trimmed — nothing precedes it) and only when the master gate
+	//    settings.experimental.composePipes is ON. Ticked → the session-video
+	//    auto-compose drops BOUNDARY_TRIM_FRAMES (one 8n+1 interval) off that
+	//    pipe's clip head so the splice lands in stable content. Run-scoped
+	//    only: it rides the wire (StartSessionGenerationInput.trim_boundary),
+	//    never written back to the session row by this modal. ──
+	const composeGateOn = $derived(getSettings().experimental?.composePipes === true);
+	const trimEligible = $derived(new Set(pipes.slice(1).map((p: PipeRow) => p.id)));
+	const trimBoundary: Record<string, boolean> = $derived.by(() => {
+		const out: Record<string, boolean> = {};
+		if (!composeGateOn) return out;
+		for (const [id, on] of Object.entries(trimBoundaryLocal)) {
+			if (on && trimEligible.has(id)) out[id] = true;
+		}
+		return out;
 	});
 
 	// ── Per-run model override (same pattern as GenerateModal) ──
@@ -279,7 +301,8 @@
 			await onConfirm({ imageModel, videoModel }, seed, policy, autoCompose, stats,
 				Object.keys(runStats).length > 0 ? runStats : null,
 				hasPipeParamEdits ? pipeParams : null,
-				Object.keys(forceLastFrames).length > 0 ? forceLastFrames : null);
+				Object.keys(forceLastFrames).length > 0 ? forceLastFrames : null,
+				Object.keys(trimBoundary).length > 0 ? trimBoundary : null);
 		} catch (e) {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
 		} finally {
@@ -320,6 +343,13 @@
 											<input type="checkbox" checked={!!forceLastFramesLocal[row.pipe.id]}
 												onchange={(e) => (forceLastFramesLocal = { ...forceLastFramesLocal, [row.pipe.id]: (e.target as HTMLInputElement).checked })} />
 											<span class="sg-force-label">{APP_CONSTANTS.strings.sessionPipeForceLastFrame}</span>
+										</label>
+									{/if}
+									{#if composeGateOn && trimEligible.has(row.pipe.id)}
+										<label class="gen-check sg-trim" title="Experimental: drop one 8n+1 keyframe interval off this pipe's clip head so the session-video splice lands in stable content (off = classic lossless back-to-back splice)">
+											<input type="checkbox" checked={!!trimBoundaryLocal[row.pipe.id]}
+												onchange={(e) => (trimBoundaryLocal = { ...trimBoundaryLocal, [row.pipe.id]: (e.target as HTMLInputElement).checked })} />
+											<span class="sg-trim-label">Trim 8f boundary</span>
 										</label>
 									{/if}
 									{#if row.conflicts.length}
@@ -595,6 +625,32 @@
 	}
 
 	.sg-pipes .sg-force .sg-force-label {
+		white-space: nowrap;
+	}
+
+	/* Per-pipe experimental boundary-trim toggle (interior pipes only, when
+	   the master gate is on). Same compact inline style as .sg-force, but the
+	   accent border makes the "experimental" opt-in visually distinct. */
+	.sg-pipes .sg-trim {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 11px;
+		color: var(--text-muted, #71717a);
+		cursor: pointer;
+		padding: 2px 6px;
+		border: 1px dashed var(--border-color, #3f3f46);
+		border-radius: 5px;
+	}
+	.sg-pipes .sg-trim:hover {
+		border-color: var(--accent-color, #ff3e00);
+	}
+	.sg-pipes .sg-trim input {
+		width: auto;
+		margin: 0;
+		accent-color: var(--accent-color, #ff3e00);
+	}
+	.sg-pipes .sg-trim .sg-trim-label {
 		white-space: nowrap;
 	}
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PipeRow, PipeKeyframe } from '$types';
-	import { addKeyframe as addKeyframeAction } from '$lib/composerStore';
+	import { addKeyframe as addKeyframeAction, setTrimBoundary } from '$lib/composerStore';
+	import { getSettings } from '$lib/settings/store';
 	import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
@@ -248,6 +249,16 @@
 					/>
 				{/if}
 
+				{#if getSettings().experimental?.composePipes === true && prevPipe != null}
+					<label class="kf-trim-check" title="Experimental: drop one 8n+1 keyframe interval off this pipe's clip head when the session video is composed">
+						<input
+							type="checkbox"
+							checked={pipe.trimBoundary === true}
+							onchange={(e) => void setTrimBoundary(sessionId!, pipe.id, (e.target as HTMLInputElement).checked)}
+						/>
+						<span>Trim 8-frame boundary at compose</span>
+					</label>
+				{/if}
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
@@ -257,3 +268,26 @@
 	</div>
 {/if}
 
+<style>
+	/* Experimental "compose pipes" per-pipe boundary-trim toggle. Inline row
+	   under the generation panel; visible only on interior pipes when the
+	   master gate (Settings > Tools > Experimental) is on. */
+	.kf-trim-check {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 10px;
+		padding: 8px 10px;
+		border: 1px dashed var(--border-color, #3f3f46);
+		border-radius: 7px;
+		font-size: 0.8rem;
+		color: var(--text-secondary, #a1a1aa);
+		cursor: pointer;
+	}
+	.kf-trim-check input {
+		accent-color: var(--accent-color, #ff3e00);
+	}
+	.kf-trim-check:hover {
+		border-color: var(--accent-color, #ff3e00);
+	}
+</style>

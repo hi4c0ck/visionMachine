@@ -16,8 +16,8 @@ mod specs;
 mod types;
 
 pub use compose::{
-    compose_session_video, ComposeCancel, ComposeError, ComposeRegistry, ComposeResult,
-    ComposeStartError, SourceVideo,
+    compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeCancel, ComposeError, ComposeRegistry,
+    ComposeResult, ComposeStartError, SourceVideo,
 };
 pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration};
 pub use ffmpeg::{extract_last_frame, resolve_ffmpeg, FfmpegAvailability};

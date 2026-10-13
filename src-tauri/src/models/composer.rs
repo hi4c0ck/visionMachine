@@ -311,6 +311,16 @@ pub struct Pipe {
     /// (docs/agnes-model-catalog.md, Q7).
     #[serde(default = "default_media_mode")]
     pub media_mode: String,
+    /// Experimental "compose pipes" boundary-trim: when this pipe's switch is
+    /// ON and the master gate (settings.experimental.composePipes) is on, the
+    /// session-video compose drops BOUNDARY_TRIM_FRAMES (one 8n+1 interval)
+    /// off this pipe's clip head so the splice lands in stable content. Pipe
+    /// 0 (the session's first) is never offered the toggle — there's nothing
+    /// to trim before it. Persisted per pipe (the Keyframe/Subject modal
+    /// toggles it); absent/legacy rows default to false (classic lossless
+    /// splice).
+    #[serde(default)]
+    pub trim_boundary: bool,
 }
 
 fn default_length_frames() -> u32 {
@@ -378,6 +388,7 @@ impl Pipe {
             order_index: 0,
             last_generation: None,
             media_mode: default_media_mode(),
+            trim_boundary: false,
         }
     }
 
@@ -529,6 +540,9 @@ impl Pipe {
             // run will mint a fresh last-generation state.
             last_generation: None,
             media_mode: self.media_mode.clone(),
+            // The boundary-trim switch is per-pipe setup: the copy keeps the
+            // source's trim choice so its compose splices the same way.
+            trim_boundary: self.trim_boundary,
         }
     }
 }
@@ -718,6 +732,7 @@ mod tests {
                 status: "done".into(),
             }),
             media_mode: "keyframes".into(),
+            trim_boundary: false,
         };
         let value = serde_json::to_value(&pipe).expect("serialize");
         assert_eq!(value["lastGeneration"]["taskId"], "t1");
@@ -790,6 +805,7 @@ mod tests {
                 status: "done".into(),
             }),
             media_mode: "reference".into(),
+            trim_boundary: false,
         };
         // Ids minted at every level; the copy starts artifact-free.
         let copy = pipe.rekeyed();
