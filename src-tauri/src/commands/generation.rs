@@ -325,6 +325,18 @@ pub fn build_pipe_start(
             .as_ref()
             .and_then(|r| r.orientation.clone())
             .unwrap_or_else(|| composer.orientation.clone()),
+        // 0012: pinned session target size (0 = legacy/absent -> shaper falls
+        // back to the orientation ratio map, preserving today's behavior).
+        target_w: params
+            .run_stats
+            .as_ref()
+            .and_then(|r| r.target_w)
+            .unwrap_or(0),
+        target_h: params
+            .run_stats
+            .as_ref()
+            .and_then(|r| r.target_h)
+            .unwrap_or(0),
         q_value: params
             .pipe_params
             .as_ref()
@@ -730,6 +742,8 @@ pub async fn generate_piece_image(
         fps: composer.fps,
         resolution: composer.resolution.clone(),
         orientation: composer.orientation.clone(),
+        target_w: 0,
+        target_h: 0,
         c_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.c_value).unwrap_or(0.0),
         q_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.q_value).unwrap_or(0),
         seed: input.seed,

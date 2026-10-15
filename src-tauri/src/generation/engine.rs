@@ -31,6 +31,15 @@ pub struct EngineInput {
     pub fps: u32,
     pub resolution: String,
     pub orientation: String,
+    /// 0012: the session target size (round-even'd W x H) pinned for the run.
+    /// 0 = not set -> the shaper falls back to the orientation's ratio map.
+    /// Used to pick the nearest supported `aspect_ratio` request hint when a
+    /// custom target overrides the preset aspect; never sent to the provider
+    /// as pixels (R-1/R-2).
+    #[serde(default)]
+    pub target_w: u32,
+    #[serde(default)]
+    pub target_h: u32,
     pub q_value: u32,
     pub c_value: f32,
     /// Session media root the provider engine writes its artifacts into

@@ -1430,6 +1430,8 @@ mod tests {
             stage: None,
             upstream: Vec::new(),
             force_media_mode: None,
+            target_w: 0,
+            target_h: 0,
         }
     }
 

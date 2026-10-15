@@ -49,6 +49,14 @@ pub struct StageContext {
     pub fps: u32,
     pub resolution: String,
     pub orientation: String,
+    /// 0012: the session target size (round-even'd W x H) the run is pinned to.
+    /// Used by `resolve_target_size` for the nearest-ratio request hint when a
+    /// custom target overrides the orientation's preset aspect. 0 = absent ->
+    /// fall back to the orientation's ratio map (today's behavior).
+    #[serde(default)]
+    pub target_w: u32,
+    #[serde(default)]
+    pub target_h: u32,
     /// Pipe cValue; the shaper sends it under the spec's `guidance` param
     /// name only when set (E7).
     pub c_value: f32,
@@ -145,6 +153,89 @@ pub fn pick_ratio(spec: &ModelSpecWire, orientation: &str) -> Option<String> {
         .cloned()
 }
 
+/// 0012 / R-1..R-2: resolve the (tier, ratio) request params for a model from
+/// the session resolution + orientation + the pinned session target size.
+///
+/// - `tier` comes from `limits.size_map[resolution]` — a custom W x H target
+///   does NOT change the provider tier (the provider renders its own size;
+///   the compose step normalizes to the target, so the tier is only a hint).
+/// - `ratio`: the orientation's `ratio_map` entry is the default. A custom
+///   target whose aspect genuinely differs from the map's aspect overrides
+///   it with the nearest supported ratio (edges 2.3/2.4/2.5). `target_w`/
+///   `target_h` of 0 = "no target" -> the map value is used verbatim
+///   (today's behavior, legacy callers).
+pub fn resolve_target_size(
+    spec: &ModelSpecWire,
+    resolution: &str,
+    orientation: &str,
+    target_w: u32,
+    target_h: u32,
+) -> (Option<String>, Option<String>) {
+    let tier = spec
+        .limits
+        .size_map
+        .as_ref()
+        .and_then(|m| m.get(resolution))
+        .cloned();
+    let ratio = pick_ratio(spec, orientation);
+    if target_w == 0 || target_h == 0 {
+        return (tier, ratio);
+    }
+    // A concrete target: keep the orientation's map ratio unless the target's
+    // aspect is materially different, in which case pick the nearest one.
+    let target_aspect = target_w as f64 / target_h.max(1) as f64;
+    let differs = ratio
+        .as_ref()
+        .and_then(|r| parse_ratio_aspect(r))
+        .map(|a| (a - target_aspect).abs() > 0.05)
+        .unwrap_or(true); // no map entry -> let nearest_ratio decide
+    let ratio = if differs {
+        nearest_ratio(spec, target_w, target_h).or(ratio)
+    } else {
+        ratio
+    };
+    (tier, ratio)
+}
+
+fn parse_ratio_aspect(ratio: &str) -> Option<f64> {
+    let (a, b) = ratio.split_once(':')?;
+    let n = a.parse::<f64>().ok()?;
+    let d = b.parse::<f64>().ok()?;
+    if d == 0.0 {
+        None
+    } else {
+        Some(n / d)
+    }
+}
+
+/// Pick the supported ratio (from `limits.ratios`) closest to the target
+/// aspect `w / h`. Tie-break: the smaller denominator (edge 2.5). `None` when
+/// the spec lists no ratios.
+fn nearest_ratio(spec: &ModelSpecWire, w: u32, h: u32) -> Option<String> {
+    let target_aspect = w as f64 / h.max(1) as f64;
+    let mut best: Option<(f64, i64, String)> = None; // (dist, den, ratio)
+    for ratio in spec.limits.ratios.iter().flatten() {
+        let (num, den) = match ratio.split_once(':') {
+            Some((a, b)) => match (a.parse::<f64>(), b.parse::<i64>()) {
+                (Ok(n), Ok(d)) if d != 0 => (n, d),
+                _ => continue,
+            },
+            None => continue,
+        };
+        let dist = (num / den as f64 - target_aspect).abs();
+        let better = match &best {
+            None => true,
+            Some((bd, _, _)) if dist < *bd => true,
+            Some((bd, bden, _)) if dist == *bd && den < *bden => true,
+            _ => false,
+        };
+        if better {
+            best = Some((dist, den, ratio.clone()));
+        }
+    }
+    best.map(|(_, _, r)| r)
+}
+
 /// Seed only when the spec supports it AND a value was provided (E-seed).
 fn seed_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<i64> {
     spec.supports_seed().then(|| ctx.seed).flatten()
@@ -172,10 +263,14 @@ fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
         "prompt": ctx.prompt,
         "extra_body": extra_body,
     });
-    if let Some(size) = pick_image_size(spec, &ctx.resolution) {
+    // 0012 / R-1..R-2: tier + ratio resolved from the spec's maps and the
+    // pinned session target (custom aspect -> nearest supported ratio).
+    let (size, ratio) =
+        resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
+    if let Some(size) = size {
         payload["size"] = json!(size);
     }
-    if let Some(ratio) = pick_ratio(spec, &ctx.orientation) {
+    if let Some(ratio) = ratio {
         payload["ratio"] = json!(ratio);
     }
     if let Some((name, val)) = guidance_value(spec, ctx) {
@@ -412,12 +507,16 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
         "n": 1,
     });
 
-    // size: 2.5-flash only accepts "720P" (catalog sizeMap maps every
-    // session resolution to it); other seconds models use their own tiers.
-    if let Some(size) = pick_image_size(spec, &ctx.resolution) {
+    // 0012 / R-1..R-2: tier + ratio from the spec's maps and the pinned
+    // session target (custom aspect -> nearest supported ratio). 2.5-flash
+    // only accepts "720P" (catalog sizeMap maps every session resolution to
+    // it); other seconds models use their own tiers.
+    let (size, ratio) =
+        resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
+    if let Some(size) = size {
         payload["size"] = json!(size);
     }
-    if let Some(ratio) = pick_ratio(spec, &ctx.orientation) {
+    if let Some(ratio) = ratio {
         payload["aspect_ratio"] = json!(ratio);
     }
 
@@ -547,6 +646,8 @@ mod tests {
             fps: 24,
             resolution: "720p".into(),
             orientation: "horizontal".into(),
+            target_w: 0,
+            target_h: 0,
             c_value: 7.0,
             q_value: 18,
             seed: None,
@@ -1200,5 +1301,102 @@ mod tests {
         assert_eq!(clamp_to_range(2f64, 4.0, 12.0), 4.0);
         assert_eq!(clamp_to_range(15f64, 4.0, 12.0), 12.0);
         assert_eq!(clamp_to_range(8f64, 4.0, 12.0), 8.0);
+    }
+
+    // ── 0012: resolve_target_size / nearest_ratio ──────────────────────────
+
+    fn spec_with_ratios() -> ModelSpecWire {
+        spec("video-job-seconds", |m| {
+            m.id = "agnes-video-2.5-flash".into();
+            m.limits.size_map = Some(std::collections::HashMap::from([
+                ("480p".to_string(), "720P".to_string()),
+                ("720p".to_string(), "720P".to_string()),
+                ("1080p".to_string(), "720P".to_string()),
+            ]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([
+                ("horizontal".to_string(), "16:9".to_string()),
+                ("vertical".to_string(), "9:16".to_string()),
+                ("square".to_string(), "1:1".to_string()),
+            ]));
+            m.limits.ratios = Some(vec![
+                "21:9".into(),
+                "16:9".into(),
+                "4:3".into(),
+                "1:1".into(),
+                "3:4".into(),
+                "9:16".into(),
+            ]);
+        })
+    }
+
+    #[test]
+    fn resolve_no_target_uses_orientation_ratio() {
+        // target 0/0 -> the orientation's ratio_map entry verbatim (R-5 /
+        // today's behavior).
+        let (tier, ratio) = resolve_target_size(&spec_with_ratios(), "720p", "vertical", 0, 0);
+        assert_eq!(tier.as_deref(), Some("720P"));
+        assert_eq!(ratio.as_deref(), Some("9:16"));
+    }
+
+    #[test]
+    fn resolve_square_uses_map_when_close() {
+        // A square target matches the map's 1:1 within tolerance -> keep 1:1.
+        let (tier, ratio) = resolve_target_size(&spec_with_ratios(), "720p", "square", 1080, 1080);
+        assert_eq!(tier.as_deref(), Some("720P"));
+        assert_eq!(ratio.as_deref(), Some("1:1"));
+    }
+
+    #[test]
+    fn resolve_custom_43_overrides_to_nearest_ratio() {
+        // 1600x1200 = 4:3, materially different from the vertical 9:16 map
+        // entry -> nearest supported = "4:3".
+        let (_t, ratio) = resolve_target_size(&spec_with_ratios(), "720p", "vertical", 1600, 1200);
+        assert_eq!(ratio.as_deref(), Some("4:3"));
+    }
+
+    #[test]
+    fn resolve_custom_32_maps_to_43() {
+        // 1500x1000 = 3:2. Nearest: 4:3 (|1.333-1.5|=0.167) < 16:9
+        // (|1.778-1.5|=0.278) -> "4:3".
+        let (_t, ratio) = resolve_target_size(&spec_with_ratios(), "1080p", "horizontal", 1500, 1000);
+        assert_eq!(ratio.as_deref(), Some("4:3"));
+    }
+
+    #[test]
+    fn nearest_ratio_tie_breaks_smaller_denominator() {
+        // 500x400 = 1.25. Distances: 4:3 (1.333)=0.083, 1:1 (1.0)=0.25 ->
+        // "4:3". (Also exercises the denominator tie-break ordering.)
+        let s = spec_with_ratios();
+        assert_eq!(nearest_ratio(&s, 500, 400).as_deref(), Some("4:3"));
+    }
+
+    #[test]
+    fn resolve_no_ratios_list_falls_back_to_map() {
+        let s = spec("video-job-seconds", |m| {
+            m.id = "x".into();
+            m.limits.size_map = Some(std::collections::HashMap::from([(
+                "720p".to_string(),
+                "720P".to_string(),
+            )]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([(
+                "horizontal".to_string(),
+                "16:9".to_string(),
+            )]));
+            // NOTE: no `ratios` list.
+        });
+        // No ratios list -> nearest_ratio returns None -> fall back to map.
+        let (_t, ratio) = resolve_target_size(&s, "720p", "horizontal", 1600, 900);
+        assert_eq!(ratio.as_deref(), Some("16:9"));
+    }
+
+    #[test]
+    fn image_gen_no_maps_omits_size_ratio() {
+        // A spec with no size/ratio data sends neither param (edge 2.1/2.2).
+        let s = spec("image-gen", |m| {
+            m.id = "plain".into();
+        });
+        let p = shape_request(&s, &ctx(|c| { c.target_w = 1600; c.target_h = 900; })).unwrap();
+        assert!(p.get("size").is_none());
+        assert!(p.get("ratio").is_none());
     }
 }

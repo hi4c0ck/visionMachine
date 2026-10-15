@@ -389,6 +389,8 @@ impl ProviderEngine {
             stage: None,
             upstream: Vec::new(),
             force_media_mode: None,
+            target_w: 0,
+            target_h: 0,
         };
         let slot = self.provider_slot(&input, spec.kind.clone()).await?;
         let payload = shape_request(spec, &req.ctx).map_err(|e| {
@@ -842,6 +844,8 @@ impl ProviderEngine {
             fps: input.fps,
             resolution: input.resolution.clone(),
             orientation: input.orientation.clone(),
+            target_w: input.target_w,
+            target_h: input.target_h,
             c_value: input.c_value,
             q_value: input.q_value,
             seed: input.seed,
@@ -2012,6 +2016,8 @@ mod tests {
             }),
             upstream: Vec::new(),
             force_media_mode: None,
+            target_w: 0,
+            target_h: 0,
         }
     }
 
