@@ -16,6 +16,14 @@ pub struct SaveInput {
     pub resolution: Option<String>,
     #[serde(default)]
     pub orientation: Option<String>,
+    /// 0012: video-normalization crop mode (default "center").
+    #[serde(default, alias = "cropMode")]
+    pub crop_mode: Option<String>,
+    /// 0012: optional custom session target size (both must be present to apply).
+    #[serde(default, alias = "customWidth")]
+    pub custom_width: Option<u32>,
+    #[serde(default, alias = "customHeight")]
+    pub custom_height: Option<u32>,
     #[serde(default, alias = "totalGeneratedFrames")]
     pub total_generated_frames: Option<u32>,
 }
@@ -65,6 +73,9 @@ pub async fn get_composer(
         "fps": composer.fps,
         "resolution": composer.resolution,
         "orientation": composer.orientation,
+        "cropMode": composer.crop_mode,
+        "customWidth": composer.custom_width,
+        "customHeight": composer.custom_height,
         "totalGeneratedFrames": composer.total_generated_frames,
         "directoryPath": directory_path,
     }))
@@ -96,6 +107,19 @@ pub async fn save_composer(input: SaveInput, state: State<'_, AppState>) -> Resu
         orientation: input
             .orientation
             .unwrap_or_else(|| "horizontal".to_string()),
+        // 0012: crop/custom fall back to the existing blob so a legacy save
+        // (which omits these keys) never wipes an already-set target.
+        crop_mode: input
+            .crop_mode
+            .filter(|c| !c.trim().is_empty())
+            .unwrap_or_else(|| {
+                existing
+                    .as_ref()
+                    .map(|e| e.crop_mode.clone())
+                    .unwrap_or_else(crate::models::composer::default_crop_mode)
+            }),
+        custom_width: input.custom_width.or_else(|| existing.as_ref().and_then(|e| e.custom_width)),
+        custom_height: input.custom_height.or_else(|| existing.as_ref().and_then(|e| e.custom_height)),
         total_generated_frames: input.total_generated_frames.unwrap_or(0),
         created_at: None,
         updated_at: None,

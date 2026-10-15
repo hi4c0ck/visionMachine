@@ -263,17 +263,46 @@ fn session_compose_out_dir(media_root: &Option<String>, session_name: &str) -> s
 /// spawns, and the compose — shapes against the identical stats it began
 /// with, instead of each pipe re-reading the (possibly re-edited) composer
 /// at its own start. This is what keeps a long group run atomic on
-/// orientation/resolution/fps (see the 16:9-vs-9:16 head-clip bug).
+/// orientation/resolution/fps + the 0012 video-normalization target (the
+/// 16:9-vs-9:16 head-clip bug and the "changed the size mid-run" drift).
 fn resolve_run_stats(
     composer: &crate::models::ComposerConfig,
     run_stats: &Option<crate::commands::generation::RunStats>,
 ) -> crate::commands::generation::RunStats {
     use crate::commands::generation::RunStats;
+    use crate::generation::types::target_dims;
     let rs = run_stats.clone().unwrap_or_default();
+    let resolution = rs
+        .resolution
+        .clone()
+        .unwrap_or_else(|| composer.resolution.clone());
+    let orientation = rs
+        .orientation
+        .clone()
+        .unwrap_or_else(|| composer.orientation.clone());
+    let crop_mode = rs
+        .crop_mode
+        .clone()
+        .unwrap_or_else(|| composer.crop_mode.clone());
+    let custom_width = rs.custom_width.or(composer.custom_width);
+    let custom_height = rs.custom_height.or(composer.custom_height);
+    // The concrete normalize-to target is pinned here so the whole run
+    // (every pipe + the final compose) agrees on one W x H.
+    let (target_w, target_h) = target_dims(
+        &resolution,
+        &orientation,
+        custom_width,
+        custom_height,
+    );
     RunStats {
         fps: Some(rs.fps.unwrap_or(composer.fps)),
-        resolution: Some(rs.resolution.clone().unwrap_or_else(|| composer.resolution.clone())),
-        orientation: Some(rs.orientation.clone().unwrap_or_else(|| composer.orientation.clone())),
+        resolution: Some(resolution),
+        orientation: Some(orientation),
+        crop_mode: Some(crop_mode),
+        custom_width,
+        custom_height,
+        target_w: Some(target_w),
+        target_h: Some(target_h),
     }
 }
 
@@ -1794,6 +1823,11 @@ mod tests {
                 fps: Some(30),
                 resolution: Some("1080p".into()),
                 orientation: Some("vertical".into()),
+                crop_mode: None,
+                custom_width: None,
+                custom_height: None,
+                target_w: None,
+                target_h: None,
             }),
             pipe_params: Some(PipeParamOverride {
                 q_value: Some(24),
@@ -1820,6 +1854,11 @@ mod tests {
                 fps: Some(48),
                 resolution: None,
                 orientation: None,
+                crop_mode: None,
+                custom_width: None,
+                custom_height: None,
+                target_w: None,
+                target_h: None,
             }),
             pipe_params: Some(PipeParamOverride {
                 q_value: Some(20),
@@ -1843,6 +1882,11 @@ mod tests {
             fps: Some(30),
             resolution: None,
             orientation: None,
+            crop_mode: Some("center".into()),
+            custom_width: None,
+            custom_height: None,
+            target_w: None,
+            target_h: None,
         })
         .unwrap();
         assert!(json.contains("\"fps\":30"), "fps serializes camelCase");
@@ -1879,6 +1923,11 @@ mod tests {
                 fps: Some(30),
                 resolution: None,
                 orientation: Some("vertical".into()),
+                crop_mode: None,
+                custom_width: None,
+                custom_height: None,
+                target_w: None,
+                target_h: None,
             }),
         );
         assert_eq!(pinned.fps, Some(30), "set fps pins the override");

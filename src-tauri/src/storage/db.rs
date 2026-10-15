@@ -4,12 +4,18 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct Database {
     pub pool: SqlitePool,
+    /// Local file path behind the pool (set by `Database::new`); used by the
+    /// 0012 pre-migration backup. `None` for pool-only constructions (tests).
+    db_file_path: Option<String>,
 }
 
 impl Database {
     /// Create from an existing pool (for sync initialization)
     pub fn from_pool(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            db_file_path: None,
+        }
     }
 
     /// Create a new database connection (async - use during setup)
@@ -36,7 +42,10 @@ impl Database {
             .await
             .map_err(|e| format!("Failed to enable foreign keys: {}", e))?;
 
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            db_file_path: Some(path.to_string()),
+        })
     }
 
     pub async fn migrate(&self) -> Result<(), String> {
@@ -67,6 +76,9 @@ impl Database {
         self.run_additive_group_source_column().await?;
         self.run_additive_task_columns().await?;
         self.run_additive_session_columns().await?;
+        // 0012: session target size + crop normalization columns (additive,
+        // tolerant, applied only once per install).
+        self.run_additive_session_size_columns().await?;
 
         log::info!("[DB] All migrations completed");
         Ok(())
@@ -87,6 +99,63 @@ impl Database {
 
     async fn run_additive_session_columns(&self) -> Result<(), String> {
         let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN directory_path TEXT")
+            .execute(&self.pool)
+            .await;
+        Ok(())
+    }
+
+    /// 0012: the group-level snapshot of the video-normalization params used
+    /// by the last compose (stale-detect, G8). The session target size +
+    /// crop mode themselves live in the composer blob (ComposerConfig) — the
+    /// same layer as fps/resolution/orientation — so only the
+    /// `generation_groups` snapshot columns are added here. Tolerant:
+    /// duplicate-column errors on already-migrated DBs are ignored.
+    async fn run_additive_session_size_columns(&self) -> Result<(), String> {
+        // Product safeguard (post data-loss incident): before the first-ever
+        // application of a schema change, copy the live DB next to it so a
+        // bad migration can be rolled back by hand while the app is closed.
+        // Gated: only when `crop_mode_used` is still absent AND the groups
+        // table has rows (a fresh DB has nothing worth preserving).
+        let migrated: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('generation_groups') WHERE name = 'crop_mode_used'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(1); // read failure -> assume migrated, skip
+        if migrated == 0 {
+            let has_rows: bool =
+                sqlx::query_scalar("SELECT COUNT(*) > 0 FROM generation_groups")
+                    .fetch_one(&self.pool)
+                    .await
+                    .unwrap_or(false);
+            if has_rows {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                if let Some(parent) = self
+                    .db_file_path
+                    .as_ref()
+                    .and_then(|p| std::path::Path::new(p).parent().map(|d| d.to_path_buf()))
+                {
+                    let backup = parent.join(format!("visionmachine.db.bak-{ts}"));
+                    // Best-effort: SQLite's main file at idle is a consistent
+                    // snapshot, so a plain copy is reliable enough; a failure
+                    // here must never block startup.
+                    match std::fs::copy(self.db_file_path.as_deref().unwrap_or(""), &backup) {
+                        Ok(_n) => log::info!("[DB] backup before 0012 migration -> {}", backup.display()),
+                        Err(e) => log::warn!("[DB] pre-migration backup failed: {e}"),
+                    }
+                }
+            }
+        }
+        let _ = sqlx::query("ALTER TABLE generation_groups ADD COLUMN crop_mode_used TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE generation_groups ADD COLUMN target_w_used INTEGER")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE generation_groups ADD COLUMN target_h_used INTEGER")
             .execute(&self.pool)
             .await;
         Ok(())
@@ -588,7 +657,9 @@ impl Database {
         // (Pipe::rekeyed mints fresh ids so the copy never shares Svelte
         // `each` keys with the source). The legacy sessions.pipes_json column
         // must therefore stay NULL: copying the source's blob here would leave
-        // stale, id-colliding pipe ids in the copy's session row.
+        // stale, id-colliding pipe ids in the copy's session row. The
+        // crop/custom size settings travel with the blob via
+        // `mirror_copy_composer`, not through this sessions row.
         sqlx::query(
             "INSERT INTO sessions (id, project_id, name, fps, resolution, orientation, pipes_json, files_metadata, directory_path) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

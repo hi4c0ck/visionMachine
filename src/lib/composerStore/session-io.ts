@@ -3,7 +3,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { SessionService, ServiceResult } from './interfaces';
-import type { SessionData, PipeRow, ResolutionPreset } from '$types';
+import type { SessionData, PipeRow, ResolutionPreset, Orientation, CropMode } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
 import { normalizePipe } from './validators';
 
@@ -31,7 +31,12 @@ export class SessionServiceImpl implements SessionService {
         pipes,
         fps: backendData.fps || 24,
         resolution: (backendData.resolution || '720p') as ResolutionPreset,
-        orientation: backendData.orientation || 'horizontal',
+        orientation: (backendData.orientation || 'horizontal') as Orientation,
+        // 0012: session target-size / crop normalization. Absent on legacy
+        // blobs -> center + no custom pair.
+        cropMode: (backendData.cropMode as CropMode | undefined) || 'center',
+        customWidth: typeof backendData.customWidth === 'number' ? backendData.customWidth : null,
+        customHeight: typeof backendData.customHeight === 'number' ? backendData.customHeight : null,
         createdAt: backendData.createdAt || Date.now(),
         updatedAt: backendData.updatedAt || Date.now(),
         directoryPath: backendData.directoryPath || '',

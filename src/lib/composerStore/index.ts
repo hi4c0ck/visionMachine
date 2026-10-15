@@ -101,6 +101,9 @@ class ComposerStoreImpl implements ComposerStore {
         fps: 24,
         resolution: '720p',
         orientation: 'horizontal',
+        cropMode: 'center',
+        customWidth: null,
+        customHeight: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         directoryPath: '',
@@ -558,10 +561,42 @@ class ComposerStoreImpl implements ComposerStore {
 
   async updateOrientation(sessionId: string, orientation: string): Promise<ServiceResult> {
     const session = this.resolveSession(sessionId);
-    if (orientation !== 'horizontal' && orientation !== 'vertical') {
-      return { errors: ['Invalid orientation: must be horizontal or vertical'] };
+    if (orientation !== 'horizontal' && orientation !== 'vertical' && orientation !== 'square') {
+      return { errors: ['Invalid orientation: must be horizontal, vertical, or square'] };
     }
     session.orientation = orientation as any;
+    this.notifyUpdate(sessionId);
+    return { errors: [] };
+  }
+
+  /** 0012: set the session's video-normalization crop mode (persisted). */
+  async updateCropMode(sessionId: string, cropMode: string): Promise<ServiceResult> {
+    const session = this.resolveSession(sessionId);
+    const valid = ['center', 'fit', 'top', 'bottom', 'exact', 'none'];
+    if (!valid.includes(cropMode)) {
+      return { errors: [`Invalid crop mode: ${cropMode}`] };
+    }
+    session.cropMode = cropMode as any;
+    this.notifyUpdate(sessionId);
+    return { errors: [] };
+  }
+
+  /** 0012: set the session's custom target size (both, or null both). */
+  async updateCustomSize(
+    sessionId: string,
+    customWidth: number | null,
+    customHeight: number | null,
+  ): Promise<ServiceResult> {
+    const session = this.resolveSession(sessionId);
+    if (
+      (customWidth === null) !== (customHeight === null) ||
+      (customWidth !== null && (customWidth < 16 || customWidth > 8192)) ||
+      (customHeight !== null && (customHeight < 16 || customHeight > 8192))
+    ) {
+      return { errors: ['Custom size must set both W and H (16..8192) or neither'] };
+    }
+    session.customWidth = customWidth;
+    session.customHeight = customHeight;
     this.notifyUpdate(sessionId);
     return { errors: [] };
   }
@@ -688,6 +723,9 @@ class ComposerStoreImpl implements ComposerStore {
           fps: session.fps,
           resolution: session.resolution,
           orientation: session.orientation,
+          cropMode: session.cropMode ?? 'center',
+          customWidth: session.customWidth ?? null,
+          customHeight: session.customHeight ?? null,
           totalGeneratedFrames: session.totalGeneratedFrames,
         },
       });
@@ -768,6 +806,8 @@ export const clearRefRegen = composerStore.clearRefRegen.bind(composerStore);
 export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
 export const updateOrientation = composerStore.updateOrientation.bind(composerStore);
+export const updateCropMode = composerStore.updateCropMode.bind(composerStore);
+export const updateCustomSize = composerStore.updateCustomSize.bind(composerStore);
 export const loadSession = composerStore.loadSession.bind(composerStore);
 export const saveSession = composerStore.saveSession.bind(composerStore);
 export const hydrateSessions = composerStore.hydrateSessions.bind(composerStore);

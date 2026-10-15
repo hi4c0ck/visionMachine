@@ -10,6 +10,7 @@
 import type {
   AutoScrollMode,
   CarouselBlock,
+  CropMode,
   ExperimentalBlock,
   GenerationLogEntry,
   Orientation,
@@ -258,7 +259,16 @@ export function knownResolution(resolution: string): ResolutionPreset {
 
 /** Coerce a settings orientation string into a known Orientation. */
 export function knownOrientation(orientation: string): Orientation {
-  return orientation === 'vertical' ? 'vertical' : 'horizontal';
+  if (orientation === 'vertical') return 'vertical';
+  if (orientation === 'square') return 'square';
+  return 'horizontal';
+}
+
+const KNOWN_CROP_MODES: readonly string[] = ['center', 'fit', 'top', 'bottom', 'exact', 'none'];
+
+/** 0012: coerce a stored crop mode into the closed CropMode union. */
+export function knownCropMode(cropMode: string): CropMode {
+  return KNOWN_CROP_MODES.includes(cropMode) ? (cropMode as CropMode) : 'center';
 }
 
 /**

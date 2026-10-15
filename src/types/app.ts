@@ -21,7 +21,21 @@ export type ResolutionPreset = '480p' | '720p' | '1080p';
 /**
  * Video orientation
  */
-export type Orientation = 'horizontal' | 'vertical';
+export type Orientation = 'horizontal' | 'vertical' | 'square';
+
+/**
+ * How already-generated video clips are normalized to the session target
+ * W x H at compose time.
+ * - `center`: cover-scale + center-crop (most common; trims equal margins)
+ * - `fit`:    contain-scale + pad (black letterbox / pillarbox)
+ * - `top`:    cover-scale + crop from the top of the frame
+ * - `bottom`: cover-scale + crop from the bottom of the frame
+ * - `exact`:  stretch-scale to target (distorts aspect if mismatched)
+ * - `none`:   auto-center only when clip sizes are mixed; lossless if all
+ *             clips already match the target. Default "none" is never sent
+ *             by the UI — `center` is the default crop mode.
+ */
+export type CropMode = 'center' | 'fit' | 'top' | 'bottom' | 'exact' | 'none';
 
 /**
  * Keyframe image source type
@@ -73,10 +87,79 @@ export const FPS_PRESETS = [18, 24, 30, 48, 60];
  * Resolution dimensions mapping
  */
 export const RESOLUTION_DIMS: Record<ResolutionPreset, Record<Orientation, { width: number; height: number }>> = {
-  '480p': { horizontal: { width: 854, height: 480 }, vertical: { width: 480, height: 854 } },
-  '720p': { horizontal: { width: 1280, height: 720 }, vertical: { width: 720, height: 1280 } },
-  '1080p': { horizontal: { width: 1920, height: 1080 }, vertical: { width: 1080, height: 1920 } },
+  '480p': {
+    horizontal: { width: 854, height: 480 },
+    vertical: { width: 480, height: 854 },
+    square: { width: 480, height: 480 },
+  },
+  '720p': {
+    horizontal: { width: 1280, height: 720 },
+    vertical: { width: 720, height: 1280 },
+    square: { width: 720, height: 720 },
+  },
+  '1080p': {
+    horizontal: { width: 1920, height: 1080 },
+    vertical: { width: 1080, height: 1920 },
+    square: { width: 1080, height: 1080 },
+  },
 };
+
+/**
+ * 0012: round a dimension to the nearest even value. libx264 and the
+ * compose lossless gate both require even W/H; `roundEven` is the single
+ * normalization applied BEFORE any comparison or ffmpeg filter (edge 1.5).
+ * Mirrored in Rust (`round_even` in `src-tauri/src/generation/types.rs`).
+ */
+export function roundEven(v: number): number {
+  return Math.max(0, Math.round(v / 2) * 2);
+}
+
+/**
+ * 0012: effective session target size (W x H) for compose normalization.
+ * - Both `customWidth` AND `customHeight` present and valid (32..=8192) ->
+ *   the custom pair (round-even'd).
+ * - Otherwise -> `RESOLUTION_DIMS[resolution][orientation]`.
+ * A partial custom (one value set) is treated as unset (edge 1.3).
+ */
+export function effectiveTargetDims(
+  resolution: ResolutionPreset,
+  orientation: Orientation,
+  customWidth?: number | null,
+  customHeight?: number | null,
+): { width: number; height: number } {
+  if (
+    typeof customWidth === 'number' &&
+    typeof customHeight === 'number' &&
+    customWidth >= 32 &&
+    customWidth <= 8192 &&
+    customHeight >= 32 &&
+    customHeight <= 8192
+  ) {
+    return { width: roundEven(customWidth), height: roundEven(customHeight) };
+  }
+  const res = (RESOLUTION_DIMS as any)[resolution] ? resolution : '720p';
+  const ori = (RESOLUTION_DIMS as any)[res] && (RESOLUTION_DIMS as any)[res][orientation]
+    ? orientation
+    : 'horizontal';
+  return RESOLUTION_DIMS[res as ResolutionPreset][ori];
+}
+
+/**
+ * 0012: session target as a display label, e.g. "1920×1080 (16:9)" or
+ * "1080×1080 (1:1)". The ratio is the target's own W:H reduced; it may
+ * differ from the provider's `aspect_ratio` request hint (R-1/R-2).
+ */
+export function targetDimsLabel(
+  resolution: ResolutionPreset,
+  orientation: Orientation,
+  customWidth?: number | null,
+  customHeight?: number | null,
+): string {
+  const { width, height } = effectiveTargetDims(resolution, orientation, customWidth, customHeight);
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const g = gcd(width, height) || 1;
+  return `${width}×${height} (${width / g}:${height / g})`;
+}
 
 /**
  * Calculate max frames for a resolution
@@ -385,6 +468,11 @@ export interface SessionData {
   fps: number;
   resolution: ResolutionPreset;
   orientation: Orientation;
+  /** 0012: video-normalization crop mode. Absent/legacy -> "center". */
+  cropMode?: CropMode;
+  /** 0012: optional custom session target size (both present = active). */
+  customWidth?: number | null;
+  customHeight?: number | null;
   totalGeneratedFrames: number;
 }
 

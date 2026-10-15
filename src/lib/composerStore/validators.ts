@@ -153,6 +153,13 @@ export function normalizeSession(session: SessionData): SessionData {
   // (placeholder — provider settings will own these values later).
   if (!session.resolution) session.resolution = defaultResolutionFor(session.orientation) ?? '720p';
   if (!session.orientation) session.orientation = 'horizontal';
+  if (session.orientation !== 'horizontal' && session.orientation !== 'vertical' && session.orientation !== 'square') {
+    session.orientation = 'horizontal';
+  }
+  // 0012: crop / custom target size defaults for legacy rows.
+  if (!session.cropMode) session.cropMode = 'center';
+  session.customWidth = Number.isFinite(session.customWidth as number) ? (session.customWidth as number) : null;
+  session.customHeight = Number.isFinite(session.customHeight as number) ? (session.customHeight as number) : null;
   if (session.totalGeneratedFrames === undefined || session.totalGeneratedFrames === null) {
     session.totalGeneratedFrames = 0;
   }

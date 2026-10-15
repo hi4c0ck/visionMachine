@@ -196,6 +196,21 @@ pub struct RunStats {
     pub resolution: Option<String>,
     #[serde(default)]
     pub orientation: Option<String>,
+    /// 0012: session video-normalization crop mode (pinned with res/orientation
+    /// so a mid-run session edit never changes the shape of a live run).
+    #[serde(default)]
+    pub crop_mode: Option<String>,
+    #[serde(default)]
+    pub custom_width: Option<u32>,
+    #[serde(default)]
+    pub custom_height: Option<u32>,
+    /// 0012: the concrete compose-normalize-to target (round-even'd W x H),
+    /// pinned at `resolve_run_stats` time so the whole group run + final
+    /// compose agree on one size. Absent in the standalone (non-group) path.
+    #[serde(skip)]
+    pub target_w: Option<u32>,
+    #[serde(skip)]
+    pub target_h: Option<u32>,
 }
 
 /// Per-pipe Q/C override for one pipe. Only the values the user actually

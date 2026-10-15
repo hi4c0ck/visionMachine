@@ -150,6 +150,53 @@ fn is_zero_i64(v: &i64) -> bool {
     *v == 0
 }
 
+/// 0012: round a dimension to the nearest even value (edge 1.5). libx264 and
+/// the compose lossless gate both require even W/H; this is the single
+/// normalization applied before any comparison or ffmpeg filter.
+pub fn round_even(v: u32) -> u32 {
+    v.div_ceil(2) * 2
+}
+
+/// 0012: per-preset session target dimensions, mirrored from the frontend
+/// `RESOLUTION_DIMS` (`src/types/app.ts`). The same table drives the compose
+/// normalize-to target, so the Rust side is the source of truth for what
+/// actually gets written; the TS table exists only for UI display.
+pub fn resolution_dims(resolution: &str, orientation: &str) -> (u32, u32) {
+    let base: (u32, u32) = match resolution.to_ascii_lowercase().as_str() {
+        "480p" => (480, 854),
+        "1080p" => (1080, 1920),
+        // 720p is the historical default.
+        _ => (720, 1280),
+    };
+    match orientation {
+        "vertical" => (base.0, base.1),
+        "square" => {
+            let s = base.0;
+            (s, s)
+        }
+        _ => (base.1, base.0),
+    }
+}
+
+/// 0012: effective session target size for compose normalization.
+/// - Both `custom_width` AND `custom_height` present and valid (32..=8192) ->
+///   the custom pair (round-even'd).
+/// - Otherwise -> `resolution_dims(resolution, orientation)`.
+/// Mirrors `effectiveTargetDims` on the frontend (same rules, same defaults).
+pub fn target_dims(
+    resolution: &str,
+    orientation: &str,
+    custom_width: Option<u32>,
+    custom_height: Option<u32>,
+) -> (u32, u32) {
+    if let (Some(w), Some(h)) = (custom_width, custom_height) {
+        if (32..=8192).contains(&w) && (32..=8192).contains(&h) {
+            return (round_even(w), round_even(h));
+        }
+    }
+    resolution_dims(resolution, orientation)
+}
+
 /// Event the task state machine pushes to the UI (frontend listens on the
 /// `gen-task` window event). This is the "backend owns state, frontend
 /// renders" push side: `view` is the authoritative current snapshot from the
@@ -168,4 +215,55 @@ pub struct GenTaskEvent {
     pub status: Option<TaskStatus>,
     /// The current authoritative task view the UI renders from.
     pub view: GenerationTaskView,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolution_dims, round_even, target_dims};
+
+    #[test]
+    fn round_even_normalizes_to_even() {
+        // Round to nearest even; .5 rounds up. TS `roundEven` mirrors this
+        // (Math.round(v/2)*2) so the lossless gate + UI agree on the target.
+        assert_eq!(round_even(1921), 1922);
+        assert_eq!(round_even(1079), 1080);
+        assert_eq!(round_even(720), 720);
+        assert_eq!(round_even(1920), 1920);
+        assert_eq!(round_even(1), 2);
+    }
+
+    #[test]
+    fn resolution_dims_matches_frontend_table() {
+        // horizontal: (long, short) of the preset base.
+        assert_eq!(resolution_dims("720p", "horizontal"), (1280, 720));
+        assert_eq!(resolution_dims("1080p", "horizontal"), (1920, 1080));
+        // vertical is the transposed pair.
+        assert_eq!(resolution_dims("720p", "vertical"), (720, 1280));
+        // square is the min-of-pair on both axes.
+        assert_eq!(resolution_dims("720p", "square"), (720, 720));
+        assert_eq!(resolution_dims("1080p", "square"), (1080, 1080));
+        // Unknown preset falls back to the 720p base.
+        assert_eq!(resolution_dims("garbage", "horizontal"), (1280, 720));
+    }
+
+    #[test]
+    fn target_dims_prefers_valid_custom_pair() {
+        assert_eq!(target_dims("720p", "horizontal", Some(1600), Some(900)), (1600, 900));
+        // Odd custom dims get round-even'd (matches the TS mirror).
+        assert_eq!(target_dims("720p", "horizontal", Some(1601), Some(899)), (1602, 900));
+    }
+
+    #[test]
+    fn target_dims_ignores_partial_or_invalid_custom() {
+        // Only one of the two set -> fall back to the preset dims.
+        assert_eq!(
+            target_dims("720p", "vertical", Some(1600), None),
+            resolution_dims("720p", "vertical")
+        );
+        // Out of range -> ignore, use preset.
+        assert_eq!(
+            target_dims("1080p", "horizontal", Some(5), Some(5)),
+            resolution_dims("1080p", "horizontal")
+        );
+    }
 }

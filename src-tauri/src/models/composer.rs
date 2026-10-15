@@ -561,6 +561,19 @@ pub struct ComposerConfig {
     pub resolution: String,
     #[serde(default = "default_orientation")]
     pub orientation: String,
+    /// 0012: how already-generated clips are normalized to the session
+    /// target at compose time. "center" | "fit" | "top" | "bottom" |
+    /// "exact" | "none". Defaults "center" (the historical lossless-ish
+    /// behavior when sizes already match).
+    #[serde(default = "default_crop_mode")]
+    pub crop_mode: String,
+    /// 0012: optional custom session target size (W x H). Present only when
+    /// BOTH are set and valid; a partial pair is treated as unset by
+    /// `target_dims`. Absent on legacy blobs (defaults None).
+    #[serde(default)]
+    pub custom_width: Option<u32>,
+    #[serde(default)]
+    pub custom_height: Option<u32>,
     #[serde(default)]
     pub total_generated_frames: u32,
     pub created_at: Option<DateTime<Utc>>,
@@ -575,6 +588,9 @@ fn default_resolution() -> String {
 }
 fn default_orientation() -> String {
     "horizontal".to_string()
+}
+pub fn default_crop_mode() -> String {
+    "center".to_string()
 }
 
 impl ComposerConfig {
@@ -594,6 +610,9 @@ impl ComposerConfig {
             fps: 24,
             resolution: default_resolution(),
             orientation: default_orientation(),
+            crop_mode: default_crop_mode(),
+            custom_width: None,
+            custom_height: None,
             total_generated_frames: 0,
             created_at: Some(now),
             updated_at: Some(now),
