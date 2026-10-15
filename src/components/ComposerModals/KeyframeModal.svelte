@@ -85,6 +85,13 @@
 				: kfReferenceUrl.trim().length > 0 && kfPrompt.trim().length > 0,
 	);
 
+	// #5 by-design preview: a url-mode keyframe holds a DIRECT image source —
+	// a `data:` URI (the last-frame catch / a picked local image) or a remote
+	// https URL. The PieceGenPanel thumbnails above only cover txt2img/img2img,
+	// so render a compact thumbnail here for url-mode so a captured last frame
+	// (or any pasted URL) is visible when the modal opens.
+	const kfUrlPreviewable = $derived(/^data:image\/?|^https?:\/\//i.test(kfUrl.trim()));
+
 	// The value that's ACTIVE for the current mode: the URL field in url mode,
 	// the prompt field in the generation modes. This is what gets persisted
 	// (imageSrc vs prompt) and validated.
@@ -207,6 +214,12 @@
 								>{lastFrameBusy ? '…' : '⏮'}</button>
 							{/if}
 						</div>
+						{#if kfUrlPreviewable}
+							<div class="kf-url-thumb" title="Keyframe preview">
+								<img src={kfUrl} alt="Keyframe preview" />
+								<span>{canUseLastFrame && prevPipe ? 'Last frame of ' + prevPipe.name : 'Keyframe'}</span>
+							</div>
+						{/if}
 					</div>
 				{:else if kfType === 'txt2img'}
 					<div class="modal-field">
@@ -289,5 +302,25 @@
 	}
 	.kf-trim-check:hover {
 		border-color: var(--accent-color, #ff3e00);
+	}
+
+	.kf-url-thumb {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		margin-top: 8px;
+	}
+	.kf-url-thumb img {
+		width: 100%;
+		max-width: 260px;
+		aspect-ratio: 16 / 9;
+		object-fit: cover;
+		border-radius: 6px;
+		border: 1px solid var(--border-color);
+		background: var(--bg-tertiary);
+	}
+	.kf-url-thumb span {
+		font-size: 0.68rem;
+		color: var(--text-muted);
 	}
 </style>

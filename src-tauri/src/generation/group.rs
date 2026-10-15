@@ -255,6 +255,28 @@ fn session_compose_out_dir(media_root: &Option<String>, session_name: &str) -> s
 /// keyframe interval); `false` (or an absent entry) trims nothing. Centralized
 /// here so the "8" lives in one backend spot and the UI only ever deals with
 /// the boolean the user actually sees.
+/// Resolve a group run's session-stats ONCE, at start, into a fully
+/// concrete `RunStats` (fps/resolution/orientation all `Some`): the
+/// run-scoped override wins per-field, and any field the modal left unset
+/// falls back to the composer row's stored value. The result is pinned on
+/// the group's stored input so the whole run — first pipe, follow-up
+/// spawns, and the compose — shapes against the identical stats it began
+/// with, instead of each pipe re-reading the (possibly re-edited) composer
+/// at its own start. This is what keeps a long group run atomic on
+/// orientation/resolution/fps (see the 16:9-vs-9:16 head-clip bug).
+fn resolve_run_stats(
+    composer: &crate::models::ComposerConfig,
+    run_stats: &Option<crate::commands::generation::RunStats>,
+) -> crate::commands::generation::RunStats {
+    use crate::commands::generation::RunStats;
+    let rs = run_stats.clone().unwrap_or_default();
+    RunStats {
+        fps: Some(rs.fps.unwrap_or(composer.fps)),
+        resolution: Some(rs.resolution.clone().unwrap_or_else(|| composer.resolution.clone())),
+        orientation: Some(rs.orientation.clone().unwrap_or_else(|| composer.orientation.clone())),
+    }
+}
+
 fn boundary_trim_of(on: bool) -> u32 {
     if on {
         BOUNDARY_TRIM_FRAMES
@@ -362,7 +384,7 @@ impl GroupCoordinator {
     }
     pub async fn start_group(
         &self,
-        input: StartSessionGenerationInput,
+        mut input: StartSessionGenerationInput,
     ) -> Result<(String, String, GenerationTaskView), String> {
         let composer = {
             self.db
@@ -370,6 +392,20 @@ impl GroupCoordinator {
                 .await
                 .map_err(|e| e.to_string())?
         };
+        // ── Run-stats pin (session tier): resolve `run_stats ?? composer`
+        //    ONCE, here, and store the concrete values on the group input.
+        //    Every pipe start (the first pipe AND the follow-up spawns that
+        //    rebuild their input from this stored copy) then shapes against
+        //    the identical fps/res/orientation the run began with. Without
+        //    this pin, each pipe re-reads the composer at its own start and a
+        //    long run (a 503 retry storm stretches pipe starts hours apart)
+        //    can drift: pipe 1 shaped 16:9 before the user switched the
+        //    session to vertical, pipes 2..n shaped 9:16 after — one group
+        //    run, two orientations, and the composed head lands horizontal.
+        //    Pinning makes the session-generation tier authoritative for the
+        //    whole run; a mid-run settings edit no longer changes the shape.
+        let pinned = resolve_run_stats(&composer, &input.run_stats);
+        input.run_stats = Some(pinned);
         // When a group will compose, the session-video output dir is shared
         // with the standalone "compose session" button. Reset any stale
         // manifest/output AND any staged clips a PREVIOUS group run left
@@ -530,8 +566,17 @@ impl GroupCoordinator {
                 .as_ref()
                 .and_then(|m| m.get(pipe_id).cloned()),
         };
-        let (view, engine_input) =
+        let (view, mut engine_input) =
             crate::commands::generation::build_pipe_start(&composer, &pipe, &params);
+        // "Force last frame" tick for THIS pipe = insist the video stage runs in
+        // keyframe mode: the caught last-frame (slot-1) drives a keyframe
+        // generation, not a subject-reference one. Only interior pipes can be
+        // forced (the first pipe has nothing to catch); the map is the source
+        // of truth, defaulting to OFF.
+        let force_this_pipe = input.force_last_frames.get(pipe_id).copied().unwrap_or(false);
+        if force_this_pipe {
+            engine_input.force_media_mode = Some("keyframes".into());
+        }
         let tid = view.task_id.clone();
         self.generation
             .registry
@@ -603,7 +648,10 @@ impl GroupCoordinator {
             return;
         }
         // The next pipe's media mode must actually consume keyframes; in
-        // reference mode slot-1 keyframes are inert, so skip.
+        // reference mode slot-1 keyframes are inert, so skip. EXCEPTION: a
+        // FORCED pipe insists on keyframe mode (force_media_mode is set in
+        // start_pipe), so the catch must still fill its slot-1 last-frame —
+        // that's the frame the keyframe-mode video stage will consume.
         let media_mode_ok = {
             let composer = self.db.get_composer(session_id).await.ok();
             composer
@@ -611,7 +659,7 @@ impl GroupCoordinator {
                 .map(|p| p.media_mode == "keyframes")
                 .unwrap_or(false)
         };
-        if !media_mode_ok {
+        if !media_mode_ok && !force {
             return;
         }
         // Extract the last frame to a temp PNG, then base64-encode it into the
@@ -1802,6 +1850,40 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "qValue": 24 })).unwrap();
         assert_eq!(back.q_value, Some(24), "qValue key deserializes");
         assert_eq!(back.c_value, None, "absent cValue = None");
+    }
+
+    /// The run-stats pin resolves `run_stats ?? composer` into a fully
+    /// concrete RunStats so the whole group run shapes identically: a
+    /// present override field wins; an absent one falls back to the
+    /// composer row; and an absent run_stats pins the composer row verbatim.
+    #[test]
+    fn resolve_run_stats_pins_concrete_values_for_the_run() {
+        use crate::commands::generation::RunStats;
+        let composer: crate::models::ComposerConfig = serde_json::from_value(serde_json::json!({
+            "id": "c1", "sessionId": "s1", "name": "My Session",
+            "fps": 24, "resolution": "720p", "orientation": "horizontal",
+            "pipes": []
+        }))
+        .unwrap();
+
+        // Absent run_stats: pin the composer row exactly.
+        let pinned = resolve_run_stats(&composer, &None);
+        assert_eq!(pinned.fps, Some(24));
+        assert_eq!(pinned.resolution.as_deref(), Some("720p"));
+        assert_eq!(pinned.orientation.as_deref(), Some("horizontal"));
+
+        // Partial override: present fields win, absent fall back.
+        let pinned = resolve_run_stats(
+            &composer,
+            &Some(RunStats {
+                fps: Some(30),
+                resolution: None,
+                orientation: Some("vertical".into()),
+            }),
+        );
+        assert_eq!(pinned.fps, Some(30), "set fps pins the override");
+        assert_eq!(pinned.resolution.as_deref(), Some("720p"), "absent res pins the composer");
+        assert_eq!(pinned.orientation.as_deref(), Some("vertical"), "set orientation pins the override");
     }
 
     // `order_index` — not completion order — decides concat order, so a run

@@ -63,6 +63,13 @@ pub struct EngineInput {
     /// (keyframes slot order then subjects pipe order; O5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upstream: Vec<UpstreamOutput>,
+    /// Run-scoped media-mode override for the video stage (group flow).
+    /// When set (e.g. "keyframes"), the registry overrides the video
+    /// stage's `media_mode` in the stage plan, so a forced last-frame
+    /// catch insists on keyframe generation even when the pipe's stored
+    /// media_mode is "reference". None = use the pipe's stored mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub force_media_mode: Option<String>,
 }
 
 /// Per-stage context the provider engine executes against — today the

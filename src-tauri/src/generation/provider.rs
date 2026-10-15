@@ -388,6 +388,7 @@ impl ProviderEngine {
             video_spec: None,
             stage: None,
             upstream: Vec::new(),
+            force_media_mode: None,
         };
         let slot = self.provider_slot(&input, spec.kind.clone()).await?;
         let payload = shape_request(spec, &req.ctx).map_err(|e| {
@@ -2010,6 +2011,7 @@ mod tests {
                 length_frames: 121,
             }),
             upstream: Vec::new(),
+            force_media_mode: None,
         }
     }
 

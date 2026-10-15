@@ -49,6 +49,18 @@ function mediaMime(path: string): string {
   }
 }
 
+/**
+ * Drop any cached blob URL for a path so the next `toMediaUrl` re-reads the
+ * current on-disk bytes. Needed for files that are OVERWRITTEN IN PLACE at a
+ * stable path — the group auto-compose rewrites the same
+ * `session-video/session.mp4` every run, so a path-keyed cache would otherwise
+ * hand back the PREVIOUS run's blob (the "I see the previous one" symptom).
+ * No-op for unknown paths.
+ */
+export function invalidateMediaUrlCache(path: string | null | undefined): void {
+  if (path) urlCache.delete(path);
+}
+
 export async function toMediaUrl(path: string | null | undefined): Promise<string | null> {
   if (!path) return null;
   if (!isTauri()) return null;

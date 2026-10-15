@@ -83,7 +83,7 @@ const APP_CONSTANTS = {
     sessionAutoCompose: 'Auto-compose session video',
     sessionPipeForceLastFrame: 'Force last frame',
     sessionPipeForceLastFrameHint:
-      "Overwrite this pipe's settled first keyframe with the previous pipe's last frame. Pipes without a settled first keyframe are filled automatically.",
+      "On: this pipe's first keyframe is (re)snap'd from the previous pipe's last frame — created when missing, overwritten when settled. Off: a missing first keyframe is filled automatically and an existing one is kept.",
     sessionCatchLastFrameNote:
       "Each pipe's empty first keyframe is auto-filled with the previous pipe's last frame as they run. Tick \"Force last frame\" on a specific pipe to overwrite its settled first keyframe.",
     sessionCancelAll: 'Cancel all',

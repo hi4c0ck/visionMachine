@@ -86,15 +86,26 @@ export class PipeServiceImpl implements PipeService {
         ...kf,
         id: crypto.randomUUID(),
         // A copy's keyframes have NOT been generated for the copy — the
-        // status/forceRegen belong to the source's run, so reset them.
+        // status/forceRegen belong to the source's run, so reset them. The
+        // generated preview pair (previewLocalPath/previewRemoteUrl) belongs
+        // to the source's media tree too: carry it over and the copy would
+        // "settle" to a file it does not own (the "references attached not
+        // proper" mess). Mirror Pipe::rekeyed() and null it so the copy's
+        // pieces start ungenerated and mint their own previews.
         status: 'pending',
         forceRegen: false,
+        previewLocalPath: undefined,
+        previewRemoteUrl: undefined,
       })),
       subjectReferences: (pipe.subjectReferences ?? []).map((r: any) => ({
         ...r,
         id: crypto.randomUUID(),
         status: 'pending',
         forceRegen: false,
+        // Same as keyframes: the generated preview is the source's artifact,
+        // not the copy's. Drop it so the copy can't settle to a foreign file.
+        previewLocalPath: undefined,
+        previewRemoteUrl: undefined,
       })),
       elements: remintElements,
       // Pipe-level generated video is NOT part of a copy (user requirement):

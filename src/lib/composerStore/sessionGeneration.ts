@@ -63,6 +63,10 @@ export interface GenerationGroupView {
   groupId: string; sessionId: string; status: string; live: boolean;
   pipes: Array<{ pipeId?: string; taskId?: string | null; status?: string; progress?: number }>;
   progress: number; sessionVideoPath?: string | null; composeState?: string | null; composeError?: string | null;
+  /** The run-level error message (e.g. a transport failure that aborted the
+   *  whole group before any pipe finished). Present on a terminal-error
+   *  group; what the "stubbed with error" reopen must surface. */
+  error?: string | null;
   /** This run's source records, in concat (`orderIndex`) order. */
   sources?: GroupSourceRecord[];
 }
@@ -145,6 +149,7 @@ function parseGenerationGroup(raw: any): GenerationGroupView {
     sessionVideoPath: raw.sessionVideoPath ?? raw.session_video_path,
     composeState: raw.composeState ?? raw.compose_state,
     composeError: raw.composeError ?? raw.compose_error,
+    error: raw.error ?? null,
     sources: raw.sources ?? [],
   };
 }

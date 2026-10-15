@@ -25,7 +25,7 @@
 import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
-	import { toMediaUrl } from '$lib/mediaUrl';
+	import { toMediaUrl, invalidateMediaUrlCache } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
@@ -118,6 +118,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// attached on the NEW session (attachSessionVideo is async).
 	async function attachSessionVideo(path: string, label: string): Promise<boolean> {
 		const before = selectedSessionId;
+		// A group run overwrites the SAME session.mp4 in place; force a fresh
+		// read so the top panel shows THIS run, not the previous one's cached blob.
+		invalidateMediaUrlCache(path);
 		const url = await toMediaUrl(path).catch(() => null);
 		if (url && before !== selectedSessionId) {
 			// The user switched sessions mid-flight: only honor the attach when
@@ -239,6 +242,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				: undefined) ??
 			session.pipes.find((p) => p.lastGeneration?.videoPath);
 		if (!pipe?.lastGeneration?.videoPath) return;
+		invalidateMediaUrlCache(pipe.lastGeneration.videoPath);
 		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
 		if (url) {
 			previewVideo = { url, label: pipe.name };
@@ -449,6 +453,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// instead of presenting completion as a silent success.
 	let groupComposeState = $state<string | null>(null);
 	let groupComposeError = $state<string | null>(null);
+	// Run-level error of the restored group (e.g. a transport failure that
+	// aborted the whole group before any pipe finished). Surfaced on reopen
+	// so a "stubbed with error" run is not silently invisible.
+	let groupRunError = $state<string | null>(null);
 	let groupSessionVideoPath = $state<string | null>(null);
 	// Overall group progress (0..=1, the backend's stage-count-weighted
 	// average across the group's pipes) + the compose step's live phase,
@@ -763,6 +771,21 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		}
 	});
 	function handleKeyDown(e: KeyboardEvent) {
+		// Never step the global playhead while typing — the composer modals
+		// (keyframe prompt, etc.) render inside .workspace-body, so an Arrow
+		// press in their textareas used to leak here, move the frame, switch
+		// the active pipe, and re-seed the open modal (flipping its mode and
+		// erasing the in-progress text). Matches the Frame.svelte guard.
+		const t = e.target as HTMLElement | null;
+		if (
+			t &&
+			(t.tagName === 'INPUT' ||
+				t.tagName === 'TEXTAREA' ||
+				t.tagName === 'SELECT' ||
+				t.isContentEditable)
+		) {
+			return;
+		}
 		if (e.key === 'ArrowLeft') {
 			selectedFrame = Math.max(0, (selectedFrame || 0) - 8);
 		} else if (e.key === 'ArrowRight') {
@@ -1087,6 +1110,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			groupComposeState = null;
 			groupComposeError = null;
 			groupSessionVideoPath = null;
+			groupRunError = null;
 			stopGroupPoll();
 			stopWatching();
 			activeTask = null;
@@ -1130,6 +1154,21 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		groupTaskViews = {};
 		groupComposeState = group.composeState ?? null;
 		groupComposeError = group.composeError ?? null;
+		// Surface a terminal group's run-level error on reopen. The group
+		// machinery below intentionally does NOT re-arm the live poller/watcher
+		// for a restored (non-live) group, so without this a failed run
+		// ("video create transport error", a cancelled run, …) was silently
+		// invisible — the "stubbed with error, can't see it" symptom. Mark the
+		// pill as errored and toast the reason so the user sees it immediately.
+		groupRunError = group.error ?? null;
+		if (!isLiveGroup && (group.status === 'error' || group.status === 'cancelled')) {
+			pillTerminal = 'error';
+			const detail = group.error ?? group.composeError ?? 'unknown reason';
+			flashToast(
+				`${group.status === 'cancelled' ? 'Generation cancelled' : 'Generation failed'}: ${detail}`,
+				'error',
+			);
+		}
 		// The session video path is only meaningful when the compose SUCCEEDED.
 		// A failed / cancelled latest compose must not leave a stale path from
 		// another session attached — clear it so the preview can fall back (or
@@ -2321,6 +2360,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		previewVideo = null;
 		previewIsSessionVideo = false;
 		previewMediaPath = null;
+		invalidateMediaUrlCache(pipe.lastGeneration?.videoPath ?? null);
 		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
 			.then((url) => {
 				if (url) {

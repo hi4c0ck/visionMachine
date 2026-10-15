@@ -153,10 +153,10 @@ describe('Composer Integration', () => {
         cValue: 7,
         orderIndex: 0,
         keyframes: [
-          { id: 'kf1', frame: 0, slotIndex: 0, type: 'url', imageSrc: 'a.png', status: 'done', forceRegen: true },
+          { id: 'kf1', frame: 0, slotIndex: 0, type: 'url', imageSrc: 'a.png', previewLocalPath: 'C:/media/src/kf.png', previewRemoteUrl: 'https://x/kf.png', status: 'done', forceRegen: true },
         ],
         subjectReferences: [
-          { id: 'sr1', imageUrl: 'b.png', useFrames: false, status: 'done', forceRegen: true },
+          { id: 'sr1', imageUrl: 'b.png', previewLocalPath: 'C:/media/src/sr.png', previewRemoteUrl: 'https://x/sr.png', useFrames: false, status: 'done', forceRegen: true },
         ],
         elements: [
           {
@@ -195,6 +195,16 @@ describe('Composer Integration', () => {
       expect(copy.elements[0].id).not.toBe('el1');
       expect(copy.elements[0].segments[0].id).not.toBe('seg1');
       expect(copy.elements[0].segments[0].tags[0].id).not.toBe('tag1');
+      // #3: generated preview artifacts belong to the SOURCE's media tree, not
+      // the copy — carrying them makes the copy "settle" to a foreign file
+      // (the "references attached not proper" mess). The copy starts clean.
+      expect(copy.keyframes[0].previewLocalPath).toBeUndefined();
+      expect(copy.keyframes[0].previewRemoteUrl).toBeUndefined();
+      expect(copy.subjectReferences[0].previewLocalPath).toBeUndefined();
+      expect(copy.subjectReferences[0].previewRemoteUrl).toBeUndefined();
+      // ...but the source keeps its own artifacts untouched.
+      expect(src.keyframes[0].previewLocalPath).toBe('C:/media/src/kf.png');
+      expect(src.subjectReferences[0].previewRemoteUrl).toBe('https://x/sr.png');
     });
 
     it('does NOT carry over pipe-level generated video (lastGeneration)', async () => {

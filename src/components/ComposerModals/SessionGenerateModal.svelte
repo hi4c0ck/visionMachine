@@ -118,26 +118,23 @@
 	});
 	const hasPipeParamEdits = $derived(Object.keys(pipeParams).length > 0);
 
-	// ── Per-pipe "force first keyframe" — computed from each pipe's OWN setup
-	//    (not a global switch). A force toggle is offered only on a pipe that:
-	//    (a) is not the group's first pipe (nothing to catch before it),
-	//    (b) runs in keyframe mode (slot-1 is consumed), and
-	//    (c) already owns a SETTLED slot-1 keyframe (usable image). Pipes
-	//    that are NOT settled are always auto-filled by the catch — no toggle.
-	//    The toggle state defaults to OFF; it's a deliberate override. ──
-	function settledSlot1(p: PipeRow): boolean {
-		const kf = p.keyframes?.find((k) => k.slotIndex === 1);
-		if (!kf) return false;
-		if ((kf.imageSrc ?? '').trim()) return true;
-		return !!(kf.previewRemoteUrl?.trim() || kf.previewLocalPath?.trim());
-	}
-	/** Pipes eligible for a per-pipe force toggle: not first, keyframe mode,
-	 *  settled slot-1. (The catch fills non-settled pipes automatically.) */
+	// ── Per-pipe "force first keyframe" (re-snap) — offered on every INTERIOR
+	//    keyframe-mode pipe (not the group's first, and not reference-mode,
+	//    which doesn't consume slot-1). Ticked → this pipe's first keyframe is
+	//    (re)snap'd from the previous pipe's last frame: an EMPTY slot-1 gets
+	//    created, a SETTLED one gets overwritten (the backend
+	//    `upsert_slot1_image` does both). A pipe with no first kf is auto-filled
+	//    by the catch regardless; the tick makes that explicit / forces the
+	//    rewrite. Defaults to OFF. ──
+	/** Pipes eligible for the per-pipe force toggle: interior + keyframe mode.
+	 *  No settled-state gate — an empty first kf (like a pipe that has none
+	 *  yet) is exactly where the user wants to pull the snapped cut in, so the
+	 *  checkbox is shown on it too. */
 	const forceEligible = $derived(
 		new Set(
 			pipes
 				.slice(1)
-				.filter((p: PipeRow) => p.mediaMode !== 'reference' && settledSlot1(p))
+				.filter((p: PipeRow) => p.mediaMode !== 'reference')
 				.map((p: PipeRow) => p.id),
 		),
 	);

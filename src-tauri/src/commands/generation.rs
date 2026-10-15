@@ -328,6 +328,7 @@ pub fn build_pipe_start(
         video_spec: params.video_spec.clone(),
         stage: None,
         upstream: Vec::new(),
+        force_media_mode: None,
     };
     (view, engine_input)
 }
@@ -468,7 +469,7 @@ pub async fn get_generation_group(
         .and_then(|j| serde_json::from_str(j).ok())
         .unwrap_or_default();
     Ok(
-        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"sources":sources,"startedAt":row.started_at,"live":false}),
+        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"error":row.error,"sources":sources,"startedAt":row.started_at,"live":false}),
     )
 }
 
@@ -497,7 +498,7 @@ pub async fn get_latest_session_generation_group(
         .and_then(|j| serde_json::from_str(j).ok())
         .unwrap_or_default();
     Ok(
-        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"sources":sources,"startedAt":row.started_at,"live":false}),
+        serde_json::json!({"groupId":row.group_id,"sessionId":row.session_id,"status":row.status,"pipes":serde_json::from_str::<Vec<serde_json::Value>>(&row.pipes_json).unwrap_or_default(),"progress":row.progress,"sessionVideoPath":row.session_video_path,"composeState":row.compose_state,"composeError":row.compose_error,"error":row.error,"sources":sources,"startedAt":row.started_at,"live":false}),
     )
 }
 

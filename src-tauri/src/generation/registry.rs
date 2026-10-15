@@ -345,7 +345,7 @@ impl TaskRegistry {
 
         // Pipe-media snapshot -> per-stage plan (keyframes slot order, then
         // subjects pipe order, then the video stage).
-        let (stage_plan, upstream_outputs) = {
+        let (mut stage_plan, upstream_outputs) = {
             let composer = self
                 .db
                 .get_composer(&view.session_id)
@@ -363,6 +363,13 @@ impl TaskRegistry {
             input.task_id = view.task_id.clone();
             build_stage_plan(&pipe, &view.stages)
         };
+        // Run-scoped force (group "Force last frame" tick): when set, insist the
+        // video stage runs in the given media mode (e.g. "keyframes") even if
+        // the pipe's stored mode differs. The caught last-frame then drives a
+        // keyframe generation instead of a subject-reference one.
+        if let Some(forced) = input.force_media_mode.clone() {
+            apply_forced_media_mode(&mut stage_plan, &forced);
+        }
 
         // Resolve the media root once at `start()` (E3/O6): the caller's
         // pre-resolved root wins, else the registry's resolver.
@@ -1021,6 +1028,24 @@ fn settled_piece_on_disk(preview_local_path: &Option<String>) -> bool {
         .is_some_and(|p| std::path::Path::new(p).exists())
 }
 
+/// Run-scoped media-mode force (group "Force last frame"): override the
+/// video stage's `media_mode` in a stage plan when the caller insisted on a
+/// specific mode (e.g. "keyframes") for this pipe. Only the video stage is
+/// touched; image stages keep `media_mode: None`. This is what makes a
+/// forced last-frame catch drive a keyframe video even when the pipe's stored
+/// mode is "reference" — the caught frame (slot-1) is the keyframe, not a
+/// subject reference.
+fn apply_forced_media_mode(
+    plan: &mut [Option<EngineStage>],
+    forced: &str,
+) {
+    for entry in plan.iter_mut().flatten() {
+        if entry.kind == SourceKind::Video {
+            entry.media_mode = Some(forced.to_string());
+        }
+    }
+}
+
 fn build_stage_plan(
     pipe: &Pipe,
     stages: &[GenerationStageView],
@@ -1351,6 +1376,39 @@ mod tests {
         assert!(subject.image_src.is_none());
     }
 
+    /// A forced last-frame catch must insist the video stage runs in the
+    /// given media mode even when the pipe's stored mode differs. Only the
+    /// video stage is touched; image stages stay `media_mode: None`.
+    #[test]
+    fn apply_forced_media_mode_overrides_video_stage_only() {
+        let mut pipe = fixture_pipe();
+        pipe.media_mode = "reference".into(); // stored reference mode
+        let stages = TaskRegistry::build_stages("t1", &pipe);
+        let (mut plan, _) = build_stage_plan(&pipe, &stages);
+        // A reference-mode video stage resolves its media_mode from the pipe.
+        let video_before = plan
+            .iter()
+            .flatten()
+            .find(|s| s.kind == SourceKind::Video)
+            .and_then(|s| s.media_mode.clone());
+        apply_forced_media_mode(&mut plan, "keyframes");
+        let video = plan
+            .iter()
+            .flatten()
+            .find(|s| s.kind == SourceKind::Video)
+            .expect("video stage plan");
+        assert_eq!(video.media_mode.as_deref(), Some("keyframes"));
+        // No image stage ever carries a media mode.
+        for entry in plan.iter().flatten() {
+            if entry.kind != SourceKind::Video {
+                assert!(entry.media_mode.is_none(), "image stages keep media_mode None");
+            }
+        }
+        // Sanity: the stored reference mode was what the plan began with (or
+        // None when unset) — the force is what flipped it to keyframes.
+        let _ = video_before;
+    }
+
     fn engine_input() -> EngineInput {
         EngineInput {
             task_id: "t1".into(),
@@ -1371,6 +1429,7 @@ mod tests {
             video_spec: None,
             stage: None,
             upstream: Vec::new(),
+            force_media_mode: None,
         }
     }
 

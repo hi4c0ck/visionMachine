@@ -232,6 +232,8 @@ pub fn filter_args(sources: &[SourceVideo], out_path: &Path) -> Vec<String> {
         "20".into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
+    ]);
+    args.extend_from_slice(&[
         "-movflags".into(),
         "+faststart".into(),
         out_path.to_string_lossy().into_owned(),
