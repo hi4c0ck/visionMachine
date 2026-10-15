@@ -319,10 +319,22 @@ fn compose_sources(
     out_dir: &std::path::Path,
     out_path: &std::path::Path,
     cancel: &Arc<AtomicBool>,
+    target_w: u32,
+    target_h: u32,
+    crop_mode: &str,
 ) -> Result<String, String> {
     let ffmpeg = crate::generation::resolve_ffmpeg();
-    let result = compose_session_video(&ffmpeg, &sources, out_path, out_dir, cancel)
-        .map_err(|e| e.to_string())?;
+    let result = compose_session_video(
+        &ffmpeg,
+        &sources,
+        out_path,
+        out_dir,
+        cancel,
+        target_w,
+        target_h,
+        crop_mode,
+    )
+    .map_err(|e| e.to_string())?;
     // The compose core already validated the output, but a cancelled/failed
     // attempt may have left an orphaned partial file at the fixed output
     // path. Never report success for a missing file.
@@ -1161,14 +1173,30 @@ impl GroupCoordinator {
             // root + session name), so the staged copies and session.mp4
             // land together. A `None` media_root falls back to the
             // app-data media tree — same path the engine would use.
-            let composer_name = this
-                .db
-                .get_composer(&session_id)
-                .await
-                .map(|c| c.name)
+            let composer = this.db.get_composer(&session_id).await.ok();
+            let composer_name = composer
+                .as_ref()
+                .map(|c| c.name.clone())
                 .unwrap_or_default();
             let out_dir = session_compose_out_dir(&media_root, &composer_name);
             let out_path = out_dir.join("session.mp4");
+            // 0012: the compose normalize-to target = the session's stored
+            // resolution/orientation/custom size + crop mode. A composer with
+            // no target fields (legacy) yields (0,0) + "center" -> the classic
+            // byte-identical filter path (no re-encode unless a trim is active).
+            use crate::generation::target_dims;
+            let (target_w, target_h, crop_mode): (u32, u32, String) = match composer.as_ref() {
+                Some(cfg) => {
+                    let (tw, th) = target_dims(
+                        &cfg.resolution,
+                        &cfg.orientation,
+                        cfg.custom_width,
+                        cfg.custom_height,
+                    );
+                    (tw, th, cfg.crop_mode.clone())
+                }
+                None => (0, 0, "center".to_string()),
+            };
             // The concat manifest must reference THIS run's staged clips, in
             // `order_index` order (which is the pipe's timeline position, not
             // the completion order they happened to be recorded in). Sort
@@ -1223,8 +1251,15 @@ impl GroupCoordinator {
                         if group_cancel.load(Ordering::Acquire) {
                             cancel.store(true, Ordering::Release);
                         }
-                        let result =
-                            compose_sources(sources_for_result, &out_dir, &out_path, &cancel);
+                        let result = compose_sources(
+                            sources_for_result,
+                            &out_dir,
+                            &out_path,
+                            &cancel,
+                            target_w,
+                            target_h,
+                            &crop_mode,
+                        );
                         registry.finish(&session_for_result);
                         result
                     }
@@ -1412,6 +1447,9 @@ mod tests {
             std::path::Path::new("out.mp4"),
             std::path::Path::new("."),
             &cancel,
+            0,
+            0,
+            "center",
         );
         assert!(result.is_err());
     }

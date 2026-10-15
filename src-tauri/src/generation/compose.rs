@@ -184,36 +184,88 @@ pub fn trim_active(sources: &[SourceVideo]) -> bool {
     sources.iter().any(|s| s.trim_frames > 0)
 }
 
-/// Re-encode fallback args: `-i a -i b … -filter_complex [0:v]trim=…[v0]…
-/// concat=n=N:v=1:a=0[v] -map [v] -c:v libx264 -preset veryfast -crf 20
-/// -pix_fmt yuv420p -movflags +faststart out`.
-///
-/// When any source has `trim_frames > 0` each clip is head-trimmed via a
-/// `trim=start_frame` filter BEFORE the concat, so the splice lands in the
-/// stable region rather than the model's first-8-frame settle. Audio is
-/// dropped (`a=0`), which is why the trim lives on the re-encode path —
-/// the lossless copy can't re-time without desyncing the audio tail.
-pub fn filter_args(sources: &[SourceVideo], out_path: &Path) -> Vec<String> {
+/// 0012: the ffmpeg filter fragment that normalizes ONE clip to the session
+/// target W x H under a crop mode. `none` is resolved by the caller to
+/// `center` for the re-encode fallback (a mix-sized set can never concat
+/// losslessly, so the auto-center guarantees a valid concat — plan 3.10).
+fn normalize_filter(crop_mode: &str, w: u32, h: u32) -> String {
+    let mode = if crop_mode == "none" { "center" } else { crop_mode };
+    match mode {
+        "fit" => format!(
+            "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"
+        ),
+        "top" => format!(
+            "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:0"
+        ),
+        "bottom" => format!(
+            "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:ih-{h}"
+        ),
+        "exact" => format!("scale={w}:{h}"),
+        // "center" and any unknown value: cover-scale + center-crop.
+        _ => format!(
+            "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+        ),
+    }
+}
+
+/// True when a session target is set for this run (drives the re-encode
+/// normalize step). The lossless gate additionally requires `crop_mode` to be
+/// non-"none" or all clips already matching (see `compose_session_video`).
+fn target_set(target_w: u32, target_h: u32) -> bool {
+    target_w > 0 && target_h > 0
+}
+
+/// 0012: does every source clip already render at the session target dims
+/// (a lossless copy is only safe when none need rescaling)?
+fn all_clips_match_target(sources: &[VideoMetadata], target_w: u32, target_h: u32) -> bool {
+    sources
+        .iter()
+        .all(|m| m.width == target_w && m.height == target_h)
+}
+
+/// Re-encode args: per-clip `[i:v] <normalize?> <trim?> [v{i}]` (labelled
+/// pads) or the raw `[i:v]` stream when nothing is applied, then
+/// `concat=n=N:v=1:a=0[v]` + libx264. Byte-identical to the classic filter
+/// when no target is set and nothing is trimmed, so the existing tests stay
+/// green. When a target IS set, every clip is normalized to W x H under the
+/// crop mode (`none` → auto-center, plan 3.10) BEFORE the optional trim.
+pub fn filter_args(
+    sources: &[SourceVideo],
+    out_path: &Path,
+    target_w: u32,
+    target_h: u32,
+    crop_mode: &str,
+) -> Vec<String> {
     let n = sources.len();
     let mut args: Vec<String> = Vec::new();
     let mut filter = String::new();
     let any_trim = trim_active(sources);
+    let normalize = target_set(target_w, target_h);
+    let labeled = any_trim || normalize;
     for (i, s) in sources.iter().enumerate() {
         args.push("-i".into());
         args.push(s.path.clone());
-        if any_trim {
-            // `trim` start_frame in FRAMES (not seconds) so it's exact
-            // regardless of the source's actual fps / VFR. 0 = no-op on the
-            // un-trimmed clips (pipe 0), real head-trim on the interior ones.
-            let start = s.trim_frames;
-            filter.push_str(&format!("[{i}:v]trim=start_frame={start}[v{i}]"));
+        if labeled {
+            // Per-clip filter chain, in order: size normalization then the
+            // optional head-trim. Joined with commas; a clip that needs
+            // neither (because *another* clip forced the re-encode) still
+            // must produce its [v{i}] pad, so it gets a `null` no-op.
+            let mut parts: Vec<String> = Vec::new();
+            if normalize {
+                parts.push(normalize_filter(crop_mode, target_w, target_h));
+            }
+            if s.trim_frames > 0 {
+                parts.push(format!("trim=start_frame={}", s.trim_frames));
+            }
+            if parts.is_empty() {
+                filter.push_str(&format!("[{i}:v]null[v{i}]"));
+            } else {
+                filter.push_str(&format!("[{i}:v]{}[v{i}]", parts.join(",")));
+            }
         }
-        // No-trim clips feed the raw [i:v] stream straight into the concat.
+        // No-label clips feed the raw [i:v] stream straight into the concat.
     }
-    // The concat inputs are the labelled pads when trimming (each clip was
-    // re-timed into [v{i}]), or the raw [i:v] stream labels otherwise —
-    // byte-identical to the classic filter for the no-trim case.
-    let concat_inputs: String = if any_trim {
+    let concat_inputs: String = if labeled {
         (0..n).map(|i| format!("[v{i}]")).collect()
     } else {
         (0..n).map(|i| format!("[{i}:v]")).collect()
@@ -473,6 +525,8 @@ pub fn plan_expected_metadata(sources: &[VideoMetadata]) -> Result<ExpectedMetad
 pub fn plan_filter_metadata(
     sources: &[VideoMetadata],
     total_trim: u32,
+    target_w: u32,
+    target_h: u32,
 ) -> Result<ExpectedMetadata, String> {
     let first = sources
         .first()
@@ -487,10 +541,15 @@ pub fn plan_filter_metadata(
     };
     let trimmed_frames = full_frames.saturating_sub(total_trim as u64);
     let trimmed_duration = per_frame * trimmed_frames as f64;
+    // 0012: when a session target is set the re-encode normalizes every clip
+    // to the target dims (scale/crop/pad all emit exactly W x H), so the
+    // output is the target, not the first source's dims.
+    let out_w = if target_set(target_w, target_h) { target_w } else { first.width };
+    let out_h = if target_set(target_w, target_h) { target_h } else { first.height };
     Ok(ExpectedMetadata {
         codec: "h264".into(),
-        width: first.width,
-        height: first.height,
+        width: out_w,
+        height: out_h,
         duration_seconds: trimmed_duration,
         frame_count: trimmed_frames,
     })
@@ -797,6 +856,9 @@ pub fn compose_session_video(
     out_path: &Path,
     manifest_dir: &Path,
     cancel: &ComposeCancel,
+    target_w: u32,
+    target_h: u32,
+    crop_mode: &str,
 ) -> Result<ComposeResult, ComposeError> {
     if ffmpeg.source == "none" {
         return Err(ComposeError::NoFfmpeg);
@@ -851,20 +913,32 @@ pub fn compose_session_video(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let total_trim: u32 = sources.iter().map(|s| s.trim_frames).sum();
-    let filter_expected =
-        plan_filter_metadata(&source_metadata, total_trim).map_err(ComposeError::OutputInvalid)?;
+    let filter_expected = plan_filter_metadata(
+        &source_metadata,
+        total_trim,
+        target_w,
+        target_h,
+    )
+    .map_err(ComposeError::OutputInvalid)?;
 
-    // 1) Lossless copy — only when NO source is trimmed. The concat demuxer
-    // can't re-time a clip (head-trim requires re-encoding), so the
-    // experimental boundary-trim skips the copy and goes straight to the
-    // re-encode filter path (which also drops audio, keeping the trim clean).
+    // 0012 lossless gate: a lossless `-c copy` is safe only when NO clip is
+    // trimmed AND either no session target is set OR every clip already
+    // renders at the target dims. If a target is set but some clip differs,
+    // the re-encode path must run to normalize it (scale/crop/pad to W x H).
+    let lossless_ok =
+        total_trim == 0 && (!target_set(target_w, target_h) || all_clips_match_target(&source_metadata, target_w, target_h));
+
+    // 1) Lossless copy — only when the gate above holds. The concat demuxer
+    // can't re-time a clip (head-trim requires re-encoding) nor rescale it,
+    // so a trim or a size-mismatch forces the re-encode filter path (which
+    // also drops audio, keeping the trim/normalize clean).
     //
     // `copy_detail` / `copy_code` are hoisted to function scope so the
     // final error report reads the same fields whether the copy was
     // attempted or skipped.
     let copy_detail: String;
     let copy_code: i32;
-    if total_trim == 0 {
+    if lossless_ok {
         let copy_expected =
             plan_expected_metadata(&source_metadata).map_err(ComposeError::OutputInvalid)?;
         let (code, copy_tail, copy_timeout, copy_cancelled) =
@@ -887,16 +961,20 @@ pub fn compose_session_video(
                 filter_detail: "not attempted after copy timeout".into(),
             });
         }
-    } else {
+    } else if total_trim > 0 {
         // Trimmed: the manifest path is not used; the filter re-times each
         // clip. Record the skip so the fallback report is honest.
         copy_detail = "skipped (experimental boundary-trim forces re-encode)".to_string();
         copy_code = -1;
+    } else {
+        // Size normalization needed (target set, some clip off-target).
+        copy_detail = "skipped (size normalization forces re-encode)".to_string();
+        copy_code = -1;
     }
 
-    // 2) Re-encode fallback (and the ONLY path when trim is active).
+    // 2) Re-encode fallback (and the ONLY path when trim/normalize is active).
     let (code2, filter_tail, filter_timeout, filter_cancelled) =
-        run_ffmpeg(ffmpeg, &filter_args(sources, out_path), cancel);
+        run_ffmpeg(ffmpeg, &filter_args(sources, out_path, target_w, target_h, crop_mode), cancel);
     if filter_cancelled {
         return Err(ComposeError::Cancelled);
     }
@@ -987,7 +1065,7 @@ mod tests {
 
     #[test]
     fn filter_args_shape() {
-        let a = filter_args(&srcs(), Path::new("out.mp4"));
+        let a = filter_args(&srcs(), Path::new("out.mp4"), 0, 0, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         // -i x -i y -filter_complex [0:v][1:v]concat=n=2:v=1:a=0[v] -map [v] …
         assert_eq!(s[0], "-i");
@@ -1005,15 +1083,106 @@ mod tests {
         // The interior pipe drops 8 frames; the first stays whole.
         srcs[1].trim_frames = BOUNDARY_TRIM_FRAMES;
         assert!(trim_active(&srcs));
-        let a = filter_args(&srcs, Path::new("out.mp4"));
+        let a = filter_args(&srcs, Path::new("out.mp4"), 0, 0, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
         let fc = &s[fc_idx + 1];
-        // Each clip is head-trimmed by frame count; pipe 0 trims 0, pipe 1
-        // trims 8. The concat inputs are the labelled pads, not raw [i:v].
-        assert!(fc.contains("[0:v]trim=start_frame=0[v0]"), "fc: {fc}");
+        // No target: the labeled path carries only the trim step on the
+        // trimmed clip; the un-trimmed clip is a `null` no-op pad (both
+        // pads are required because the sibling trim forces re-encode).
+        assert!(fc.contains("[0:v]null[v0]"), "fc: {fc}");
         assert!(fc.contains("[1:v]trim=start_frame=8[v1]"), "fc: {fc}");
         assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
+    }
+
+    #[test]
+    fn filter_args_target_center_covers_and_crops() {
+        // A target forces the labeled path on every clip, even with no trim.
+        let a = filter_args(&srcs(), Path::new("out.mp4"), 720, 1280, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
+        let fc = &s[fc_idx + 1];
+        assert!(
+            fc.contains("[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0]"),
+            "fc: {fc}"
+        );
+        assert!(
+            fc.contains("[1:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v1]"),
+            "fc: {fc}"
+        );
+        assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
+    }
+
+    #[test]
+    fn filter_args_target_fit_pads_black() {
+        let a = filter_args(&srcs(), Path::new("out.mp4"), 1280, 720, "fit");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        assert!(
+            fc.contains("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black[v0]"),
+            "fc: {fc}"
+        );
+    }
+
+    #[test]
+    fn filter_args_target_none_autocenters() {
+        // `none` resolves to center for the normalize step (plan 3.10).
+        let a = filter_args(&srcs(), Path::new("out.mp4"), 720, 1280, "none");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        assert!(
+            fc.contains("scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0]"),
+            "fc: {fc}"
+        );
+    }
+
+    #[test]
+    fn filter_args_no_target_no_trim_is_classic() {
+        // Byte-identical to the classic filter: no labeled pads, raw [i:v].
+        let a = filter_args(&srcs(), Path::new("out.mp4"), 0, 0, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        assert_eq!(fc, "[0:v][1:v]concat=n=2:v=1:a=0[v]");
+    }
+
+    #[test]
+    fn lossless_gate_requires_all_clips_at_target() {
+        let ok = vec![
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 1.0,
+                frame_count: 24,
+            },
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 1.0,
+                frame_count: 24,
+            },
+        ];
+        assert!(all_clips_match_target(&ok, 720, 1280));
+        let mixed = vec![
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 1.0,
+                frame_count: 24,
+            },
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 1280,
+                height: 720, // a landscape clip in a vertical session
+                duration_seconds: 1.0,
+                frame_count: 24,
+            },
+        ];
+        assert!(!all_clips_match_target(&mixed, 720, 1280));
+        // A no-target run (0,0) means "no normalization": the gate short-circuits
+        // before the match check, so this branch is not reached in practice.
     }
 
     #[test]
@@ -1035,10 +1204,11 @@ mod tests {
             },
         ];
         // No trim: the classic totals.
-        let full = plan_filter_metadata(&sources, 0).unwrap();
+        let full = plan_filter_metadata(&sources, 0, 0, 0).unwrap();
         assert_eq!(full.frame_count, 72);
         // Trim 8 frames across the run: the expected output is shorter.
-        let trimmed = plan_filter_metadata(&sources, BOUNDARY_TRIM_FRAMES).unwrap();
+        let trimmed =
+            plan_filter_metadata(&sources, BOUNDARY_TRIM_FRAMES, 0, 0).unwrap();
         assert_eq!(trimmed.frame_count, 72 - BOUNDARY_TRIM_FRAMES as u64);
         // A trimmed run scales duration down by the fraction of frames kept.
         assert!(trimmed.duration_seconds < full.duration_seconds);
@@ -1191,14 +1361,14 @@ mod tests {
             frame_count: 24,
         };
         assert!(validate_metadata(&out_short, &expected).is_err());
-        assert!(plan_filter_metadata(&sources, 0).unwrap().codec == "h264");
+        assert!(plan_filter_metadata(&sources, 0, 0, 0).unwrap().codec == "h264");
     }
 
     #[test]
     fn compose_refuses_with_no_ffmpeg() {
         let none = FfmpegAvailability::none();
         let cancel = Arc::new(AtomicBool::new(false));
-        let r = compose_session_video(&none, &srcs(), Path::new("o.mp4"), Path::new("."), &cancel);
+        let r = compose_session_video(&none, &srcs(), Path::new("o.mp4"), Path::new("."), &cancel, 0, 0, "center");
         assert!(matches!(r, Err(ComposeError::NoFfmpeg)));
     }
 
@@ -1218,7 +1388,7 @@ mod tests {
             trim_frames: 0,
         }];
         let cancel = Arc::new(AtomicBool::new(false));
-        let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel);
+        let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel, 0, 0, "center");
         assert!(matches!(r, Err(ComposeError::SourceMissing(_))));
     }
 

@@ -1349,6 +1349,19 @@ pub async fn compose_session_video(
         .collect();
 
     let session_id = input.session_id.clone();
+    // 0012: compose normalize-to target from the session's stored
+    // resolution/orientation/custom size + crop mode. Legacy composer ->
+    // (0,0)/"center" = classic byte-identical path.
+    use crate::generation::target_dims;
+    let (tw, th) = target_dims(
+        &composer.resolution,
+        &composer.orientation,
+        composer.custom_width,
+        composer.custom_height,
+    );
+    let target_w = tw;
+    let target_h = th;
+    let crop_mode = composer.crop_mode.clone();
     let emit_progress = |phase: &str, progress: Option<f64>, detail: &str| {
         let _ = app.emit_to(
             "main",
@@ -1383,6 +1396,9 @@ pub async fn compose_session_video(
             &out_path,
             manifest_dir,
             &worker_cancel,
+            target_w,
+            target_h,
+            &crop_mode,
         )
     })
     .await;
