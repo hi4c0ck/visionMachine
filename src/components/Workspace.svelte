@@ -2422,6 +2422,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 
 	function handleOrientationChange(orientation: string) {
 		if (!selectedSession) return;
+		// Orientation is a FILTER over the model's supported video sizes, so
+		// changing it may exclude the explicitly-picked ratio. Reset the
+		// explicit override to "default" (orientation-derived) when one is set.
+		if (selectedSession.videoRatio != null) updateVideoRatio(selectedSession.id, null);
 		// Size (resolution) is an INDEPENDENT session-level setting — the user
 		// owns the size selector; changing orientation never rewrites it.
 		updateOrientation(selectedSession.id, orientation);

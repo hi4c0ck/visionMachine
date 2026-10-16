@@ -5,7 +5,7 @@
  * precheck.
  */
 import { describe, it, expect } from 'vitest';
-import { effectiveMediaMode, mediaLockMismatch, pipeMediaContent } from '../../src/lib/settings/mediaMode';
+import { effectiveMediaMode, mediaLockMismatch, pipeMediaContent, videoRatiosForOrientation } from '../../src/lib/settings/mediaMode';
 import { pipePrechecks } from '../../src/lib/settings/prechecks';
 import type { ModelSpec, PipeKeyframe, PipeRow, SessionData, SubjectReference } from '../../src/types';
 
@@ -185,5 +185,32 @@ describe('pipePrechecks — locked-kind downgrade (acceptable, non-blocking)', (
       dualSpec,
     );
     expect(c.map((x) => x.code)).toContain('txt2img-no-prompt');
+  });
+});
+
+describe('videoRatiosForOrientation — orientation filters the model size list', () => {
+  const ratios = (r: string[]) =>
+    ({ id: 'v', kind: 'video', limits: { ratios: r } }) as ModelSpec;
+  const V25 = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
+
+  it('horizontal -> landscape/wide ratios (aspect > 1)', () => {
+    expect(videoRatiosForOrientation(ratios(V25), 'horizontal')).toEqual(['21:9', '16:9', '4:3']);
+  });
+
+  it('vertical -> portrait ratios (aspect < 1)', () => {
+    expect(videoRatiosForOrientation(ratios(V25), 'vertical')).toEqual(['3:4', '9:16']);
+  });
+
+  it('square -> only 1:1', () => {
+    expect(videoRatiosForOrientation(ratios(V25), 'square')).toEqual(['1:1']);
+  });
+
+  it('falls back to the full list when a class matches nothing', () => {
+    expect(videoRatiosForOrientation(ratios(['1:1', '16:9']), 'vertical')).toEqual(['1:1', '16:9']);
+  });
+
+  it('returns [] when the model declares no ratios', () => {
+    expect(videoRatiosForOrientation(null, 'horizontal')).toEqual([]);
+    expect(videoRatiosForOrientation(ratios([]), 'horizontal')).toEqual([]);
   });
 });

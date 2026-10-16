@@ -5,7 +5,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
-	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
+	import { availableResolutionsForModel, videoRatiosForOrientation } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import { onMount } from 'svelte';
 
@@ -151,12 +151,12 @@
 		() => availableResolutionsForModel(activeVideoModel, session?.resolution ?? '720p'),
 	);
 
-	// 0012: the VIDEO aspect-ratio options the active model actually emits
-	// (`limits.ratios`, e.g. 2.5-flash: 21:9 16:9 4:3 1:1 3:4 9:16). The
-	// "Video size" selector in the panel lists ONLY these; "Use orientation
-	// default" means the shaper keeps deriving the ratio from Orientation.
+	// 0012: the VIDEO aspect-ratio options the active model emits, filtered by
+	// the current Orientation (a FILTER, not a concrete instruction):
+	// horizontal -> landscape ratios, vertical -> portrait, square -> 1:1.
+	// Switching Orientation re-bounds this list so incompatible sizes vanish.
 	const ratioOptions = $derived.by(
-		() => activeVideoModel?.limits?.ratios ?? [],
+		() => videoRatiosForOrientation(activeVideoModel, session?.orientation ?? 'horizontal'),
 	);
 
 	const onPanelSettingsSync = () => {

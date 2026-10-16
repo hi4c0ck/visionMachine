@@ -222,3 +222,36 @@ export function availableResolutionsForModel(
   if (!ordered.includes(current)) ordered.push(current);
   return ordered;
 }
+
+/**
+ * 0012: treat Orientation as a FILTER over the model's supported video
+ * aspect-ratios (`limits.ratios`). The "Video size" selector offers only the
+ * ratios compatible with the chosen orientation:
+ *   - horizontal -> landscape ratios (aspect > 1: 16:9, 21:9, 4:3, 3:2…)
+ *   - vertical   -> portrait ratios   (aspect < 1: 9:16, 3:4, 2:3…)
+ *   - square     -> square ratios     (aspect == 1: 1:1)
+ * A model that lists no matching ratios falls back to its full ratio list so
+ * the selector is never empty. Order follows the model's declared list.
+ */
+export function videoRatiosForOrientation(
+  model: ModelSpec | null | undefined,
+  orientation: string,
+): string[] {
+  const all = model?.limits?.ratios ?? [];
+  if (all.length === 0) return [];
+  const inClass = (ratio: string, cls: 'wide' | 'narrow' | 'square'): boolean => {
+    const m = ratio.split(':');
+    if (m.length !== 2) return false;
+    const n = parseFloat(m[0]);
+    const d = parseFloat(m[1]);
+    if (!isFinite(n) || !isFinite(d) || d === 0) return false;
+    const a = n / d;
+    if (cls === 'square') return Math.abs(a - 1) < 1e-6;
+    if (cls === 'wide') return a > 1;
+    return a < 1; // 'narrow'
+  };
+  const cls =
+    orientation === 'vertical' ? 'narrow' : orientation === 'square' ? 'square' : 'wide';
+  const filtered = all.filter((r) => inClass(r, cls));
+  return filtered.length > 0 ? filtered : all;
+}

@@ -242,10 +242,16 @@ pub fn filter_args(
 ) -> Vec<String> {
     let n = sources.len();
     let mut args: Vec<String> = Vec::new();
-    let mut filter = String::new();
     let any_trim = trim_active(sources);
     let normalize = target_set(target_w, target_h);
     let labeled = any_trim || normalize;
+    // Each labeled clip is its own filter chain (`[i:v] <normalize?> <trim?>
+    // [v{i}]`); the final `concat` is another chain. Within a single
+    // `-filter_complex` multiple chains MUST be `;`-separated — gluing them
+    // with no separator makes ffmpeg treat the whole graph as one chain and
+    // report "Trailing garbage after a filter: concat=…" (the exit -22 crash
+    // on a normalized single-clip compose).
+    let mut chains: Vec<String> = Vec::new();
     for (i, s) in sources.iter().enumerate() {
         args.push("-i".into());
         args.push(s.path.clone());
@@ -267,11 +273,12 @@ pub fn filter_args(
             if s.trim_frames > 0 {
                 parts.push(format!("trim=start_frame={}", s.trim_frames));
             }
-            if parts.is_empty() {
-                filter.push_str(&format!("[{i}:v]null[v{i}]"));
+            let body = if parts.is_empty() {
+                String::from("null")
             } else {
-                filter.push_str(&format!("[{i}:v]{}[v{i}]", parts.join(",")));
-            }
+                parts.join(",")
+            };
+            chains.push(format!("[{i}:v]{body}[v{i}]"));
         }
         // No-label clips feed the raw [i:v] stream straight into the concat.
     }
@@ -280,7 +287,10 @@ pub fn filter_args(
     } else {
         (0..n).map(|i| format!("[{i}:v]")).collect()
     };
-    filter.push_str(&format!("{concat_inputs}concat=n={n}:v=1:a=0[v]"));
+    chains.push(format!("{concat_inputs}concat=n={n}:v=1:a=0[v]"));
+    // The classic (no normalize, no trim) graph is a single chain — no `;`.
+    // The labeled graph is one chain per clip + the concat chain, `;`-joined.
+    let filter = chains.join(";");
     args.extend_from_slice(&[
         "-filter_complex".into(),
         filter,
@@ -1123,6 +1133,34 @@ mod tests {
             "fc: {fc}"
         );
         assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
+        // Multiple filter chains in one -filter_complex MUST be `;`-separated,
+        // otherwise ffmpeg reports "Trailing garbage after a filter: concat=…"
+        // and the normalized single-clip compose crashes (exit -22).
+        assert!(
+            fc.contains("crop=720:1280[v0];[1:v]"),
+            "labeled chains must be ;-separated. fc: {fc}"
+        );
+        assert!(
+            fc.contains("[v1];[v0][v1]concat"),
+            "concat chain must be ;-separated from the clips. fc: {fc}"
+        );
+    }
+
+    #[test]
+    fn filter_args_single_clip_normalize_is_valid_graph() {
+        // The exact crash from the field: ONE normalized clip. The graph must
+        // be a valid `;`-separated chain set, not a single glued string.
+        let mut srcs = srcs();
+        srcs.truncate(1); // single clip
+        let a = filter_args(&srcs, Path::new("out.mp4"), 720, 1280, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        // Two chains: the normalize chain and the (n=1) concat chain.
+        assert_eq!(
+            fc,
+            "[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0];[v0]concat=n=1:v=1:a=0[v]",
+            "single-clip normalize graph must be ;-separated. fc: {fc}"
+        );
     }
 
     #[test]
