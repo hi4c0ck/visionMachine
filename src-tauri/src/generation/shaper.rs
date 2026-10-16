@@ -260,6 +260,29 @@ fn parse_ratio_aspect(ratio: &str) -> Option<f64> {
     }
 }
 
+/// 0012: is an explicit `video_ratio` compatible with the session's
+/// orientation? Orientation is a FILTER over the model's supported sizes, so
+/// a stored ratio that contradicts the current orientation must not be sent
+/// (it would generate, e.g., a landscape clip into a vertical session).
+///
+/// - `vertical`  -> only portrait ratios (aspect < 1)
+/// - `square`    -> only square ratios  (aspect == 1)
+/// - `horizontal` / anything else -> landscape ratios (aspect > 1)
+///
+/// A ratio that can't be parsed is treated as compatible (the guard layer
+/// still clamps it to the model's declared lists), so a malformed value is
+/// not silently forced onto the wrong shape.
+fn ratio_compatible_with_orientation(ratio: &str, orientation: &str) -> bool {
+    let Some(a) = parse_ratio_aspect(ratio) else {
+        return true;
+    };
+    match orientation {
+        "vertical" => a < 1.0,
+        "square" => (a - 1.0).abs() < f64::EPSILON,
+        _ => a > 1.0, // horizontal / unknown -> wide
+    }
+}
+
 /// Pick the supported ratio (from `limits.ratios`) closest to the target
 /// aspect `w / h`. Tie-break: the smaller denominator (edge 2.5). `None` when
 /// the spec lists no ratios.
@@ -578,11 +601,15 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     let (mut size, mut ratio) =
         resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
     // 0012: an explicit session video aspect-ratio override (a `limits.ratios`
-    // entry, e.g. "21:9" / "4:3") wins over the orientation-derived ratio;
-    // the tier still comes from `size_map[resolution]`. Absent -> legacy
-    // orientation behavior.
+    // entry, e.g. "21:9" / "4:3") wins over the orientation-derived ratio ONLY
+    // when it's compatible with the current orientation (a landscape ratio must
+    // not override a vertical session's portrait default, and vice versa).
+    // Incompatible → fall back to the orientation map (the ratio is a filter,
+    // not a free parameter).
     if let Some(r) = ctx.video_ratio.clone() {
-        ratio = Some(r);
+        if ratio_compatible_with_orientation(&r, &ctx.orientation) {
+            ratio = Some(r);
+        }
     }
     // 0012 D1: clamp to the model's declared lists (a rejected square/ratio is
     // dropped, not sent) so a catalog drift can't 400 the request.
@@ -1468,8 +1495,9 @@ mod tests {
 
     #[test]
     fn video_secs_explicit_ratio_override_beats_orientation() {
-        // 0012: an explicit session video_ratio (a `limits.ratios` entry) is
-        // sent as `aspect_ratio` instead of the orientation-derived ratio.
+        // 0012: an explicit session video_ratio (a `limits.ratios` entry) that
+        // is COMPATIBLE with the orientation is sent as `aspect_ratio` instead
+        // of the orientation-derived ratio.
         let s = spec("video-job-seconds", |m| {
             m.id = "agnes-video-2.5-flash".into();
             m.limits.ratios = Some(vec!["21:9".into(), "16:9".into(), "4:3".into(), "1:1".into(), "3:4".into(), "9:16".into()]);
@@ -1482,9 +1510,13 @@ mod tests {
         // No override -> orientation vertical -> 9:16.
         let p = shape_request(&s, &ctx(|c| { c.orientation = "vertical".into(); })).unwrap();
         assert_eq!(p["aspect_ratio"], "9:16");
-        // Explicit override -> 21:9 even though vertical maps to 9:16.
+        // Compatible portrait override -> 3:4 wins over the vertical default 9:16.
+        let p = shape_request(&s, &ctx(|c| { c.orientation = "vertical".into(); c.video_ratio = Some("3:4".into()); })).unwrap();
+        assert_eq!(p["aspect_ratio"], "3:4");
+        // INCOMPATIBLE landscape override (21:9) is rejected by the
+        // orientation filter -> falls back to the vertical default 9:16.
         let p = shape_request(&s, &ctx(|c| { c.orientation = "vertical".into(); c.video_ratio = Some("21:9".into()); })).unwrap();
-        assert_eq!(p["aspect_ratio"], "21:9");
+        assert_eq!(p["aspect_ratio"], "9:16");
     }
 
     #[test]
