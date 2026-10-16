@@ -8,6 +8,7 @@
 	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
 	import type { ModelSelection } from './GenerateModal.svelte';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
+	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
 	import '../composer-modal.css';
 
 	export interface SessionGenerateStats {
@@ -214,6 +215,10 @@
 	let videoModels = $state<ModelSpec[]>([]);
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
+	// 0012: offer only the resolution presets the active video model can emit.
+	const resOptions = $derived(
+		availableResolutionsForModel(selectedVideoModel, resolution),
+	);
 
 	// Reseed at most once per distinct model/preset config. The self-heal
 	// check below READS the model arrays + models, and a plain run reassigns
@@ -449,7 +454,7 @@
 								<label for="sg-res">{APP_CONSTANTS.strings.resolution}</label>
 								<select id="sg-res" value={resolution} onchange={handleResolution}
 									class:changed={resolution !== session.resolution}>
-									{#each APP_CONSTANTS.resolutions as r (r)}
+									{#each resOptions as r (r)}
 										<option value={r}>{r}</option>
 									{/each}
 								</select>

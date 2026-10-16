@@ -1,9 +1,13 @@
 <script lang="ts">
-	import type { SessionData, ProjectData, ComposerFocus, PipeRow, Segment, TagElement, TimelineElement, CropMode } from '$types';
+	import type { SessionData, ProjectData, ComposerFocus, PipeRow, Segment, TagElement, TimelineElement, CropMode, ModelSpec } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { compilePrompt } from '$lib/compiler';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
+	import { getPreset, modelsFor } from '$lib/settings/catalog';
+	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
+	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
+	import { onMount } from 'svelte';
 
 	let {
 		session,
@@ -24,7 +28,6 @@
 		onresolutionchange,
 		onorientationchange,
 		oncropmodechange,
-		oncustomsizechange,
 		sessionVideoStale = false,
 		qValue,
 		cValue,
@@ -61,8 +64,6 @@
 		onorientationchange?: (orientation: string) => void;
 		/** 0012: session video-normalization crop mode. */
 		oncropmodechange?: (cropMode: string) => void;
-		/** 0012: session custom target size (both, or null both). */
-		oncustomsizechange?: (w: number | null, h: number | null) => void;
 		/** 0012 G8: the session video was composed with a different target/crop
 		 *  than the session currently has — flag it for re-compose. */
 		sessionVideoStale?: boolean;
@@ -128,20 +129,28 @@
 		return `${d.width} / ${d.height}`;
 	});
 
-	// 0012: custom W×H input. Both values are committed atomically — a partial
-	// entry (one side empty) clears the pair so the session falls back to the
-	// resolution preset (plan 1.3).
-	function onCustomSizeInput(e: Event, which: 'w' | 'h') {
-		if (!session) return;
-		const input = e.currentTarget as HTMLInputElement;
-		const val = input.value.trim() === '' ? null : Math.round(Number(input.value));
-		const nextW = which === 'w' ? val : session.customWidth;
-		const nextH = which === 'h' ? val : session.customHeight;
-		const valid =
-			(nextW === null && nextH === null) ||
-			(nextW != null && nextH != null && nextW >= 16 && nextW <= 8192 && nextH >= 16 && nextH <= 8192);
-		if (valid) oncustomsizechange?.(nextW, nextH);
-	}
+	// 0012: the session resolution dropdown offers ONLY the presets whose own
+	// tier the active VIDEO model can actually emit (a 2.5-flash model is
+	// 720P-only, so 480p / 1080p are not listed). settingsRev re-bounds the
+	// options when the user switches the video model in Settings.
+	let settingsRev = $state(0);
+	const activeVideoModel = $derived.by((): ModelSpec | null => {
+		void settingsRev;
+		const s = getSettings();
+		const vp = getPreset(s.providers.video.preset);
+		const models = (vp ? modelsFor(vp, 'video') : []).filter((m) => !m.readOnly);
+		const id = s.providers.video.model;
+		const m = models.find((mm) => mm.id === id) ?? models.find((mm) => !mm.pending) ?? null;
+		return m;
+	});
+	const resOptions = $derived.by(
+		() => availableResolutionsForModel(activeVideoModel, session?.resolution ?? '720p'),
+	);
+	const onPanelSettingsSync = () => {
+		settingsRev++;
+	};
+	setOnSettingsChange(onPanelSettingsSync);
+	onMount(() => () => unregisterSettingsChange(onPanelSettingsSync));
 
 	function openNewSessionModal() {
 		if (!project) return;
@@ -371,9 +380,9 @@
             value={session.resolution}
             onchange={(e) => onresolutionchange?.(e.currentTarget.value)}
           >
-            <option value="480p">480p</option>
-            <option value="720p">720p</option>
-            <option value="1080p">1080p</option>
+            {#each resOptions as r (r)}
+              <option value={r}>{r}</option>
+            {/each}
           </select>
         </div>
 
@@ -388,41 +397,6 @@
             <option value="vertical">Vertical</option>
             <option value="square">Square (1:1)</option>
           </select>
-        </div>
-
-        <!-- 0012: session target size + video crop normalization -->
-        <div class="setting-row">
-          <label class="setting-label">Custom size</label>
-          <div class="custom-size-row">
-            <input
-              type="number"
-              class="custom-size-input"
-              min={16}
-              max={8192}
-              placeholder="W"
-              value={session.customWidth ?? ''}
-              oninput={(e) => onCustomSizeInput(e, 'w')}
-              aria-label="Custom target width"
-            />
-            <span class="custom-size-sep">×</span>
-            <input
-              type="number"
-              class="custom-size-input"
-              min={16}
-              max={8192}
-              placeholder="H"
-              value={session.customHeight ?? ''}
-              oninput={(e) => onCustomSizeInput(e, 'h')}
-              aria-label="Custom target height"
-            />
-          </div>
-          <div class="setting-hint">
-            {#if session.customWidth != null && session.customHeight != null}
-              Target: {targetLabel} · Custom
-            {:else}
-              Target: {targetLabel} · Default ({session.orientation})
-            {/if}
-          </div>
         </div>
 
         <div class="setting-row">
@@ -1006,33 +980,7 @@
     box-shadow: 0 0 0 3px var(--accent-glow);
   }
 
-  /* 0012: custom W×H target inputs + the target/crop hint line. */
-  .custom-size-row {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .custom-size-input {
-    flex: 1;
-    min-width: 0;
-    padding: 6px 8px;
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 12px;
-    font-family: inherit;
-  }
-  .custom-size-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-  }
-  .custom-size-sep {
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
+  /* 0012: the target/crop hint line under the Crop method select. */
   .setting-hint {
     flex-basis: 100%;
     margin-top: 2px;

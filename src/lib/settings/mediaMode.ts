@@ -13,6 +13,7 @@
 import type { ModelMedia, PipeRow, ModelSpec, SessionData } from '$types';
 import { effectiveTargetDims, targetDimsLabel } from '$types';
 import { knownResolution, knownOrientation } from './guards';
+import { APP_CONSTANTS } from '$constants';
 
 /** The wire mode actually sent by the engine for a video deploy. */
 export type EffectiveMediaMode = 'keyframe' | 'reference' | 'text';
@@ -192,4 +193,32 @@ export function sessionDefaultLabel(
     session.customWidth,
     session.customHeight,
   );
+}
+
+/**
+ * 0012: the resolution presets a session may actually use WITH a given
+ * video model. The provider only accepts the model's declared size tiers
+ * (`limits.resolutions`); a session preset is offered ONLY when its
+ * `sizeMap` tier is one of the model's declared tiers. So a `2.5-flash`
+ * video model (tiers `['720P']`) offers just 720p; a `2.5` paid model
+ * (tiers `['720P','1080P','1K','2K']`) offers 720p + 1080p. Models with no
+ * size map or no declared tiers fall back to the full preset list (the
+ * classic behavior), and the current session preset is always included so a
+ * stored value never renders blank.
+ */
+export function availableResolutionsForModel(
+  model: ModelSpec | null | undefined,
+  current = '720p',
+): string[] {
+  const all = APP_CONSTANTS.resolutions;
+  const tiers = model?.limits?.resolutions;
+  if (!tiers || tiers.length === 0) return all; // unknown model -> classic
+  // Offer only the session preset whose OWN canonical tier (480p->480P,
+  // 720p->720P, 1080p->1080P) is in the model's declared output tiers.
+  const supported = all.filter((preset) => tiers.includes(preset.replace('p', 'P')));
+  if (supported.length === 0) return all; // never offer an empty list
+  // Preserve the canonical preset order; ensure the current value is visible.
+  const ordered = supported.filter((r) => all.includes(r));
+  if (!ordered.includes(current)) ordered.push(current);
+  return ordered;
 }
