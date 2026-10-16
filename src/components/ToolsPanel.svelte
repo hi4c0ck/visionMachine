@@ -5,7 +5,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
-	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
+	import { availableResolutionsForModel, sessionDefaultLabel } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import { onMount } from 'svelte';
 
@@ -145,6 +145,25 @@
 	});
 	const resOptions = $derived.by(
 		() => availableResolutionsForModel(activeVideoModel, session?.resolution ?? '720p'),
+	);
+
+	// 0012: the active IMAGE model (profile default) — the session's image
+	// tier + ratio are resolved from its catalog maps, so the panel can show
+	// the user what size images will actually generate for the current
+	// resolution + orientation (R-1: session target, R-2: tier+ratio only).
+	const activeImageModel = $derived.by((): ModelSpec | null => {
+		void settingsRev;
+		const s = getSettings();
+		const ip = getPreset(s.providers.image.preset);
+		const models = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
+		const id = s.providers.image.model;
+		return models.find((mm) => mm.id === id) ?? models.find((mm) => !mm.pending) ?? null;
+	});
+	// Read-only session image-size hint: "1K · 9:16" (tier + ratio the image
+	// model will emit for this session's resolution + orientation). Shown so
+	// the user can SEE what size will result without opening a piece.
+	const imageSizeLabel = $derived.by(
+		() => sessionDefaultLabel(activeImageModel, session),
 	);
 	const onPanelSettingsSync = () => {
 		settingsRev++;
@@ -397,6 +416,16 @@
             <option value="vertical">Vertical</option>
             <option value="square">Square (1:1)</option>
           </select>
+        </div>
+
+        <!-- 0012: session image size (derived from Resolution + Orientation
+             via the active image model's catalog: tier = sizeMap[resolution],
+             ratio = ratioMap[orientation]). Shown so the user sees what size
+             image pieces will generate. A keyframe / subject inherits this —
+             there is no per-piece size picker. -->
+        <div class="setting-row">
+          <label class="setting-label" title="Image tier + ratio for this session, derived from Resolution + Orientation via the active image model">Image size</label>
+          <span class="setting-value setting-value-static" title="Resolved from Resolution + Orientation via the active image model">{imageSizeLabel}</span>
         </div>
 
         <div class="setting-row">
@@ -1031,6 +1060,20 @@
     color: var(--text-secondary);
     min-width: 24px;
     text-align: right;
+  }
+
+  /* 0012: static (non-numeric) read-only value, e.g. the derived image-size
+     "1K · 9:16" hint — flexes to fill the row instead of shrinking to fit
+     a number like the Quality/Creativity readouts do. */
+  .setting-value-static {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    font-size: 12px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .no-session-hint {
