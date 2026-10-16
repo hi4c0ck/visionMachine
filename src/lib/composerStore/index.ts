@@ -14,7 +14,7 @@ import type {
   MigrationService,
   SubjectReferenceService,
 } from './interfaces';
-import type { SessionData, PipeRow, PipeLastGeneration, GenerationStatus, KeyframeType } from '$types';
+import type { SessionData, PipeRow, PipeLastGeneration, GenerationStatus, KeyframeType, CropMode } from '$types';
 
 // ── Service Implementations ──────────────────────────────────────────────────
 
@@ -194,6 +194,14 @@ class ComposerStoreImpl implements ComposerStore {
   async setTrimBoundary(sessionId: string, pipeId: string, on: boolean): Promise<ServiceResult> {
     const s = this.getService(sessionId);
     const result = await s.pipes.setTrimBoundary(sessionId, pipeId, on);
+    if (result.errors.length === 0) this.notifyUpdate(sessionId);
+    return result;
+  }
+
+  /** 0012 D2: per-pipe crop-mode override (null = session crop). */
+  async setPipeCropOverride(sessionId: string, pipeId: string, mode: CropMode | null): Promise<ServiceResult> {
+    const s = this.getService(sessionId);
+    const result = await s.pipes.setPipeCropOverride(sessionId, pipeId, mode);
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
   }
@@ -786,6 +794,7 @@ export const updateC = composerStore.updateC.bind(composerStore);
 export const setPipeLength = composerStore.setPipeLength.bind(composerStore);
 export const setMediaMode = composerStore.setMediaMode.bind(composerStore);
 export const setTrimBoundary = composerStore.setTrimBoundary.bind(composerStore);
+export const setPipeCropOverride = composerStore.setPipeCropOverride.bind(composerStore);
 export const addGlobalElement = composerStore.addGlobalElement.bind(composerStore);
 export const updateGlobalRange = composerStore.updateGlobalRange.bind(composerStore);
 export const toggleGlobalElement = composerStore.toggleGlobalElement.bind(composerStore);

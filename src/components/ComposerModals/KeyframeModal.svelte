@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { PipeRow, PipeKeyframe, ModelSpec } from '$types';
-	import { addKeyframe as addKeyframeAction, setTrimBoundary, sessions } from '$lib/composerStore';
+	import type { PipeRow, PipeKeyframe, ModelSpec, CropMode } from '$types';
+	import { addKeyframe as addKeyframeAction, setTrimBoundary, setPipeCropOverride, sessions } from '$lib/composerStore';
 	import { getSettings } from '$lib/settings/store';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
 	import {
@@ -377,6 +377,33 @@
 						<span>Trim 8-frame boundary at compose</span>
 					</label>
 				{/if}
+
+				<!-- 0012 D2: per-pipe crop-mode override for the session-video
+				     compose. "Use session" = fall back to the session-global crop
+				     method; a specific choice normalizes ONLY this pipe's clip
+				     under its own crop, independent of the session. -->
+				<div class="kf-crop-override">
+					<span class="kf-crop-label">Pipe crop override</span>
+					<select
+						class="kf-crop-select"
+						value={pipe.cropOverride ?? 'session'}
+						onchange={(e) =>
+							void setPipeCropOverride(
+								sessionId!,
+								pipe.id,
+								e.currentTarget.value === 'session' ? null : (e.currentTarget.value as CropMode),
+							)}
+						title="Override how THIS pipe's clip is normalized to the session target at compose (default = use the session crop method)"
+					>
+						<option value="session">Use session crop</option>
+						<option value="center">Center crop</option>
+						<option value="fit">Fit (letterbox)</option>
+						<option value="top">Top crop</option>
+						<option value="bottom">Bottom crop</option>
+						<option value="exact">Exact (stretch)</option>
+						<option value="none">Auto (center if mixed)</option>
+					</select>
+				</div>
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
@@ -407,6 +434,32 @@
 	}
 	.kf-trim-check:hover {
 		border-color: var(--accent-color, #ff3e00);
+	}
+
+	/* 0012 D2: per-pipe crop-mode override control. */
+	.kf-crop-override {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 10px;
+		padding: 8px 10px;
+		border: 1px dashed var(--border-color, #3f3f46);
+		border-radius: 7px;
+		font-size: 0.8rem;
+		color: var(--text-secondary, #a1a1aa);
+	}
+	.kf-crop-label {
+		flex-shrink: 0;
+	}
+	.kf-crop-select {
+		flex: 1;
+		min-width: 0;
+		padding: 4px 8px;
+		border-radius: 6px;
+		border: 1px solid var(--border-color, #3f3f46);
+		background: var(--bg-color, #18181b);
+		color: var(--text-primary, #fafafa);
+		font-size: 0.78rem;
 	}
 
 	.kf-url-thumb {

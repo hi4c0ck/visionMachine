@@ -4,6 +4,7 @@
 import type {
   SessionData,
   PipeRow,
+  CropMode,
   TagType,
   PipeKeyframe,
   GlobalElement,

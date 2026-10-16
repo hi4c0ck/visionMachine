@@ -2,7 +2,7 @@
 // Handles pipe CRUD operations
 
 import type { PipeService, ServiceResult } from './interfaces';
-import type { SessionData, PipeRow } from '$types';
+import type { SessionData, PipeRow, CropMode } from '$types';
 import {
   validatePipeLength,
   validateQValue,
@@ -150,6 +150,20 @@ export class PipeServiceImpl implements PipeService {
     const pipe = this.getPipe(this.session, pipeId);
     if (pipe) {
       pipe.trimBoundary = on;
+    }
+    return { errors: [] };
+  }
+
+  /** 0012 D2: per-pipe crop-mode override for the session-video compose.
+   *  A non-null value makes THIS pipe's clip normalize under its own crop
+   *  mode; null = fall back to the session-global crop mode. Like the
+   *  trim switch this is a plain field write — persistence rides the
+   *  normal save path (session-io.ts → Rust Pipe.crop_override), and the
+   *  compose-time core (filter_args) decides which mode actually applies. */
+  async setPipeCropOverride(_sessionId: string, pipeId: string, mode: CropMode | null): Promise<ServiceResult> {
+    const pipe = this.getPipe(this.session, pipeId);
+    if (pipe) {
+      pipe.cropOverride = mode;
     }
     return { errors: [] };
   }
