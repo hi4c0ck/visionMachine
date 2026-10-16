@@ -168,7 +168,7 @@ const APP_CONSTANTS = {
   
   resolutions: ['480p', '720p', '1080p'],
   
-  orientations: ['horizontal', 'vertical'],
+  orientations: ['horizontal', 'vertical', 'square'],
   
   tagTypes: ['scene', 'camera', 'rotation', 'lighting', 'effect', 'zoom', 'transition'] as const,
 };

@@ -7,6 +7,7 @@
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
 	import type { ModelSelection } from './GenerateModal.svelte';
+	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import '../composer-modal.css';
 
 	export interface SessionGenerateStats {
@@ -170,6 +171,41 @@
 		}
 		return out;
 	});
+
+	// 0012: session target size label + crop-method label + the compose
+	// re-encode badge. `none` crop resolves to center for mixed-size sets, so
+	// the badge reflects whether the session actually needs a re-encode pass.
+	const targetLabel = $derived.by(() => {
+		return targetDimsLabel(
+			(resolution ?? session.resolution) as ResolutionPreset,
+			(orientation ?? session.orientation) as Orientation,
+			session.customWidth,
+			session.customHeight,
+		);
+	});
+	const cropModeActive: string = $derived(session.cropMode ?? 'center');
+	const cropLabel = $derived.by(() => {
+		switch (cropModeActive) {
+			case 'fit': return 'Fit (letterbox)';
+			case 'top': return 'Top crop';
+			case 'bottom': return 'Bottom crop';
+			case 'exact': return 'Exact';
+			case 'none': return 'Auto (center if mixed)';
+			default: return 'Center crop';
+		}
+	});
+	// A re-encode happens when trim is active OR a non-none crop is set (the
+	// lossless gate skips copy in either case).
+	const anyTrimOn = $derived(Object.keys(trimBoundary).length > 0);
+	const reencodeBadge = $derived(
+		anyTrimOn && cropModeActive !== 'none'
+			? 're-encode (trim + crop)'
+			: anyTrimOn
+				? 're-encode (trim)'
+				: cropModeActive !== 'none'
+					? 're-encode (size norm)'
+					: null,
+	);
 
 	// ── Per-run model override (same pattern as GenerateModal) ──
 	let imageModel = $state('');
@@ -429,6 +465,16 @@
 							</div>
 						</div>
 
+						<!-- 0012: session target size + compose normalization badge -->
+						<div class="sg-target-row">
+							<span class="sg-target-label">Session target</span>
+							<span class="sg-target-value">{targetLabel}</span>
+							<span class="sg-target-crop">· {cropLabel}</span>
+							{#if reencodeBadge}
+								<span class="sg-badge">{reencodeBadge}</span>
+							{/if}
+						</div>
+
 						<!-- ── Run options ── -->
 						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionRunOptions}</span>
 						<div class="gen-grid">
@@ -658,6 +704,46 @@
 		border: 1px solid var(--border-color, #3f3f46);
 		border-radius: 6px;
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	}
+
+	/* 0012: session target size + crop-method row with the compose re-encode
+	   badge. Surfaces "Session: 1920×1080 · Center crop · re-encode (size norm)"
+	   so the user sees what the final session video will look like. */
+	.sg-target-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 8px 0 4px;
+		padding: 8px 10px;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 6px;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		font-size: 0.78rem;
+		flex-wrap: wrap;
+	}
+	.sg-target-label {
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.sg-target-value {
+		color: var(--text-primary);
+		font-weight: 500;
+	}
+	.sg-target-crop {
+		color: var(--text-secondary);
+	}
+	.sg-badge {
+		margin-left: auto;
+		font-size: 10px;
+		color: var(--text-muted);
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 999px;
+		padding: 2px 8px;
+		white-space: nowrap;
 	}
 
 	.gen-check {

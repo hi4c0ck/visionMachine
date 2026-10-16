@@ -846,6 +846,10 @@ impl ProviderEngine {
             orientation: input.orientation.clone(),
             target_w: input.target_w,
             target_h: input.target_h,
+            // 0012 Phase 4: per-piece explicit size/ratio override (None = the
+            // session default via resolve_target_size).
+            image_size: stage.image_size.clone(),
+            image_ratio: stage.image_ratio.clone(),
             c_value: input.c_value,
             q_value: input.q_value,
             seed: input.seed,
@@ -2013,6 +2017,8 @@ mod tests {
                 image_src: None,
                 media_mode: None,
                 length_frames: 121,
+                image_size: None,
+                image_ratio: None,
             }),
             upstream: Vec::new(),
             force_media_mode: None,
@@ -2033,6 +2039,8 @@ mod tests {
             image_src: None,
             media_mode: Some("keyframes".into()),
             length_frames: 121,
+            image_size: None,
+            image_ratio: None,
         });
         input.upstream = vec![UpstreamOutput {
             source_id: "k1".into(),
@@ -2155,6 +2163,8 @@ mod tests {
             image_src: None,
             media_mode: None,
             length_frames: 121,
+            image_size: None,
+            image_ratio: None,
         });
         let out_b = engine
             .run(&subject_input, &cancel, &|_p| {}, &|_line| {})

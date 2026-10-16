@@ -10,7 +10,9 @@
 // is selected on deploy, and so a locked-but-empty kind is visible to the
 // user instead of silently re-sent by the engine.
 
-import type { ModelMedia, PipeRow } from '$types';
+import type { ModelMedia, PipeRow, ModelSpec, SessionData } from '$types';
+import { effectiveTargetDims, targetDimsLabel } from '$types';
+import { knownResolution, knownOrientation } from './guards';
 
 /** The wire mode actually sent by the engine for a video deploy. */
 export type EffectiveMediaMode = 'keyframe' | 'reference' | 'text';
@@ -92,4 +94,102 @@ export function mediaLockMismatch(
   const eff = effectiveMediaMode(pipe, media);
   const stored: EffectiveMediaMode = pipe.mediaMode === 'reference' ? 'reference' : 'keyframe';
   return eff !== stored;
+}
+
+// ── 0012 Phase 4: per-piece image size-mode helpers ─────────────────────────
+
+/**
+ * The image-size tiers the current image model offers (its `limits.resolutions`).
+ * The modal's "Size mode" selector lists only these; a model switch re-bounds
+ * the available options (plan 4.3). Empty list = the model accepts no size
+ * param (the selector falls back to "Use session default" only).
+ */
+export function availableImageTiers(model: ModelSpec | null | undefined): string[] {
+  return model?.limits?.resolutions ?? [];
+}
+
+/**
+ * The image-ratio options the current image model offers (its `limits.ratios`).
+ */
+export function availableImageRatios(model: ModelSpec | null | undefined): string[] {
+  return model?.limits?.ratios ?? [];
+}
+
+/**
+ * The "session default" tier the shaper would resolve for the current session
+ * (mirrors Rust `resolve_target_size`): `sizeMap[resolution]`. `null` when the
+ * model has no tier map (the provider's implicit default applies). Shown in the
+ * selector's "Use session default (…)" row.
+ */
+export function sessionDefaultTier(
+  model: ModelSpec | null | undefined,
+  session: SessionData | null | undefined,
+): string | null {
+  if (!model || !session) return null;
+  const res = knownResolution(String(session.resolution));
+  const tier = model.limits?.sizeMap?.[res];
+  return tier ?? null;
+}
+
+/**
+ * The "session default" ratio the shaper would resolve for the current session
+ * orientation (mirrors Rust `resolve_target_size` + nearest_ratio). `null` when
+ * the model has no ratio data.
+ */
+export function sessionDefaultRatio(
+  model: ModelSpec | null | undefined,
+  session: SessionData | null | undefined,
+): string | null {
+  if (!model || !session) return null;
+  const ori = knownOrientation(String(session.orientation));
+  const mapped = model.limits?.ratioMap?.[ori];
+  if (mapped) return mapped;
+  // Nearest-ratio fallback (same rule as Rust): pick the ratio in
+  // `limits.ratios` closest to the target aspect.
+  const ratios = model.limits?.ratios ?? [];
+  if (ratios.length === 0) return null;
+  const { width, height } = effectiveTargetDims(
+    session.resolution,
+    session.orientation,
+    session.customWidth,
+    session.customHeight,
+  );
+  const targetAspect = width / Math.max(1, height);
+  let best: string | null = null;
+  let bestDist = Infinity;
+  let bestDen = Infinity;
+  for (const r of ratios) {
+    const m = r.split(':');
+    if (m.length !== 2) continue;
+    const n = parseFloat(m[0]);
+    const d = parseInt(m[1], 10);
+    if (!isFinite(n) || d === 0) continue;
+    const dist = Math.abs(n / d - targetAspect);
+    if (dist < bestDist || (dist === bestDist && d < bestDen)) {
+      best = r;
+      bestDist = dist;
+      bestDen = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Display label for the "session default" row: e.g. "1K · 16:9". Falls back to
+ * the raw target dims when the model has no size/ratio maps.
+ */
+export function sessionDefaultLabel(
+  model: ModelSpec | null | undefined,
+  session: SessionData | null | undefined,
+): string {
+  const tier = sessionDefaultTier(model, session);
+  const ratio = sessionDefaultRatio(model, session);
+  if (tier || ratio) return `${tier ?? '?'} · ${ratio ?? '?'}`;
+  if (!session) return 'Session default';
+  return targetDimsLabel(
+    session.resolution,
+    session.orientation,
+    session.customWidth,
+    session.customHeight,
+  );
 }

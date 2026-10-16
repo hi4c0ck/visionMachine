@@ -349,6 +349,7 @@ class ComposerStoreImpl implements ComposerStore {
     id?: string,
     previewLocalPath?: string,
     previewRemoteUrl?: string,
+    imageOverride?: { size?: string | null; ratio?: string | null },
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
     const result = await s.keyframes.add(
@@ -362,6 +363,7 @@ class ComposerStoreImpl implements ComposerStore {
       id,
       previewLocalPath,
       previewRemoteUrl,
+      imageOverride,
     );
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
@@ -672,6 +674,11 @@ class ComposerStoreImpl implements ComposerStore {
               previewLocalPath: kf.previewLocalPath ?? undefined,
               status: kf.status ?? 'pending',
               forceRegen: kf.forceRegen === true,
+              // 0012 Phase 4: explicit per-piece image size/ratio override
+              // (null/undefined = use the session default). Rust defaults
+              // these to None on legacy rows; carry them through on save.
+              imageSize: kf.imageSize ?? null,
+              imageRatio: kf.imageRatio ?? null,
             })),
             subjectReferences: (pipe.subjectReferences ?? []).map((ref: any) => ({
               id: ref.id,
@@ -686,6 +693,8 @@ class ComposerStoreImpl implements ComposerStore {
               previewLocalPath: ref.previewLocalPath ?? undefined,
               status: ref.status ?? 'pending',
               forceRegen: ref.forceRegen === true,
+              imageSize: ref.imageSize ?? null,
+              imageRatio: ref.imageRatio ?? null,
             })),
             elements: pipe.elements.map((el: any) => {
               if ('segments' in el) {

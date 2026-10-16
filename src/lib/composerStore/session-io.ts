@@ -89,6 +89,10 @@ export class SessionServiceImpl implements SessionService {
         previewLocalPath: kf.previewLocalPath,
         status: kf.status || 'pending',
         forceRegen: kf.forceRegen === true,
+        // 0012 Phase 4: per-piece explicit size override (absent/null = use
+        // the session default; round-trips through the Rust Keyframe fields).
+        imageSize: kf.imageSize ?? null,
+        imageRatio: kf.imageRatio ?? null,
       })),
       subjectReferences: (p.subjectReferences || []).map((r: any) => {
         const useFrames = r.useFrames === true;
@@ -102,6 +106,8 @@ export class SessionServiceImpl implements SessionService {
           previewLocalPath: r.previewLocalPath,
           status: r.status ?? 'pending',
           forceRegen: r.forceRegen === true,
+          imageSize: r.imageSize ?? null,
+          imageRatio: r.imageRatio ?? null,
           ...(useFrames && (r.frameStart !== undefined || r.frameEnd !== undefined) ? {
             frameStart: r.frameStart ?? 0,
             frameEnd: r.frameEnd ?? 240,

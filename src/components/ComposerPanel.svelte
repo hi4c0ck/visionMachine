@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { SessionData, PipeRow, TagType, PipeKeyframe, TagElement, Segment, ComposerFocus, ModelSpec, GlobalElement, SoundElement, ResolutionPreset, Orientation } from '$types';
-	import { RESOLUTION_DIMS } from '$types';
+	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { effectiveMediaMode } from '$lib/settings';
 	import KeyframeModal from './ComposerModals/KeyframeModal.svelte';
 	import SubjectRefModal from './ComposerModals/SubjectRefModal.svelte';
@@ -172,8 +172,18 @@ import { flashToast } from '$lib/flashToast';
 	const sceneAspect = $derived.by((): string => {
 		const res = (session?.resolution ?? '720p') as ResolutionPreset;
 		const ori = (session?.orientation ?? 'horizontal') as Orientation;
-		const dims = RESOLUTION_DIMS[res][ori];
+		// 0012: the effective target (custom W×H when set, else the preset dims).
+		const dims = effectiveTargetDims(res, ori, session?.customWidth, session?.customHeight);
 		return `${dims.width} / ${dims.height}`;
+	});
+
+	// 0012: the session target-size label shown at every pipe header (W×H ·
+	// ratio), reflecting the custom override when set.
+	const sessionTargetLabel = $derived.by((): string | null => {
+		if (!session) return null;
+		const res = (session.resolution ?? '720p') as ResolutionPreset;
+		const ori = (session.orientation ?? 'horizontal') as Orientation;
+		return targetDimsLabel(res, ori, session.customWidth, session.customHeight);
 	});
 
 	// ── UI state ─────────────────────────────────────────────────────────────
@@ -809,6 +819,7 @@ import { flashToast } from '$lib/flashToast';
 				onLengthChange={(raw) => handlePipeLengthChange(pipeIdx, raw)}
 				onLengthEdit={() => openPipeLengthModal(pipeIdx)}
 				fps={session?.fps}
+				targetLabel={sessionTargetLabel}
 			/>
 
 			<!-- ═══ MEDIA MODE (pipe-level, model-driven — docs/agnes-model-catalog.md Q7) ═══ -->

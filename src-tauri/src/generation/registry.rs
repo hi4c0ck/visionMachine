@@ -1084,6 +1084,10 @@ fn build_stage_plan(
                         },
                         media_mode: None,
                         length_frames: pipe.length_frames,
+                        // 0012 Phase 4: the keyframe's explicit size/ratio
+                        // override (None = session default).
+                        image_size: kf.image_size.clone(),
+                        image_ratio: kf.image_ratio.clone(),
                     }
                 }));
                 // Pre-seed already-available pieces: the user's remote URL for
@@ -1164,6 +1168,10 @@ fn build_stage_plan(
                         },
                         media_mode: None,
                         length_frames: pipe.length_frames,
+                        // 0012 Phase 4: the subject's explicit size/ratio
+                        // override (None = session default).
+                        image_size: sr.image_size.clone(),
+                        image_ratio: sr.image_ratio.clone(),
                     }
                 }));
                 // Pre-seed already-available subjects: the user's remote URL
@@ -1214,6 +1222,10 @@ fn build_stage_plan(
                     image_src: None,
                     media_mode: Some(pipe.media_mode.clone()),
                     length_frames: pipe.length_frames,
+                    // 0012 Phase 4: the video stage carries no image size
+                    // override — its size is the session target via compose.
+                    image_size: None,
+                    image_ratio: None,
                 }));
                 // The video stage carries no upstream slot of its own.
                 upstream.push(None);
@@ -1321,6 +1333,8 @@ mod tests {
             preview_local_path: None,
             status: "pending".into(),
             force_regen: false,
+            image_size: None,
+            image_ratio: None,
         }
     }
 
@@ -1338,6 +1352,8 @@ mod tests {
             frame_end: None,
             visible: true,
             force_regen: false,
+            image_size: None,
+            image_ratio: None,
         }
     }
 

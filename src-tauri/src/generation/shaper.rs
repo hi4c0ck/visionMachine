@@ -57,6 +57,16 @@ pub struct StageContext {
     pub target_w: u32,
     #[serde(default)]
     pub target_h: u32,
+    /// 0012 Phase 4: per-piece explicit image-generation size override
+    /// (provider tier, e.g. "2K"). `None` = use the session default
+    /// (`resolve_target_size`). Image stages only; R-3: request tier/ratio
+    /// only, never the image bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
+    /// 0012 Phase 4: per-piece explicit image-generation ratio override
+    /// (e.g. "1:1"). `None` = use the session default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_ratio: Option<String>,
     /// Pipe cValue; the shaper sends it under the spec's `guidance` param
     /// name only when set (E7).
     pub c_value: f32,
@@ -265,8 +275,17 @@ fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     });
     // 0012 / R-1..R-2: tier + ratio resolved from the spec's maps and the
     // pinned session target (custom aspect -> nearest supported ratio).
-    let (size, ratio) =
+    let (mut size, mut ratio) =
         resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
+    // 0012 Phase 4 (4.1/4.2): a per-piece explicit override wins over the
+    // session default. Only the image stage carries these; R-3 — they change
+    // the request tier/ratio, never the image bytes.
+    if let Some(s) = ctx.image_size.clone() {
+        size = Some(s);
+    }
+    if let Some(r) = ctx.image_ratio.clone() {
+        ratio = Some(r);
+    }
     if let Some(size) = size {
         payload["size"] = json!(size);
     }
@@ -657,6 +676,8 @@ mod tests {
             reference_url: None,
             media_mode: None,
             upstream: Vec::new(),
+            image_size: None,
+            image_ratio: None,
         };
         f(&mut c);
         c
@@ -1398,5 +1419,50 @@ mod tests {
         let p = shape_request(&s, &ctx(|c| { c.target_w = 1600; c.target_h = 900; })).unwrap();
         assert!(p.get("size").is_none());
         assert!(p.get("ratio").is_none());
+    }
+
+    #[test]
+    fn image_gen_piece_override_wins_over_session_default() {
+        // 0012 Phase 4 (4.1/4.2): an explicit per-piece size/ratio override
+        // replaces the session-default tier/ratio the shaper would otherwise
+        // resolve. R-3: only the request params change.
+        let s = spec("image-gen", |m| {
+            m.id = "agnes-image-2.5-flash".into();
+            m.limits.size_map = Some(std::collections::HashMap::from([
+                ("720p".to_string(), "1K".to_string()),
+                ("1080p".to_string(), "2K".to_string()),
+            ]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([
+                ("horizontal".to_string(), "16:9".to_string()),
+            ]));
+        });
+        // Session default would be 1K / 16:9. The piece overrides to 2K / 1:1.
+        let p = shape_request(
+            &s,
+            &ctx(|c| {
+                c.image_size = Some("2K".into());
+                c.image_ratio = Some("1:1".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(p["size"], "2K");
+        assert_eq!(p["ratio"], "1:1");
+    }
+
+    #[test]
+    fn image_gen_no_override_uses_session_default() {
+        // Absent override -> the session default (1K / 16:9 here) is used.
+        let s = spec("image-gen", |m| {
+            m.id = "agnes-image-2.5-flash".into();
+            m.limits.size_map = Some(std::collections::HashMap::from([
+                ("720p".to_string(), "1K".to_string()),
+            ]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([
+                ("horizontal".to_string(), "16:9".to_string()),
+            ]));
+        });
+        let p = shape_request(&s, &ctx(|_| {})).unwrap();
+        assert_eq!(p["size"], "1K");
+        assert_eq!(p["ratio"], "16:9");
     }
 }

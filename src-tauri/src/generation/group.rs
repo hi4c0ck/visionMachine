@@ -519,6 +519,11 @@ impl GroupCoordinator {
             error: None,
             started_at: Self::now(),
             sources_json: None,
+            // 0012 G8: normalized target params are snapshotted at compose
+            // time, not at group start (legacy rows read back as NULL).
+            crop_mode_used: None,
+            target_w_used: None,
+            target_h_used: None,
         };
         // Start the first pipe BEFORE persisting the group row: when the
         // registry rejects the start (e.g. "Generation already in progress"),
@@ -1244,6 +1249,9 @@ impl GroupCoordinator {
             let registry = this.compose_registry.clone();
             let session_for_result = session_id.clone();
             let worker_group_cancel = Arc::clone(&group_cancel);
+            // G8: keep an owned copy of the crop-mode string for the DB
+            // snapshot; the closure below moves its own copy.
+            let crop_mode_owned = crop_mode.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let group_cancel = worker_group_cancel;
                 match registry.start(&session_for_result) {
@@ -1306,6 +1314,15 @@ impl GroupCoordinator {
             // state: the group row then describes EXACTLY the clips this run
             // staged, so a stale set can never be mistaken for the current one.
             let sources_json = serde_json::to_string(&group_sources).ok();
+            // G8: snapshot the normalize params this compose ran with so a
+            // later session edit can flag the stored video as stale.
+            let crop_snapshot = if output_path.is_some() {
+                Some(crop_mode_owned.as_str())
+            } else {
+                None
+            };
+            let tw_snapshot = if output_path.is_some() { Some(target_w as i64) } else { None };
+            let th_snapshot = if output_path.is_some() { Some(target_h as i64) } else { None };
             this.db
                 .update_generation_group_composition(
                     &gid_owned,
@@ -1313,6 +1330,9 @@ impl GroupCoordinator {
                     compose_state.as_deref(),
                     compose_error.as_deref(),
                     sources_json.as_deref(),
+                    crop_snapshot,
+                    tw_snapshot,
+                    th_snapshot,
                 )
                 .await
                 .ok();

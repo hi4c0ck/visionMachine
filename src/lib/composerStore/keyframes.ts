@@ -25,6 +25,7 @@ export class KeyframeServiceImpl implements KeyframeService {
     id?: string,
     previewLocalPath?: string,
     previewRemoteUrl?: string,
+    imageOverride?: { size?: string | null; ratio?: string | null },
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
@@ -66,7 +67,18 @@ export class KeyframeServiceImpl implements KeyframeService {
       existing.frame = snappedFrame;
       existing.status = 'pending';
       Object.assign(existing, preview);
+      // 0012 Phase 4: explicit size/ratio override for this piece (undefined
+      // = keep the session default = null).
+      if (imageOverride) {
+        existing.imageSize = imageOverride.size ?? null;
+        existing.imageRatio = imageOverride.ratio ?? null;
+      }
     } else {
+      const override: Partial<PipeKeyframe> = {};
+      if (imageOverride) {
+        override.imageSize = imageOverride.size ?? null;
+        override.imageRatio = imageOverride.ratio ?? null;
+      }
       pipe.keyframes.push({
         id: id ?? crypto.randomUUID(),
         slotIndex,
@@ -77,6 +89,7 @@ export class KeyframeServiceImpl implements KeyframeService {
         referenceUrl: type === 'img2img' ? (referenceUrl ?? undefined) : undefined,
         status: 'pending',
         ...preview,
+        ...override,
       });
     }
 

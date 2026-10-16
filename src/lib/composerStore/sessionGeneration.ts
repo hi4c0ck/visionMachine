@@ -69,6 +69,17 @@ export interface GenerationGroupView {
   error?: string | null;
   /** This run's source records, in concat (`orderIndex`) order. */
   sources?: GroupSourceRecord[];
+  /**
+   * 0012 G8: the video-normalization params the last compose ran with,
+   * snapshotted on the group row. `null`/absent = pre-0012 group (no
+   * snapshot). The UI compares these against the session's CURRENT
+   * target + crop mode: a mismatch = the stored session video is stale
+   * (the user changed the size/crop after this compose), so it is
+   * flagged for re-compose instead of being trusted as current.
+   */
+  cropModeUsed?: string | null;
+  targetWUsed?: number | null;
+  targetHUsed?: number | null;
 }
 export interface GroupEvent {
   groupId: string; kind: 'pipe-started' | 'pipe-terminal' | 'compose-started' | 'compose-terminal' | 'group-terminal' | string;
@@ -151,7 +162,63 @@ function parseGenerationGroup(raw: any): GenerationGroupView {
     composeError: raw.composeError ?? raw.compose_error,
     error: raw.error ?? null,
     sources: raw.sources ?? [],
+    // 0012 G8: the snapshot is absent on pre-0012 groups (null).
+    cropModeUsed: raw.cropModeUsed ?? null,
+    targetWUsed: raw.targetWUsed ?? null,
+    targetHUsed: raw.targetHUsed ?? null,
   };
+}
+
+/**
+ * 0012 G8: is the session's stored composed video STALE relative to the
+ * session's current target + crop settings? The compose snapshot
+ * (`cropModeUsed` / `targetWUsed` / `targetHUsed`) was written when the
+ * session video was produced; if the user has since changed the session's
+ * crop mode or custom target size, the stored video no longer matches what a
+ * fresh compose would produce and the UI should offer a re-compose.
+ *
+ * Returns `true` only when a snapshot exists AND at least one of the
+ * crop-mode / target dims differs from the current session value. `null`
+ * snapshots (pre-0012 groups) return `false` — we can't compare, so we
+ * don't flag stale. A no-target session (custom dims null) compares against
+ * the resolution-preset-derived target, mirroring `target_dims` on the
+ * backend.
+ */
+export function isComposeStale(
+  group: { cropModeUsed?: string | null; targetWUsed?: number | null; targetHUsed?: number | null } | null | undefined,
+  session: {
+    cropMode?: string;
+    customWidth?: number | null;
+    customHeight?: number | null;
+    resolution: string;
+    orientation: string;
+  },
+): boolean {
+  if (!group) return false;
+  // No snapshot (pre-0012) -> can't decide, never flag.
+  if (group.cropModeUsed == null && group.targetWUsed == null && group.targetHUsed == null) return false;
+  // Resolve the current target dims (custom override when both present, else
+  // the resolution-preset dims — same rule as Rust `target_dims`).
+  const presetDims: Record<string, Record<string, [number, number]>> = {
+    '480p': { horizontal: [854, 480], vertical: [480, 854], square: [480, 480] },
+    '720p': { horizontal: [1280, 720], vertical: [720, 1280], square: [720, 720] },
+    '1080p': { horizontal: [1920, 1080], vertical: [1080, 1920], square: [1080, 1080] },
+  };
+  const roundEven = (v: number) => Math.round(v / 2) * 2;
+  const bothCustom =
+    typeof session.customWidth === 'number' &&
+    typeof session.customHeight === 'number' &&
+    session.customWidth >= 32 && session.customWidth <= 8192 &&
+    session.customHeight >= 32 && session.customHeight <= 8192;
+  const [cw, ch] = bothCustom
+    ? [roundEven(session.customWidth!), roundEven(session.customHeight!)]
+    : (presetDims[session.resolution]?.[session.orientation] ?? [1280, 720]);
+  const curCrop = session.cropMode ?? 'center';
+  // Compare each known snapshot field against the current value.
+  if (group.cropModeUsed != null && group.cropModeUsed !== curCrop) return true;
+  if (group.targetWUsed != null && group.targetWUsed !== cw) return true;
+  if (group.targetHUsed != null && group.targetHUsed !== ch) return true;
+  return false;
 }
 export async function cancelSessionGeneration(groupId: string): Promise<void> {
   // snake_case flat-arg convention (rename_all = "snake_case" on the command).

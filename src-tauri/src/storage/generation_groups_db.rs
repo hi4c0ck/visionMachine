@@ -44,6 +44,12 @@ pub struct GenerationGroupRow {
     /// Group-run source records (JSON array of `GroupSourceRecord`).
     /// `NULL` on pre-0011 rows (read back as an empty list).
     pub sources_json: Option<String>,
+    /// 0012 G8: the normalize params the last compose ran with — snapshotted
+    /// so a later session edit (target size / crop mode) can flag the stored
+    /// video as stale without re-composing. `NULL` on pre-0012 rows.
+    pub crop_mode_used: Option<String>,
+    pub target_w_used: Option<i64>,
+    pub target_h_used: Option<i64>,
 }
 
 impl Database {
@@ -110,9 +116,16 @@ impl Database {
         compose_state: Option<&str>,
         compose_error: Option<&str>,
         sources_json: Option<&str>,
+        // 0012 G8: the normalize params this compose ran with, snapshotted on
+        // the row so a later session edit can flag the stored video as stale.
+        crop_mode_used: Option<&str>,
+        target_w_used: Option<i64>,
+        target_h_used: Option<i64>,
     ) -> Result<(), String> {
-        sqlx::query("UPDATE generation_groups SET session_video_path = ?, compose_state = ?, compose_error = ?, sources_json = ?, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?")
-            .bind(session_video_path).bind(compose_state).bind(compose_error).bind(sources_json).bind(group_id)
+        sqlx::query("UPDATE generation_groups SET session_video_path = ?, compose_state = ?, compose_error = ?, sources_json = ?, crop_mode_used = ?, target_w_used = ?, target_h_used = ?, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?")
+            .bind(session_video_path).bind(compose_state).bind(compose_error).bind(sources_json)
+            .bind(crop_mode_used).bind(target_w_used).bind(target_h_used)
+            .bind(group_id)
             .execute(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -120,7 +133,7 @@ impl Database {
         &self,
         group_id: &str,
     ) -> Result<Option<GenerationGroupRow>, String> {
-        let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json FROM generation_groups WHERE group_id = ?")
+        let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json, crop_mode_used, target_w_used, target_h_used FROM generation_groups WHERE group_id = ?")
             .bind(group_id).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(row.map(|r| GenerationGroupRow {
             group_id: r.get("group_id"),
@@ -136,6 +149,10 @@ impl Database {
             error: r.get("error"),
             started_at: r.get("started_at"),
             sources_json: r.try_get("sources_json").ok().flatten(),
+            // 0012 G8 columns: tolerant — absent on pre-0012 DBs (NULL).
+            crop_mode_used: r.try_get("crop_mode_used").ok().flatten(),
+            target_w_used: r.try_get("target_w_used").ok().flatten(),
+            target_h_used: r.try_get("target_h_used").ok().flatten(),
         }))
     }
 
@@ -148,7 +165,7 @@ impl Database {
         &self,
         session_id: &str,
     ) -> Result<Option<GenerationGroupRow>, String> {
-        let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json FROM generation_groups WHERE session_id = ? ORDER BY started_at DESC LIMIT 1")
+        let row = sqlx::query("SELECT group_id, session_id, status, progress, pipes_json, failure_policy, auto_compose, session_video_path, compose_state, compose_error, error, started_at, sources_json, crop_mode_used, target_w_used, target_h_used FROM generation_groups WHERE session_id = ? ORDER BY started_at DESC LIMIT 1")
             .bind(session_id).fetch_optional(&self.pool).await.map_err(|e| e.to_string())?;
         Ok(row.map(|r| GenerationGroupRow {
             group_id: r.get("group_id"),
@@ -164,6 +181,9 @@ impl Database {
             error: r.get("error"),
             started_at: r.get("started_at"),
             sources_json: r.try_get("sources_json").ok().flatten(),
+            crop_mode_used: r.try_get("crop_mode_used").ok().flatten(),
+            target_w_used: r.try_get("target_w_used").ok().flatten(),
+            target_h_used: r.try_get("target_h_used").ok().flatten(),
         }))
     }
 }

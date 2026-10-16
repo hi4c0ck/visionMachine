@@ -13,6 +13,7 @@
 		onLengthChange,
 		onLengthEdit,
 		fps,
+		targetLabel = null,
 	} = $props<{
 		pipe: PipeRow;
 		idx: number;
@@ -26,6 +27,9 @@
 		onLengthEdit: () => void;
 		/** Session fps — lets the header show the equivalent duration. */
 		fps?: number;
+		/** 0012: the session target size label (e.g. "1920×1080 (16:9)") to
+		 *  surface in the pipe header. Null/absent = hidden. */
+		targetLabel?: string | null;
 	}>();
 
 	// The bare <input type=number> spinners were the old path for the pipe
@@ -51,6 +55,11 @@
 <div class="pipe-header">
 	<span class="pipe-label">{pipe.name}</span>
 	<span class="pipe-meta">{pipe.lengthFrames}f{durationSec !== null ? ` · ${durationSec.toFixed(2)}s` : ''}</span>
+	{#if targetLabel}
+		<span class="pipe-size-chip" title="Session target size (all session videos normalize to this)">
+			{targetLabel}
+		</span>
+	{/if}
 	<span class="pipe-ops">
 		<button class="btn-icon" onclick={() => onMove(-1)} disabled={idx === 0} title="Move pipe up">↑</button>
 		<button class="btn-icon" onclick={() => onMove(1)} disabled={idx === pipeCount - 1} title="Move pipe down">↓</button>
@@ -82,6 +91,19 @@
 		font-size: 12px;
 		color: var(--text-secondary);
 		margin-left: auto;
+	}
+
+	/* 0012: session target-size chip (W×H · ratio), shown at the pipe header
+	   so the composer always surfaces the size every video normalizes to. */
+	.pipe-size-chip {
+		font-size: 10px;
+		color: var(--text-muted);
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 1px 8px;
+		margin-left: 8px;
+		white-space: nowrap;
 	}
 
 	.pipe-ops {

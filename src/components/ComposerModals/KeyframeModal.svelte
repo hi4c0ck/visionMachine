@@ -1,7 +1,15 @@
 <script lang="ts">
-	import type { PipeRow, PipeKeyframe } from '$types';
-	import { addKeyframe as addKeyframeAction, setTrimBoundary } from '$lib/composerStore';
+	import type { PipeRow, PipeKeyframe, ModelSpec } from '$types';
+	import { addKeyframe as addKeyframeAction, setTrimBoundary, sessions } from '$lib/composerStore';
 	import { getSettings } from '$lib/settings/store';
+	import { getPreset, modelsFor } from '$lib/settings/catalog';
+	import {
+		availableImageTiers,
+		availableImageRatios,
+		sessionDefaultTier,
+		sessionDefaultRatio,
+		sessionDefaultLabel,
+	} from '$lib/settings/mediaMode';
 	import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
@@ -50,6 +58,28 @@
 	// the record at Confirm so the chip shows a thumbnail immediately).
 	let kfGenLocal = $state('');
 	let kfGenRemote = $state('');
+	// 0012 Phase 4: per-piece image size-mode override. `default` = use the
+	// session default (shown with its tier/ratio label); a concrete tier/ratio
+	// pair overrides it for this piece only (R-3: request params, not bytes).
+	let kfSizeMode = $state<'default' | 'custom'>('default');
+	let kfCustomSize = $state('');
+	let kfCustomRatio = $state('');
+
+	// Resolve the active image model + its size options (mirrors PieceGenPanel:
+	// the profile default, non-readOnly, non-pending fallback).
+	const imageModel = $derived.by((): ModelSpec | null => {
+		const s = getSettings();
+		const ip = getPreset(s.providers.image.preset);
+		const models = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
+		let id = s.providers.image.model;
+		if (!models.some((m) => m.id === id)) id = models.find((m) => !m.pending)?.id ?? id;
+		return models.find((m) => m.id === id) ?? null;
+	});
+	const sizeTiers = $derived(availableImageTiers(imageModel));
+	const sizeRatios = $derived(availableImageRatios(imageModel));
+	const defTier = $derived(sessionDefaultTier(imageModel, sessions.get(sessionId ?? '')));
+	const defRatio = $derived(sessionDefaultRatio(imageModel, sessions.get(sessionId ?? '')));
+	const defLabel = $derived(sessionDefaultLabel(imageModel, sessions.get(sessionId ?? '')));
 
 	// Seed values when the modal opens (moved verbatim from openKeyframeModal)
 	$effect(() => {
@@ -64,6 +94,16 @@
 			kfRefId = existing.id;
 			kfGenLocal = existing.previewLocalPath ?? '';
 			kfGenRemote = existing.previewRemoteUrl ?? '';
+			// 0012 Phase 4: restore this piece's explicit size override (if any).
+			if (existing.imageSize || existing.imageRatio) {
+				kfSizeMode = 'custom';
+				kfCustomSize = existing.imageSize ?? '';
+				kfCustomRatio = existing.imageRatio ?? '';
+			} else {
+				kfSizeMode = 'default';
+				kfCustomSize = '';
+				kfCustomRatio = '';
+			}
 		} else {
 			kfType = 'url';
 			kfUrl = '';
@@ -73,6 +113,9 @@
 			kfRefId = `kf-slot${editingSlot}`;
 			kfGenLocal = '';
 			kfGenRemote = '';
+			kfSizeMode = 'default';
+			kfCustomSize = '';
+			kfCustomRatio = '';
 		}
 	});
 
@@ -166,6 +209,11 @@
 			kfRefId || undefined,
 			kfGenLocal || undefined,
 			kfGenRemote || undefined,
+			// 0012 Phase 4: per-piece size override (default -> null = session
+			// default; custom -> the selected tier/ratio from the model catalog).
+			kfSizeMode === 'custom'
+				? { size: kfCustomSize || null, ratio: kfCustomRatio || null }
+				: { size: null, ratio: null },
 		);
 		if (result.errors.length > 0) {
 			flashToast(result.errors[0] || 'Failed to save keyframe');
@@ -262,6 +310,56 @@
 					/>
 				{/if}
 
+				{#if kfType !== 'url'}
+					<div class="modal-field kf-size-field">
+						<label id="kf-size-label">Size mode</label>
+						<div class="kf-size-row">
+							<select
+								class="modal-input"
+								value={kfSizeMode}
+								onchange={(e) => (kfSizeMode = e.currentTarget.value as 'default' | 'custom')}
+								aria-labelledby="kf-size-label"
+							>
+								<option value="default">Use session default ({defLabel})</option>
+								{#if sizeTiers.length || sizeRatios.length}
+									<option value="custom">Custom size</option>
+								{/if}
+							</select>
+							{#if kfSizeMode === 'custom'}
+								<select class="modal-input" bind:value={kfCustomSize} aria-label="Size tier">
+									{#if sizeTiers.length}
+										{#each sizeTiers as t (t)}
+											<option value={t}>{t}</option>
+										{/each}
+									{:else}
+										<option value="">(no size tiers)</option>
+									{/if}
+								</select>
+								<select class="modal-input" bind:value={kfCustomRatio} aria-label="Aspect ratio">
+									{#if sizeRatios.length}
+										{#each sizeRatios as r (r)}
+											<option value={r}>{r}</option>
+										{/each}
+									{:else}
+										<option value="">(no ratios)</option>
+									{/if}
+								</select>
+							{/if}
+						</div>
+						<p class="kf-size-hint">
+							{#if kfSizeMode === 'default'}
+								Session default: {defLabel} — all images in this session generate at this size unless overridden here.
+							{:else}
+								{#if sizeTiers.length || sizeRatios.length}
+									Generates this piece at {kfCustomSize || '—'} {kfCustomRatio && `· ${kfCustomRatio}`}.
+								{:else}
+									The current model offers no explicit size options.
+								{/if}
+							{/if}
+						</p>
+					</div>
+				{/if}
+
 				{#if getSettings().experimental?.composePipes === true && prevPipe != null}
 					<label class="kf-trim-check" title="Experimental: drop one 8n+1 keyframe interval off this pipe's clip head when the session video is composed">
 						<input
@@ -322,5 +420,24 @@
 	.kf-url-thumb span {
 		font-size: 0.68rem;
 		color: var(--text-muted);
+	}
+
+	/* 0012 Phase 4: per-piece image size-mode selector. */
+	.kf-size-field {
+		margin-top: 12px;
+	}
+	.kf-size-row {
+		display: flex;
+		gap: 8px;
+		margin-top: 4px;
+	}
+	.kf-size-row .modal-input {
+		flex: 1;
+	}
+	.kf-size-hint {
+		margin: 6px 0 0;
+		font-size: 0.68rem;
+		color: var(--text-muted);
+		line-height: 1.4;
 	}
 </style>

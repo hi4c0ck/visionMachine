@@ -1,8 +1,9 @@
 <script lang="ts">
-	import type { SessionData, ProjectData, ComposerFocus, PipeRow, Segment, TagElement, TimelineElement } from '$types';
+	import type { SessionData, ProjectData, ComposerFocus, PipeRow, Segment, TagElement, TimelineElement, CropMode } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { compilePrompt } from '$lib/compiler';
 	import { toMediaUrl } from '$lib/mediaUrl';
+	import { effectiveTargetDims, targetDimsLabel } from '$types';
 
 	let {
 		session,
@@ -22,6 +23,9 @@
 		onfpschange,
 		onresolutionchange,
 		onorientationchange,
+		oncropmodechange,
+		oncustomsizechange,
+		sessionVideoStale = false,
 		qValue,
 		cValue,
 		onqvaluechange,
@@ -55,6 +59,13 @@
 		onfpschange?: (fps: number) => void;
 		onresolutionchange?: (resolution: string) => void;
 		onorientationchange?: (orientation: string) => void;
+		/** 0012: session video-normalization crop mode. */
+		oncropmodechange?: (cropMode: string) => void;
+		/** 0012: session custom target size (both, or null both). */
+		oncustomsizechange?: (w: number | null, h: number | null) => void;
+		/** 0012 G8: the session video was composed with a different target/crop
+		 *  than the session currently has — flag it for re-compose. */
+		sessionVideoStale?: boolean;
 		/** Quality (inference steps) of the active pipe */
 		qValue?: number;
 		/** Creativity (cfg scale) of the active pipe */
@@ -90,6 +101,33 @@
 		const cur = Number(session?.fps);
 		return Number.isFinite(cur) && cur > 0 ? String(cur) : '24';
 	});
+
+	// 0012: the session's effective target size label (W×H · ratio), reflecting
+	// the custom override when set, else the resolution preset + orientation.
+	const targetLabel = $derived.by(() => {
+		if (!session) return '—';
+		return targetDimsLabel(
+			session.resolution,
+			session.orientation,
+			session.customWidth,
+			session.customHeight,
+		);
+	});
+
+	// 0012: custom W×H input. Both values are committed atomically — a partial
+	// entry (one side empty) clears the pair so the session falls back to the
+	// resolution preset (plan 1.3).
+	function onCustomSizeInput(e: Event, which: 'w' | 'h') {
+		if (!session) return;
+		const input = e.currentTarget as HTMLInputElement;
+		const val = input.value.trim() === '' ? null : Math.round(Number(input.value));
+		const nextW = which === 'w' ? val : session.customWidth;
+		const nextH = which === 'h' ? val : session.customHeight;
+		const valid =
+			(nextW === null && nextH === null) ||
+			(nextW != null && nextH != null && nextW >= 16 && nextW <= 8192 && nextH >= 16 && nextH <= 8192);
+		if (valid) oncustomsizechange?.(nextW, nextH);
+	}
 
 	function openNewSessionModal() {
 		if (!project) return;
@@ -248,6 +286,14 @@
             </button>
           </div>
           <p class="preview-name">{sessionVideo.label}</p>
+          {#if sessionVideoStale}
+            <div class="stale-badge" title="The session size/crop changed after this video was composed — re-compose to apply the current settings">
+              <span>Re-compose (size changed)</span>
+              {#if oncomposesession && ffmpegAvailable}
+                <button class="btn-icon" type="button" title="Re-compose with the current size/crop" onclick={() => oncomposesession?.()}>↻</button>
+              {/if}
+            </div>
+          {/if}
         </div>
       {:else if session}
         <div class="preview-active">
@@ -325,7 +371,63 @@
           >
             <option value="horizontal">Horizontal</option>
             <option value="vertical">Vertical</option>
+            <option value="square">Square (1:1)</option>
           </select>
+        </div>
+
+        <!-- 0012: session target size + video crop normalization -->
+        <div class="setting-row">
+          <label class="setting-label">Custom size</label>
+          <div class="custom-size-row">
+            <input
+              type="number"
+              class="custom-size-input"
+              min={16}
+              max={8192}
+              placeholder="W"
+              value={session.customWidth ?? ''}
+              oninput={(e) => onCustomSizeInput(e, 'w')}
+              aria-label="Custom target width"
+            />
+            <span class="custom-size-sep">×</span>
+            <input
+              type="number"
+              class="custom-size-input"
+              min={16}
+              max={8192}
+              placeholder="H"
+              value={session.customHeight ?? ''}
+              oninput={(e) => onCustomSizeInput(e, 'h')}
+              aria-label="Custom target height"
+            />
+          </div>
+          <div class="setting-hint">
+            {#if session.customWidth != null && session.customHeight != null}
+              Target: {targetLabel} · Custom
+            {:else}
+              Target: {targetLabel} · Default ({session.orientation})
+            {/if}
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <label class="setting-label">Crop method</label>
+          <select
+            class="setting-select"
+            value={session.cropMode ?? 'center'}
+            onchange={(e) => oncropmodechange?.(e.currentTarget.value as CropMode)}
+          >
+            <option value="center">Center crop</option>
+            <option value="fit">Fit (letterbox)</option>
+            <option value="top">Top crop</option>
+            <option value="bottom">Bottom crop</option>
+            <option value="exact">Exact (stretch)</option>
+            <option value="none">Auto (center if mixed)</option>
+          </select>
+          <div class="setting-hint">
+            Applies to all session videos at compose; older clips are normalized to
+            {targetLabel}.
+          </div>
         </div>
 
         <div class="setting-row">
@@ -885,6 +987,59 @@
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+
+  /* 0012: custom W×H target inputs + the target/crop hint line. */
+  .custom-size-row {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .custom-size-input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  .custom-size-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  .custom-size-sep {
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .setting-hint {
+    flex-basis: 100%;
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--text-muted);
+    line-height: 1.35;
+  }
+
+  /* 0012 G8: stale session-video badge — the stored video was composed with
+     a different target/crop than the session currently has. */
+  .stale-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    padding: 4px 8px;
+    border: 1px solid var(--accent, #ff3e00);
+    border-radius: 6px;
+    background: var(--bg-tertiary);
+    font-size: 10px;
+    color: var(--accent, #ff3e00);
+  }
+  .stale-badge .btn-icon {
+    font-size: 12px;
   }
 
   .setting-slider {

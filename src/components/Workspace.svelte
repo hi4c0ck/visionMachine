@@ -21,13 +21,13 @@
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
 	import { subscribeGenTask } from '$lib/generationEvents';
 	import { isStaleGroup } from '$lib/compactPipes';
-	import { startSessionGeneration, fetchGenerationGroup, fetchLatestGenerationGroupForSession, cancelSessionGeneration, subscribeGroupEvent, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
+	import { startSessionGeneration, fetchGenerationGroup, fetchLatestGenerationGroupForSession, cancelSessionGeneration, subscribeGroupEvent, isComposeStale, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
 import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl, invalidateMediaUrlCache } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
-	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, setMediaMode } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, updateCustomSize, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
@@ -458,6 +458,22 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// so a "stubbed with error" run is not silently invisible.
 	let groupRunError = $state<string | null>(null);
 	let groupSessionVideoPath = $state<string | null>(null);
+	// 0012 G8: the video-normalization params the last compose ran with,
+	// snapshotted on the group row. Compared against the session's CURRENT
+	// target + crop mode to flag a stale session video (the user changed
+	// size/crop after the compose) instead of silently trusting it.
+	let groupComposeSnapshot = $state<{
+		cropModeUsed: string | null;
+		targetWUsed: number | null;
+		targetHUsed: number | null;
+	} | null>(null);
+	// 0012 G8: is the session's stored composed video stale relative to the
+	// session's current target size + crop mode? `true` = the user changed
+	// size/crop after the last compose — the UI offers a re-compose.
+	const sessionVideoStale = $derived.by(() => {
+		if (!groupComposeSnapshot || !selectedSession) return false;
+		return isComposeStale(groupComposeSnapshot, selectedSession);
+	});
 	// Overall group progress (0..=1, the backend's stage-count-weighted
 	// average across the group's pipes) + the compose step's live phase,
 	// shown in the group modal so a long run reads as progress, not a freeze.
@@ -1174,6 +1190,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// another session attached — clear it so the preview can fall back (or
 		// blank) rather than showing the previous session's video.
 		groupSessionVideoPath = (group.composeState === 'done') ? (group.sessionVideoPath ?? null) : null;
+		// 0012 G8: capture the compose-normalization snapshot so the stale
+		// badge (ToolsPanel) can flag a session video that was produced with
+		// a different target/crop than the session currently has.
+		groupComposeSnapshot = (group.composeState === 'done')
+			? {
+				cropModeUsed: group.cropModeUsed ?? null,
+				targetWUsed: group.targetWUsed ?? null,
+				targetHUsed: group.targetHUsed ?? null,
+			}
+			: null;
 		// The compose outcome landed but the video can't be attached: the file
 		// is gone, or read_media_file rejected the path as outside every known
 		// media root (a writer path whose root the reader doesn't allow — see
@@ -1823,6 +1849,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			);
 			// Point the top panel at the composed file (served via read_media_file).
 			void attachSessionVideo(r.outputPath, `${selectedSession?.name ?? 'Session'} — video`);
+			// 0012 G8: the manual compose just ran with the CURRENT target/crop,
+			// so the snapshot is no longer stale — clear it.
+			groupComposeSnapshot = null;
 		})
 		.catch((e) => {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
@@ -2398,6 +2427,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		updateOrientation(selectedSession.id, orientation);
 	}
 
+	function handleCropModeChange(cropMode: string) {
+		if (!selectedSession) return;
+		updateCropMode(selectedSession.id, cropMode);
+	}
+
+	function handleCustomSizeChange(w: number | null, h: number | null) {
+		if (!selectedSession) return;
+		updateCustomSize(selectedSession.id, w, h);
+	}
+
 	function handleToolSelect(id: string) {
 		activeTool = id;
 	}
@@ -2583,7 +2622,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onfpschange={handleFpsChange}
 				onresolutionchange={handleResolutionChange}
 				onorientationchange={handleOrientationChange}
+				oncropmodechange={handleCropModeChange}
+				oncustomsizechange={handleCustomSizeChange}
 				sessionVideo={toolsSessionVideo}
+				sessionVideoStale={sessionVideoStale}
 				/>
 			{/if}
 

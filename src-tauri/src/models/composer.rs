@@ -159,6 +159,12 @@ pub struct SubjectReference {
     /// registry's Ready-skip is overridden). Legacy rows default to false.
     #[serde(default)]
     pub force_regen: bool,
+    /// 0012 Phase 4: explicit image-generation size override for THIS subject
+    /// (None = session default; R-3: request tier/ratio only, never bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_ratio: Option<String>,
 }
 
 fn default_ref_type() -> String {
@@ -191,6 +197,8 @@ impl SubjectReference {
             frame_end: None,
             visible: true,
             force_regen: false,
+            image_size: None,
+            image_ratio: None,
         }
     }
 }
@@ -253,6 +261,16 @@ pub struct Keyframe {
     /// rows default to false.
     #[serde(default)]
     pub force_regen: bool,
+    /// 0012 Phase 4: explicit image-generation size override for THIS piece
+    /// (a provider tier from the model catalog, e.g. "2K"). `None` = use the
+    /// session default (R-3: affects only the request tier/ratio, never the
+    /// image bytes). Legacy rows default to None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
+    /// 0012 Phase 4: explicit image-generation ratio override for THIS piece
+    /// (e.g. "1:1"). `None` = use the session default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_ratio: Option<String>,
 }
 
 impl Keyframe {
@@ -269,6 +287,8 @@ impl Keyframe {
             preview_local_path: None,
             status: "pending".to_string(),
             force_regen: false,
+            image_size: None,
+            image_ratio: None,
         }
     }
 }
@@ -432,6 +452,8 @@ impl Pipe {
             preview_local_path: None,
             status: "pending".to_string(),
             force_regen: false,
+            image_size: None,
+            image_ratio: None,
         });
         true
     }
@@ -470,6 +492,11 @@ impl Pipe {
                     preview_local_path: None,
                     status: "pending".into(),
                     force_regen: false,
+                    // 0012 Phase 4: the user's explicit size override is a
+                    // design choice, not an artifact — carry it forward
+                    // (plan 4.5).
+                    image_size: kf.image_size.clone(),
+                    image_ratio: kf.image_ratio.clone(),
                 })
                 .collect(),
             subject_references: self
@@ -488,6 +515,10 @@ impl Pipe {
                     frame_end: ref_.frame_end,
                     visible: ref_.visible,
                     force_regen: false,
+                    // 0012 Phase 4: explicit size override is a design choice —
+                    // carry it forward (plan 4.5).
+                    image_size: ref_.image_size.clone(),
+                    image_ratio: ref_.image_ratio.clone(),
                 })
                 .collect(),
             elements: self
@@ -657,6 +688,8 @@ mod tests {
             frame_end: Some(120),
             visible: true,
             force_regen: false,
+            image_size: None,
+            image_ratio: None,
         };
         let value = serde_json::to_value(&ref_).expect("serialize");
         // The wire field is named `type`, not the Rust field `kind`.
@@ -794,6 +827,8 @@ mod tests {
                 preview_local_path: Some("C:/media/dragon.png".into()),
                 status: "done".into(),
                 force_regen: true,
+                image_size: Some("2K".into()),
+                image_ratio: Some("1:1".into()),
             }],
             subject_references: vec![SubjectReference::new(
                 "https://example.com/ref.jpg".into(),
@@ -869,6 +904,11 @@ mod tests {
         assert!(!copy.keyframes[0].force_regen);
         assert!(copy.subject_references[0].preview_remote_url.is_none());
         assert_eq!(copy.subject_references[0].status, "pending");
+        // 0012 Phase 4 (plan 4.5): the user's explicit size override is a
+        // DESIGN choice, not a generation artifact — it carries forward
+        // (unlike the blanked previews/status above).
+        assert_eq!(copy.keyframes[0].image_size.as_deref(), Some("2K"));
+        assert_eq!(copy.keyframes[0].image_ratio.as_deref(), Some("1:1"));
     }
 
     // `has_settled_slot1` — the per-pipe readiness check the auto-catch keys

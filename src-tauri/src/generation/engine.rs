@@ -116,6 +116,16 @@ pub struct EngineStage {
     pub media_mode: Option<String>,
     /// Pipe frame count (8n+1, pre-checked) — feeds the video shaper.
     pub length_frames: u32,
+    /// 0012 Phase 4: per-piece explicit image-generation size override
+    /// (provider tier, e.g. "2K"). `None` = use the session default. Only
+    /// image stages (keyframe / subject) set this; the video stage ignores it.
+    /// R-3: affects only the request tier/ratio, never the image bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
+    /// 0012 Phase 4: per-piece explicit image-generation ratio override
+    /// (e.g. "1:1"). `None` = use the session default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_ratio: Option<String>,
 }
 
 /// Output of a single engine stage run. Image stages report both the

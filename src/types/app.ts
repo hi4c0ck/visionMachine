@@ -302,6 +302,15 @@ export interface PipeKeyframe {
    * attached (attachGeneratedImage).
    */
   forceRegen?: boolean;
+  /**
+   * 0012 Phase 4: explicit image-generation size override for THIS piece
+   * (a provider tier from the model catalog, e.g. "2K"). `undefined` = use
+   * the session default. Affects only the request tier/ratio (R-3), never
+   * the image bytes. Absent on legacy rows.
+   */
+  imageSize?: string | null;
+  /** 0012 Phase 4: explicit image-generation ratio override (e.g. "1:1"). */
+  imageRatio?: string | null;
 }
 
 export interface SubjectReference {
@@ -343,6 +352,13 @@ export interface SubjectReference {
    * settled preview data is kept. Cleared by attachGeneratedImage.
    */
   forceRegen?: boolean;
+  /**
+   * 0012 Phase 4: explicit image-generation size override for THIS subject
+   * (None/undefined = use the session default; R-3: request tier/ratio only).
+   */
+  imageSize?: string | null;
+  /** 0012 Phase 4: explicit image-generation ratio override (e.g. "1:1"). */
+  imageRatio?: string | null;
 }
 
 /**
