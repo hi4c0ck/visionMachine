@@ -185,7 +185,14 @@
 			// Keep a live preview of the picked base in the generated panel.
 			kfGenLocal = res.localPath || '';
 			kfGenRemote = '';
-			flashToast('Local image loaded as img2img reference', 'success');
+			// 0012 D4: notify when the image was preemptively downscaled to
+			// fit the API's input cap (the data URI already carries the
+			// resized bytes — this is informational, not a failure).
+			const note =
+				res.resizedToWidth != null && res.resizedToHeight != null
+					? ` (${res.imageWidth}×${res.imageHeight} → ${res.resizedToWidth}×${res.resizedToHeight}, downscaled to fit API limit)`
+					: '';
+			flashToast(`Local image loaded as img2img reference${note}`, 'success');
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			flashToast(msg.startsWith('{') ? 'Could not load local image' : msg, 'error');

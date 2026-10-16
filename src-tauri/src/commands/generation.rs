@@ -931,15 +931,50 @@ pub async fn read_user_image(
     let mime = mime_from_ext(src.extension().and_then(|e| e.to_str()));
     let bytes = std::fs::read(&src)
         .map_err(|e| format!("read {}: {e}", src.display()))?;
-    let data_uri = to_data_uri(&bytes, &mime);
+
+    // 0012 D4: preemptive downscale — the API's documented input cap
+    // (MAX_INPUT_IMAGE_PX per dim) is enforced BEFORE the request ever
+    // leaves the app. A picked image whose larger side exceeds it is
+    // rescaled (larger side only, no crop) and the RESCALED bytes are what
+    // gets stored/persisted. Unknown dims / no ffmpeg / downscale failure
+    // -> keep the original (safe side: the provider may still accept it,
+    // and the user is never blocked).
+    let source_dims = read_image_dims(&src);
+    let mut notification = serde_json::json!({
+        "imageWidth": source_dims.map(|(w, _)| w),
+        "imageHeight": source_dims.map(|(_, h)| h),
+    });
+    let persist_bytes = match downscale_box(source_dims, MAX_INPUT_IMAGE_PX) {
+        Some((tw, th)) => {
+            let ffmpeg = crate::generation::resolve_ffmpeg();
+            let tmp = src.with_extension("resize-tmp");
+            let mut resized: Option<Vec<u8>> = None;
+            if ffmpeg.source != "none" && downscale_image_to(&ffmpeg, &src, &tmp, tw, th).is_ok() {
+                resized = std::fs::read(&tmp).ok();
+            }
+            let _ = std::fs::remove_file(&tmp);
+            match resized {
+                Some(rb) => {
+                    notification["resizedToWidth"] = serde_json::json!(tw);
+                    notification["resizedToHeight"] = serde_json::json!(th);
+                    rb
+                }
+                None => bytes.clone(),
+            }
+        }
+        None => bytes.clone(),
+    };
+    let data_uri = to_data_uri(&persist_bytes, &mime);
 
     // Persist a copy under the pipe's user-images dir (best-effort: the data
     // URI already carries the full image, so a persistence hiccup is not fatal).
+    // Write the SAME bytes that will be sent (persist_bytes) so the durable
+    // copy never diverges from the data URI after a D4 downscale.
     let user_dir = {
         let db = &state.db.lock().await;
         let media_root = match resolve_media_root(db, &input.session_id).await {
             Some(r) if !r.trim().is_empty() => r,
-            _ => return Ok(serde_json::json!({ "dataUri": data_uri })),
+            _ => return Ok(result_with_notification(&data_uri, &mime, None, &notification)),
         };
         let composer = db
             .get_composer(&input.session_id)
@@ -955,19 +990,36 @@ pub async fn read_user_image(
             .join(safe_session_name(&composer.name));
         match crate::generation::user_image_dir(&session_root, &pipe_name) {
             Ok(d) => d,
-            Err(_) => return Ok(serde_json::json!({ "dataUri": data_uri })),
+            Err(_) => return Ok(result_with_notification(&data_uri, &mime, None, &notification)),
         }
     };
-    let local_path: Option<std::path::PathBuf> =
-        persist_user_image(&user_dir, &input.ref_id, src.extension())
-            .ok()
-            .and_then(|p| std::fs::copy(&src, &p).ok().map(|_| p));
+    let local_path: Option<std::path::PathBuf> = persist_user_image(&user_dir, &input.ref_id, src.extension())
+        .ok()
+        .and_then(|p| std::fs::write(&p, &persist_bytes).ok().map(|_| p));
 
-    Ok(serde_json::json!({
+    Ok(result_with_notification(&data_uri, &mime, local_path.as_ref(), &notification))
+}
+
+/// 0012 D4: assemble the read_user_image result, always carrying the
+/// notification fields (source dims + post-downscale dims when applied).
+fn result_with_notification(
+    data_uri: &str,
+    mime: &str,
+    local_path: Option<&std::path::PathBuf>,
+    notification: &serde_json::Value,
+) -> serde_json::Value {
+    let mut v = serde_json::json!({
         "dataUri": data_uri,
         "mimeType": mime,
-        "localPath": local_path,
-    }))
+        "localPath": local_path.map(|p| p.to_string_lossy().into_owned()),
+    });
+    // Merge the notification object (imageWidth/Height + resizedTo* keys).
+    if let (Some(obj), Some(ntf)) = (v.as_object_mut(), notification.as_object()) {
+        for (k, val) in ntf {
+            obj.insert(k.clone(), val.clone());
+        }
+    }
+    v
 }
 
 /// Best-effort copy of the picked source into `user-images/`.
@@ -990,6 +1042,137 @@ fn mime_from_ext(ext: Option<&str>) -> String {
         Some("jpg") | Some("jpeg") => "image/jpeg".to_string(),
         Some("webp") => "image/webp".to_string(),
         _ => "image/png".to_string(),
+    }
+}
+
+/// 0012 D4: the Agnes API's documented input-image limit (catalog, 2.5 paid
+/// reference caps: "256–5760 px per dim"). A local image whose LARGER side
+/// exceeds this would risk a provider 400, so we preemptively downscale the
+/// larger side to it (R-4: downscale-only, no crop, no upscale, no aspect
+/// change) and notify the user.
+const MAX_INPUT_IMAGE_PX: u32 = 5760;
+
+/// Parse (width, height) from an image file header: PNG, JPEG (SOF markers),
+/// WebP (VP8 / VP8L / VP8X). `None` when the header is unrecognized — the
+/// caller then skips the downscale and sends the original (safe side).
+fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 24 {
+        return None;
+    }
+    // PNG: signature + IHDR (BE u32 width/height at offsets 16/20).
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+        let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+        return Some((w, h));
+    }
+    // WebP: RIFF....WEBP + chunk type.
+    if &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        let chunk = &bytes[12..16];
+        if chunk == b"VP8X" {
+            // 24-bit (width-1)/(height-1) little-endian.
+            let w = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]) + 1;
+            let h = u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]) + 1;
+            return Some((w, h));
+        }
+        if chunk == b"VP8L" {
+            let bits = u32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]);
+            let w = (bits & 0x3FFF) as u32 + 1;
+            let h = (bits >> 14 & 0x3FFF) as u32 + 1;
+            return Some((w, h));
+        }
+        if chunk == b"VP8 " {
+            // Lossy: start code 0x9D 0x01 0x2A at 16-18; LE16 & 0x3FFF dims.
+            if bytes.len() > 30
+                && bytes[16] == 0x9d
+                && bytes[17] == 0x01
+                && bytes[18] == 0x2a
+            {
+                let w = u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3FFF;
+                let h = u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3FFF;
+                return Some((w, h));
+            }
+            return None;
+        }
+        return None;
+    }
+    // JPEG: SOI, then walk segments to a SOFn (0xC0..=0xCF, not C4/C8/CC).
+    if &bytes[0..2] == b"\xFF\xD8" {
+        let mut i = 2;
+        while i + 9 < bytes.len() {
+            if bytes[i] != 0xFF {
+                i += 1;
+                continue;
+            }
+            let marker = bytes[i + 1];
+            if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+                let h = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                let w = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+                return Some((w, h));
+            }
+            let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            if len < 2 {
+                return None;
+            }
+            i += 2 + len;
+        }
+    }
+    None
+}
+
+/// 0012 D4: ffmpeg-rescale `src` to the exact (tw, th) box (both even),
+/// keeping the same container extension. Returns the written path.
+fn downscale_image_to(
+    ffmpeg: &crate::generation::FfmpegAvailability,
+    src: &std::path::Path,
+    out: &std::path::Path,
+    tw: u32,
+    th: u32,
+) -> Result<(), String> {
+    let status = std::process::Command::new(&ffmpeg.path)
+        .args([
+            "-y",
+            "-i",
+            src.to_str().ok_or("bad source path")?,
+            "-vf",
+            &format!("scale={tw}:{th}"),
+            "-frames:v",
+            "1",
+            out.to_str().ok_or("bad output path")?,
+        ])
+        .output()
+        .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+    if !status.status.success() {
+        return Err(format!(
+            "ffmpeg downscale failed: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// 0012 D4: compute the downscale box when `src`'s larger side exceeds
+/// `max_px`: scale the larger side to `max_px`, the other side
+/// proportionally, both sides rounded to even (ffmpeg yuv/h264 parity).
+/// `None` when no downscale is needed or the dims are unknown.
+fn downscale_box(
+    dims: Option<(u32, u32)>,
+    max_px: u32,
+) -> Option<(u32, u32)> {
+    let (w, h) = dims?;
+    let larger = w.max(h);
+    if larger <= max_px {
+        return None;
+    }
+    let scale = |v: u32| ((v as f64 * max_px as f64 / larger as f64) as f64).round();
+    let even = |v: f64| {
+        let r = v as u32;
+        r.div_ceil(2) * 2 // div_ceil(2)*2 rounds to even like the compose path
+    };
+    if w >= h {
+        Some((max_px, even(scale(h)).clamp(2, max_px)))
+    } else {
+        Some((even(scale(w)).clamp(2, max_px), max_px))
     }
 }
 
@@ -1838,5 +2021,54 @@ mod tests {
         .unwrap();
         assert_eq!(v.session_id, "s");
         assert_eq!(v.file_path, "C:\\x\\y.png");
+    }
+
+    // ── 0012 D4: downscale_box ────────────────────────────────────────────────
+
+    #[test]
+    fn d4_downscale_box_omits_when_within_cap() {
+        // 4000x3000 within 5760 -> no downscale.
+        assert_eq!(downscale_box(Some((4000, 3000)), MAX_INPUT_IMAGE_PX), None);
+        assert_eq!(downscale_box(Some((5760, 5760)), MAX_INPUT_IMAGE_PX), None);
+    }
+
+    #[test]
+    fn d4_downscale_box_scales_larger_side_to_cap() {
+        // 11520x8640 -> larger 11520 -> scale to 5760, other side
+        // 8640 * 5760/11520 = 4320 (even).
+        assert_eq!(
+            downscale_box(Some((11520, 8640)), MAX_INPUT_IMAGE_PX),
+            Some((5760, 4320))
+        );
+        // Portraits: larger is height.
+        assert_eq!(
+            downscale_box(Some((8640, 11520)), MAX_INPUT_IMAGE_PX),
+            Some((4320, 5760))
+        );
+    }
+
+    #[test]
+    fn d4_downscale_box_unknown_dims_noop() {
+        assert_eq!(downscale_box(None, MAX_INPUT_IMAGE_PX), None);
+    }
+
+    // ── 0012 D4: read_image_dims (PNG) ────────────────────────────────────────
+
+    #[test]
+    fn d4_read_png_dims() {
+        // A minimal PNG: signature + IHDR with 16-bit BE w/h.
+        let mut b = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // sig
+            0x00, 0x00, 0x00, 0x0D, // IHDR length
+            0x49, 0x48, 0x44, 0x52, // "IHDR"
+        ];
+        b.extend_from_slice(&1024u32.to_be_bytes()); // w
+        b.extend_from_slice(&512u32.to_be_bytes()); // h
+        let dir = std::env::temp_dir().join(format!("vm_d4_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("probe.png");
+        std::fs::write(&f, &b).unwrap();
+        assert_eq!(read_image_dims(&f), Some((1024, 512)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

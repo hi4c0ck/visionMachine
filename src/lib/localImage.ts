@@ -18,6 +18,15 @@ export interface ReadUserImageResult {
   /** Durable copy under the pipe's user-images dir (absent when the session
    *  has no resolvable media root — the data URI still carries the image). */
   localPath?: string;
+  /** 0012 D4: source image dimensions (absent when the header is
+   *  unrecognized — the original bytes are used as-is). */
+  imageWidth?: number;
+  imageHeight?: number;
+  /** 0012 D4: set when the larger side exceeded the API's input cap and the
+   *  image was preemptively downscaled; the data URI / persisted copy carry
+   *  the RESIZED bytes, and these are the new dims. */
+  resizedToWidth?: number;
+  resizedToHeight?: number;
 }
 
 export interface ExtractLastFrameResult {
