@@ -125,6 +125,13 @@ export class SessionServiceImpl implements SessionService {
       // the Rust Pipe.trim_boundary. Absent/legacy rows read as false (the
       // classic lossless splice), so old sessions never change behavior.
       trimBoundary: p.trimBoundary === true,
+      // 0012 D2: per-pipe crop-mode override: round-trips through the Rust
+      // Pipe.crop_override. Absent/legacy rows read as null = use the
+      // session crop mode.
+      cropOverride:
+        typeof p.cropOverride === 'string' && p.cropOverride.trim() !== ''
+          ? (p.cropOverride as CropMode)
+          : null,
     }));
   }
 

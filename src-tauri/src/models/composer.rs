@@ -341,6 +341,14 @@ pub struct Pipe {
     /// splice).
     #[serde(default)]
     pub trim_boundary: bool,
+    /// 0012 D2: per-pipe crop-mode override for the session-video compose.
+    /// `Some(mode)` (center|fit|top|bottom|exact|none) = this pipe's clip is
+    /// normalized under ITS OWN crop mode, independent of the session-global
+    /// `ComposerConfig.crop_mode`. `None` = fall back to the session crop
+    /// mode (the classic behavior). Persisted per pipe; absent/legacy rows
+    /// default to `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_override: Option<String>,
 }
 
 fn default_length_frames() -> u32 {
@@ -409,6 +417,7 @@ impl Pipe {
             last_generation: None,
             media_mode: default_media_mode(),
             trim_boundary: false,
+            crop_override: None,
         }
     }
 
@@ -574,6 +583,9 @@ impl Pipe {
             // The boundary-trim switch is per-pipe setup: the copy keeps the
             // source's trim choice so its compose splices the same way.
             trim_boundary: self.trim_boundary,
+            // 0012 D2: the per-pipe crop override is also design setup —
+            // carry it forward so a duplicated pipe composes the same way.
+            crop_override: self.crop_override.clone(),
         }
     }
 }
@@ -785,6 +797,7 @@ mod tests {
             }),
             media_mode: "keyframes".into(),
             trim_boundary: false,
+            crop_override: None,
         };
         let value = serde_json::to_value(&pipe).expect("serialize");
         assert_eq!(value["lastGeneration"]["taskId"], "t1");
@@ -860,6 +873,7 @@ mod tests {
             }),
             media_mode: "reference".into(),
             trim_boundary: false,
+            crop_override: None,
         };
         // Ids minted at every level; the copy starts artifact-free.
         let copy = pipe.rekeyed();

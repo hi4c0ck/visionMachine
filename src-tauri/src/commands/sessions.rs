@@ -266,6 +266,7 @@ mod tests {
                 }),
                 media_mode: "keyframes".into(),
                 trim_boundary: false,
+                crop_override: None,
             },
             Pipe {
                 id: "pipe-b".into(),
@@ -294,6 +295,7 @@ mod tests {
                 last_generation: None,
                 media_mode: "reference".into(),
                 trim_boundary: false,
+                crop_override: None,
             },
         ];
         c

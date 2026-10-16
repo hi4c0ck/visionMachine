@@ -1374,6 +1374,7 @@ mod tests {
             last_generation: None,
             media_mode: "keyframes".into(),
             trim_boundary: false,
+            crop_override: None,
         }
     }
 

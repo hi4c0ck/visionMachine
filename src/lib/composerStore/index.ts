@@ -658,6 +658,10 @@ class ComposerStoreImpl implements ComposerStore {
             // Experimental compose-pipes boundary-trim switch (per-pipe).
             // Rust Pipe.trim_boundary defaults false for legacy rows.
             trimBoundary: pipe.trimBoundary === true,
+            // 0012 D2: per-pipe crop-mode override (null = use the session
+            // crop mode). Rust Pipe.crop_override defaults None for legacy
+            // rows; carry it through on save.
+            cropOverride: (pipe.cropOverride as string | null | undefined) ?? null,
             // Keyframes: map explicitly — the frontend shape is camelCase
             // while the Rust composer model (ComposerConfig::Keyframe)
             // deserializes with `#[serde(rename_all = "camelCase")]` too,

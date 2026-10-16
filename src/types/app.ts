@@ -389,6 +389,12 @@ export interface PipeRow {
    *  false = classic lossless back-to-back splice. Pipe 0 is never offered
    *  the toggle (nothing precedes it). */
   trimBoundary?: boolean;
+  /** 0012 D2: per-pipe crop-mode override for the session-video compose.
+   *  When set, THIS pipe's clip is normalized under its own crop mode
+   *  (center|fit|top|bottom|exact|none) instead of the session-global
+   *  `cropMode`. Absent/legacy rows default to `null` = fall back to the
+   *  session crop mode (the classic behavior). */
+  cropOverride?: CropMode | null;
 }
 
 /**

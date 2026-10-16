@@ -31,8 +31,8 @@ pub use media::{
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};
 pub use shaper::{
-    clamp_to_range, format_seconds, pick_image_size, pick_ratio, shape_request, StageContext,
-    substitute_poll_template, UpstreamOutput,
+    clamp_to_range, format_seconds, guard_supported, pick_image_size, pick_ratio, shape_request,
+    StageContext, substitute_poll_template, UpstreamOutput,
 };
 pub use specs::{ModelSpecLimits, ModelSpecMedia, ModelSpecWire};
 pub use types::*;

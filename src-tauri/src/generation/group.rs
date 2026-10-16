@@ -190,6 +190,10 @@ fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> O
             // StartSessionGenerationInput.trim_frames when present; 0 here
             // keeps the classic lossless splice for non-trimmed runs.
             trim_frames: 0,
+            // 0012 D2: per-pipe crop override is wired on the staged-source
+            // path (where the composer's pipe map is available); this
+            // fallback keeps the session-global crop mode (None).
+            crop_mode: None,
         })
 }
 
@@ -1202,6 +1206,18 @@ impl GroupCoordinator {
                 }
                 None => (0, 0, "center".to_string()),
             };
+            // 0012 D2: per-pipe crop-mode override map (pipe id -> Some(mode)).
+            // A pipe with a `crop_override` is normalized under ITS OWN crop
+            // mode; absent -> fall back to the session-global `crop_mode`.
+            let crop_override_map: std::collections::HashMap<String, Option<String>> = composer
+                .as_ref()
+                .map(|cfg| {
+                    cfg.pipes
+                        .iter()
+                        .map(|p| (p.id.clone(), p.crop_override.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
             // The concat manifest must reference THIS run's staged clips, in
             // `order_index` order (which is the pipe's timeline position, not
             // the completion order they happened to be recorded in). Sort
@@ -1221,6 +1237,12 @@ impl GroupCoordinator {
                     // head-trim (0 = keep the whole clip). Pipe 0 is never
                     // offered the toggle, but a stored value still applies.
                     trim_frames: boundary_trim_of(trim_map.get(&r.pipe_id).copied().unwrap_or(false)),
+                    // 0012 D2: this pipe's crop override (session crop if none).
+                    crop_mode: crop_override_map
+                        .get(&r.pipe_id)
+                        .cloned()
+                        .flatten()
+                        .filter(|m| !m.is_empty()),
                 })
                 .collect::<Vec<_>>();
             // Use the staged set only when it covers EVERY pipe that produced
@@ -1244,6 +1266,13 @@ impl GroupCoordinator {
             // id) so the fallback path splices the same trimmed clips.
             for s in fallback.iter_mut() {
                 s.trim_frames = boundary_trim_of(trim_map.get(&s.label).copied().unwrap_or(false));
+                // 0012 D2: mirror the per-pipe crop override on the fallback
+                // originals (keyed by label = pipe id).
+                s.crop_mode = crop_override_map
+                    .get(&s.label)
+                    .cloned()
+                    .flatten()
+                    .filter(|m| !m.is_empty());
             }
             let sources_for_result = if staged_is_complete { staged } else { fallback };
             let registry = this.compose_registry.clone();
@@ -1638,6 +1667,7 @@ mod tests {
             path: src_path.to_string_lossy().into_owned(),
             task_id: "task-9".into(),
             trim_frames: 0,
+            crop_mode: None,
         };
         let staged = stage_source_clip(&out_dir, &source, 0);
         assert!(staged.is_some(), "staging a present clip must succeed");
@@ -1672,6 +1702,7 @@ mod tests {
                 .into_owned(),
             task_id: "task-9".into(),
             trim_frames: 0,
+            crop_mode: None,
         };
         assert!(
             stage_source_clip(&out_dir, &source, 0).is_none(),
@@ -1718,6 +1749,7 @@ mod tests {
             path: src.to_string_lossy().into_owned(),
             task_id: "t1".into(),
             trim_frames: 0,
+            crop_mode: None,
         };
         let staged = stage_source_clip(&out_dir, &source, 0).unwrap();
         std::fs::write(out_dir.join("concat.txt"), b"stale").unwrap();

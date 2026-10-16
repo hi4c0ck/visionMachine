@@ -163,6 +163,42 @@ pub fn pick_ratio(spec: &ModelSpecWire, orientation: &str) -> Option<String> {
         .cloned()
 }
 
+/// 0012 D1 / R-1..R-2: clamp a resolved (tier, ratio) pair to the model's
+/// DECLARED allowed lists so a catalog drift or an unsupported combo (e.g. a
+/// square `1:1` a specific model doesn't offer) can never be sent and 400.
+///
+/// - `tier`: when `spec.limits.resolutions` is present and non-empty, a tier
+///   that is not in that list is dropped (`None` → the provider's implicit
+///   default applies) instead of risking a live 400.
+/// - `ratio`: when `spec.limits.ratios` is present and non-empty, a ratio not
+///   in that list is dropped the same way.
+///
+/// This is the "effective application" guard: it runs on BOTH the
+/// session-default path and the per-piece override path, so a user-picked
+/// custom size that the current model actually rejects is also neutralized
+/// before the request is built.
+pub fn guard_supported(
+    spec: &ModelSpecWire,
+    tier: Option<String>,
+    ratio: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let in_list = |val: &str, list: &Option<Vec<String>>| match list {
+        Some(list) if !list.is_empty() => list.iter().any(|x| x == val),
+        _ => true, // no declared list -> trust the value
+    };
+    let tier = match tier {
+        Some(t) if in_list(&t, &spec.limits.resolutions) => Some(t),
+        Some(_) => None,
+        None => None,
+    };
+    let ratio = match ratio {
+        Some(r) if in_list(&r, &spec.limits.ratios) => Some(r),
+        Some(_) => None,
+        None => None,
+    };
+    (tier, ratio)
+}
+
 /// 0012 / R-1..R-2: resolve the (tier, ratio) request params for a model from
 /// the session resolution + orientation + the pinned session target size.
 ///
@@ -286,6 +322,9 @@ fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     if let Some(r) = ctx.image_ratio.clone() {
         ratio = Some(r);
     }
+    // 0012 D1: clamp to the model's declared lists (a rejected square/ratio is
+    // dropped, not sent) so a catalog drift can't 400 the request.
+    let (size, ratio) = guard_supported(spec, size, ratio);
     if let Some(size) = size {
         payload["size"] = json!(size);
     }
@@ -530,8 +569,11 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     // session target (custom aspect -> nearest supported ratio). 2.5-flash
     // only accepts "720P" (catalog sizeMap maps every session resolution to
     // it); other seconds models use their own tiers.
-    let (size, ratio) =
+    let (mut size, mut ratio) =
         resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
+    // 0012 D1: clamp to the model's declared lists (a rejected square/ratio is
+    // dropped, not sent) so a catalog drift can't 400 the request.
+    (size, ratio) = guard_supported(spec, size, ratio);
     if let Some(size) = size {
         payload["size"] = json!(size);
     }
@@ -1464,5 +1506,74 @@ mod tests {
         let p = shape_request(&s, &ctx(|_| {})).unwrap();
         assert_eq!(p["size"], "1K");
         assert_eq!(p["ratio"], "16:9");
+    }
+
+    // ── 0012 D1: guard_supported clamps to declared lists ─────────────────
+
+    #[test]
+    fn guard_keeps_values_in_declared_lists() {
+        let s = spec("image-gen", |m| {
+            m.limits.resolutions = Some(vec!["1K".into(), "2K".into()]);
+            m.limits.ratios = Some(vec!["1:1".into(), "16:9".into()]);
+        });
+        assert_eq!(guard_supported(&s, Some("2K".into()), Some("1:1".into())),
+            (Some("2K".into()), Some("1:1".into())));
+    }
+
+    #[test]
+    fn guard_drops_undeclared_square_1_to_1() {
+        // A model that offers only 2:3 / 3:2 ratios: a square 1:1 request
+        // (from orientation/ratio_map) is dropped instead of being sent.
+        let s = spec("image-gen", |m| {
+            m.limits.ratios = Some(vec!["2:3".into(), "3:2".into()]);
+        });
+        let (tier, ratio) = guard_supported(&s, Some("1K".into()), Some("1:1".into()));
+        assert_eq!(tier, Some("1K".into())); // no declared resolutions list -> trust
+        assert_eq!(ratio, None); // 1:1 not in the declared list -> dropped
+    }
+
+    #[test]
+    fn guard_drops_undeclared_tier() {
+        let s = spec("video-job-seconds", |m| {
+            m.limits.resolutions = Some(vec!["720P".into(), "1080P".into()]);
+        });
+        assert_eq!(guard_supported(&s, Some("4K".into()), None), (None, None));
+        assert_eq!(guard_supported(&s, Some("720P".into()), None),
+            (Some("720P".into()), None));
+    }
+
+    #[test]
+    fn guard_trusts_values_when_no_lists() {
+        // No declared lists at all -> the value is passed through verbatim.
+        let s = spec("image-gen", |_m| {});
+        assert_eq!(guard_supported(&s, Some("5K".into()), Some("7:4".into())),
+            (Some("5K".into()), Some("7:4".into())));
+    }
+
+    #[test]
+    fn guard_applies_to_piece_override_in_image_path() {
+        // A per-piece custom override the model rejects is neutralized: the
+        // 1:1 ratio is dropped, the 2K tier (which the model declares) stays.
+        let s = spec("image-gen", |m| {
+            m.id = "agnes-image-2.5-flash".into();
+            m.limits.resolutions = Some(vec!["1K".into(), "2K".into()]);
+            m.limits.ratios = Some(vec!["16:9".into()]); // no 1:1
+            m.limits.size_map = Some(std::collections::HashMap::from([
+                ("720p".to_string(), "1K".to_string()),
+            ]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([
+                ("horizontal".to_string(), "16:9".to_string()),
+            ]));
+        });
+        let p = shape_request(
+            &s,
+            &ctx(|c| {
+                c.image_size = Some("2K".into());
+                c.image_ratio = Some("1:1".into()); // unsupported by this model
+            }),
+        )
+        .unwrap();
+        assert_eq!(p["size"], "2K"); // declared -> kept
+        assert!(p.get("ratio").is_none()); // 1:1 not declared -> omitted
     }
 }

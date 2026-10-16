@@ -1288,6 +1288,12 @@ pub async fn compose_session_video(
                         } else {
                             0
                         },
+                        // 0012 D2: this pipe's per-pipe crop-mode override
+                        // (session crop when `None`); blank values -> None.
+                        crop_mode: p
+                            .crop_override
+                            .clone()
+                            .filter(|m| !m.is_empty()),
                     })
                 }
             })

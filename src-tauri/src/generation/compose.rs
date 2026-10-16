@@ -89,6 +89,10 @@ pub struct SourceVideo {
     /// the re-encode filter path, which is the only one that can re-time
     /// per-clip without audio.
     pub trim_frames: u32,
+    /// 0012 D2: this clip's per-pipe crop-mode override. `Some(mode)` =
+    /// normalize THIS clip under its own crop mode; `None` = fall back to the
+    /// session-global crop mode passed to `filter_args`/`compose_session_video`.
+    pub crop_mode: Option<String>,
 }
 
 /// Output of a successful compose: the written file + the ffmpeg source.
@@ -252,7 +256,13 @@ pub fn filter_args(
             // must produce its [v{i}] pad, so it gets a `null` no-op.
             let mut parts: Vec<String> = Vec::new();
             if normalize {
-                parts.push(normalize_filter(crop_mode, target_w, target_h));
+                // 0012 D2: a clip with its own crop override is normalized under
+                // that mode; otherwise the session-global crop mode applies.
+                let clip_mode = s.crop_mode
+                    .as_deref()
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or(crop_mode);
+                parts.push(normalize_filter(clip_mode, target_w, target_h));
             }
             if s.trim_frames > 0 {
                 parts.push(format!("trim=start_frame={}", s.trim_frames));
@@ -1015,12 +1025,14 @@ mod tests {
                 path: "C:\\proj\\Session\\Pipe 1\\t1\\video.mp4".into(),
                 task_id: "t1".into(),
                 trim_frames: 0,
+                crop_mode: None,
             },
             SourceVideo {
                 label: "Pipe 2".into(),
                 path: "C:\\proj\\Session\\Pipe 2\\t2\\video.mp4".into(),
                 task_id: "t2".into(),
                 trim_frames: 0,
+                crop_mode: None,
             },
         ]
     }
@@ -1111,6 +1123,28 @@ mod tests {
             "fc: {fc}"
         );
         assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
+    }
+
+    #[test]
+    fn filter_args_per_pipe_crop_override_wins_over_session() {
+        // 0012 D2: a clip with its own crop override is normalized under that
+        // mode; a sibling with none falls back to the session crop mode.
+        let mut srcs = srcs();
+        srcs[0].crop_mode = Some("fit".into()); // pipe 0 overrides to fit
+        // srcs[1] has crop_mode: None -> uses the session "top" mode.
+        let a = filter_args(&srcs, Path::new("out.mp4"), 1280, 720, "top");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        // Pipe 0 (fit) gets the pad-black filter; pipe 1 (session top) gets
+        // the top-crop filter.
+        assert!(
+            fc.contains("[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black[v0]"),
+            "pipe 0 should use its own fit override. fc: {fc}"
+        );
+        assert!(
+            fc.contains("[1:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720:0:0[v1]"),
+            "pipe 1 should fall back to the session top crop. fc: {fc}"
+        );
     }
 
     #[test]
@@ -1386,6 +1420,7 @@ mod tests {
             path: "C:\\definitely\\not\\here.mp4".into(),
             task_id: String::new(),
             trim_frames: 0,
+            crop_mode: None,
         }];
         let cancel = Arc::new(AtomicBool::new(false));
         let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel, 0, 0, "center");
