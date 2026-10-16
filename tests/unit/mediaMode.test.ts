@@ -5,7 +5,7 @@
  * precheck.
  */
 import { describe, it, expect } from 'vitest';
-import { effectiveMediaMode, mediaLockMismatch, pipeMediaContent, videoRatiosForOrientation } from '../../src/lib/settings/mediaMode';
+import { effectiveMediaMode, mediaLockMismatch, pipeMediaContent, videoRatiosForOrientation, effectiveVideoAspect } from '../../src/lib/settings/mediaMode';
 import { pipePrechecks } from '../../src/lib/settings/prechecks';
 import type { ModelSpec, PipeKeyframe, PipeRow, SessionData, SubjectReference } from '../../src/types';
 
@@ -185,6 +185,46 @@ describe('pipePrechecks — locked-kind downgrade (acceptable, non-blocking)', (
       dualSpec,
     );
     expect(c.map((x) => x.code)).toContain('txt2img-no-prompt');
+  });
+});
+
+describe('effectiveVideoAspect — the exact aspect_ratio the video request carries', () => {
+  const model = (ratios?: string[], ratioMap?: Record<string, string>) =>
+    ({
+      id: 'v',
+      kind: 'video',
+      limits: {
+        ratios,
+        ratioMap,
+      },
+    }) as ModelSpec;
+
+  it('returns the explicit videoRatio when compatible with the orientation', () => {
+    const m = model(['16:9', '9:16', '1:1'], { vertical: '9:16', horizontal: '16:9' });
+    // 3:4 is not in the declared list → not sent; falls back to preset 9:16.
+    expect(effectiveVideoAspect(m, 'vertical', '3:4')).toBe('9:16');
+    expect(effectiveVideoAspect(m, 'vertical', '9:16')).toBe('9:16');
+    // incompatible (landscape 16:9) on vertical → rejected → preset 9:16.
+    expect(effectiveVideoAspect(m, 'vertical', '16:9')).toBe('9:16');
+    // a compatible explicit value in the declared list wins over the preset.
+    const m2 = model(['3:4', '9:16'], { vertical: '9:16' });
+    expect(effectiveVideoAspect(m2, 'vertical', '3:4')).toBe('3:4');
+  });
+
+  it('falls back to the orientation preset ratio', () => {
+    const m = model(['16:9', '9:16'], { vertical: '9:16', horizontal: '16:9' });
+    expect(effectiveVideoAspect(m, 'vertical', null)).toBe('9:16');
+    expect(effectiveVideoAspect(m, 'horizontal', null)).toBe('16:9');
+  });
+
+  it('returns null when the model declares no ratio data', () => {
+    expect(effectiveVideoAspect(model(undefined, undefined), 'vertical', null)).toBeNull();
+  });
+
+  it('drops a preset the model does not actually offer', () => {
+    // ratioMap says vertical→9:16 but the declared list has no 9:16 → null.
+    const m = model(['16:9'], { vertical: '9:16' });
+    expect(effectiveVideoAspect(m, 'vertical', null)).toBeNull();
   });
 });
 

@@ -5,7 +5,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
-	import { availableResolutionsForModel, videoRatiosForOrientation } from '$lib/settings/mediaMode';
+	import { availableResolutionsForModel, videoRatiosForOrientation, effectiveVideoAspect } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import { onMount } from 'svelte';
 
@@ -157,6 +157,18 @@
 	// Switching Orientation re-bounds this list so incompatible sizes vanish.
 	const ratioOptions = $derived.by(
 		() => videoRatiosForOrientation(activeVideoModel, session?.orientation ?? 'horizontal'),
+	);
+
+	// 0012: the EXACT aspect_ratio the video request will carry — mirrors the
+	// Rust shaper so the user sees the concrete value instead of guessing
+	// ("control, always"). null = no aspect_ratio param (provider default).
+	const effectiveAspect = $derived.by(
+		() =>
+			effectiveVideoAspect(
+				activeVideoModel,
+				session?.orientation ?? 'horizontal',
+				session?.videoRatio ?? null,
+			),
 	);
 
 	const onPanelSettingsSync = () => {
@@ -410,6 +422,7 @@
             <option value="vertical">Vertical</option>
             <option value="square">Square (1:1)</option>
           </select>
+          <div class="setting-hint">Orientation filters the Video sizes shown below; changing it regenerates settled image pieces in the new aspect.</div>
         </div>
 
         {#if ratioOptions.length}
@@ -426,10 +439,11 @@
               {/each}
             </select>
             <div class="setting-hint">
-              {#if session.videoRatio}
-                Sending {session.videoRatio} as the video aspect ratio (overrides Orientation).
+              {#if effectiveAspect}
+                Sends aspect_ratio <b>{effectiveAspect}</b> · {targetLabel}.
+                Changing this regenerates settled image pieces in the new aspect (not a crop).
               {:else}
-                Ratio follows Orientation ({session.orientation ?? 'horizontal'}).
+                No aspect sent (model default).
               {/if}
             </div>
           </div>

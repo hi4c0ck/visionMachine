@@ -574,12 +574,33 @@ class ComposerStoreImpl implements ComposerStore {
     return { errors: [] };
   }
 
+  /** 0012: when the session size (orientation / explicit video ratio) changes,
+   *  any ALREADY-GENERATED image pieces (txt2img/img2img keyframes + subjects)
+   *  are stale in the OLD aspect — feeding them into a video request would
+   *  force ffmpeg to crop/pad them. Instead, mark them for regeneration so the
+   *  next generation re-emits them in the current aspect (normal generation,
+   *  not normalization). URL pieces (user-supplied assets) are left alone. */
+  invalidateImagePiecesForSize(session: SessionData): void {
+    for (const pipe of session.pipes ?? []) {
+      for (const kf of pipe.keyframes ?? []) {
+        if (kf.type === 'txt2img' || kf.type === 'img2img') kf.forceRegen = true;
+      }
+      for (const ref of pipe.subjectReferences ?? []) {
+        if (ref.type === 'txt2img' || ref.type === 'img2img') ref.forceRegen = true;
+      }
+    }
+  }
+
   async updateOrientation(sessionId: string, orientation: string): Promise<ServiceResult> {
     const session = this.resolveSession(sessionId);
     if (orientation !== 'horizontal' && orientation !== 'vertical' && orientation !== 'square') {
       return { errors: ['Invalid orientation: must be horizontal, vertical, or square'] };
     }
     session.orientation = orientation as any;
+    // 0012: the orientation is a FILTER over the supported sizes — changing it
+    //  changes the image aspect the generator must emit, so settled image
+    //  pieces are invalidated for regeneration (not later ffmpeg-normalized).
+    this.invalidateImagePiecesForSize(session);
     this.notifyUpdate(sessionId);
     return { errors: [] };
   }
@@ -602,6 +623,9 @@ class ComposerStoreImpl implements ComposerStore {
   async updateVideoRatio(sessionId: string, videoRatio: string | null): Promise<ServiceResult> {
     const session = this.resolveSession(sessionId);
     session.videoRatio = videoRatio;
+    // 0012: an explicit size change also changes the image aspect the
+    // generator must emit — invalidate settled image pieces for regeneration.
+    this.invalidateImagePiecesForSize(session);
     this.notifyUpdate(sessionId);
     return { errors: [] };
   }

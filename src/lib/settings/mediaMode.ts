@@ -255,3 +255,39 @@ export function videoRatiosForOrientation(
   const filtered = all.filter((r) => inClass(r, cls));
   return filtered.length > 0 ? filtered : all;
 }
+
+/**
+ * 0012: the EXACT `aspect_ratio` the video request will carry — a frontend
+ * mirror of the Rust shaper (`shape_video_job_seconds` +
+ * `ratio_compatible_with_orientation` + `guard_supported`), so the UI can
+ * show the user the concrete value that will be sent instead of guessing.
+ *
+ * - If `videoRatio` is set AND compatible with `orientation` AND in the
+ *   model's declared `limits.ratios` → return it.
+ * - Otherwise fall back to `limits.ratioMap[orientation]` (the orientation's
+ *   preset ratio), if that is also declared; if the model declares no map /
+ *   no declared ratios → return null (the provider's implicit default).
+ *
+ * Returned null means "no `aspect_ratio` param in the request".
+ */
+export function effectiveVideoAspect(
+  model: ModelSpec | null | undefined,
+  orientation: string,
+  videoRatio: string | null,
+): string | null {
+  const declared = model?.limits?.ratios;
+  // 1. Explicit override, only when compatible with the orientation class.
+  if (videoRatio && declared && declared.includes(videoRatio)) {
+    const ratioAspect = videoRatio.split(':').map(parseFloat);
+    if (ratioAspect.length === 2 && ratioAspect[1] !== 0) {
+      const a = ratioAspect[0] / ratioAspect[1];
+      const ok =
+        orientation === 'vertical' ? a < 1 : orientation === 'square' ? a === 1 : a > 1;
+      if (ok) return videoRatio;
+    }
+  }
+  // 2. Fall back to the orientation's preset ratio (ratio_map[orientation]).
+  const preset = model?.limits?.ratioMap?.[orientation];
+  if (preset && (!declared || declared.includes(preset))) return preset;
+  return null; // no declared data → provider default
+}
