@@ -434,12 +434,14 @@
 		border-color: var(--accent-color, #ff3e00);
 	}
 
-	/* 0012 D2: per-pipe crop-mode override control. */
+	/* 0012 D2: per-pipe crop-mode override control — reskinned to match the
+	   modal input/select geometry so it reads as theme-native, not a foreign
+	   widget. */
 	.kf-crop-override {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		margin-top: 10px;
+		margin-top: 4px;
 		padding: 8px 10px;
 		border: 1px dashed var(--border-color, #3f3f46);
 		border-radius: 7px;
@@ -448,16 +450,23 @@
 	}
 	.kf-crop-label {
 		flex-shrink: 0;
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: var(--text-secondary, #a1a1aa);
 	}
 	.kf-crop-select {
 		flex: 1;
 		min-width: 0;
-		padding: 4px 8px;
+		padding: 10px 12px;
 		border-radius: 6px;
 		border: 1px solid var(--border-color, #3f3f46);
-		background: var(--bg-color, #18181b);
-		color: var(--text-primary, #fafafa);
-		font-size: 0.78rem;
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+		color: var(--text-primary, #fff);
+		font-size: 0.85rem;
+	}
+	.kf-crop-select:focus {
+		outline: none;
+		border-color: var(--accent-color, #ff3e00);
 	}
 
 	.kf-url-thumb {
