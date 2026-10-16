@@ -268,6 +268,55 @@ Data + wiring:
 - Engine mapping (Phase 6, model-agnostic): (anchors[], refs[]) →
   per-`requestFormat` wire fields; paid dual mode = the extension point.
 
+## Size model — target vs. preset (0012, user-confirmed 2026-10-16)
+
+The session owns ONE concrete video target (W×H), set once and applied to
+every video in the session. The provider is told only a preset
+(tier + aspect-ratio) from the model catalog; the final pixel size is
+enforced by the compose step, not the provider.
+
+**Invariants (never violated):**
+- **R-1** — The session target (W×H) is the only concrete video-size
+  instruction. Orientation is a filter + the target's default; a custom
+  W×H overrides the preset-derived target.
+- **R-2** — A provider request never carries pixels. It carries the tier +
+  ratio resolved from the model's `limits` (`size_map[resolution]`,
+  `ratio_map[orientation]`, nearest-ratio fallback). Mapping target →
+  preset is OUR job; the provider's output size is not our concern.
+- **R-3** — Image bytes are never rescaled to the video target. An image
+  "size mode" only changes the request tier/ratio for that piece (or the
+  session default); the stored local/remote/base64 artifact is untouched.
+- **R-4** — The only image-side processing we ever do is downscale by the
+  LONGER side (aspect preserved, no upscale, no crop-to-video-aspect).
+  Deferred until a live 400 forces it.
+- **R-5** — fps is a request hint only; compose never re-times.
+
+**Layers:**
+- **Request side (shaper)** — `resolve_target_size(spec, res, ori, tw, th)`
+  → `(tier, ratio)`. A custom target's aspect overrides the orientation's
+  `ratio_map` entry via `nearest_ratio(spec.limits.ratios)` only when it
+  differs by > 5%. Per-piece override (Phase 4): `Keyframe.image_size` /
+  `image_ratio` (same on `SubjectReference`) win over the session default.
+- **Compose side (normalize)** — every clip is `scale`+`crop`/`pad`-ed to
+  the session target under the chosen crop mode (`center` / `fit` / `top` /
+  `bottom` / `exact` / `none`→auto-center). The lossless `-c copy` path is
+  used only when no trim AND no clip needs rescaling; any mismatch forces
+  the re-encode filter path.
+- **Target source of truth** — `ComposerConfig` (the composer blob), same
+  layer as fps/resolution/orientation: `crop_mode` (default `"center"`),
+  `custom_width` / `custom_height` (both present + valid = active; a
+  partial pair is ignored). Pinned at group start via `resolve_run_stats`
+  so a mid-run edit never reshapes a live run.
+
+**Live checks (Phase 2 CP2):**
+- square `1:1` — `ratio_map` gained `square: '1:1'` on all 5 models (every
+  model's `limits.ratios` lists `1:1`). If a live call 400s on `1:1` for a
+  specific model, record the limitation in that model's `limits.ratios` and
+  the UI filters Square out for it (edge 2.7).
+- base64 invariance — a video request carrying a local/base64 reference
+  sends the bytes VERBATIM in the body (verify in `request.log`); R-3 is
+  guaranteed by construction (`resolve_target_size` only yields tier+ratio).
+
 ## Public URLs + fail-fast (Q8)
 
 - txt2img/img2img → result is a public Agnes CDN URL; scheme stores the
