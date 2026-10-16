@@ -160,6 +160,10 @@ export function normalizeSession(session: SessionData): SessionData {
   if (!session.cropMode) session.cropMode = 'center';
   session.customWidth = Number.isFinite(session.customWidth as number) ? (session.customWidth as number) : null;
   session.customHeight = Number.isFinite(session.customHeight as number) ? (session.customHeight as number) : null;
+  // 0012: video aspect-ratio override — keep only a non-empty string, else null
+  // (a legacy/absent value must reset the shaper to the orientation default).
+  session.videoRatio =
+    typeof session.videoRatio === 'string' && session.videoRatio.trim() ? session.videoRatio.trim() : null;
   if (session.totalGeneratedFrames === undefined || session.totalGeneratedFrames === null) {
     session.totalGeneratedFrames = 0;
   }

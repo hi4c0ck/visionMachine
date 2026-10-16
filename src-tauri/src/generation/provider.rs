@@ -391,6 +391,7 @@ impl ProviderEngine {
             force_media_mode: None,
             target_w: 0,
             target_h: 0,
+            video_ratio: None,
         };
         let slot = self.provider_slot(&input, spec.kind.clone()).await?;
         let payload = shape_request(spec, &req.ctx).map_err(|e| {
@@ -850,6 +851,8 @@ impl ProviderEngine {
             // session default via resolve_target_size).
             image_size: stage.image_size.clone(),
             image_ratio: stage.image_ratio.clone(),
+            // 0012: explicit session video aspect-ratio override (None = legacy).
+            video_ratio: input.video_ratio.clone(),
             c_value: input.c_value,
             q_value: input.q_value,
             seed: input.seed,
@@ -2024,6 +2027,7 @@ mod tests {
             force_media_mode: None,
             target_w: 0,
             target_h: 0,
+            video_ratio: None,
         }
     }
 

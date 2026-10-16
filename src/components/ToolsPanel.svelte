@@ -5,7 +5,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
-	import { availableResolutionsForModel, sessionDefaultLabel } from '$lib/settings/mediaMode';
+	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import { onMount } from 'svelte';
 
@@ -28,6 +28,7 @@
 		onresolutionchange,
 		onorientationchange,
 		oncropmodechange,
+		onvideoratiochange,
 		sessionVideoStale = false,
 		qValue,
 		cValue,
@@ -64,6 +65,9 @@
 		onorientationchange?: (orientation: string) => void;
 		/** 0012: session video-normalization crop mode. */
 		oncropmodechange?: (cropMode: string) => void;
+		/** 0012: session video aspect-ratio override (a model limits.ratios
+		 *  entry, e.g. "21:9"; null = reset to orientation-derived default). */
+		onvideoratiochange?: (ratio: string | null) => void;
 		/** 0012 G8: the session video was composed with a different target/crop
 		 *  than the session currently has — flag it for re-compose. */
 		sessionVideoStale?: boolean;
@@ -147,24 +151,14 @@
 		() => availableResolutionsForModel(activeVideoModel, session?.resolution ?? '720p'),
 	);
 
-	// 0012: the active IMAGE model (profile default) — the session's image
-	// tier + ratio are resolved from its catalog maps, so the panel can show
-	// the user what size images will actually generate for the current
-	// resolution + orientation (R-1: session target, R-2: tier+ratio only).
-	const activeImageModel = $derived.by((): ModelSpec | null => {
-		void settingsRev;
-		const s = getSettings();
-		const ip = getPreset(s.providers.image.preset);
-		const models = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
-		const id = s.providers.image.model;
-		return models.find((mm) => mm.id === id) ?? models.find((mm) => !mm.pending) ?? null;
-	});
-	// Read-only session image-size hint: "1K · 9:16" (tier + ratio the image
-	// model will emit for this session's resolution + orientation). Shown so
-	// the user can SEE what size will result without opening a piece.
-	const imageSizeLabel = $derived.by(
-		() => sessionDefaultLabel(activeImageModel, session),
+	// 0012: the VIDEO aspect-ratio options the active model actually emits
+	// (`limits.ratios`, e.g. 2.5-flash: 21:9 16:9 4:3 1:1 3:4 9:16). The
+	// "Video size" selector in the panel lists ONLY these; "Use orientation
+	// default" means the shaper keeps deriving the ratio from Orientation.
+	const ratioOptions = $derived.by(
+		() => activeVideoModel?.limits?.ratios ?? [],
 	);
+
 	const onPanelSettingsSync = () => {
 		settingsRev++;
 	};
@@ -418,15 +412,28 @@
           </select>
         </div>
 
-        <!-- 0012: session image size (derived from Resolution + Orientation
-             via the active image model's catalog: tier = sizeMap[resolution],
-             ratio = ratioMap[orientation]). Shown so the user sees what size
-             image pieces will generate. A keyframe / subject inherits this —
-             there is no per-piece size picker. -->
-        <div class="setting-row">
-          <label class="setting-label" title="Image tier + ratio for this session, derived from Resolution + Orientation via the active image model">Image size</label>
-          <span class="setting-value setting-value-static" title="Resolved from Resolution + Orientation via the active image model">{imageSizeLabel}</span>
-        </div>
+        {#if ratioOptions.length}
+          <div class="setting-row">
+            <label class="setting-label" title="Video aspect-ratio sent to the provider for this session">Video size</label>
+            <select
+              class="setting-select"
+              value={session.videoRatio ?? ''}
+              onchange={(e) => onvideoratiochange?.(e.currentTarget.value === '' ? null : e.currentTarget.value)}
+            >
+              <option value="" title="Derived from Orientation">{session.videoRatio ? `Default (${session.videoRatio})` : 'Default'}</option>
+              {#each ratioOptions as r (r)}
+                <option value={r} selected={session.videoRatio === r}>{r}</option>
+              {/each}
+            </select>
+            <div class="setting-hint">
+              {#if session.videoRatio}
+                Sending {session.videoRatio} as the video aspect ratio (overrides Orientation).
+              {:else}
+                Ratio follows Orientation ({session.orientation ?? 'horizontal'}).
+              {/if}
+            </div>
+          </div>
+        {/if}
 
         <div class="setting-row">
           <label class="setting-label">Crop method</label>

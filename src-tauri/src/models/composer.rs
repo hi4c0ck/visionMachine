@@ -617,6 +617,12 @@ pub struct ComposerConfig {
     pub custom_width: Option<u32>,
     #[serde(default)]
     pub custom_height: Option<u32>,
+    /// 0012: explicit video aspect-ratio override (e.g. "21:9", "4:3"). When
+    /// set, the video shaper uses it directly instead of the orientation→ratio_map
+    /// derivation. Must be a valid entry in the model's `limits.ratios` or it
+    /// will be dropped by `guard_supported`. Absent on legacy blobs (None).
+    #[serde(default)]
+    pub video_ratio: Option<String>,
     #[serde(default)]
     pub total_generated_frames: u32,
     pub created_at: Option<DateTime<Utc>>,
@@ -656,6 +662,7 @@ impl ComposerConfig {
             crop_mode: default_crop_mode(),
             custom_width: None,
             custom_height: None,
+            video_ratio: None,
             total_generated_frames: 0,
             created_at: Some(now),
             updated_at: Some(now),

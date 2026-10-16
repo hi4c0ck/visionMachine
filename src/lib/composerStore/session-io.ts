@@ -37,6 +37,9 @@ export class SessionServiceImpl implements SessionService {
         cropMode: (backendData.cropMode as CropMode | undefined) || 'center',
         customWidth: typeof backendData.customWidth === 'number' ? backendData.customWidth : null,
         customHeight: typeof backendData.customHeight === 'number' ? backendData.customHeight : null,
+        // 0012: explicit video aspect-ratio (a model `limits.ratios` entry).
+        // Absent on legacy blobs → null (shaper derives from orientation).
+        videoRatio: typeof backendData.videoRatio === 'string' && backendData.videoRatio ? backendData.videoRatio : null,
         createdAt: backendData.createdAt || Date.now(),
         updatedAt: backendData.updatedAt || Date.now(),
         directoryPath: backendData.directoryPath || '',

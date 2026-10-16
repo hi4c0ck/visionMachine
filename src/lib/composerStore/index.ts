@@ -104,6 +104,7 @@ class ComposerStoreImpl implements ComposerStore {
         cropMode: 'center',
         customWidth: null,
         customHeight: null,
+        videoRatio: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         directoryPath: '',
@@ -595,6 +596,16 @@ class ComposerStoreImpl implements ComposerStore {
     return { errors: [] };
   }
 
+  /** 0012: set the session's video aspect-ratio override (a model
+   *  `limits.ratios` entry, e.g. "21:9" / "4:3"). null = reset to the
+   *  orientation-derived default. Persisted with the rest of the session. */
+  async updateVideoRatio(sessionId: string, videoRatio: string | null): Promise<ServiceResult> {
+    const session = this.resolveSession(sessionId);
+    session.videoRatio = videoRatio;
+    this.notifyUpdate(sessionId);
+    return { errors: [] };
+  }
+
   /** 0012: set the session's custom target size (both, or null both). */
   async updateCustomSize(
     sessionId: string,
@@ -751,6 +762,7 @@ class ComposerStoreImpl implements ComposerStore {
           cropMode: session.cropMode ?? 'center',
           customWidth: session.customWidth ?? null,
           customHeight: session.customHeight ?? null,
+          videoRatio: session.videoRatio ?? null,
           totalGeneratedFrames: session.totalGeneratedFrames,
         },
       });
@@ -833,6 +845,7 @@ export const updateFPS = composerStore.updateFPS.bind(composerStore);
 export const updateResolution = composerStore.updateResolution.bind(composerStore);
 export const updateOrientation = composerStore.updateOrientation.bind(composerStore);
 export const updateCropMode = composerStore.updateCropMode.bind(composerStore);
+export const updateVideoRatio = composerStore.updateVideoRatio.bind(composerStore);
 export const updateCustomSize = composerStore.updateCustomSize.bind(composerStore);
 export const loadSession = composerStore.loadSession.bind(composerStore);
 export const saveSession = composerStore.saveSession.bind(composerStore);

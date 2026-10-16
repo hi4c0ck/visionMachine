@@ -337,6 +337,9 @@ pub fn build_pipe_start(
             .as_ref()
             .and_then(|r| r.target_h)
             .unwrap_or(0),
+        // 0012: explicit video aspect-ratio override (None = use orientation
+        // ratio map as before).
+        video_ratio: composer.video_ratio.clone(),
         q_value: params
             .pipe_params
             .as_ref()
@@ -746,6 +749,7 @@ pub async fn generate_piece_image(
         target_h: 0,
         image_size: None,
         image_ratio: None,
+        video_ratio: None,
         c_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.c_value).unwrap_or(0.0),
         q_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.q_value).unwrap_or(0),
         seed: input.seed,

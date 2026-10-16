@@ -40,6 +40,12 @@ pub struct EngineInput {
     pub target_w: u32,
     #[serde(default)]
     pub target_h: u32,
+    /// 0012: explicit video aspect-ratio override (a `limits.ratios` entry).
+    /// When set, the shaper uses it directly as the `aspect_ratio` request
+    /// param instead of the orientation→ratio_map derivation. `None` = use
+    /// the orientation's ratio (legacy behavior).
+    #[serde(default)]
+    pub video_ratio: Option<String>,
     pub q_value: u32,
     pub c_value: f32,
     /// Session media root the provider engine writes its artifacts into

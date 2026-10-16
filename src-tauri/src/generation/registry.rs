@@ -1449,6 +1449,7 @@ mod tests {
             force_media_mode: None,
             target_w: 0,
             target_h: 0,
+            video_ratio: None,
         }
     }
 

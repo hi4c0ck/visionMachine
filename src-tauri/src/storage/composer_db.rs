@@ -111,6 +111,7 @@ impl Database {
                             crop_mode: crate::models::composer::default_crop_mode(),
                             custom_width: None,
                             custom_height: None,
+                            video_ratio: None,
                             total_generated_frames,
                             created_at: None,
                             updated_at: None,

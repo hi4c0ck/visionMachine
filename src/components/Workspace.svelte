@@ -27,7 +27,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl, invalidateMediaUrlCache } from '$lib/mediaUrl';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
-	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, setMediaMode } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
@@ -2432,6 +2432,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		updateCropMode(selectedSession.id, cropMode);
 	}
 
+	function handleVideoRatioChange(ratio: string | null) {
+		if (!selectedSession) return;
+		updateVideoRatio(selectedSession.id, ratio);
+	}
+
 	function handleToolSelect(id: string) {
 		activeTool = id;
 	}
@@ -2618,6 +2623,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onresolutionchange={handleResolutionChange}
 				onorientationchange={handleOrientationChange}
 				oncropmodechange={handleCropModeChange}
+				onvideoratiochange={handleVideoRatioChange}
 				sessionVideo={toolsSessionVideo}
 				sessionVideoStale={sessionVideoStale}
 				/>

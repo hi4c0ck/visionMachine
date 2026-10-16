@@ -24,6 +24,9 @@ pub struct SaveInput {
     pub custom_width: Option<u32>,
     #[serde(default, alias = "customHeight")]
     pub custom_height: Option<u32>,
+    /// 0012: explicit video aspect-ratio override (model `limits.ratios` entry).
+    #[serde(default, alias = "videoRatio")]
+    pub video_ratio: Option<String>,
     #[serde(default, alias = "totalGeneratedFrames")]
     pub total_generated_frames: Option<u32>,
 }
@@ -76,6 +79,7 @@ pub async fn get_composer(
         "cropMode": composer.crop_mode,
         "customWidth": composer.custom_width,
         "customHeight": composer.custom_height,
+        "videoRatio": composer.video_ratio,
         "totalGeneratedFrames": composer.total_generated_frames,
         "directoryPath": directory_path,
     }))
@@ -120,6 +124,7 @@ pub async fn save_composer(input: SaveInput, state: State<'_, AppState>) -> Resu
             }),
         custom_width: input.custom_width.or_else(|| existing.as_ref().and_then(|e| e.custom_width)),
         custom_height: input.custom_height.or_else(|| existing.as_ref().and_then(|e| e.custom_height)),
+        video_ratio: input.video_ratio.or_else(|| existing.as_ref().and_then(|e| e.video_ratio.clone())),
         total_generated_frames: input.total_generated_frames.unwrap_or(0),
         created_at: None,
         updated_at: None,

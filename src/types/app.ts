@@ -495,6 +495,9 @@ export interface SessionData {
   /** 0012: optional custom session target size (both present = active). */
   customWidth?: number | null;
   customHeight?: number | null;
+  /** 0012: explicit video aspect-ratio (a `limits.ratios` entry, e.g. "21:9").
+   *  Absent/legacy = null → the shaper derives ratio from Orientation. */
+  videoRatio?: string | null;
   totalGeneratedFrames: number;
 }
 

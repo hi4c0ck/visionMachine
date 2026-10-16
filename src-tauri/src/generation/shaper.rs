@@ -67,6 +67,12 @@ pub struct StageContext {
     /// (e.g. "1:1"). `None` = use the session default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_ratio: Option<String>,
+    /// 0012: explicit session video aspect-ratio override (a `limits.ratios`
+    /// entry, e.g. "21:9"). When set, the VIDEO shaper uses it directly as
+    /// the `aspect_ratio` request param instead of the orientation→ratio_map
+    /// derivation. `None` = legacy behavior (orientation drives the ratio).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_ratio: Option<String>,
     /// Pipe cValue; the shaper sends it under the spec's `guidance` param
     /// name only when set (E7).
     pub c_value: f32,
@@ -571,6 +577,13 @@ fn shape_video_job_seconds(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     // it); other seconds models use their own tiers.
     let (mut size, mut ratio) =
         resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
+    // 0012: an explicit session video aspect-ratio override (a `limits.ratios`
+    // entry, e.g. "21:9" / "4:3") wins over the orientation-derived ratio;
+    // the tier still comes from `size_map[resolution]`. Absent -> legacy
+    // orientation behavior.
+    if let Some(r) = ctx.video_ratio.clone() {
+        ratio = Some(r);
+    }
     // 0012 D1: clamp to the model's declared lists (a rejected square/ratio is
     // dropped, not sent) so a catalog drift can't 400 the request.
     (size, ratio) = guard_supported(spec, size, ratio);
@@ -720,6 +733,7 @@ mod tests {
             upstream: Vec::new(),
             image_size: None,
             image_ratio: None,
+            video_ratio: None,
         };
         f(&mut c);
         c
@@ -1450,6 +1464,43 @@ mod tests {
         // No ratios list -> nearest_ratio returns None -> fall back to map.
         let (_t, ratio) = resolve_target_size(&s, "720p", "horizontal", 1600, 900);
         assert_eq!(ratio.as_deref(), Some("16:9"));
+    }
+
+    #[test]
+    fn video_secs_explicit_ratio_override_beats_orientation() {
+        // 0012: an explicit session video_ratio (a `limits.ratios` entry) is
+        // sent as `aspect_ratio` instead of the orientation-derived ratio.
+        let s = spec("video-job-seconds", |m| {
+            m.id = "agnes-video-2.5-flash".into();
+            m.limits.ratios = Some(vec!["21:9".into(), "16:9".into(), "4:3".into(), "1:1".into(), "3:4".into(), "9:16".into()]);
+            m.limits.size_map = Some(std::collections::HashMap::from([("720p".to_string(), "720P".to_string())]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([
+                ("horizontal".to_string(), "16:9".to_string()),
+                ("vertical".to_string(), "9:16".to_string()),
+            ]));
+        });
+        // No override -> orientation vertical -> 9:16.
+        let p = shape_request(&s, &ctx(|c| { c.orientation = "vertical".into(); })).unwrap();
+        assert_eq!(p["aspect_ratio"], "9:16");
+        // Explicit override -> 21:9 even though vertical maps to 9:16.
+        let p = shape_request(&s, &ctx(|c| { c.orientation = "vertical".into(); c.video_ratio = Some("21:9".into()); })).unwrap();
+        assert_eq!(p["aspect_ratio"], "21:9");
+    }
+
+    #[test]
+    fn video_secs_explicit_ratio_guarded_to_declared_list() {
+        // 0012 D1: an explicit video_ratio that the model does NOT offer is
+        // dropped (guard_supported), not sent -> provider default applies.
+        let s = spec("video-job-seconds", |m| {
+            m.id = "x".into();
+            m.limits.ratios = Some(vec!["16:9".into(), "9:16".into()]);
+            m.limits.size_map = Some(std::collections::HashMap::from([("720p".to_string(), "720P".to_string())]));
+            m.limits.ratio_map = Some(std::collections::HashMap::from([("horizontal".to_string(), "16:9".to_string())]));
+        });
+        // 21:9 is not in the declared list -> guard drops it (no 400), so the
+        // param is OMITTED and the provider applies its own default.
+        let p = shape_request(&s, &ctx(|c| { c.video_ratio = Some("21:9".into()); })).unwrap();
+        assert!(p.get("aspect_ratio").is_none());
     }
 
     #[test]
