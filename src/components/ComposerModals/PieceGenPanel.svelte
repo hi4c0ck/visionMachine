@@ -32,6 +32,8 @@
 		prompt,
 		referenceUrl,
 		onGenerated,
+		initialLocal = null,
+		initialRemote = null,
 	} = $props<{
 		kind: PieceKind;
 		refId: string;
@@ -44,6 +46,11 @@
 		referenceUrl?: string;
 		/** Fires after a successful generation with (localPath, remoteUrl). */
 		onGenerated?: (localPath: string, remoteUrl: string | null) => void;
+		/** The piece's persisted generation preview (local path / remote URL).
+		 *  When set, the panel opens on THIS artifact instead of the newest
+		 *  on-disk entry — so a re-opened modal shows the user's last choice. */
+		initialLocal?: string | null;
+		initialRemote?: string | null;
 	}>();
 
 	const isImg2Img = $derived(imageType === 'img2img');
@@ -172,17 +179,32 @@
 		return entry.localPath ? toMediaUrl(entry.localPath) : Promise.resolve(null);
 	}
 
-	/** Load the piece's on-disk history and preview the newest artifact. */
+	/** Load the piece's on-disk history and preview the SAVED artifact (the
+	 *  piece's persisted generation) when present, else the newest entry. */
 	async function loadHistory() {
 		const entries = await listPieceHistory(sessionId, pipeId, refId, kind);
 		history = entries;
 		historyThumbs = await Promise.all(entries.map((e) => thumbUrl(e)));
 		await refreshSource();
-		const newest = entries[0];
-		if (newest?.localPath) {
-			generatedPath = newest.localPath;
-			generatedRemote = newest.remoteUrl ?? null;
-			generatedUrl = await toMediaUrl(newest.localPath);
+		// 0012 D3-fix: prefer the piece's persisted generation preview over
+		// "always the newest" so a re-opened modal lands on the user's choice.
+		const seed = initialLocal ?? initialRemote;
+		const match = seed
+			? entries.find((e) =>
+					initialLocal ? e.localPath === initialLocal : e.remoteUrl === initialRemote,
+				)
+			: undefined;
+		const chosen = match ?? entries[0];
+		if (chosen?.localPath) {
+			generatedPath = chosen.localPath;
+			generatedRemote = chosen.remoteUrl ?? null;
+			// historyThumbs aligns 1:1 with `history` (=== entries), so the
+			// pre-resolved blob URL for the chosen artifact is already cached.
+			const idx = entries.findIndex((e) => e.localPath === chosen.localPath);
+			generatedUrl = (idx >= 0 ? historyThumbs[idx] : null) ?? (await toMediaUrl(chosen.localPath));
+		} else if (initialRemote) {
+			generatedRemote = initialRemote;
+			generatedUrl = initialRemote;
 		}
 	}
 
@@ -191,7 +213,10 @@
 		if (refId) void loadHistory();
 	});
 
-	/** A history thumb was clicked — preview that generation. */
+	/** A history thumb was clicked — preview that generation AND propagate it
+	 *  to the parent record via onGenerated so the *selected* image is what
+	 *  gets persisted (previously only the newest was, so a reopened modal
+	 *  always jumped back to the last generation). */
 	function selectGeneration(entry: PieceHistoryEntry, idx: number) {
 		// `historyThumbs[idx]` is the already-resolved `toMediaUrl` cache entry
 		// for this generation; fall back to re-resolving for a missing local.
@@ -200,6 +225,8 @@
 		void (entry.localPath ? toMediaUrl(entry.localPath) : Promise.resolve(null)).then(
 			(u) => (generatedUrl = u ?? historyThumbs[idx] ?? null),
 		);
+		// Persist the selection onto the keyframe / subject record.
+		onGenerated?.(entry.localPath ?? '', entry.remoteUrl ?? '');
 	}
 
 	async function doGenerate() {

@@ -264,6 +264,8 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 						prompt={srPrompt}
 						referenceUrl={srType === 'img2img' ? srImageUrl : undefined}
 						onGenerated={(l, r) => { srGenLocal = l; srGenRemote = r ?? ''; }}
+						initialLocal={srGenLocal || null}
+						initialRemote={srGenRemote || null}
 					/>
 				{/if}
 				{#if srType !== 'url'}
@@ -314,22 +316,6 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 								{/if}
 							{/if}
 						</p>
-					</div>
-				{/if}
-				<div class="modal-field">
-					<label>
-						<input type="checkbox" bind:checked={srUseFrames} />
-						Use frame range
-					</label>
-				</div>
-				{#if srUseFrames}
-					<div class="modal-field">
-						<label id="sr-start-label">Start Frame</label>
-						<input type="number" bind:value={srStart} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="sr-start-label" />
-					</div>
-					<div class="modal-field">
-						<label id="sr-end-label">End Frame</label>
-						<input type="number" bind:value={srEnd} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="sr-end-label" />
 					</div>
 				{/if}
 			</div>

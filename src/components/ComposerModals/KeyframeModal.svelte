@@ -249,10 +249,6 @@
 					<button class="mode-btn {kfType === 'txt2img' ? 'active' : ''}" onclick={() => kfType = 'txt2img'}>Txt2Img</button>
 					<button class="mode-btn {kfType === 'img2img' ? 'active' : ''}" onclick={() => kfType = 'img2img'}>Img2Img</button>
 				</div>
-				<div class="modal-field">
-					<label id="kf-frame-label">Frame</label>
-					<input type="number" bind:value={kfFrame} step={8} min={0} max={maxFrames - 1} class="modal-input" aria-labelledby="kf-frame-label" />
-				</div>
 				{#if kfType === 'url'}
 					<div class="modal-field">
 						<label id="kf-url-label">Image URL</label>
@@ -314,6 +310,8 @@
 						prompt={kfPrompt}
 						referenceUrl={kfType === 'img2img' ? kfReferenceUrl : undefined}
 						onGenerated={(l, r) => { kfGenLocal = l; kfGenRemote = r ?? ''; }}
+						initialLocal={kfGenLocal || null}
+						initialRemote={kfGenRemote || null}
 					/>
 				{/if}
 
