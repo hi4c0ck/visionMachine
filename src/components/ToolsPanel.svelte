@@ -114,6 +114,20 @@
 		);
 	});
 
+	// 0012 (5.4): the preview video's aspect follows the SESSION TARGET
+	// (custom W×H when set, else the preset dims) — a vertical/square session
+	// previews in its own shape instead of a letterboxed 16:9 box.
+	const targetAspectCss = $derived.by(() => {
+		if (!session) return '16 / 9';
+		const d = effectiveTargetDims(
+			session.resolution,
+			session.orientation,
+			session.customWidth,
+			session.customHeight,
+		);
+		return `${d.width} / ${d.height}`;
+	});
+
 	// 0012: custom W×H input. Both values are committed atomically — a partial
 	// entry (one side empty) clears the pair so the session falls back to the
 	// resolution preset (plan 1.3).
@@ -271,6 +285,7 @@
             <video
               src={sessionVideo.url}
               class="preview-video"
+              style={`aspect-ratio: ${targetAspectCss}`}
               muted
               loop
               autoplay
@@ -877,7 +892,9 @@
 
   .preview-video {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    /* 0012 (5.4): the aspect comes from the session target (inline style),
+       not a hard-coded 16:9 — a vertical/square/custom session previews in
+       its own shape. */
     object-fit: contain;
     background: #000;
     border-radius: 6px;

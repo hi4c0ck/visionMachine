@@ -102,6 +102,12 @@ async fn mirror_copy_composer(
         copy.fps = composer.fps;
         copy.resolution = composer.resolution.clone();
         copy.orientation = composer.orientation.clone();
+        // 0012 (G1): carry the video-normalization target forward — the
+        // duplicated session composes against the same crop mode + custom
+        // size as its source.
+        copy.crop_mode = composer.crop_mode.clone();
+        copy.custom_width = composer.custom_width;
+        copy.custom_height = composer.custom_height;
         // A fresh session has no generation history of its own yet.
         copy.total_generated_frames = 0;
         // Design-only: re-mint every piece id, blank the artifacts.

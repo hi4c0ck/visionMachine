@@ -44,6 +44,7 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     id?: string,
     previewLocalPath?: string,
     previewRemoteUrl?: string,
+    imageOverride?: { size?: string | null; ratio?: string | null },
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
@@ -69,6 +70,10 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
       useFrames,
       visible: true,
       ...preview,
+      // 0012 Phase 4: explicit per-piece size override (null/absent = the
+      // session default). Round-trips through the Rust SubjectReference.
+      imageSize: imageOverride?.size ?? null,
+      imageRatio: imageOverride?.ratio ?? null,
       ...(useFrames && frameStart !== undefined && frameEnd !== undefined ? {
         frameStart: snapTo8(frameStart),
         frameEnd: Math.min(snapTo8(frameEnd), pipe.lengthFrames - 1),
@@ -145,6 +150,10 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
       frameEnd?: number;
       type?: KeyframeType;
       prompt?: string;
+      /** 0012 Phase 4: explicit per-piece size override. `undefined` = keep
+       *  the stored override (an edit without touching size); `{size: null,
+       *  ratio: null}` = reset to the session default. */
+      imageOverride?: { size?: string | null; ratio?: string | null };
     },
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
@@ -189,6 +198,12 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
       } else {
         delete ref.frameStart;
         delete ref.frameEnd;
+      }
+      // 0012 Phase 4: apply the explicit size override only when the caller
+      // sent one (undefined = keep the stored override untouched).
+      if (update.imageOverride) {
+        ref.imageSize = update.imageOverride.size ?? null;
+        ref.imageRatio = update.imageOverride.ratio ?? null;
       }
     }
 

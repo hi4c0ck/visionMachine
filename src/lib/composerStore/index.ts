@@ -396,6 +396,7 @@ class ComposerStoreImpl implements ComposerStore {
     id?: string,
     previewLocalPath?: string,
     previewRemoteUrl?: string,
+    imageOverride?: { size?: string | null; ratio?: string | null },
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);
     const result = await s.subjectRefs.add(
@@ -410,6 +411,7 @@ class ComposerStoreImpl implements ComposerStore {
       id,
       previewLocalPath,
       previewRemoteUrl,
+      imageOverride,
     );
     if (result.errors.length === 0) this.notifyUpdate(sessionId);
     return result;
@@ -465,6 +467,8 @@ class ComposerStoreImpl implements ComposerStore {
       frameEnd?: number;
       type?: KeyframeType;
       prompt?: string;
+      /** 0012 Phase 4: explicit per-piece size override (undefined = keep). */
+      imageOverride?: { size?: string | null; ratio?: string | null };
     },
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);

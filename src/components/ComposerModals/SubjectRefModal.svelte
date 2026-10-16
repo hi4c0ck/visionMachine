@@ -1,9 +1,19 @@
 <script lang="ts">
-	import type { PipeRow, SubjectReference } from '$types';
+	import type { PipeRow, SubjectReference, ModelSpec } from '$types';
 	import {
 		addSubjectRef as addSubjectRefAction,
 		updateSubjectRef as updateSubjectRefAction,
 	} from '$lib/composerStore';
+	import { sessions } from '$lib/composerStore';
+	import { getSettings } from '$lib/settings/store';
+	import { getPreset, modelsFor } from '$lib/settings/catalog';
+	import {
+		availableImageTiers,
+		availableImageRatios,
+		sessionDefaultTier,
+		sessionDefaultRatio,
+		sessionDefaultLabel,
+	} from '$lib/settings/mediaMode';
 import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { isTauri } from '@tauri-apps/api/core';
@@ -45,6 +55,23 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	// the record at Confirm so the chip shows a thumbnail immediately).
 	let srGenLocal = $state('');
 	let srGenRemote = $state('');
+	// 0012 Phase 4: per-piece image size-mode override (same as KeyframeModal).
+	let srSizeMode = $state<'default' | 'custom'>('default');
+	let srCustomSize = $state('');
+	let srCustomRatio = $state('');
+
+	// Resolve the active image model + its size options (mirrors KeyframeModal).
+	const imageModel = $derived.by((): ModelSpec | null => {
+		const s = getSettings();
+		const ip = getPreset(s.providers.image.preset);
+		const models = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
+		let id = s.providers.image.model;
+		if (!models.some((m) => m.id === id)) id = models.find((m) => !m.pending)?.id ?? id;
+		return models.find((m) => m.id === id) ?? null;
+	});
+	const sizeTiers = $derived(availableImageTiers(imageModel));
+	const sizeRatios = $derived(availableImageRatios(imageModel));
+	const defLabel = $derived(sessionDefaultLabel(imageModel, sessions.get(sessionId ?? '')));
 
 	// Seed values when the modal opens (moved verbatim from openSubjectRefModal)
 	$effect(() => {
@@ -62,6 +89,16 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			srRefId = existing.id;
 			srGenLocal = existing.previewLocalPath ?? '';
 			srGenRemote = existing.previewRemoteUrl ?? '';
+			// 0012 Phase 4: restore this piece's explicit size override (if any).
+			if (existing.imageSize || existing.imageRatio) {
+				srSizeMode = 'custom';
+				srCustomSize = existing.imageSize ?? '';
+				srCustomRatio = existing.imageRatio ?? '';
+			} else {
+				srSizeMode = 'default';
+				srCustomSize = '';
+				srCustomRatio = '';
+			}
 		} else {
 			srType = 'url';
 			srImageUrl = '';
@@ -72,6 +109,9 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			srRefId = `sr-new${Date.now()}`;
 			srGenLocal = '';
 			srGenRemote = '';
+			srSizeMode = 'default';
+			srCustomSize = '';
+			srCustomRatio = '';
 		}
 	});
 
@@ -125,6 +165,12 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				frameEnd: srUseFrames ? srEnd : undefined,
 				type: srType,
 				prompt: srPrompt,
+				// 0012 Phase 4: the modal always sends an override decision
+				// (default -> reset to session default; custom -> the selection).
+				imageOverride:
+					srSizeMode === 'custom'
+						? { size: srCustomSize || null, ratio: srCustomRatio || null }
+						: { size: null, ratio: null },
 			});
 			if (result.errors.length === 0) onSaved?.(editingRefId);
 		} else {
@@ -142,6 +188,10 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				srRefId || undefined,
 				srGenLocal || undefined,
 				srGenRemote || undefined,
+				// 0012 Phase 4: same override decision as the edit path.
+				srSizeMode === 'custom'
+					? { size: srCustomSize || null, ratio: srCustomRatio || null }
+					: { size: null, ratio: null },
 			);
 		}
 		if (result.errors.length > 0) {
@@ -209,6 +259,56 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 						onGenerated={(l, r) => { srGenLocal = l; srGenRemote = r ?? ''; }}
 					/>
 				{/if}
+				{#if srType !== 'url'}
+					<!-- 0012 Phase 4: per-piece image size-mode selector (mirrors KeyframeModal). -->
+					<div class="modal-field sr-size-field">
+						<label id="sr-size-label">Size mode</label>
+						<div class="sr-size-row">
+							<select
+								class="modal-input"
+								value={srSizeMode}
+								onchange={(e) => (srSizeMode = e.currentTarget.value as 'default' | 'custom')}
+								aria-labelledby="sr-size-label"
+							>
+								<option value="default">Use session default ({defLabel})</option>
+								{#if sizeTiers.length || sizeRatios.length}
+									<option value="custom">Custom size</option>
+								{/if}
+							</select>
+							{#if srSizeMode === 'custom'}
+								<select class="modal-input" bind:value={srCustomSize} aria-label="Size tier">
+									{#if sizeTiers.length}
+										{#each sizeTiers as t (t)}
+											<option value={t}>{t}</option>
+										{/each}
+									{:else}
+										<option value="">(no size tiers)</option>
+									{/if}
+								</select>
+								<select class="modal-input" bind:value={srCustomRatio} aria-label="Aspect ratio">
+									{#if sizeRatios.length}
+										{#each sizeRatios as r (r)}
+											<option value={r}>{r}</option>
+										{/each}
+									{:else}
+										<option value="">(no ratios)</option>
+									{/if}
+								</select>
+							{/if}
+						</div>
+						<p class="sr-size-hint">
+							{#if srSizeMode === 'default'}
+								Session default: {defLabel} — all subject images in this session generate at this size unless overridden here.
+							{:else}
+								{#if sizeTiers.length || sizeRatios.length}
+									Generates this subject at {srCustomSize || '—'} {srCustomRatio && `· ${srCustomRatio}`}.
+								{:else}
+									The current model offers no explicit size options.
+								{/if}
+							{/if}
+						</p>
+					</div>
+				{/if}
 				<div class="modal-field">
 					<label>
 						<input type="checkbox" bind:checked={srUseFrames} />
@@ -233,3 +333,24 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 		</div>
 	</div>
 {/if}
+
+<style>
+	/* 0012 Phase 4: per-piece image size-mode selector (mirrors KeyframeModal). */
+	.sr-size-field {
+		margin-top: 12px;
+	}
+	.sr-size-row {
+		display: flex;
+		gap: 8px;
+		margin-top: 4px;
+	}
+	.sr-size-row .modal-input {
+		flex: 1;
+	}
+	.sr-size-hint {
+		margin: 6px 0 0;
+		font-size: 0.68rem;
+		color: var(--text-muted);
+		line-height: 1.4;
+	}
+</style>
