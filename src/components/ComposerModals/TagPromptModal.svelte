@@ -160,29 +160,27 @@
 				</button>
 			{/each}
 			<div class="tpm-center" role="dialog" aria-modal="true" tabindex="-1">
-				<div class="tpm-layout">
-					<div class="modal tpm-modal" style="--tag-color: {tagColor}; --tag-color-safe: {tagColorSafe};">
-						<div class="modal-header">
-							<h3>Edit {specName} Prompt</h3>
-						</div>
-						<div class="modal-body">
-							<textarea
-								id="tag-prompt-area"
-								bind:this={textareaEl}
-								bind:value={tagPrompt}
-								placeholder="Describe this {specName.toLowerCase()}…"
-								class="modal-textarea tpm-textarea"
-								aria-label={specName + ' prompt'}
-							></textarea>
-						</div>
-						<div class="modal-footer">
+				<div class="modal tpm-modal" style="--tag-color: {tagColor}; --tag-color-safe: {tagColorSafe};">
+					<div class="modal-header">
+						<h3>Edit {specName} Prompt</h3>
+					</div>
+					<div class="modal-body">
+						<textarea
+							id="tag-prompt-area"
+							bind:this={textareaEl}
+							bind:value={tagPrompt}
+							placeholder="Describe this {specName.toLowerCase()}…"
+							class="modal-textarea tpm-textarea"
+							aria-label={specName + ' prompt'}
+						></textarea>
+						{#if refs.length}
+							<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} />
+						{/if}
+					</div>
+					<div class="modal-footer">
 						<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
 						<button class="btn-confirm" onclick={confirm}>Confirm</button>
 					</div>
-				</div>
-				{#if refs.length}
-					<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} />
-				{/if}
 				</div>
 			</div>
 		</div>
@@ -191,22 +189,13 @@
 
 <style>
 	/* Fake frame: 3x3 grid. The ring cells define the outer bounds; the card
-	   occupies the center cell and is correctly inset from every icon. Column
-	   2 is `auto` (not a fixed 420px) so the modal + optional subject-ref side
-	   strip both fit without overflow. */
+	   occupies the center cell and is correctly inset from every icon. */
 	.tpm-frame {
 		position: relative;
 		display: grid;
-		grid-template-columns: 64px auto 64px;
+		grid-template-columns: 64px minmax(0, 420px) 64px;
 		grid-template-rows: 64px minmax(0, auto) 64px;
 		gap: 20px;
-	}
-
-	/* Center cell: modal card + the subject-ref strip sit side by side. */
-	.tpm-layout {
-		display: flex;
-		gap: 12px;
-		align-items: flex-start;
 	}
 
 	/* Ring cells: 44px icon tiles inside 64px grid slots, so every mark has
