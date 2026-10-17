@@ -261,6 +261,25 @@
 		onfocuschange?.(crumb.target);
 	}
 
+	// P3: remember the most-recently-active pipe so that after the user browses
+	// UP to session level (breadcrumb), a "continue on <pipe>" chip in the
+	// context box offers a one-click jump back — and it occupies the same
+	// vertical space as the pipe video, so the hero never jumps height (P1).
+	let lastPipeId = $state<string | null>(null);
+	$effect(() => {
+		const fp = focusedPipe?.id ?? null;
+		if (fp) lastPipeId = fp; // only capture; keep the memory when we go up
+	});
+	const lastPipeExists = $derived(
+		!!lastPipeId && (session?.pipes?.some((p: PipeRow) => p.id === lastPipeId) ?? false),
+	);
+	const lastPipeName = $derived(
+		session?.pipes?.find((p: PipeRow) => p.id === lastPipeId)?.name ?? 'last pipe',
+	);
+	function resumeLastPipe() {
+		if (lastPipeId) onfocuschange?.({ level: 'pipe', pipeId: lastPipeId });
+	}
+
 	// Busy state for the pipe-level Generate button (drives the inline
 	// progress shimmer). `groupActive` = a group generate is already running.
 	const genBusy = $derived(!!(pipegenerating || groupActive));
@@ -348,7 +367,9 @@
 									<path d="M8.5 21v-2.2M12.2 21v-2.2M15.8 21v-2.2M19.5 21v-2.2" opacity="0.5"/>
 									<path d="M14 10.4l1 2.1 2.1 1-2.1 1-1 2.1-1-2.1-2.1-1 2.1-1z" fill="currentColor" stroke="none"/>
 								</svg>
-								<span>{APP_CONSTANTS.strings.generate}</span>
+								<!-- P4: session generates the WHOLE film — distinct label
+								     + film-strip icon vs the pipe button's single-take. -->
+								<span>{APP_CONSTANTS.strings.sessionGenerate}</span>
 							</button>
 						{:else}
 							<button
@@ -361,11 +382,12 @@
 									<span class="act-progress" aria-hidden="true"></span>
 									<span>Generating…</span>
 								{:else}
+									<!-- P4: pipe-generate uses a VIEWFINDER (corner ticks +
+									     one framed shot) so it visually differs from the
+									     session button's film-strip — "one take" vs "the whole film". -->
 									<svg class="act-ico" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-										<rect x="5" y="7" width="18" height="14" rx="2"/>
-										<path d="M8.5 7v2.2M12.2 7v2.2M15.8 7v2.2M19.5 7v2.2" opacity="0.9"/>
-										<path d="M8.5 21v-2.2M12.2 21v-2.2M15.8 21v-2.2M19.5 21v-2.2" opacity="0.5"/>
-										<path d="M14 10.4l1 2.1 2.1 1-2.1 1-1 2.1-1-2.1-2.1-1 2.1-1z" fill="currentColor" stroke="none"/>
+										<path d="M4 8.5h3M4 8.5v3M24 8.5h-3M24 8.5v3M4 19.5h3M4 19.5v-3M24 19.5h-3M24 19.5v-3"/>
+										<rect x="11.5" y="10.5" width="5" height="7" rx="1" opacity="0.95"/>
 									</svg>
 									<span>{APP_CONSTANTS.strings.generate}</span>
 								{/if}
@@ -402,42 +424,59 @@
 				<p class="hero-hint">Select a session to configure video settings &amp; pipes.</p>
 			{/if}
 
-			<!-- Per-level context block (compact, no metric chips). -->
-			{#if focus.level === 'pipe' && focusedPipe}
-				<div class="pipe-preview">
-					{#if lastVideoUrl}
-						<video
-							class="pipe-video"
-							src={lastVideoUrl}
-							style={`aspect-ratio: ${targetAspectCss}`}
-							muted
-							loop
-							autoplay
-							playsinline
-							aria-label="Last generation preview"></video>
-						<button class="pipe-open" onclick={() => onopenpreview?.(focusedPipe)}>
-							{APP_CONSTANTS.strings.openInPreview}
-						</button>
-					{:else if !lastVideoLoading}
-						<span class="pipe-empty">{APP_CONSTANTS.strings.noPreview}</span>
+			<!-- Per-level context block: a STABLE-HEIGHT card so the hero
+			     never jumps between session and pipe levels (P1). Pipe = a
+			     cropped last-gen video band; session = a "Continue on <pipe>"
+			     chip that resumes the last pipe in one click (P3). -->
+			{#if focus.level !== 'project'}
+				<div class="hero-card">
+					{#if focus.level === 'pipe' && focusedPipe}
+						{#if lastVideoUrl}
+							<video
+								class="pipe-video"
+								src={lastVideoUrl}
+								muted
+								loop
+								autoplay
+								playsinline
+								aria-label="Last generation preview"></video>
+							<button class="pipe-open" onclick={() => onopenpreview?.(focusedPipe)}>
+								{APP_CONSTANTS.strings.openInPreview}
+							</button>
+						{:else if !lastVideoLoading}
+							<span class="pipe-empty">{APP_CONSTANTS.strings.noPreview}</span>
+						{/if}
+					{:else if focus.level === 'segment'}
+						{#if focusedSegment}
+							<p class="ctx-line">f{focusedSegment.frameStart}–{focusedSegment.frameEnd} · {focusedSegment.tags.length} tag{(focusedSegment.tags.length !== 1 ? 's' : '')}</p>
+						{:else}
+							<p class="hero-hint">No segment selected.</p>
+						{/if}
+					{:else if focus.level === 'tag'}
+						{#if focusedTag}
+							<p class="ctx-line">{focusedTag.tag} · f{focusedTag.frameStart}–{focusedTag.frameEnd}</p>
+							{#if focusedTag.prompt}
+								<div class="tag-prompt">{focusedTag.prompt}</div>
+							{/if}
+						{:else}
+							<p class="hero-hint">No tag selected.</p>
+						{/if}
+					{:else}
+						<!-- session level: fast jump-back to the last active pipe (P3) -->
+						{#if lastPipeExists}
+							<button class="resume-chip" onclick={resumeLastPipe} title="Jump back to this pipe">
+								<svg class="act-ico" style="width:16px;height:16px" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<path d="M4 8.5h3M4 8.5v3M24 8.5h-3M24 8.5v3M4 19.5h3M4 19.5v-3M24 19.5h-3M24 19.5v-3"/>
+									<rect x="11.5" y="10.5" width="5" height="7" rx="1" opacity="0.95"/>
+								</svg>
+								<span>Continue on {lastPipeName}</span>
+							</button>
+						{:else}
+							<p class="hero-hint">Configure the session video settings below.</p>
+						{/if}
 					{/if}
 				</div>
-			{:else if focus.level === 'segment'}
-				{#if focusedSegment}
-					<p class="ctx-line">f{focusedSegment.frameStart}–{focusedSegment.frameEnd} · {focusedSegment.tags.length} tag{(focusedSegment.tags.length !== 1 ? 's' : '')}</p>
-				{:else}
-					<p class="hero-hint">No segment selected.</p>
-				{/if}
-			{:else if focus.level === 'tag'}
-				{#if focusedTag}
-					<p class="ctx-line">{focusedTag.tag} · f{focusedTag.frameStart}–{focusedTag.frameEnd}</p>
-					{#if focusedTag.prompt}
-						<div class="tag-prompt">{focusedTag.prompt}</div>
-					{/if}
-				{:else}
-					<p class="hero-hint">No tag selected.</p>
-				{/if}
-			{:else if focus.level === 'project'}
+			{:else}
 				<div class="proj-nums">
 					<span>{project?.sessions.length ?? 0} sessions</span>
 					<span>{project?.totalGenerations ?? 0} generations</span>
@@ -891,18 +930,26 @@
 		white-space: nowrap;
 	}
 
-	/* Pipe last-gen preview, tucked into the hero when the focus is a pipe. */
-	.pipe-preview {
+	/* P1: a STABLE-HEIGHT context card so the hero never jumps between
+	   session and pipe levels. Pipe = a cropped last-gen video band; session
+	   = a "Continue on <pipe>" resume chip (P3) — both live in the same
+	   fixed-height frame, so switching levels swaps content, not size. */
+	.hero-card {
 		position: relative;
+		min-height: 92px;
 		border: 1px solid var(--panel-right-border);
 		border-radius: 8px;
 		overflow: hidden;
 		background: #000;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 	.pipe-video {
 		width: 100%;
+		height: 92px;
+		object-fit: cover; /* a cropped 92px band — stable regardless of aspect */
 		display: block;
-		object-fit: contain;
 		background: #000;
 	}
 	.pipe-open {
@@ -928,6 +975,31 @@
 		text-align: center;
 		font-size: 10px;
 		color: var(--text-muted);
+	}
+
+	/* P3: the "Continue on <pipe>" chip shown at session level — a quiet,
+	   centered resume affordance that lives in the same card as the pipe video. */
+	.resume-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		padding: 7px 12px;
+		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 55%, transparent);
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 9px;
+		color: var(--text-primary);
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.01em;
+		cursor: pointer;
+		transition: border-color 0.18s ease, background 0.18s ease;
+	}
+	.resume-chip:hover {
+		border-color: var(--accent, #ff3e00);
+		background: color-mix(in srgb, var(--accent, #ff3e00) 8%, transparent);
+	}
+	.resume-chip .act-ico {
+		opacity: 0.85;
 	}
 
 	/* ── Section header (shared) ────────────────────────────────────── */

@@ -365,7 +365,14 @@ import { flashToast } from '$lib/flashToast';
 	// (handleOpenTagMenu). The focus $effect follows the new activePipeIdx,
 	// so the tools-panel inspector lands on pipe level.
 	function handlePipeSelect(idx: number) {
+		const pipe = pipes[idx];
+		if (!pipe) return;
 		activePipeIdx = idx;
+		// P2: if the user browsed UP to session level via the tools-panel
+		// breadcrumb, `activePipeIdx` already holds this pipe — re-assigning
+		// it is a reactive no-op, so the focus $effect never re-runs and the
+		// pipe appears "unselectable". Force the focus back down to pipe level.
+		focus = { level: 'pipe', pipeId: pipe.id };
 	}
 
 	async function handleAddPipe() {
