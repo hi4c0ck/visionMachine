@@ -328,48 +328,75 @@
 		</div>
 
 		<div class="hero-body">
-			<!-- One action row: Compose is a session-level action, so it stays
-			     visible on EVERY focus level; Generate's role follows the focus
-			     (session → generate session, pipe → generate pipe; at
-			     segment/tag focus there is no generate, compose only). -->
+			<!-- One action row: Generate (scope follows focus) + Compose
+			     (always session-level). Flat buttons in a single row; the
+			     scope captions beneath each answer "what exactly will run?"
+			     Segment/tag focus stays in pipe scope — generate never
+			     disappears while we're inside a pipe. -->
 			{#if session && focus.level !== 'project'}
-				<div class="hero-btns">
-					{#if focus.level === 'session'}
-						<button
-							class="gen-btn"
-							onclick={ongenerate}
-							disabled={!session.pipes?.length}
-							title={session.pipes?.length ? APP_CONSTANTS.strings.generate : 'Add a pipe first'}>
-							<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-							<span>{APP_CONSTANTS.strings.generate}</span>
-						</button>
-					{:else if focus.level === 'pipe'}
-						<button
-							class="gen-btn"
-							class:busy={genBusy}
-							onclick={() => focusedPipe && ongeneratepipe?.(focusedPipe.id)}
-							disabled={genBusy || !focusedPipe}
-							title={genBusy ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}>
-							{#if genBusy}
-								<span class="gen-progress" aria-hidden="true"></span>
-								<span>Generating…</span>
-							{:else}
-								<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+				<div class="hero-actions">
+					<div class="hero-actions-row">
+						{#if focus.level === 'session'}
+							<button
+								class="act-btn act-primary"
+								onclick={ongenerate}
+								disabled={!session.pipes?.length}
+								title={session.pipes?.length ? APP_CONSTANTS.strings.sessionGenerateHint : 'Add a pipe first'}>
+								<svg class="act-ico" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="5" y="7" width="18" height="14" rx="2"/>
+									<path d="M8.5 7v2.2M12.2 7v2.2M15.8 7v2.2M19.5 7v2.2" opacity="0.9"/>
+									<path d="M8.5 21v-2.2M12.2 21v-2.2M15.8 21v-2.2M19.5 21v-2.2" opacity="0.5"/>
+									<path d="M14 10.4l1 2.1 2.1 1-2.1 1-1 2.1-1-2.1-2.1-1 2.1-1z" fill="currentColor" stroke="none"/>
+								</svg>
 								<span>{APP_CONSTANTS.strings.generate}</span>
-							{/if}
+							</button>
+						{:else}
+							<button
+								class="act-btn act-primary"
+								class:busy={genBusy}
+								onclick={() => focusedPipe && ongeneratepipe?.(focusedPipe.id)}
+								disabled={genBusy || !focusedPipe}
+								title={genBusy ? APP_CONSTANTS.strings.generationInProgress : (focusedPipe ? 'Generate this pipe' : 'No pipe selected')}>
+								{#if genBusy}
+									<span class="act-progress" aria-hidden="true"></span>
+									<span>Generating…</span>
+								{:else}
+									<svg class="act-ico" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+										<rect x="5" y="7" width="18" height="14" rx="2"/>
+										<path d="M8.5 7v2.2M12.2 7v2.2M15.8 7v2.2M19.5 7v2.2" opacity="0.9"/>
+										<path d="M8.5 21v-2.2M12.2 21v-2.2M15.8 21v-2.2M19.5 21v-2.2" opacity="0.5"/>
+										<path d="M14 10.4l1 2.1 2.1 1-2.1 1-1 2.1-1-2.1-2.1-1 2.1-1z" fill="currentColor" stroke="none"/>
+									</svg>
+									<span>{APP_CONSTANTS.strings.generate}</span>
+								{/if}
+							</button>
+						{/if}
+						<button
+							class="act-btn act-secondary"
+							class:busy={composing}
+							onclick={() => oncomposesession?.()}
+							disabled={!ffmpegAvailable || composing}
+							title={ffmpegAvailable
+								? APP_CONSTANTS.strings.composeSessionVideoHint
+								: APP_CONSTANTS.strings.composeSessionNoFfmpeg}>
+							{#if composing}<span class="act-progress act-progress-accent" aria-hidden="true"></span>{/if}
+							<svg class="act-ico" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<rect x="7" y="3.5" width="14" height="8" rx="1.5"/>
+								<path d="M10.5 3.5v8M14 3.5v8M17.5 3.5v8" opacity="0.45"/>
+								<rect x="7" y="16.5" width="14" height="8" rx="1.5" opacity="0.5"/>
+								<path d="M14 11.5v3.8M12.4 13.9L14 16.5L15.6 13.9"/>
+							</svg>
+							<span>{composing ? (compositionLabel || 'Composing…') : 'Compose'}</span>
 						</button>
-					{/if}
-					<button
-						class="compose-btn"
-						class:busy={composing}
-						onclick={() => oncomposesession?.()}
-						disabled={!ffmpegAvailable || composing}
-						title={ffmpegAvailable
-							? APP_CONSTANTS.strings.composeSessionVideoHint
-							: APP_CONSTANTS.strings.composeSessionNoFfmpeg}>
-						{#if composing}<span class="bar-progress" aria-hidden="true"></span>{/if}
-						<span>{composing ? (compositionLabel || 'Composing…') : APP_CONSTANTS.strings.composeSessionVideo}</span>
-					</button>
+					</div>
+					<div class="hero-scopes" aria-hidden="true">
+						<span>
+							{focus.level === 'session'
+								? `all ${session.pipes?.length ?? 0} pipes · ${stats.frames}f`
+								: `${focusedPipe?.name ?? 'pipe'} · ${focusedPipe?.lengthFrames ?? 0}f`}
+						</span>
+						<span>→ session video</span>
+					</div>
 				</div>
 			{:else if focus.level === 'project'}
 				<p class="hero-hint">Select a session to configure video settings &amp; pipes.</p>
@@ -744,65 +771,89 @@
 		overflow-y: auto;
 	}
 
-	/* One action row: a dominant Generate + a ghost Compose. */
-	.hero-btns {
+	/* One action row: a dominant Generate + a quiet Compose, both FLAT (icon
+	   sits beside the label — no stacked icon-above-text, no 3D puff). The
+	   scope captions beneath each button answer "what exactly will run?" in
+	   one compact mono line, instead of inflating the button height. */
+	.hero-actions {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.hero-actions-row {
 		display: flex;
 		gap: 8px;
 	}
-
-	/* ── The Generate button: the star of the panel ────────────────── */
-	.gen-btn {
+	.act-btn {
 		position: relative;
-		flex: 1.35 1 auto;
+		flex: 1 1 0;
+		min-width: 0;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		gap: 7px;
-		height: 44px;
-		padding: 0 16px;
+		gap: 8px;
+		height: 40px;
+		padding: 0 12px;
 		overflow: hidden;
-		border: none;
-		border-radius: 11px;
+		border-radius: 10px;
 		font-size: 13px;
-		font-weight: 800;
-		letter-spacing: 0.03em;
-		color: #fff;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		white-space: nowrap;
 		cursor: pointer;
-		background: var(--gradient-btn);
-		/* A "physical" button: top inset highlight, deep bottom shade, a
-		   wide accent glow so it reads as lifted and tappable. */
-		box-shadow:
-			0 10px 22px var(--accent-glow),
-			inset 0 1px 0 rgba(255, 255, 255, 0.30),
-			inset 0 -7px 14px rgba(0, 0, 0, 0.28);
-		transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+		transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.12s ease, box-shadow 0.2s ease;
 	}
-	.gen-btn:hover:not(:disabled) {
-		background: var(--gradient-btn-hover);
-		transform: translateY(-1px);
-		box-shadow:
-			0 14px 30px var(--accent-glow),
-			inset 0 1px 0 rgba(255, 255, 255, 0.42),
-			inset 0 -7px 14px rgba(0, 0, 0, 0.22);
-	}
-	.gen-btn:active:not(:disabled) {
+	.act-btn:active:not(:disabled) {
 		transform: translateY(0);
-		box-shadow:
-			0 6px 14px var(--accent-glow),
-			inset 0 1px 0 rgba(255, 255, 255, 0.25),
-			inset 0 -3px 8px rgba(0, 0, 0, 0.3);
 	}
-	.gen-btn:disabled {
+	.act-btn:disabled {
 		cursor: not-allowed;
-		/* Desaturate instead of a flat opacity — the shape still reads. */
+	}
+	.act-ico {
+		width: 20px;
+		height: 20px;
+		flex: 0 0 auto;
+	}
+
+	/* Generate = primary: filled accent, the star of the panel. Flat — the
+	   weight comes from the solid fill + a soft glow, not a 3D shadow. */
+	.act-primary {
+		color: #fff;
+		background: var(--gradient-btn);
+		border: none;
+		box-shadow: 0 2px 10px var(--accent-glow);
+	}
+	.act-primary:hover:not(:disabled) {
+		background: var(--gradient-btn-hover);
+		box-shadow: 0 4px 16px var(--accent-glow);
+	}
+	.act-primary:disabled {
 		filter: saturate(0.4) brightness(0.9);
 		box-shadow: none;
 	}
-	.gen-ico { flex: 0 0 auto; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.3)); }
 
-	/* Busy shimmer: a thin animated bar riding the bottom edge while the
-	   pipe generates (the button stays in place, no separate progress box). */
-	.gen-progress {
+	/* Compose = secondary: equal-width slot, quieter. Same flat language —
+	   outline + a hair of accent on hover, so it's equally present but reads
+	   as the follow-through step, not the primary trigger. */
+	.act-secondary {
+		color: var(--text-primary, #fff);
+		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 55%, transparent);
+		border: 1px solid var(--border-color, #3f3f46);
+	}
+	.act-secondary .act-ico {
+		opacity: 0.85;
+	}
+	.act-secondary:hover:not(:disabled) {
+		border-color: var(--accent, #ff3e00);
+		background: color-mix(in srgb, var(--accent, #ff3e00) 8%, transparent);
+	}
+	.act-secondary:disabled {
+		opacity: 0.45;
+	}
+
+	/* In-flight progress: a thin animated bar riding the button's bottom edge
+	   (the button stays in place; no separate progress box). */
+	.act-progress {
 		position: absolute;
 		left: 0;
 		bottom: 0;
@@ -812,50 +863,32 @@
 		background-size: 200% 100%;
 		animation: genSlide 0.9s linear infinite;
 	}
+	.act-progress-accent {
+		background: repeating-linear-gradient(90deg, var(--accent, #ff3e00) 0 14px, color-mix(in srgb, var(--accent, #ff3e00) 40%, transparent) 14px 28px);
+	}
 	@keyframes genSlide {
 		from { background-position: 0 0; }
 		to { background-position: 28px 0; }
 	}
 
-	/* Compose: a quiet ghost sibling to the dominant Generate. */
-	.compose-btn {
-		position: relative;
-		flex: 1 1 auto;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		height: 44px;
-		padding: 0 14px;
+	/* The "what will run?" captions — one under each button, mono, muted. */
+	.hero-scopes {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 0 2px;
+	}
+	.hero-scopes span {
+		flex: 1 1 0;
+		min-width: 0;
+		font-size: 9px;
+		font-family: var(--font-mono, monospace);
+		letter-spacing: 0.02em;
+		color: var(--text-muted);
+		text-align: center;
 		overflow: hidden;
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 11px;
-		background: transparent;
-		color: var(--text-primary, #fff);
-		font-size: 12px;
-		font-weight: 600;
+		text-overflow: ellipsis;
 		white-space: nowrap;
-		cursor: pointer;
-		transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
-	}
-	.compose-btn:hover:not(:disabled) {
-		border-color: var(--accent, #ff3e00);
-		background: color-mix(in srgb, var(--accent, #ff3e00) 8%, transparent);
-	}
-	.compose-btn:disabled {
-		opacity: 0.45;
-		cursor: not-allowed;
-	}
-	/* Compose-in-flight progress bar (same visual language as Generate). */
-	.bar-progress {
-		position: absolute;
-		left: 0;
-		bottom: 0;
-		height: 3px;
-		width: 100%;
-		background: repeating-linear-gradient(90deg, var(--accent, #ff3e00) 0 14px, color-mix(in srgb, var(--accent, #ff3e00) 40%, transparent) 14px 28px);
-		background-size: 200% 100%;
-		animation: genSlide 0.9s linear infinite;
 	}
 
 	/* Pipe last-gen preview, tucked into the hero when the focus is a pipe. */
