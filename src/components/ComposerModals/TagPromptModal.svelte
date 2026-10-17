@@ -30,8 +30,9 @@
 		tagId: string;
 		tagType: TagType;
 		prompt: string;
-		/** The pipe's subject references — rendered as a side panel; clicking
-		 *  +N inserts the `[SubjectN]` token into the prompt. */
+		/** The pipe's subject references — rendered as a compact tray in the
+		 *  footer next to Cancel/Confirm; "+" inserts the `[SubjectN]`
+		 *  token into the prompt, clicking a card previews it fullscreen. */
 		refs?: SubjectReference[];
 		open: boolean;
 		onConfirm: (prompt: string) => void;
@@ -173,11 +174,13 @@
 							class="modal-textarea tpm-textarea"
 							aria-label={specName + ' prompt'}
 						></textarea>
-						{#if refs.length}
-							<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} />
-						{/if}
 					</div>
-					<div class="modal-footer">
+					<div class="modal-footer tpm-footer" class:tpm-split={refs.length > 0}>
+						{#if refs.length}
+							<div class="tpm-footer-subs">
+								<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} compact />
+							</div>
+						{/if}
 						<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
 						<button class="btn-confirm" onclick={confirm}>Confirm</button>
 					</div>
@@ -193,7 +196,7 @@
 	.tpm-frame {
 		position: relative;
 		display: grid;
-		grid-template-columns: 64px minmax(0, 420px) 64px;
+		grid-template-columns: 64px minmax(0, 460px) 64px;
 		grid-template-rows: 64px minmax(0, auto) 64px;
 		gap: 20px;
 	}
@@ -257,7 +260,29 @@
 
 	.tpm-modal {
 		width: 100%;
-		max-width: 420px;
+		max-width: 460px;
+	}
+
+	/* Footer "subject tray": compact thumbnails on the left, actions on the
+	   right — one row when they fit (460px fits 5×34px cards + the two
+	   buttons), wraps to two rows when crowded. When there are no subjects
+	   the buttons keep their default right-aligned layout. */
+	.tpm-split {
+		justify-content: space-between;
+	}
+	.tpm-footer {
+		flex-wrap: wrap;
+		row-gap: 10px;
+	}
+
+	.tpm-footer-subs {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
+	.tpm-footer .btn-cancel,
+	.tpm-footer .btn-confirm {
+		flex: 0 0 auto;
 	}
 
 	.tpm-icon:hover svg,

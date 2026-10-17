@@ -1,13 +1,14 @@
 <script lang="ts">
 	/**
-	 * Compact subject-reference strip for prompt modals. A horizontal row of
-	 * cards (44px thumbnail + a corner number = 1-based position in the
-	 * reference list). Each card carries a small overlay "+" button that
-	 * inserts the `[SubjectN]` token into the prompt; clicking the card
-	 * itself opens the FULLSCREEN lightbox (ImageLightbox, zoom + pan).
+	 * Subject-reference thumbnail row for prompt modals. Each card is a small
+	 * square with a corner number (= 1-based position in the reference list,
+	 * matching the `[SubjectN]` prompt token) and a hover-reveal "+" overlay
+	 * that inserts the token into the prompt. Clicking the card itself opens
+	 * the shared fullscreen ImageLightbox (zoom + pan).
 	 *
-	 * The strip is one compact block, so the prompt area is never squeezed;
-	 * it only appears when the pipe actually has subject refs.
+	 * `compact` mode (used in the modal footer next to Cancel/Confirm): no
+	 * header row, 34px cards — a single slim strip that never squeezes the
+	 * prompt area.
 	 */
 	import type { SubjectReference } from '$types';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
@@ -16,25 +17,23 @@
 	let {
 		refs,
 		onInsert,
+		compact = false,
 	} = $props<{
 		refs: SubjectReference[];
 		/** Called with the `[SubjectN]` token to insert into the prompt. */
 		onInsert?: (token: string) => void;
+		/** Footer layout: slim cards, no header. */
+		compact?: boolean;
 	}>();
 
 	// ── Lightbox preview state ─────────────────────────────────────────────
+	let lightboxOpen = $state(false);
 	let previewIdx = $state<number | null>(null);
+	const previewSrc = $derived(previewIdx !== null ? srcFor(refs[previewIdx]) : null);
 	function openPreview(i: number) {
 		previewIdx = i;
+		lightboxOpen = true;
 	}
-	function closePreview() {
-		previewIdx = null;
-	}
-	let lightboxOpen = $state(false);
-	$effect(() => {
-		lightboxOpen = previewIdx !== null;
-	});
-	const previewSrc = $derived(previewIdx !== null ? srcFor(refs[previewIdx]) : null);
 
 	// Resolve local media paths to WebView blob URLs (same priority as
 	// SubjectRefsRow: previewLocalPath first, then the remote imageUrl).
@@ -75,11 +74,17 @@
 	}
 </script>
 
-<aside class="srp-strip" aria-label="Subject references">
-	<div class="srp-head">
-		<span class="srp-title">Subjects</span>
-		<span class="srp-hint">click → preview · + → insert token</span>
-	</div>
+<aside
+	class="srp-strip"
+	class:srp-compact={compact}
+	aria-label="Subject references"
+>
+	{#if !compact}
+		<div class="srp-head">
+			<span class="srp-title">Subjects</span>
+			<span class="srp-hint">click → preview · + → insert token</span>
+		</div>
+	{/if}
 	<div class="srp-list">
 		{#each refs as r, i (r.id)}
 			{@const src = srcFor(r)}
@@ -108,7 +113,7 @@
 	</div>
 </aside>
 
-{#if previewIdx !== null}
+{#if lightboxOpen && previewIdx !== null}
 	<ImageLightbox
 		bind:open={lightboxOpen}
 		src={previewSrc}
@@ -117,9 +122,7 @@
 {/if}
 
 <style>
-	/* One compact block: a header row + a single horizontal card row.
-	   Never squeezes the prompt — it just adds ~60px of height when the pipe
-	   has subject refs. */
+	/* Default: a compact block (header + card row) added under the prompt. */
 	.srp-strip {
 		display: flex;
 		flex-direction: column;
@@ -128,6 +131,16 @@
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 		border: 1px solid var(--border-color, #3f3f46);
 		border-radius: 8px;
+	}
+
+	/* Footer mode: one slim, borderless tray (no card chrome) so it blends
+	   into the footer next to the action buttons. No header, smaller thumbs. */
+	.srp-compact {
+		gap: 0;
+		padding: 0;
+		background: transparent;
+		border: none;
+		border-radius: 0;
 	}
 
 	.srp-head {
@@ -151,16 +164,19 @@
 		opacity: 0.7;
 	}
 
-	/* Horizontal row, wraps when there are many refs. */
+	/* Horizontal row, wraps when there are more than 5 refs. */
 	.srp-list {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
 	}
 
-	/* Card: 44px square thumbnail with two overlays — a corner number
-	   (Subject N index) and a small "+" insert button on the right edge,
-	   mirroring the pg-open / pg-copy overlay pattern of PieceGenPanel. */
+	.srp-compact .srp-list {
+		gap: 6px;
+	}
+
+	/* Card: square thumbnail + corner number (Subject N) + hover-reveal "+"
+	   insert overlay on the right edge (the pg-open / pg-copy pattern). */
 	.srp-card {
 		position: relative;
 		flex: 0 0 auto;
@@ -216,9 +232,9 @@
 		line-height: 13px;
 	}
 
-	/* "+" insert button: a small overlay on the card's right edge (only
-	   visible on hover / focus, like pg-open / pg-copy). The click target
-	   stopPropagation implicitly — it's a separate <button> over the card. */
+	/* "+" insert button: small overlay on the card's right edge, revealed on
+	   hover / focus (like pg-open / pg-copy). Separate <button> so the click
+	   doesn't open the lightbox. */
 	.srp-insert {
 		position: absolute;
 		top: -4px;
@@ -248,5 +264,30 @@
 	.srp-insert:hover {
 		color: var(--accent-color, #ff3e00);
 		border-color: var(--accent-color, #ff3e00);
+	}
+
+	/* Compact footer geometry: smaller thumbs + always-visible (subtle) "+" so
+	   the insert affordance is discoverable without hover in a busy footer. */
+	.srp-compact .srp-thumb {
+		width: 36px;
+		height: 36px;
+		border-radius: 7px;
+	}
+	.srp-compact .srp-ph {
+		width: 24px;
+		height: 24px;
+	}
+	.srp-compact .srp-num {
+		font-size: 8px;
+		line-height: 11px;
+	}
+	.srp-compact .srp-insert {
+		width: 16px;
+		height: 16px;
+		font-size: 11px;
+		opacity: 0.75;
+	}
+	.srp-compact .srp-card:hover .srp-insert {
+		opacity: 1;
 	}
 </style>

@@ -14,8 +14,9 @@
 		/** Element label shown in the header (e.g. "Global", "Sound") */
 		label: string;
 		prompt: string;
-		/** The pipe's subject references — rendered as a side panel; clicking
-		 *  +N inserts the `[SubjectN]` token into the prompt. */
+		/** The pipe's subject references — rendered as a compact tray in the
+		 *  footer next to Cancel/Confirm; "+" inserts the `[SubjectN]`
+		 *  token into the prompt, clicking a card previews it fullscreen. */
 		refs?: SubjectReference[];
 		open: boolean;
 		onConfirm: (prompt: string) => void;
@@ -59,7 +60,7 @@
 
 {#if open}
 	<div class="modal-overlay" onclick={() => (open = false)} role="presentation">
-		<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+		<div class="modal gpm-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
 			<div class="modal-header">
 				<h3>Edit {label} Prompt</h3>
 			</div>
@@ -74,14 +75,34 @@
 						aria-labelledby="global-prompt-label"
 					></textarea>
 				</div>
-				{#if refs.length}
-					<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} />
-				{/if}
 			</div>
-			<div class="modal-footer">
+			<div class="modal-footer gpm-footer" class:gpm-split={refs.length > 0}>
+				{#if refs.length}
+					<div class="gpm-subs">
+						<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} compact />
+					</div>
+				{/if}
 				<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
 				<button class="btn-confirm" onclick={confirm}>Confirm</button>
 			</div>
 		</div>
 	</div>
 {/if}
+
+<style>
+	/* Widen the modal so the footer subject tray fits alongside the buttons. */
+	.gpm-modal {
+		max-width: 560px;
+	}
+	.gpm-split {
+		justify-content: space-between;
+	}
+	.gpm-footer {
+		flex-wrap: wrap;
+		row-gap: 10px;
+	}
+	.gpm-subs {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+</style>
