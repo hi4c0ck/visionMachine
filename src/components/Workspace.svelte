@@ -2630,6 +2630,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onvideoratiochange={handleVideoRatioChange}
 				sessionVideo={toolsSessionVideo}
 				sessionVideoStale={sessionVideoStale}
+				onfocuschange={(f: ComposerFocus) => (focus = f)}
 				/>
 			{/if}
 

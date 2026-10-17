@@ -36,7 +36,8 @@
 		oncvaluechange,
 		unsynced = false,
 		sessionVideo = null,
-		onopensessionpreview
+		onopensessionpreview,
+		onfocuschange
 	} = $props<{
 		session: SessionData | null;
 		project: ProjectData | null;
@@ -82,6 +83,8 @@
 		sessionVideo?: { url: string; label: string } | null;
 		/** Point the top-panel preview back at the session video. */
 		onopensessionpreview?: () => void;
+		/** Move the focus up one level (click a breadcrumb ancestor). */
+		onfocuschange?: (focus: ComposerFocus) => void;
 	}>();
 
 	let showModal = $state(false);
@@ -231,21 +234,32 @@
 	);
 
 	// Breadcrumb of the focus path — gives orientation without a big header.
-	const focusPath = $derived.by((): string[] => {
-		const p: string[] = [];
+	// Each ancestor is a real ComposerFocus you can click to MOVE UP a level
+	// (the user "can't deselect a pipe" today; the session crumb fixes that).
+	const focusPath = $derived.by((): { label: string; target: ComposerFocus }[] => {
+		const sid = (focus as ComposerFocus & { id?: string }).id ?? session?.id ?? '';
+		const sessionF: ComposerFocus = { level: 'session', id: sid };
+		const p: { label: string; target: ComposerFocus }[] = [];
 		if (focus.level === 'project') {
-			p.push('Project');
+			p.push({ label: 'Project', target: { level: 'project' } });
 			return p;
 		}
-		p.push(session?.name ?? 'Session');
+		p.push({ label: session?.name ?? 'Session', target: sessionF });
 		if (focus.level === 'session') return p;
-		if (focusedPipe) p.push(focusedPipe.name || 'Pipe');
+		if (focusedPipe) p.push({ label: focusedPipe.name || 'Pipe', target: { level: 'pipe', pipeId: focusedPipe.id } });
 		if (focus.level === 'pipe') return p;
-		if (focusedSegment) p.push(`Seg ${focusedSegment.frameStart}–${focusedSegment.frameEnd}`);
+		if (focusedSegment) p.push({ label: `Seg ${focusedSegment.frameStart}–${focusedSegment.frameEnd}`, target: { level: 'segment', pipeId: focusedPipe!.id, segmentId: focusedSegment.id } });
 		if (focus.level === 'segment') return p;
-		if (focusedTag) p.push(focusedTag.tag);
+		if (focusedTag) p.push({ label: focusedTag.tag, target: { level: 'tag', pipeId: focusedPipe!.id, segmentId: focusedSegment!.id, tagId: focusedTag.id } });
 		return p;
 	});
+
+	// Click a breadcrumb ancestor to move the focus up to that level.
+	function goToFocus(level: number) {
+		const crumb = focusPath[level];
+		if (!crumb || level === focusPath.length - 1) return; // last is current, no-op
+		onfocuschange?.(crumb.target);
+	}
 
 	// Busy state for the pipe-level Generate button (drives the inline
 	// progress shimmer). `groupActive` = a group generate is already running.
@@ -296,9 +310,20 @@
 	<!-- ═══ HERO: focus breadcrumb + one smart action row ═══════════════ -->
 	<section class="tp-hero">
 		<div class="hero-crumbs" aria-label="Focus path">
-			{#each focusPath as crumb, i (i + crumb)}
+			{#each focusPath as crumb, i (i + crumb.label)}
 				{#if i > 0}<span class="crumb-sep" aria-hidden="true">/</span>{/if}
-				<span class="crumb" class:crumb-current={i === focusPath.length - 1}>{crumb}</span>
+				{#if i === focusPath.length - 1}
+					<span class="crumb crumb-current">{crumb.label}</span>
+				{:else}
+					<button
+						class="crumb crumb-link"
+						onclick={() => goToFocus(i)}
+						title="Go to {crumb.label} level"
+						aria-label="Go to {crumb.label} level">
+						{crumb.label}
+						<span class="crumb-up" aria-hidden="true">↑</span>
+					</button>
+				{/if}
 			{/each}
 		</div>
 
@@ -638,6 +663,37 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	/* Ancestor crumbs are real buttons — navigate UP the focus hierarchy. */
+	.crumb-link {
+		appearance: none;
+		font: inherit;
+		line-height: inherit;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+	}
+	.crumb-link:hover {
+		color: var(--text-primary);
+		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
+		background: color-mix(in srgb, var(--accent, #ff3e00) 9%, var(--bg-tertiary, #27272a));
+	}
+	.crumb-link:focus-visible {
+		outline: none;
+		border-color: var(--accent, #ff3e00);
+		box-shadow: 0 0 0 3px var(--accent-glow);
+	}
+	/* The little up-arrow: signals "this is a level you can jump back to". */
+	.crumb-up {
+		font-size: 9px;
+		opacity: 0;
+		color: var(--accent, #ff3e00);
+		transition: opacity 0.15s ease;
+	}
+	.crumb-link:hover .crumb-up {
+		opacity: 1;
+	}
 	.crumb-current {
 		color: var(--text-primary);
 		font-weight: 700;
@@ -743,7 +799,6 @@
 		box-shadow: none;
 	}
 	.gen-ico { flex: 0 0 auto; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.3)); }
-	.gen-wide { flex: 1 1 100%; }
 
 	/* Busy shimmer: a thin animated bar riding the bottom edge while the
 	   pipe generates (the button stays in place, no separate progress box). */
