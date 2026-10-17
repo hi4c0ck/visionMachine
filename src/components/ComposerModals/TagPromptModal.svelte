@@ -9,6 +9,8 @@
 	import { updateTagPrompt as updateTagPromptAction } from '$lib/composerStore';
 	import { ICONS_BY_TAG_TYPE, SLOT_CLASS, type AtlasIcon } from '$lib/promptIcons';
 	import PromptIcon from '../PromptIcon.svelte';
+	import SubjectRefStrip from './SubjectRefStrip.svelte';
+	import type { SubjectReference } from '$types';
 	import '../composer-modal.css';
 
 	let {
@@ -18,6 +20,7 @@
 		tagId,
 		tagType = 'scene',
 		prompt,
+		refs = [] as SubjectReference[],
 		open = $bindable(false),
 		onConfirm,
 	} = $props<{
@@ -27,11 +30,15 @@
 		tagId: string;
 		tagType: TagType;
 		prompt: string;
+		/** The pipe's subject references — rendered as a side panel; clicking
+		 *  +N inserts the `[SubjectN]` token into the prompt. */
+		refs?: SubjectReference[];
 		open: boolean;
 		onConfirm: (prompt: string) => void;
 	}>();
 
 	let tagPrompt = $state('');
+	let textareaEl = $state<HTMLTextAreaElement | null>(null);
 
 	// Normalize the runtime tagType against the atlas/spec maps (unknown tag
 	// types fall back to the scene set).
@@ -98,6 +105,27 @@
 		tagPrompt = (t.length > 0 ? t + ' ; ' : '') + ic.tag;
 	}
 
+	// Insert a `[SubjectN]` token from the side panel. Places it at the textarea
+	// cursor when focused (preserves selection), otherwise appends.
+	function insertSubjectToken(token: string) {
+		const el = textareaEl;
+		if (!el) {
+			tagPrompt = tagPrompt.length > 0 ? tagPrompt.replace(/[\s;]+$/, '') + ' ' + token : token;
+			return;
+		}
+		const s = el.selectionStart ?? el.value.length;
+		const e = el.selectionEnd ?? s;
+		const next = tagPrompt.slice(0, s) + token + tagPrompt.slice(e);
+		tagPrompt = next;
+		// Restore focus + caret right after the inserted token so the user can
+		// keep typing without re-selecting.
+		requestAnimationFrame(() => {
+			el.focus();
+			const pos = s + token.length;
+			el.setSelectionRange(pos, pos);
+		});
+	}
+
 	async function confirm() {
 		if (!sessionId) return;
 		const result = await updateTagPromptAction(sessionId, pipeId, segmentId, tagId, tagPrompt);
@@ -132,23 +160,29 @@
 				</button>
 			{/each}
 			<div class="tpm-center" role="dialog" aria-modal="true" tabindex="-1">
-				<div class="modal tpm-modal" style="--tag-color: {tagColor}; --tag-color-safe: {tagColorSafe};">
-					<div class="modal-header">
-						<h3>Edit {specName} Prompt</h3>
-					</div>
-					<div class="modal-body">
-						<textarea
-							id="tag-prompt-area"
-							bind:value={tagPrompt}
-							placeholder="Describe this {specName.toLowerCase()}…"
-							class="modal-textarea tpm-textarea"
-							aria-label={specName + ' prompt'}
-						></textarea>
-					</div>
-					<div class="modal-footer">
+				<div class="tpm-layout">
+					<div class="modal tpm-modal" style="--tag-color: {tagColor}; --tag-color-safe: {tagColorSafe};">
+						<div class="modal-header">
+							<h3>Edit {specName} Prompt</h3>
+						</div>
+						<div class="modal-body">
+							<textarea
+								id="tag-prompt-area"
+								bind:this={textareaEl}
+								bind:value={tagPrompt}
+								placeholder="Describe this {specName.toLowerCase()}…"
+								class="modal-textarea tpm-textarea"
+								aria-label={specName + ' prompt'}
+							></textarea>
+						</div>
+						<div class="modal-footer">
 						<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
 						<button class="btn-confirm" onclick={confirm}>Confirm</button>
 					</div>
+				</div>
+				{#if refs.length}
+					<SubjectRefStrip refs={refs} onInsert={insertSubjectToken} />
+				{/if}
 				</div>
 			</div>
 		</div>
@@ -157,13 +191,22 @@
 
 <style>
 	/* Fake frame: 3x3 grid. The ring cells define the outer bounds; the card
-	   occupies the center cell and is correctly inset from every icon. */
+	   occupies the center cell and is correctly inset from every icon. Column
+	   2 is `auto` (not a fixed 420px) so the modal + optional subject-ref side
+	   strip both fit without overflow. */
 	.tpm-frame {
 		position: relative;
 		display: grid;
-		grid-template-columns: 64px minmax(0, 420px) 64px;
+		grid-template-columns: 64px auto 64px;
 		grid-template-rows: 64px minmax(0, auto) 64px;
 		gap: 20px;
+	}
+
+	/* Center cell: modal card + the subject-ref strip sit side by side. */
+	.tpm-layout {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
 	}
 
 	/* Ring cells: 44px icon tiles inside 64px grid slots, so every mark has

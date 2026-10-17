@@ -991,6 +991,7 @@ import { flashToast } from '$lib/flashToast';
 			tagId={editingTagId}
 			tagType={editingTagType}
 			prompt={tagPrompt}
+			refs={activePipe.subjectReferences ?? []}
 			bind:open={showTagPromptModal}
 		onConfirm={(p) => confirmTagPrompt(p)}
 	/>
@@ -1001,6 +1002,7 @@ import { flashToast } from '$lib/flashToast';
 		<GlobalPromptModal
 			label={globalPromptLabel}
 			prompt={globalPromptText}
+			refs={activePipe.subjectReferences ?? []}
 			bind:open={showGlobalPromptModal}
 			onConfirm={(p) => confirmGlobalPrompt(p)}
 		/>
