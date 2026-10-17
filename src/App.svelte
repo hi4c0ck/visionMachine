@@ -6,6 +6,7 @@
 	import ErrorHandler from './components/ErrorHandler.svelte';
 	import WelcomeAccounts from './components/WelcomeAccounts.svelte';
 	import WelcomeDeleteModal from './components/WelcomeDeleteModal.svelte';
+	import DesignLab from './design-lab/DesignLab.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
 	// State declarations - explicit reactive state
@@ -18,6 +19,23 @@
 	let layoutMode = $state('landscape');
 	let error = $state<string | null>(null);
 	let runtimeError = $state<Error | null>(null);
+
+	// ── DEV-only Design Lab (visual-language template gallery) ──────────────
+	// Reach it by navigating to `#/design-lab` in the dev build
+	// (http://localhost:1420/#/design-lab). `import.meta.env.DEV` is false in
+	// every production build, so this branch is never compiled in and the
+	// default startup path is unchanged. It also never writes to the composer
+	// store, user projects, or localStorage — it renders a shared fixture.
+	let devDesignLab = $state(false);
+	$effect(() => {
+		if (!import.meta.env.DEV) { devDesignLab = false; return; }
+		const check = () => {
+			devDesignLab = location.hash.toLowerCase().includes('design-lab');
+		};
+		check();
+		window.addEventListener('hashchange', check);
+		return () => window.removeEventListener('hashchange', check);
+	});
 
 	// Welcome-page account list (desktop only; empty in the browser).
 	let accounts = $state<any[]>([]);
@@ -219,6 +237,9 @@
 	});
 </script>
 
+{#if devDesignLab}
+	<DesignLab />
+{:else}
 <ErrorHandler error={runtimeError}>
 	{#if showWelcome}
 		<div class="app">
@@ -317,6 +338,7 @@
 			</div>
 		{/if}
 </ErrorHandler>
+{/if}
 
 <style>
 	* { margin: 0; padding: 0; box-sizing: border-box; }

@@ -1,0 +1,210 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   TEMPLATE C — PRECISION INSTRUMENT   (data-template="c")
+   -----------------------------------------------------------------------
+   Concept: a highly controlled creative instrument in the spirit of
+   professional production equipment / technical editors. Compact, but NOT
+   the old-fashioned boxed-control aesthetic.
+
+   Grammar rules
+   • Disciplined grid + precise alignment; functional relationships shown
+     through indentation, shared baselines, consistent labels.
+   • More visible separators than A, fewer than the current design.
+   • Compact controls, technical readability, precise temporal relations.
+   • Rectangular timeline spans, precise alignment marks, restrained
+     boundaries; minimal rounded containers; no faux-metal / shadows.
+   • Monospace for timing, frame positions, numeric output.
+   • Ruler has a stronger measurement structure (denser, crisper ticks);
+     resize handles visible on hover; crisp selected vs unselected.
+   • Organized density, not indiscriminate compression.
+
+   Color-agnostic grammar only.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+[data-template="c"] {
+	/* geometry: rectangular, minimal radius, precise */
+	--dl-radius-region: 0px;
+	--dl-radius: 2px;
+	--dl-radius-span: 2px;
+	--dl-radius-control: 2px;
+
+	/* compact but comfortable */
+	--dl-pad: 14px;
+	--dl-gap-lg: 14px;
+	--dl-gap-md: 10px;
+	--dl-gap-sm: 6px;
+
+	/* technical type scale, small + dense */
+	--dl-size-brand: 13px;
+	--dl-size-region: 13px;
+	--dl-size-section: 11px;
+	--dl-size-label: 11.5px;
+	--dl-size-meta: 10.5px;
+	--dl-size-tiny: 9.5px;
+	--dl-section-transform: none;
+	--dl-section-track: 0px;
+	--dl-section-weight: 600;
+
+	/* compact columns, more separators */
+	--dl-region-bg: transparent;
+	--surface: var(--bg-secondary);
+	--surface-nav: var(--bg-secondary);
+	--surface-insp: var(--bg-tertiary);
+	--dl-col-gap: 0;
+	--dl-hairline: 1px solid var(--border-light, var(--border));
+
+	/* shorter media strip; compact controls */
+	--dl-frame-h: 196px;
+	--dl-nav-w: 216px;
+	--dl-insp-w: 256px;
+
+	/* tight chips */
+	--dl-chip-pad: 6px;
+}
+
+/* ── C: disciplined grid, more hairline separators ── */
+[data-template="c"] .dl-pipe {
+	gap: 10px;
+	border: 1px solid var(--border);
+}
+[data-template="c"] .dl-pipe.active {
+	outline: none;
+}
+[data-template="c"] .dl-pipe.active::after {
+	content: '';
+	position: absolute;
+	inset: -1px;
+	border: 1px solid var(--accent);
+	border-radius: 0;
+	pointer-events: none;
+}
+/* thin vertical dividers between composer regions instead of wide gaps */
+[data-template="c"] .dl-row {
+	gap: 8px;
+	padding: 10px 0;
+}
+[data-template="c"] .dl-row + .dl-row {
+	border-top: 1px solid var(--border);
+}
+
+/* chips: bordered cells, rectangular, quiet */
+[data-template="c"] .dl-kf,
+[data-template="c"] .dl-sr {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	padding: 5px;
+	gap: 8px;
+}
+[data-template="c"] .dl-kf-img,
+[data-template="c"] .dl-sr-img { border-radius: 0; }
+[data-template="c"] .dl-kf-addbox,
+[data-template="c"] .dl-sr-addbox { border-radius: 0; }
+
+/* ── C: stronger ruler measurement structure ── */
+[data-template="c"] .dl-ruler { height: 34px; }
+[data-template="c"] .dl-tick {
+	opacity: 0.55;
+	height: 6px;
+	background: var(--text-secondary);
+}
+[data-template="c"] .dl-tick.mid { height: 10px; opacity: 0.7; }
+[data-template="c"] .dl-tick.major { height: 14px; background: var(--text-primary); opacity: 0.95; }
+/* a full-width baseline makes the tick field read as one measuring scale */
+[data-template="c"] .dl-ruler-line { height: 1px; background: var(--border-light, var(--border)); }
+[data-template="c"] .dl-tick-label {
+	color: var(--text-secondary);
+	opacity: 0.9;
+	font-size: 9px;
+}
+/* crisp playhead: thin line + precise cap */
+[data-template="c"] .dl-playhead { width: 1px; background: var(--accent); }
+[data-template="c"] .dl-playhead::before {
+	content: '';
+	position: absolute;
+	top: -1px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 8px;
+	height: 8px;
+	border-radius: 0;
+	background: var(--accent);
+}
+[data-template="c"] .dl-pin-note {
+	background: var(--bg-elevated);
+	border: 1px solid var(--border-light, var(--border));
+	border-radius: 0;
+	color: var(--text-secondary);
+}
+
+/* ── C: precise rectangular spans + visible hover handles ── */
+[data-template="c"] .dl-zone {
+	height: 22px;
+	opacity: 0.9;
+	box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
+}
+[data-template="c"] .dl-tag {
+	height: 16px;
+	opacity: 0.95;
+	box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25);
+}
+/* crisp selected tag: solid outline + raised z (already in structure) */
+[data-template="c"] .dl-tag.selected {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+/* resize handles: always-faint, brighten on hover (precise marks) */
+[data-template="c"] .dl-grip::before {
+	width: 2px;
+	height: 70%;
+	background: var(--border-light, rgba(255,255,255,0.35));
+	opacity: 0.5;
+}
+[data-template="c"] .dl-zone-lane:hover .dl-grip-zone::before,
+[data-template="c"] .dl-tag-lane-track:hover .dl-grip-tag::before {
+	opacity: 1;
+	background: var(--text-primary);
+}
+
+/* ── C: inspector = compact aligned groups, baselines, hairlines ── */
+[data-template="c"] .dl-insp + .dl-insp { border-top: 1px solid var(--border-light, var(--border)); }
+[data-template="c"] .dl-insp-head { padding: 10px 12px 6px; }
+[data-template="c"] .dl-focus-body,
+[data-template="c"] .dl-settings-body { padding-left: 12px; padding-right: 12px; gap: 8px; }
+/* settings rows share a baseline; numeric readouts are right-aligned mono */
+[data-template="c"] .dl-set { padding: 5px 0; }
+[data-template="c"] .dl-set + .dl-set { border-top: 1px solid var(--border); }
+[data-template="c"] .dl-select { border-radius: 0; }
+[data-template="c"] .dl-input { border-radius: 0; }
+[data-template="c"] .dl-focus-timing {
+	background: var(--bg-primary);
+	border: 1px solid var(--border);
+	border-radius: 0;
+	gap: 14px;
+}
+/* stat cells: bordered, tight */
+[data-template="c"] .dl-stat {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border);
+	border-radius: 0;
+	padding: 8px;
+}
+[data-template="c"] .dl-stat-val { font-size: 16px; }
+/* the focus region gets a hairline box to separate it as "the instrument readout" */
+[data-template="c"] .dl-insp.selected { background: var(--bg-tertiary); }
+[data-template="c"] .dl-insp.selected .dl-focus-body {
+	border-top: 1px solid var(--border);
+}
+
+/* C: buttons are square, compact, no glow */
+[data-template="c"] .dl-btn-primary {
+	border-radius: 0;
+	background: var(--accent);
+	padding: 5px 12px;
+}
+[data-template="c"] .dl-btn-ghost {
+	border-radius: 0;
+	padding: 5px 12px;
+}
+
+/* C: brand reads as a precise label, not a logo */
+[data-template="c"] .dl-brand-name { font-weight: 600; letter-spacing: 0; }
+[data-template="c"] .dl-brand-mark { border-radius: 0; }

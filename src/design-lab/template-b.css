@@ -1,0 +1,138 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   TEMPLATE B — EDITORIAL WORKSPACE   (data-template="b")
+   -----------------------------------------------------------------------
+   Concept: a design-led workspace inspired by editorial layouts and modern
+   graphic systems. Uses whitespace, typographic hierarchy and precise
+   alignment more assertively than A.
+
+   Grammar rules
+   • Strong typographic hierarchy across nav, section headers and the
+     selected-object heading — size + weight, not uppercase.
+   • Generous spacing between MAJOR regions; tighter spacing WITHIN related
+     control groups.
+   • Preview + keyframe imagery dominate the composition.
+   • Mostly flat surfaces, sparse separators; groupings by spacing.
+   • Rectangular media framing, simple selection outlines.
+   • Long spans communicate duration through geometry, not heavy color.
+   • Ruler minimally noisy; labels scanned by consistent placement.
+
+   Color-agnostic grammar only.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+[data-template="b"] {
+	/* geometry: editorial — rectangular media framing, soft control radius */
+	--dl-radius-region: 0px;
+	--dl-radius: 4px;
+	--dl-radius-span: 3px;
+	--dl-radius-control: 4px;
+
+	/* generous region gaps, tight group gaps */
+	--dl-pad: 30px;
+	--dl-gap-lg: 36px;
+	--dl-gap-md: 12px;
+	--dl-gap-sm: 8px;
+
+	/* assertive type: bigger region/heading, quiet metadata */
+	--dl-size-brand: 16px;
+	--dl-size-region: 20px;
+	--dl-size-section: 13px;
+	--dl-size-label: 13px;
+	--dl-size-meta: 11px;
+	--dl-size-tiny: 10px;
+	--dl-section-transform: none;
+	--dl-section-track: 0px;
+	--dl-section-weight: 500;
+
+	/* flat surfaces, sparse separators */
+	--dl-region-bg: transparent;
+	--surface: var(--bg-secondary);
+	--surface-nav: var(--bg-secondary);
+	--surface-insp: var(--bg-secondary);
+	--dl-col-gap: 0;
+	--dl-hairline: 1px solid var(--border);
+
+	/* imagery dominant: tallest media strip */
+	--dl-frame-h: 300px;
+	--dl-nav-w: 236px;
+	--dl-insp-w: 284px;
+
+	/* chips: thumbnails float, but with more air */
+	--dl-chip-pad: 8px;
+}
+
+/* ── B: typographic scale — region + selected object carry presence ── */
+[data-template="b"] .dl-pipe-name { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+[data-template="b"] .dl-focus-name .dl-focus-type { font-size: 22px; }
+[data-template="b"] .dl-focus-name { gap: 10px; }
+[data-template="b"] .dl-focus-label { font-size: 14px; color: var(--text-secondary); }
+
+/* section headers: quiet, spaced-out, lowercased-feeling via weight */
+[data-template="b"] .dl-row-label,
+[data-template="b"] .dl-insp-title,
+[data-template="b"] .dl-lane-title,
+[data-template="b"] .dl-nav-title {
+	font-weight: 500;
+	color: var(--text-secondary);
+}
+/* a hairline rule separates major inspector regions (sparse, intentional) */
+[data-template="b"] .dl-insp + .dl-insp { border-top: 1px solid var(--border); padding-top: 4px; }
+
+/* ── B: rows breathe; within-row groups stay tight ── */
+[data-template="b"] .dl-row { gap: 14px; }
+[data-template="b"] .dl-row-head { min-height: 24px; margin-bottom: 4px; }
+[data-template="b"] .dl-keyframes,
+[data-template="b"] .dl-subjects { gap: 12px; }
+
+/* thumbnails sit on the surface, no nested card */
+[data-template="b"] .dl-kf,
+[data-template="b"] .dl-sr {
+	background: transparent;
+	border: 1px solid transparent;
+}
+[data-template="b"] .dl-kf:not(.dl-kf-add),
+[data-template="b"] .dl-sr:not(.dl-sr-add) {
+	border-color: var(--border);
+}
+/* selection = a clean rectangular outline around the whole pipe */
+[data-template="b"] .dl-pipe.active { outline: 1px solid var(--border); }
+[data-template="b"] .dl-pipe.active::after {
+	content: '';
+	position: absolute;
+	inset: -1px;
+	border: 1.5px solid var(--accent);
+	border-radius: 0;
+	pointer-events: none;
+}
+
+/* ── B: preview dominates; align timeline to the media grid ── */
+[data-template="b"] .dl-frame-img { object-fit: cover; }
+[data-template="b"] .dl-lane { margin-top: 12px; }
+/* ruler minimal + quiet */
+[data-template="b"] .dl-tick { opacity: 0.3; }
+[data-template="b"] .dl-tick.major { opacity: 0.6; }
+[data-template="b"] .dl-tick-label { opacity: 0.6; letter-spacing: 0.04em; }
+/* playhead: thin vertical line, no cap */
+[data-template="b"] .dl-playhead { width: 1px; background: var(--accent); opacity: 0.9; }
+[data-template="b"] .dl-playhead::before { display: none; }
+
+/* ── B: spans read through geometry, not heavy fills ── */
+[data-template="b"] .dl-zone { height: 24px; top: 2px; opacity: 0.55; }
+[data-template="b"] .dl-zone.selected, [data-template="b"] .dl-zone { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.15); }
+[data-template="b"] .dl-tag { opacity: 0.9; height: 18px; top: 3px; }
+/* tag lanes gain a little more vertical room for scanning */
+[data-template="b"] .dl-tag-lane-track { height: 28px; }
+[data-template="b"] .dl-zone-lane { height: 32px; }
+[data-template="b"] .dl-grip-zone { height: 32px; }
+[data-template="b"] .dl-grip-tag { height: 28px; }
+
+/* ── B: inspector = spacious editorial groups, hairline rules ── */
+[data-template="b"] .dl-focus-body,
+[data-template="b"] .dl-settings-body { gap: 16px; }
+[data-template="b"] .dl-settings-body .dl-set { padding: 8px 0; border-bottom: 1px solid var(--border); }
+[data-template="b"] .dl-settings-body .dl-set:last-child { border-bottom: none; }
+[data-template="b"] .dl-focus-timing { background: transparent; border: 1px solid var(--border); padding: 10px 12px; }
+[data-template="b"] .dl-stat { background: transparent; border: 1px solid var(--border); }
+[data-template="b"] .dl-stat-val { font-size: 22px; }
+/* selected-object band: quiet tonal wash, not a card */
+[data-template="b"] .dl-insp.selected { background: var(--bg-tertiary); }
+[data-template="b"] .dl-insp-head { padding: 14px 14px 10px; }

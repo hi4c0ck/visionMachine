@@ -1,0 +1,133 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   TEMPLATE A — OPEN CANVAS   (data-template="a")
+   -----------------------------------------------------------------------
+   Concept: an uninterrupted creative workspace. Hierarchy comes from
+   alignment, whitespace, typography and restrained tonal difference —
+   not repeated boxes. The preferred baseline.
+
+   Grammar rules
+   • No rounded outer container around a region (square geometry).
+   • Continuous workspace surface: the pipe and its rows sit directly on
+     the composer canvas; child chips drop their own card frames so
+     thumbnails float on the surface.
+   • Subtle hairline separators only where adjacent regions need a
+     boundary.
+   • Natural capitalization; no decorative uppercase. Weight + spacing do
+     the work. Monospace reserved for timecodes / frames / seeds.
+   • Keyframe thumbnails sit on the canvas (no nested frame); selection
+     is a precise 1px outline; empty slots are quiet but actionable.
+   • Ruler is fine-grained and subordinate; spans are compact and nearly
+     rectangular; the playhead is easy to find but not heavy.
+
+   Only color-agnostic grammar changes — all paint still comes from the
+   shared design-system variables.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+[data-template="a"] {
+	/* geometry: square regions, one small radius convention for controls */
+	--dl-radius-region: 0px;
+	--dl-radius: 3px;
+	--dl-radius-span: 2px;
+	--dl-radius-control: 3px;
+
+	/* breathing room: generous but disciplined */
+	--dl-pad: 24px;
+	--dl-gap-lg: 26px;
+	--dl-gap-md: 18px;
+	--dl-gap-sm: 10px;
+
+	/* type: natural case, weight-driven hierarchy */
+	--dl-size-brand: 15px;
+	--dl-size-region: 15px;
+	--dl-size-section: 13px;
+	--dl-size-label: 12.5px;
+	--dl-size-meta: 11px;
+	--dl-size-tiny: 10px;
+	--dl-section-transform: none;
+	--dl-section-track: 0px;
+	--dl-section-weight: 600;
+
+	/* surfaces: one continuous canvas, no nested cards */
+	--dl-region-bg: transparent;
+	--surface: transparent;              /* pipe sits on the canvas */
+	--surface-nav: var(--bg-secondary);
+	--surface-insp: var(--bg-tertiary);
+	--dl-col-gap: 0;
+
+	/* separators: quiet hairlines */
+	--dl-hairline: 1px solid var(--border);
+
+	/* media strip: a bit taller so the frame dominates */
+	--dl-frame-h: 240px;
+	--dl-nav-w: 232px;
+	--dl-insp-w: 272px;
+
+	/* chip padding (thumbnails float tighter to the surface) */
+	--dl-chip-pad: 6px;
+}
+
+/* ── A: let thumbnails sit directly on the canvas ── */
+[data-template="a"] .dl-kf,
+[data-template="a"] .dl-sr {
+	background: transparent;
+	border: 1px solid transparent;
+	padding: 4px;
+}
+[data-template="a"] .dl-kf:hover,
+[data-template="a"] .dl-sr:hover {
+	border-color: var(--border);
+}
+/* filled keyframes read as real content; add-slots stay quiet */
+[data-template="a"] .dl-kf:not(.dl-kf-add),
+[data-template="a"] .dl-sr:not(.dl-sr-add) {
+	border-color: var(--border);
+}
+/* precise selection emphasis instead of a card-in-card */
+[data-template="a"] .dl-pipe.active {
+	outline: none;
+}
+[data-template="a"] .dl-pipe.active::after {
+	content: '';
+	position: absolute;
+	inset: -1px;
+	border: 1px solid var(--accent);
+	border-radius: 0;
+	pointer-events: none;
+}
+
+/* ── A: row sections open up (headroom between sections, not boxes) ── */
+[data-template="a"] .dl-row { gap: 12px; }
+[data-template="a"] .dl-row-head { min-height: 22px; }
+
+/* ── A: ruler is fine + subordinate; playhead is quiet but locatable ── */
+[data-template="a"] .dl-tick { opacity: 0.35; height: 5px; background: var(--text-muted); }
+[data-template="a"] .dl-tick.mid { opacity: 0.5; height: 8px; }
+[data-template="a"] .dl-tick.major { opacity: 0.7; height: 12px; background: var(--text-secondary); }
+[data-template="a"] .dl-tick-label { opacity: 0.7; }
+[data-template="a"] .dl-playhead { width: 1px; background: var(--accent); }
+/* a soft cap makes the 1px playhead pop without a heavy bar */
+[data-template="a"] .dl-playhead::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--accent);
+}
+
+/* ── A: compact, well-defined spans; zones distinct from tags by shape ── */
+[data-template="a"] .dl-zone { opacity: 0.92; }
+[data-template="a"] .dl-tag { height: 18px; top: 3px; }
+
+/* ── A: inspector = compact aligned groups on a continuous surface ── */
+[data-template="a"] .dl-insp + .dl-insp { border-top: 1px solid var(--border); }
+[data-template="a"] .dl-stat { background: transparent; border: 1px solid var(--border); }
+/* selected-object inspector gets a hairline band, not a card */
+[data-template="a"] .dl-insp.selected { background: var(--accent-bg); }
+
+/* ── A: inputs keep consistent geometry, quiet borders ── */
+[data-template="a"] .dl-input,
+[data-template="a"] .dl-select { background: var(--bg-primary); }
