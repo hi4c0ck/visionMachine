@@ -78,20 +78,20 @@
 		onqvaluechange?: (q: number) => void;
 		oncvaluechange?: (c: number) => void;
 		unsynced?: boolean;
-		/** Composed session video (group auto-compose or the compose button) to
-		 *  show in the Preview section. null = nothing composed yet. */
+		/** Composed session video to show in the Output section. null = none. */
 		sessionVideo?: { url: string; label: string } | null;
-		/** Point the top-panel preview back at the session video after the
-		 *  user switched it to a per-pipe clip ("Open in preview" affordance). */
+		/** Point the top-panel preview back at the session video. */
 		onopensessionpreview?: () => void;
 	}>();
 
 	let showModal = $state(false);
 	let newSessionName = $state('');
+	// The compiled prompt is a reference/debug view — keep it collapsed so it
+	// never eats the panel's prime vertical space.
+	let promptOpen = $state(false);
 
 	// Svelte's select matcher compares the option value (a string) against the
-	// passed value STRICTLY — a numeric fps (24) never matches option "24" and
-	// the select renders blank (still selectable, but showing nothing).
+	// passed value STRICTLY — a numeric fps (24) never matches option "24".
 	// Coerce both sides to strings, and mirror a non-standard session fps into
 	// the option list so any flexible fps value the session carries is visible.
 	const BASE_FPS_OPTIONS = [18, 24, 30, 48, 60];
@@ -107,9 +107,8 @@
 		return Number.isFinite(cur) && cur > 0 ? String(cur) : '24';
 	});
 
-	// 0012 (5.4): the preview video's aspect follows the SESSION TARGET
-	// (custom W×H when set, else the preset dims) — a vertical/square session
-	// previews in its own shape instead of a letterboxed 16:9 box.
+	// The preview video's aspect follows the SESSION TARGET — a vertical/square
+	// session previews in its own shape instead of a letterboxed 16:9 box.
 	const targetAspectCss = $derived.by(() => {
 		if (!session) return '16 / 9';
 		const d = effectiveTargetDims(
@@ -121,9 +120,8 @@
 		return `${d.width} / ${d.height}`;
 	});
 
-	// 0012: the session resolution dropdown offers ONLY the presets whose own
-	// tier the active VIDEO model can actually emit (a 2.5-flash model is
-	// 720P-only, so 480p / 1080p are not listed). settingsRev re-bounds the
+	// The session resolution dropdown offers ONLY the presets whose own tier
+	// the active VIDEO model can actually emit. settingsRev re-bounds the
 	// options when the user switches the video model in Settings.
 	let settingsRev = $state(0);
 	const activeVideoModel = $derived.by((): ModelSpec | null => {
@@ -139,17 +137,14 @@
 		() => availableResolutionsForModel(activeVideoModel, session?.resolution ?? '720p'),
 	);
 
-	// 0012: the VIDEO aspect-ratio options the active model emits, filtered by
-	// the current Orientation (a FILTER, not a concrete instruction):
-	// horizontal -> landscape ratios, vertical -> portrait, square -> 1:1.
-	// Switching Orientation re-bounds this list so incompatible sizes vanish.
+	// The VIDEO aspect-ratio options the active model emits, filtered by the
+	// current Orientation (a FILTER, not a concrete instruction).
 	const ratioOptions = $derived.by(
 		() => videoRatiosForOrientation(activeVideoModel, session?.orientation ?? 'horizontal'),
 	);
 
-	// 0012: the EXACT aspect_ratio the video request will carry — mirrors the
-	// Rust shaper so the user sees the concrete value instead of guessing
-	// ("control, always"). null = no aspect_ratio param (provider default).
+	// The EXACT aspect_ratio the video request will carry — mirrors the Rust
+	// shaper so the user sees the concrete value instead of guessing.
 	const effectiveAspect = $derived.by(
 		() =>
 			effectiveVideoAspect(
@@ -196,7 +191,6 @@
 				generations: project?.totalGenerations || 0,
 			};
 		}
-		
 		return {
 			sessions: project?.sessions.length || 0,
 			pipes: session?.pipes?.length ?? 0,
@@ -207,15 +201,10 @@
 
 	const stats = $derived(getStats());
 
-	// T6: Compiled prompt output (T6)
-	const compiledOutput = $derived.by(() => {
-		if (!session?.pipes?.length) return '';
-		return compilePrompt(session.pipes[0]);
-	});
-
 	// ── Focus → entity resolution for the context-sensitive inspector ────
 	// The focus model only carries ids; the panel holds the live session, so
-	// we resolve each level to its concrete entity here.
+	// we resolve each level to its concrete entity here. (Declared before the
+	// compiled-prompt derived below, which reads `focusedPipe`.)
 	function findPipe(pipeId?: string): PipeRow | null {
 		if (!session?.pipes?.length || !pipeId) return null;
 		return session.pipes.find((p: PipeRow) => p.id === pipeId) ?? null;
@@ -240,18 +229,42 @@
 	const focusedTag = $derived(
 		focus.level === 'tag' ? findTag(focusedPipe, (focus as any).segmentId, (focus as any).tagId) : null
 	);
-	const focusLabel = $derived(
-		focus.level === 'project' ? 'Project' :
-		focus.level === 'session' ? 'Session' :
-		focus.level === 'pipe' ? `Pipe · ${focusedPipe?.name ?? focusedPipe?.id ?? ''}` :
-		focus.level === 'segment' ? 'Segment' : 'Tag'
-	);
 
-	// Last-gen preview thumb (D9): served through read_media_file (Phase E).
+	// Breadcrumb of the focus path — gives orientation without a big header.
+	const focusPath = $derived.by((): string[] => {
+		const p: string[] = [];
+		if (focus.level === 'project') {
+			p.push('Project');
+			return p;
+		}
+		p.push(session?.name ?? 'Session');
+		if (focus.level === 'session') return p;
+		if (focusedPipe) p.push(focusedPipe.name || 'Pipe');
+		if (focus.level === 'pipe') return p;
+		if (focusedSegment) p.push(`Seg ${focusedSegment.frameStart}–${focusedSegment.frameEnd}`);
+		if (focus.level === 'segment') return p;
+		if (focusedTag) p.push(focusedTag.tag);
+		return p;
+	});
+
+	// Busy state for the pipe-level Generate button (drives the inline
+	// progress shimmer). `groupActive` = a group generate is already running.
+	const genBusy = $derived(!!(pipegenerating || groupActive));
+
+	// T6: compiled prompt. Only the focused pipe (or the first pipe when the
+	// focus is above pipe level) is compiled — a reference view, not the
+	// source of truth for every pipe at once.
+	const compiledPipe = $derived(focusedPipe ?? session?.pipes?.[0] ?? null);
+	const compiledOutput = $derived.by(() => {
+		if (!compiledPipe?.length) return '';
+		return compilePrompt(compiledPipe);
+	});
+	const compiledLines = $derived(compiledOutput ? compiledOutput.split('\n').length : 0);
+
+	// Last-gen preview (D9): served through read_media_file (Phase E).
 	let lastVideoUrl = $state<string | null>(null);
 	// True while lastVideoUrl is in flight — the <video> is then hidden so a
-	// stale/failed 0:00 shell can't sit in the panel (mirrors Frame's
-	// "don't render an unloaded <video>" behavior).
+	// stale/failed 0:00 shell can't sit in the panel.
 	let lastVideoLoading = $state(false);
 	$effect(() => {
 		let cancelled = false;
@@ -268,8 +281,6 @@
 			lastVideoUrl = url;
 			lastVideoLoading = false;
 		}).catch(() => {
-			// read_media_file failed (path moved / not under a media root):
-			// fall back to the empty state instead of a dead <video> element.
 			if (cancelled) return;
 			lastVideoUrl = null;
 			lastVideoLoading = false;
@@ -281,989 +292,1003 @@
 </script>
 
 <div class="tools-panel">
-  <!-- Session Preview -->
-  <div class="preview-section">
-    <div class="section-header">
-      <span class="section-title">Preview</span>
-      {#if session}
-        <button class="btn-generate" onclick={ongenerate} disabled={!session.pipes?.length}>
-          {APP_CONSTANTS.strings.generate}
-        </button>
-        <button
-          class="btn-compose"
-          onclick={() => oncomposesession?.()}
-          disabled={!ffmpegAvailable || composing}
-          title={ffmpegAvailable
-            ? APP_CONSTANTS.strings.composeSessionVideoHint
-            : APP_CONSTANTS.strings.composeSessionNoFfmpeg}>
-          {composing ? (compositionLabel || 'Composing…') : APP_CONSTANTS.strings.composeSessionVideo}
-        </button>
-      {/if}
-    </div>
-    <div class="preview-area">
-      {#if session && sessionVideo}
-        <div class="preview-active preview-video-box">
-          <div class="preview-video-frame">
-            <video
-              src={sessionVideo.url}
-              class="preview-video"
-              style={`aspect-ratio: ${targetAspectCss}`}
-              muted
-              loop
-              autoplay
-              playsinline
-              controls
-            ></video>
-            <button
-              class="preview-video-open"
-              onclick={() => onopensessionpreview?.()}
-              title="Show the session video in the top panel"
-            >
-              {APP_CONSTANTS.strings.openInPreview}
-            </button>
-          </div>
-          <p class="preview-name">{sessionVideo.label}</p>
-          {#if sessionVideoStale}
-            <div class="stale-badge" title="The session size/crop changed after this video was composed — re-compose to apply the current settings">
-              <span>Re-compose (size changed)</span>
-              {#if oncomposesession && ffmpegAvailable}
-                <button class="btn-icon" type="button" title="Re-compose with the current size/crop" onclick={() => oncomposesession?.()}>↻</button>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {:else if session}
-        <div class="preview-active">
-          <div class="preview-icon">🎬</div>
-          <p class="preview-name">{session.name}</p>
-          <p class="preview-meta">{session?.pipes?.length ?? 0} pipes · {stats.frames}f</p>
-          {#if unsynced}
-            <span class="unsynced-badge">Unsynced</span>
-          {/if}
-        </div>
-      {:else}
-        <div class="preview-empty">
-          <div class="preview-icon">🎬</div>
-          <p>No preview available</p>
-          <p class="hint">Select a session to see preview</p>
-        </div>
-      {/if}
-    </div>
-  </div>
 
-  <!-- Compiler Preview -->
-  <div class="compiler-section">
-    <div class="section-header">
-      <span class="section-title">Compiler</span>
-    </div>
-    <div class="compiler-preview">
-      {#if compiledOutput}
-        <div class="compiler-output">{compiledOutput}</div>
-      {:else}
-        <div class="compiler-empty">No pipes to compile</div>
-      {/if}
-    </div>
-  </div>
+	<!-- ═══ HERO: focus breadcrumb + one smart action row ═══════════════ -->
+	<section class="tp-hero">
+		<div class="hero-crumbs" aria-label="Focus path">
+			{#each focusPath as crumb, i (i + crumb)}
+				{#if i > 0}<span class="crumb-sep" aria-hidden="true">/</span>{/if}
+				<span class="crumb" class:crumb-current={i === focusPath.length - 1}>{crumb}</span>
+			{/each}
+		</div>
 
-  <!-- Settings -->
-  <div class="settings-section">
-    <div class="section-header">
-      <span class="section-title">{APP_CONSTANTS.strings.settings}</span>
-    </div>
-    
-    {#if session}
-      <div class="settings-content">
-        <div class="setting-row">
-          <label class="setting-label">FPS</label>
-          <select 
-            class="setting-select"
-            value={fpsValue}
-            onchange={(e) => onfpschange?.(Number(e.currentTarget.value))}
-          >
-            {#each fpsOptions as opt (opt)}
-              <option value={String(opt)}>{opt} fps</option>
-            {/each}
-          </select>
-        </div>
+		<div class="hero-body">
+			<!-- One action row; its content follows the focus level so the
+			     Generate / Compose affordances are never duplicated. -->
+			{#if focus.level === 'session'}
+				<div class="hero-btns">
+					<button
+						class="gen-btn"
+						onclick={ongenerate}
+						disabled={!session?.pipes?.length}
+						title={session?.pipes?.length ? APP_CONSTANTS.strings.generate : 'Add a pipe first'}>
+						<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+						<span>{APP_CONSTANTS.strings.generate}</span>
+					</button>
+					<button
+						class="compose-btn"
+						class:busy={composing}
+						onclick={() => oncomposesession?.()}
+						disabled={!ffmpegAvailable || composing}
+						title={ffmpegAvailable
+							? APP_CONSTANTS.strings.composeSessionVideoHint
+							: APP_CONSTANTS.strings.composeSessionNoFfmpeg}>
+						{#if composing}<span class="bar-progress" aria-hidden="true"></span>{/if}
+						<span>{composing ? (compositionLabel || 'Composing…') : APP_CONSTANTS.strings.composeSessionVideo}</span>
+					</button>
+				</div>
 
-        <div class="setting-row">
-          <label class="setting-label">Resolution</label>
-          <select 
-            class="setting-select"
-            value={session.resolution}
-            onchange={(e) => onresolutionchange?.(e.currentTarget.value)}
-          >
-            {#each resOptions as r (r)}
-              <option value={r}>{r}</option>
-            {/each}
-          </select>
-        </div>
+			{:else if focus.level === 'pipe'}
+				<button
+					class="gen-btn gen-wide"
+					class:busy={genBusy}
+					onclick={() => focusedPipe && ongeneratepipe?.(focusedPipe.id)}
+					disabled={genBusy || !focusedPipe}
+					title={genBusy ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}>
+					{#if genBusy}
+						<span class="gen-progress" aria-hidden="true"></span>
+						<span>Generating…</span>
+					{:else}
+						<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+						<span>{APP_CONSTANTS.strings.generate}</span>
+					{/if}
+				</button>
 
-        <div class="setting-row">
-          <label class="setting-label">Orientation</label>
-          <select 
-            class="setting-select"
-            value={session.orientation}
-            onchange={(e) => onorientationchange?.(e.currentTarget.value)}
-          >
-            <option value="horizontal">Horizontal</option>
-            <option value="vertical">Vertical</option>
-            <option value="square">Square (1:1)</option>
-          </select>
-        </div>
+			{:else if focus.level === 'project'}
+				<p class="hero-hint">Select a session to configure video settings &amp; pipes.</p>
+			{/if}
 
-        {#if ratioOptions.length}
-          <div class="setting-row">
-            <label class="setting-label" title="Video aspect-ratio sent to the provider for this session">Video size</label>
-            <select
-              class="setting-select"
-              value={session.videoRatio ?? ''}
-              onchange={(e) => onvideoratiochange?.(e.currentTarget.value === '' ? null : e.currentTarget.value)}
-            >
-              <option value="" title="Derived from Orientation">{session.videoRatio ? `Default (${session.videoRatio})` : 'Default'}</option>
-              {#each ratioOptions as r (r)}
-                <option value={r} selected={session.videoRatio === r}>{r}</option>
-              {/each}
-            </select>
-            <div class="setting-hint">{effectiveAspect ?? 'auto'}</div>
-          </div>
-        {/if}
+			<!-- Per-level context block (compact, no metric chips). -->
+			{#if focus.level === 'pipe' && focusedPipe}
+				<div class="pipe-preview">
+					{#if lastVideoUrl}
+						<video
+							class="pipe-video"
+							src={lastVideoUrl}
+							style={`aspect-ratio: ${targetAspectCss}`}
+							muted
+							loop
+							autoplay
+							playsinline
+							aria-label="Last generation preview"></video>
+						<button class="pipe-open" onclick={() => onopenpreview?.(focusedPipe)}>
+							{APP_CONSTANTS.strings.openInPreview}
+						</button>
+					{:else if !lastVideoLoading}
+						<span class="pipe-empty">{APP_CONSTANTS.strings.noPreview}</span>
+					{/if}
+				</div>
+			{:else if focus.level === 'segment'}
+				{#if focusedSegment}
+					<p class="ctx-line">f{focusedSegment.frameStart}–{focusedSegment.frameEnd} · {focusedSegment.tags.length} tag{(focusedSegment.tags.length !== 1 ? 's' : '')}</p>
+				{:else}
+					<p class="hero-hint">No segment selected.</p>
+				{/if}
+			{:else if focus.level === 'tag'}
+				{#if focusedTag}
+					<p class="ctx-line">{focusedTag.tag} · f{focusedTag.frameStart}–{focusedTag.frameEnd}</p>
+					{#if focusedTag.prompt}
+						<div class="tag-prompt">{focusedTag.prompt}</div>
+					{/if}
+				{:else}
+					<p class="hero-hint">No tag selected.</p>
+				{/if}
+			{:else if focus.level === 'project'}
+				<div class="proj-nums">
+					<span>{project?.sessions.length ?? 0} sessions</span>
+					<span>{project?.totalGenerations ?? 0} generations</span>
+				</div>
+			{/if}
+		</div>
+	</section>
 
-        <div class="setting-row">
-          <label class="setting-label">Crop method</label>
-          <select
-            class="setting-select"
-            value={session.cropMode ?? 'center'}
-            onchange={(e) => oncropmodechange?.(e.currentTarget.value as CropMode)}
-          >
-            <option value="center">Center crop</option>
-            <option value="fit">Fit (letterbox)</option>
-            <option value="top">Top crop</option>
-            <option value="bottom">Bottom crop</option>
-            <option value="exact">Exact (stretch)</option>
-            <option value="none">Auto (center if mixed)</option>
-          </select>
-        </div>
+	<!-- ═══ VIDEO SETTINGS (dense 2×2 field grid) ═══════════════════════ -->
+	<section class="tp-sec">
+		<div class="sec-head"><span class="sec-title">{APP_CONSTANTS.strings.settings}</span></div>
 
-        <div class="setting-row">
-          <label class="setting-label">Quality</label>
-          <input type="range" min="5" max="30" step="1" value={qValue ?? 18} class="setting-slider" onchange={(e) => onqvaluechange?.(Number(e.currentTarget.value))} />
-          <span class="setting-value">{qValue ?? 18}</span>
-        </div>
+		{#if session}
+			<div class="set-body">
+				<div class="set-grid">
+					<label class="set-field">
+						<span class="set-lab">FPS</span>
+						<select
+							class="set-select"
+							value={fpsValue}
+							onchange={(e) => onfpschange?.(Number(e.currentTarget.value))}>
+							{#each fpsOptions as opt (opt)}
+								<option value={String(opt)}>{opt}</option>
+							{/each}
+						</select>
+					</label>
 
-        <div class="setting-row">
-          <label class="setting-label">Creativity</label>
-          <input type="range" min="0.5" max="15" step="0.5" value={cValue ?? 7} class="setting-slider" onchange={(e) => oncvaluechange?.(Number(e.currentTarget.value))} />
-          <span class="setting-value">{cValue ?? 7}</span>
-        </div>
-      </div>
-    {:else}
-      <div class="no-session-hint">
-        <p>Select a session to configure settings</p>
-      </div>
-    {/if}
-  </div>
+					<label class="set-field">
+						<span class="set-lab">Resolution</span>
+						<select
+							class="set-select"
+							value={session.resolution}
+							onchange={(e) => onresolutionchange?.(e.currentTarget.value)}>
+							{#each resOptions as r (r)}
+								<option value={r}>{r}</option>
+							{/each}
+						</select>
+					</label>
 
-  <!-- Context Inspector — one view per focus level -->
-  <div class="focus-section">
-    <div class="section-header">
-      <span class="section-title">Focus</span>
-      <span class="focus-level">{focusLabel}</span>
-    </div>
+					<label class="set-field">
+						<span class="set-lab">Orientation</span>
+						<select
+							class="set-select"
+							value={session.orientation}
+							onchange={(e) => onorientationchange?.(e.currentTarget.value)}>
+							<option value="horizontal">Horizontal</option>
+							<option value="vertical">Vertical</option>
+							<option value="square">Square (1:1)</option>
+						</select>
+					</label>
 
-    {#if focus.level === 'project'}
-      <div class="focus-body">
-        <p class="focus-hint">Project summary. Select a session to edit its video settings and pipes.</p>
-        <div class="focus-summary">
-          <span>{project?.sessions.length ?? 0} sessions</span>
-          <span>{project?.totalGenerations ?? 0} generations</span>
-        </div>
-      </div>
+					{#if ratioOptions.length}
+						<label class="set-field" title="Video aspect-ratio sent to the provider for this session">
+							<span class="set-lab">Video size</span>
+							<select
+								class="set-select"
+								value={session.videoRatio ?? ''}
+								onchange={(e) => onvideoratiochange?.(e.currentTarget.value === '' ? null : e.currentTarget.value)}>
+								<option value="">{session.videoRatio ? `Default (${session.videoRatio})` : 'Default'}</option>
+								{#each ratioOptions as r (r)}
+									<option value={r}>{r}</option>
+								{/each}
+							</select>
+						</label>
+					{/if}
+				</div>
 
-    {:else if focus.level === 'session'}
-      <div class="focus-body">
-        <p class="focus-name">{session?.name}</p>
-        <p class="focus-hint">Overall video settings + generation. Pipes inherit fps/res/orientation.</p>
-        {#if session}
-          <button class="focus-generate" onclick={ongenerate} disabled={!session.pipes?.length}>
-            {APP_CONSTANTS.strings.generate}
-          </button>
-        {/if}
-      </div>
+				{#if ratioOptions.length}
+					<div class="set-size-hint">sends <b>{effectiveAspect ?? 'auto'}</b></div>
+				{/if}
 
-    {:else if focus.level === 'pipe'}
-      <div class="focus-body">
-        {#if focusedPipe}
-          <p class="focus-name">{focusedPipe.name}</p>
-          <div class="focus-meta">
-            <span>{focusedPipe.lengthFrames}f</span>
-            <span>Q {focusedPipe.qValue}</span>
-            <span>C {focusedPipe.cValue}</span>
-          </div>
-          <p class="focus-hint">Pipe generation settings + last-gen preview. Elements live in this pipe's frame space.</p>
-          {#if focusedPipe.keyframes.length > 0}
-            <div class="focus-list">
-              {#each focusedPipe.keyframes as kf (kf.id)}
-                <span class="focus-list-item">k{kf.slotIndex} · f{kf.frame}</span>
-              {/each}
-            </div>
-          {:else}
-            <p class="focus-hint">No keyframes yet.</p>
-          {/if}
-          <button
-            class="focus-generate"
-            onclick={() => ongeneratepipe?.(focusedPipe.id)}
-            disabled={pipegenerating || groupActive}
-            title={pipegenerating ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}
-          >
-            {APP_CONSTANTS.strings.generate}
-          </button>
-          		<div class="focus-preview">
-          			{#if lastVideoUrl}
-          				<video
-          					class="focus-video"
-          					src={lastVideoUrl}
-          					muted
-          					loop
-          					autoplay
-          					playsinline
-          					aria-label="Last generation preview"
-          				></video>
-          				<button class="focus-preview-open" onclick={() => onopenpreview?.(focusedPipe)}>
-          					{APP_CONSTANTS.strings.openInPreview}
-          				</button>
-          			{:else}
-          				<span class="focus-preview-empty">{APP_CONSTANTS.strings.noPreview}</span>
-          			{/if}
-          		</div>
-        {:else}
-          <p class="focus-hint">No pipe selected.</p>
-        {/if}
-      </div>
+				<label class="set-field set-field-full">
+					<span class="set-lab">Crop method</span>
+					<select
+						class="set-select"
+						value={session.cropMode ?? 'center'}
+						onchange={(e) => oncropmodechange?.(e.currentTarget.value as CropMode)}>
+						<option value="center">Center crop</option>
+						<option value="fit">Fit (letterbox)</option>
+						<option value="top">Top crop</option>
+						<option value="bottom">Bottom crop</option>
+						<option value="exact">Exact (stretch)</option>
+						<option value="none">Auto (center if mixed)</option>
+					</select>
+				</label>
 
-    {:else if focus.level === 'segment'}
-      <div class="focus-body">
-        {#if focusedSegment}
-          <p class="focus-name">Segment {focusedSegment.frameStart}–{focusedSegment.frameEnd}</p>
-          <p class="focus-hint">{focusedSegment.tags.length} tag{(focusedSegment.tags.length !== 1 ? 's' : '')}. Prompt editing opens in the tag view.</p>
-          {#if focusedSegment.tags.length > 0}
-            <div class="focus-list">
-              {#each focusedSegment.tags as t (t.id)}
-                <span class="focus-list-item">{t.tag}</span>
-              {/each}
-            </div>
-          {/if}
-        {:else}
-          <p class="focus-hint">No segment selected.</p>
-        {/if}
-      </div>
+				<div class="set-slider">
+					<span class="set-lab">Quality</span>
+					<input type="range" min="5" max="30" step="1" value={qValue ?? 18} class="set-range"
+						onchange={(e) => onqvaluechange?.(Number(e.currentTarget.value))} />
+					<b class="set-val">{qValue ?? 18}</b>
+				</div>
+				<div class="set-slider">
+					<span class="set-lab">Creativity</span>
+					<input type="range" min="0.5" max="15" step="0.5" value={cValue ?? 7} class="set-range"
+						onchange={(e) => oncvaluechange?.(Number(e.currentTarget.value))} />
+					<b class="set-val">{cValue ?? 7}</b>
+				</div>
+			</div>
+		{:else}
+			<p class="set-empty">Select a session to configure settings.</p>
+		{/if}
+	</section>
 
-    {:else}
-      <!-- tag level -->
-      <div class="focus-body">
-        {#if focusedTag}
-          <p class="focus-name">{focusedTag.tag}</p>
-          <p class="focus-hint">f{focusedTag.frameStart}–{focusedTag.frameEnd} · prompt view (edit via the tag-prompt modal)</p>
-          {#if focusedTag.prompt}
-            <div class="focus-prompt">{focusedTag.prompt}</div>
-          {:else}
-            <p class="focus-hint">No prompt set.</p>
-          {/if}
-        {:else}
-          <p class="focus-hint">No tag selected.</p>
-        {/if}
-      </div>
-    {/if}
-  </div>
+	<!-- ═══ OUTPUT (composed session video) ════════════════════════════ -->
+	<section class="tp-sec">
+		<div class="sec-head">
+			<span class="sec-title">Output</span>
+			{#if session}<span class="out-meta">{session?.pipes?.length ?? 0}p · {stats.frames}f</span>{/if}
+		</div>
+		<div class="out-body">
+			{#if session && sessionVideo}
+				<div class="out-video-frame">
+					<video
+						src={sessionVideo.url}
+						class="out-video"
+						style={`aspect-ratio: ${targetAspectCss}`}
+						muted
+						loop
+						autoplay
+						playsinline
+						controls></video>
+					<button class="out-open" onclick={() => onopensessionpreview?.()}>
+						{APP_CONSTANTS.strings.openInPreview}
+					</button>
+				</div>
+				{#if sessionVideoStale}
+					<div class="stale-badge" title="The session size/crop changed after this video was composed — re-compose to apply the current settings">
+						<span>Re-compose (size changed)</span>
+						{#if oncomposesession && ffmpegAvailable}
+							<button class="btn-icon" type="button" title="Re-compose with the current size/crop"
+								onclick={() => oncomposesession?.()}>↻</button>
+						{/if}
+					</div>
+				{/if}
+			{:else if session}
+				<div class="out-empty">
+					<span class="out-empty-title">{session.name}</span>
+					<span>Nothing composed yet</span>
+					{#if unsynced}<span class="unsynced-badge">Unsynced</span>{/if}
+				</div>
+			{:else}
+				<div class="out-empty"><span>Select a session to see output.</span></div>
+			{/if}
+		</div>
+	</section>
 
-  <!-- Stats -->
-  <div class="stats-section">
-    <div class="section-header">
-      <span class="section-title">{APP_CONSTANTS.strings.stats}</span>
-    </div>
-    
-    <div class="stats-content">
-      <div class="stat-item">
-        <span class="stat-value">{stats.sessions}</span>
-        <span class="stat-label">Sessions</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{stats.pipes}</span>
-        <span class="stat-label">Pipes</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{stats.frames}</span>
-        <span class="stat-label">Frames</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">{stats.generations}</span>
-        <span class="stat-label">Generations</span>
-      </div>
-    </div>
-  </div>
+	<!-- ═══ PROMPT (collapsible compiled view) ═════════════════════════ -->
+	<section class="tp-sec">
+		<button class="sec-toggle" onclick={() => promptOpen = !promptOpen} aria-expanded={promptOpen}>
+			<span class="sec-title">
+				Prompt
+				{#if compiledLines > 0}<span class="prompt-count">· {compiledLines} lines</span>{/if}
+			</span>
+			<span class="chev" aria-hidden="true">{promptOpen ? '▾' : '▸'}</span>
+		</button>
+		{#if promptOpen}
+			<div class="prompt-body">
+				{#if compiledOutput}
+					<div class="prompt-output">{compiledOutput}</div>
+				{:else}
+					<div class="prompt-empty">No pipes to compile.</div>
+				{/if}
+			</div>
+		{/if}
+	</section>
 
-  <!-- Modal for new session -->
-  {#if showModal && project}
-    <div class="modal-backdrop" onclick={closeNewSessionModal} role="presentation">
-      <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-session-title">
-        <div class="modal-header">
-          <span class="modal-title" id="new-session-title">{APP_CONSTANTS.strings.createSessionModal}</span>
-          <button class="modal-close" onclick={closeNewSessionModal} aria-label="Close">×</button>
-        </div>
-        
-        <div class="modal-body">
-          <label class="form-label">Session Name</label>
-          <input 
-            type="text" 
-            class="modal-input"
-            bind:value={newSessionName}
-            placeholder="Enter session name..."
-            onkeydown={handleKeyDown}
-          />
-        </div>
-        
-        <div class="modal-footer">
-          <button class="btn-cancel" onclick={closeNewSessionModal}>{APP_CONSTANTS.strings.cancel}</button>
-          <button 
-            class="btn-confirm" 
-            disabled={!newSessionName.trim()}
-            onclick={confirmNewSession}
-          >
-            {APP_CONSTANTS.strings.create}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+	<!-- ═══ STATS STRIP (inline, pinned to the bottom) ═════════════════ -->
+	<footer class="stats-strip" aria-label="Statistics">
+		<span class="stat"><b>{stats.sessions}</b><span>Sessions</span></span>
+		<span class="stat"><b>{stats.pipes}</b><span>Pipes</span></span>
+		<span class="stat"><b>{stats.frames}</b><span>Frames</span></span>
+		<span class="stat"><b>{stats.generations}</b><span>Generated</span></span>
+	</footer>
+
+	<!-- Modal for new session -->
+	{#if showModal && project}
+		<div class="modal-backdrop" onclick={closeNewSessionModal} role="presentation">
+			<div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+				<div class="modal-header">
+					<span class="modal-title" id="new-session-title">{APP_CONSTANTS.strings.createSessionModal}</span>
+					<button class="modal-close" onclick={closeNewSessionModal} aria-label="Close">×</button>
+				</div>
+
+				<div class="modal-body">
+					<label class="form-label">Session Name</label>
+					<input
+						type="text"
+						class="modal-input"
+						bind:value={newSessionName}
+						placeholder="Enter session name..."
+						onkeydown={handleKeyDown}
+					/>
+				</div>
+
+				<div class="modal-footer">
+					<button class="btn-cancel" onclick={closeNewSessionModal}>{APP_CONSTANTS.strings.cancel}</button>
+					<button
+						class="btn-confirm"
+						disabled={!newSessionName.trim()}
+						onclick={confirmNewSession}
+					>
+						{APP_CONSTANTS.strings.create}
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <style>
-  .tools-panel {
-    display: flex;
-    flex-direction: column;
-    width: 260px;
-    min-width: 220px;
-    max-width: 300px;
-    border-left: 1px solid var(--panel-right-border);
-    background: var(--panel-right-bg);
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
+	.tools-panel {
+		display: flex;
+		flex-direction: column;
+		width: 264px;
+		min-width: 232px;
+		max-width: 300px;
+		border-left: 1px solid var(--panel-right-border);
+		background: var(--panel-right-bg);
+		overflow-x: hidden;
+		overflow-y: auto;
+	}
 
-  /* Sections */
-  .preview-section,
-  .settings-section,
-  .focus-section,
-  .stats-section,
-  .compiler-section {
-    border-bottom: 1px solid var(--panel-right-border);
-  }
+	/* ── HERO: focus breadcrumb + smart actions ─────────────────────── */
+	.tp-hero {
+		border-bottom: 1px solid var(--panel-right-border);
+		background:
+			linear-gradient(180deg, color-mix(in srgb, var(--accent, #ff3e00) 9%, transparent), transparent 70%);
+	}
 
-  /* Focus inspector */
-  .focus-level {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--accent);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-  }
-  .focus-body {
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .focus-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-  .focus-hint {
-    font-size: 11px;
-    color: var(--text-secondary);
-    line-height: 1.4;
-  }
-  .focus-meta {
-    display: flex;
-    gap: 10px;
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-  .focus-summary {
-    display: flex;
-    gap: 12px;
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-  .focus-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .focus-list-item {
-    font-size: 10px;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: var(--panel-right-bg);
-    border: 1px solid var(--panel-right-border);
-    color: var(--text-secondary);
-  }
-  .focus-generate {
-    padding: 7px 14px;
-    background: var(--gradient-btn);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 700;
-    align-self: flex-start;
-  }
-  .focus-generate:disabled { opacity: 0.4; cursor: not-allowed; }
-  .focus-preview {
-    margin-top: 4px;
-    height: 56px;
-    border: 1px dashed var(--panel-right-border);
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .focus-preview-empty {
-    font-size: 10px;
-    color: var(--text-secondary);
-    opacity: 0.7;
-  }
-  .focus-video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    background: #000;
-  }
-  .focus-preview-open {
-    position: absolute;
-    bottom: 2px;
-    right: 2px;
-    padding: 2px 8px;
-    font-size: 10px;
-    background: rgba(0, 0, 0, 0.7);
-    color: var(--text-primary);
-    border: 1px solid var(--panel-right-border);
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  .focus-preview:has(.focus-video) {
-    position: relative;
-    border-style: solid;
-  }
-  .focus-prompt {
-    font-size: 11px;
-    color: var(--text-primary);
-    background: var(--panel-right-bg);
-    border: 1px solid var(--panel-right-border);
-    border-radius: 6px;
-    padding: 6px 8px;
-    white-space: pre-wrap;
-  }
+	/* Breadcrumb chips: the current level is the accent, the ancestors are
+	   muted — a glance tells you exactly where the focus sits. */
+	.hero-crumbs {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 3px;
+		padding: 10px 12px 8px;
+	}
+	.crumb {
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text-secondary);
+		padding: 2px 8px;
+		border-radius: 6px;
+		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 60%, transparent);
+		border: 1px solid var(--panel-right-border);
+		max-width: 150px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.crumb-current {
+		color: var(--text-primary);
+		font-weight: 700;
+		background: color-mix(in srgb, var(--accent, #ff3e00) 14%, var(--bg-tertiary, #27272a));
+		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
+	}
+	.crumb-sep {
+		font-size: 11px;
+		color: var(--text-muted);
+	}
 
-  .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 12px;
-    background: var(--panel-right-bg);
-  }
+	.hero-body {
+		padding: 2px 12px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.hero-hint {
+		margin: 0;
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--text-secondary);
+	}
+	.proj-nums {
+		display: flex;
+		gap: 12px;
+		font-size: 11px;
+		color: var(--text-secondary);
+	}
+	.ctx-line {
+		margin: 0;
+		font-size: 11px;
+		color: var(--text-secondary);
+		font-family: var(--font-mono, monospace);
+	}
+	.tag-prompt {
+		margin: 4px 0 0;
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--text-primary);
+		background: var(--bg-primary);
+		border: 1px solid var(--panel-right-border);
+		border-radius: 6px;
+		padding: 7px 9px;
+		white-space: pre-wrap;
+		word-break: break-word;
+		max-height: 96px;
+		overflow-y: auto;
+	}
 
-  .section-title {
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--panel-right-text);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-  }
+	/* One action row: a dominant Generate + a ghost Compose. */
+	.hero-btns {
+		display: flex;
+		gap: 8px;
+	}
 
-  .btn-generate {
-    padding: 7px 14px;
-    background: var(--gradient-btn);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 700;
-    transition: all var(--transition-fast);
-    box-shadow: 0 4px 16px var(--accent-glow);
-    letter-spacing: 0.02em;
-  }
+	/* ── The Generate button: the star of the panel ────────────────── */
+	.gen-btn {
+		position: relative;
+		flex: 1.35 1 auto;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 7px;
+		height: 44px;
+		padding: 0 16px;
+		overflow: hidden;
+		border: none;
+		border-radius: 11px;
+		font-size: 13px;
+		font-weight: 800;
+		letter-spacing: 0.03em;
+		color: #fff;
+		cursor: pointer;
+		background: var(--gradient-btn);
+		/* A "physical" button: top inset highlight, deep bottom shade, a
+		   wide accent glow so it reads as lifted and tappable. */
+		box-shadow:
+			0 10px 22px var(--accent-glow),
+			inset 0 1px 0 rgba(255, 255, 255, 0.30),
+			inset 0 -7px 14px rgba(0, 0, 0, 0.28);
+		transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+	}
+	.gen-btn:hover:not(:disabled) {
+		background: var(--gradient-btn-hover);
+		transform: translateY(-1px);
+		box-shadow:
+			0 14px 30px var(--accent-glow),
+			inset 0 1px 0 rgba(255, 255, 255, 0.42),
+			inset 0 -7px 14px rgba(0, 0, 0, 0.22);
+	}
+	.gen-btn:active:not(:disabled) {
+		transform: translateY(0);
+		box-shadow:
+			0 6px 14px var(--accent-glow),
+			inset 0 1px 0 rgba(255, 255, 255, 0.25),
+			inset 0 -3px 8px rgba(0, 0, 0, 0.3);
+	}
+	.gen-btn:disabled {
+		cursor: not-allowed;
+		/* Desaturate instead of a flat opacity — the shape still reads. */
+		filter: saturate(0.4) brightness(0.9);
+		box-shadow: none;
+	}
+	.gen-ico { flex: 0 0 auto; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.3)); }
+	.gen-wide { flex: 1 1 100%; }
 
-  .btn-generate:hover {
-    background: var(--gradient-btn-hover);
-    box-shadow: 0 6px 24px var(--accent-glow);
-    transform: translateY(-1px);
-  }
+	/* Busy shimmer: a thin animated bar riding the bottom edge while the
+	   pipe generates (the button stays in place, no separate progress box). */
+	.gen-progress {
+		position: absolute;
+		left: 0;
+		bottom: 0;
+		height: 3px;
+		width: 100%;
+		background: repeating-linear-gradient(90deg, rgba(255,255,255,0.95) 0 14px, rgba(255,255,255,0.35) 14px 28px);
+		background-size: 200% 100%;
+		animation: genSlide 0.9s linear infinite;
+	}
+	@keyframes genSlide {
+		from { background-position: 0 0; }
+		to { background-position: 28px 0; }
+	}
 
-  .btn-generate:active {
-    transform: translateY(0);
-  }
+	/* Compose: a quiet ghost sibling to the dominant Generate. */
+	.compose-btn {
+		position: relative;
+		flex: 1 1 auto;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		height: 44px;
+		padding: 0 14px;
+		overflow: hidden;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 11px;
+		background: transparent;
+		color: var(--text-primary, #fff);
+		font-size: 12px;
+		font-weight: 600;
+		white-space: nowrap;
+		cursor: pointer;
+		transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+	}
+	.compose-btn:hover:not(:disabled) {
+		border-color: var(--accent, #ff3e00);
+		background: color-mix(in srgb, var(--accent, #ff3e00) 8%, transparent);
+	}
+	.compose-btn:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	/* Compose-in-flight progress bar (same visual language as Generate). */
+	.bar-progress {
+		position: absolute;
+		left: 0;
+		bottom: 0;
+		height: 3px;
+		width: 100%;
+		background: repeating-linear-gradient(90deg, var(--accent, #ff3e00) 0 14px, color-mix(in srgb, var(--accent, #ff3e00) 40%, transparent) 14px 28px);
+		background-size: 200% 100%;
+		animation: genSlide 0.9s linear infinite;
+	}
 
-  .btn-generate:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-  }
+	/* Pipe last-gen preview, tucked into the hero when the focus is a pipe. */
+	.pipe-preview {
+		position: relative;
+		border: 1px solid var(--panel-right-border);
+		border-radius: 8px;
+		overflow: hidden;
+		background: #000;
+	}
+	.pipe-video {
+		width: 100%;
+		display: block;
+		object-fit: contain;
+		background: #000;
+	}
+	.pipe-open {
+		position: absolute;
+		right: 5px;
+		bottom: 5px;
+		padding: 3px 9px;
+		font-size: 10px;
+		font-weight: 600;
+		background: rgba(0, 0, 0, 0.75);
+		color: var(--text-primary);
+		border: 1px solid var(--panel-right-border);
+		border-radius: 10px;
+		cursor: pointer;
+		transition: border-color var(--transition-fast);
+	}
+	.pipe-open:hover {
+		border-color: var(--accent, #ff3e00);
+	}
+	.pipe-empty {
+		display: block;
+		padding: 16px;
+		text-align: center;
+		font-size: 10px;
+		color: var(--text-muted);
+	}
 
-  .btn-compose {
-    padding: 7px 14px;
-    background: var(--bg-tertiary, #27272a);
-    color: var(--text-primary, #fff);
-    border: 1px solid var(--border-color, #3f3f46);
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 600;
-    transition: all var(--transition-fast);
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-  }
+	/* ── Section header (shared) ────────────────────────────────────── */
+	.tp-sec {
+		border-bottom: 1px solid var(--panel-right-border);
+	}
+	.sec-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 9px 12px;
+	}
+	.sec-title {
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		color: var(--panel-right-text);
+	}
+	.out-meta {
+		font-size: 10px;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-muted);
+		letter-spacing: 0.02em;
+	}
 
-  .btn-compose:hover:not(:disabled) {
-    border-color: var(--accent-color, #ff3e00);
-    color: var(--text-primary, #fff);
-  }
+	/* ── VIDEO SETTINGS: dense 2×2 field grid ───────────────────────── */
+	.set-body {
+		padding: 4px 12px 14px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+	.set-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 9px;
+	}
+	.set-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+	.set-field-full {
+		width: 100%;
+	}
+	.set-lab {
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+	}
+	/* The "sends 16:9" echo — one line, value in the accent mono. */
+	.set-size-hint {
+		margin-top: -3px;
+		font-size: 10px;
+		color: var(--text-muted);
+	}
+	.set-size-hint b {
+		color: var(--accent, #ff3e00);
+		font-family: var(--font-mono, monospace);
+		font-weight: 700;
+	}
 
-  .btn-compose:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
+	/* Polished field: soft rounded surface, a custom chevron, accent hover +
+	   focus glow — the settings read as one crafted kit, not raw form rows. */
+	.set-select {
+		width: 100%;
+		height: 36px;
+		padding: 0 30px 0 10px;
+		font-size: 12px;
+		font-family: inherit;
+		color: var(--text-primary);
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color, #3f3f46);
+		border-radius: 9px;
+		cursor: pointer;
+		-webkit-appearance: none;
+		appearance: none;
+		transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+		box-sizing: border-box;
+		background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23a1a1aa' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+		background-repeat: no-repeat;
+		background-position: right 11px center;
+	}
+	.set-select:hover {
+		border-color: color-mix(in srgb, var(--accent, #ff3e00) 55%, var(--border-color, #3f3f46));
+	}
+	.set-select:focus {
+		outline: none;
+		border-color: var(--accent, #ff3e00);
+		box-shadow: 0 0 0 3px var(--accent-glow);
+	}
 
-  /* Preview */
-  .preview-area {
-    padding: 16px;
-  }
+	/* Sliders: label · track · value. A satisfying tactile thumb. */
+	.set-slider {
+		display: flex;
+		align-items: center;
+		gap: 9px;
+	}
+	.set-slider .set-lab {
+		min-width: 58px;
+		font-size: 9px;
+	}
+	.set-val {
+		min-width: 22px;
+		text-align: right;
+		font-size: 12px;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-secondary);
+	}
+	.set-range {
+		flex: 1;
+		height: 4px;
+		-webkit-appearance: none;
+		appearance: none;
+		background: var(--bg-tertiary);
+		border-radius: 3px;
+		outline: none;
+	}
+	.set-range::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: var(--accent, #ff3e00);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #ff3e00) 22%, transparent), 0 2px 6px var(--accent-glow);
+		cursor: pointer;
+		transition: transform 0.12s ease, box-shadow 0.15s ease;
+	}
+	.set-range::-webkit-slider-thumb:hover {
+		transform: scale(1.18);
+	}
+	.set-range:active::-webkit-slider-thumb {
+		transform: scale(1.25);
+		box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent, #ff3e00) 30%, transparent), 0 2px 8px var(--accent-glow);
+	}
+	.set-range::-moz-range-thumb {
+		width: 14px;
+		height: 14px;
+		border: none;
+		border-radius: 50%;
+		background: var(--accent, #ff3e00);
+		cursor: pointer;
+	}
+	.set-empty {
+		margin: 0;
+		padding: 14px 12px;
+		text-align: center;
+		font-size: 11px;
+		font-style: italic;
+		color: var(--text-muted);
+	}
 
-  .preview-active,
-  .preview-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: 6px;
-    padding: 12px 0;
-  }
+	/* ── OUTPUT (composed session video) ────────────────────────────── */
+	.out-body {
+		padding: 10px 12px 12px;
+	}
+	.out-video-frame {
+		position: relative;
+		border: 1px solid var(--panel-right-border);
+		border-radius: 8px;
+		overflow: hidden;
+		background: #000;
+	}
+	.out-video {
+		width: 100%;
+		display: block;
+		object-fit: contain;
+		background: #000;
+	}
+	.out-open {
+		position: absolute;
+		right: 5px;
+		bottom: 5px;
+		padding: 3px 10px;
+		font-size: 10px;
+		font-weight: 600;
+		background: rgba(0, 0, 0, 0.75);
+		color: var(--text-primary);
+		border: 1px solid var(--panel-right-border);
+		border-radius: 10px;
+		cursor: pointer;
+		transition: border-color var(--transition-fast);
+	}
+	.out-open:hover {
+		border-color: var(--accent, #ff3e00);
+	}
+	.out-empty {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 5px;
+		padding: 20px 12px;
+		text-align: center;
+		font-size: 11px;
+		color: var(--text-muted);
+		border: 1px dashed var(--panel-right-border);
+		border-radius: 8px;
+	}
+	.out-empty-title {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-secondary);
+	}
+	.stale-badge {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 6px;
+		margin-top: 9px;
+		padding: 5px 9px;
+		border: 1px solid var(--accent, #ff3e00);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--accent, #ff3e00) 9%, var(--bg-tertiary, #27272a));
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--accent, #ff3e00);
+	}
+	.stale-badge .btn-icon {
+		padding: 0 2px;
+		background: transparent;
+		border: none;
+		color: inherit;
+		font-size: 13px;
+		cursor: pointer;
+	}
+	.stale-badge .btn-icon:hover {
+		transform: rotate(180deg);
+		transition: transform 0.3s ease;
+	}
+	.unsynced-badge {
+		display: inline-block;
+		padding: 2px 8px;
+		background: #fbbf24;
+		color: #000;
+		font-size: 10px;
+		font-weight: 700;
+		border-radius: 5px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
 
-  .preview-icon {
-    font-size: 32px;
-    margin-bottom: 4px;
-  }
+	/* ── PROMPT (collapsible compiled view) ─────────────────────────── */
+	.sec-toggle {
+		width: 100%;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 9px 12px;
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		transition: background var(--transition-fast);
+	}
+	.sec-toggle:hover {
+		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 40%, transparent);
+	}
+	.prompt-count {
+		margin-left: 5px;
+		font-weight: 500;
+		font-family: var(--font-mono, monospace);
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--text-muted);
+	}
+	.chev {
+		font-size: 11px;
+		color: var(--text-muted);
+	}
+	.prompt-body {
+		padding: 0 12px 12px;
+	}
+	.prompt-output {
+		font-family: 'JetBrains Mono', 'Fira Code', monospace;
+		font-size: 10px;
+		line-height: 1.5;
+		color: var(--text-secondary);
+		white-space: pre-wrap;
+		word-break: break-word;
+		background: var(--bg-primary);
+		border: 1px solid var(--border, #2a2a33);
+		border-radius: 8px;
+		padding: 9px 10px;
+		max-height: 200px;
+		overflow-y: auto;
+	}
+	.prompt-empty {
+		padding: 10px;
+		text-align: center;
+		font-size: 11px;
+		font-style: italic;
+		color: var(--text-muted);
+	}
 
-  .preview-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-    word-break: break-word;
-  }
+	/* ── STATS STRIP (inline, pinned to the bottom) ─────────────────── */
+	.stats-strip {
+		display: flex;
+		justify-content: space-between;
+		gap: 4px;
+		padding: 10px 12px;
+		margin-top: auto;
+	}
+	.stat {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		flex: 1;
+		gap: 3px;
+	}
+	.stat b {
+		font-size: 15px;
+		font-weight: 700;
+		line-height: 1;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-primary);
+	}
+	.stat span {
+		font-size: 8px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+	}
 
-  .preview-meta {
-    font-size: 11px;
-    color: var(--text-secondary);
-    margin: 0;
-  }
-
-  .preview-empty p {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin: 4px 0;
-  }
-
-  .preview-empty .hint {
-    font-size: 10px;
-    color: var(--text-muted);
-    opacity: 0.7;
-  }
-
-  /* Unsynced badge */
-  .preview-video-box {
-    flex-direction: column;
-    gap: 6px;
-    align-items: stretch;
-  }
-
-  .preview-video {
-    width: 100%;
-    /* 0012 (5.4): the aspect comes from the session target (inline style),
-       not a hard-coded 16:9 — a vertical/square/custom session previews in
-       its own shape. */
-    object-fit: contain;
-    background: #000;
-    border-radius: 6px;
-  }
-
-  /* The video + its "Open in preview" button share one anchor: the button
-     sits ON the video (bottom-right corner overlay), not as a sibling that
-     floats away from it. */
-  .preview-video-frame {
-    position: relative;
-    width: 100%;
-  }
-  .preview-video-open {
-    position: absolute;
-    right: 4px;
-    bottom: 4px;
-    padding: 3px 10px;
-    font-size: 10px;
-    font-weight: 600;
-    background: rgba(0, 0, 0, 0.75);
-    color: var(--text-primary);
-    border: 1px solid var(--panel-right-border);
-    border-radius: 10px;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-  .preview-video-open:hover {
-    border-color: var(--accent-color, #ff3e00);
-    background: rgba(0, 0, 0, 0.9);
-  }
-
-  .unsynced-badge {
-    display: inline-block;
-    margin-top: 8px;
-    padding: 2px 8px;
-    background: #fbbf24;
-    color: #000;
-    font-size: 10px;
-    font-weight: 600;
-    border-radius: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  /* Compiler preview */
-  .compiler-preview {
-    padding: 10px 12px;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  .compiler-output {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 10px;
-    color: var(--text-secondary);
-    white-space: pre-wrap;
-    word-break: break-all;
-    line-height: 1.5;
-    background: var(--bg-primary);
-    padding: 8px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-  }
-
-  .compiler-empty {
-    padding: 10px 12px;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-style: italic;
-  }
-
-  /* Settings */
-  .settings-content {
-    padding: 12px;
-  }
-
-  .setting-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-
-  .setting-label {
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-weight: 500;
-    min-width: 70px;
-  }
-
-  .setting-select {
-    flex: 1;
-    padding: 6px 8px;
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 12px;
-    font-family: inherit;
-    cursor: pointer;
-    transition: all var(--transition-fast);
-  }
-
-  .setting-select:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-  }
-
-  /* 0012: the target/crop hint line under the Crop method select. */
-  .setting-hint {
-    flex-basis: 100%;
-    margin-top: 2px;
-    font-size: 10px;
-    color: var(--text-muted);
-    line-height: 1.35;
-  }
-
-  /* 0012 G8: stale session-video badge — the stored video was composed with
-     a different target/crop than the session currently has. */
-  .stale-badge {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 4px;
-    padding: 4px 8px;
-    border: 1px solid var(--accent, #ff3e00);
-    border-radius: 6px;
-    background: var(--bg-tertiary);
-    font-size: 10px;
-    color: var(--accent, #ff3e00);
-  }
-  .stale-badge .btn-icon {
-    font-size: 12px;
-  }
-
-  .setting-slider {
-    flex: 1;
-    height: 4px;
-    background: var(--bg-tertiary);
-    border-radius: 2px;
-    outline: none;
-    -webkit-appearance: none;
-  }
-
-  .setting-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-    box-shadow: 0 2px 6px var(--accent-glow);
-  }
-
-  .setting-value {
-    font-size: 11px;
-    color: var(--text-secondary);
-    min-width: 24px;
-    text-align: right;
-  }
-
-  /* 0012: static (non-numeric) read-only value, e.g. the derived image-size
-     "1K · 9:16" hint — flexes to fill the row instead of shrinking to fit
-     a number like the Quality/Creativity readouts do. */
-  .setting-value-static {
-    flex: 1;
-    min-width: 0;
-    text-align: left;
-    font-size: 12px;
-    color: var(--text-secondary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .no-session-hint {
-    padding: 16px;
-    text-align: center;
-  }
-
-  .no-session-hint p {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-style: italic;
-  }
-
-  /* Stats */
-  .stats-content {
-    padding: 12px;
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-  }
-
-  .stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 10px;
-    background: var(--bg-tertiary);
-    border-radius: 8px;
-    border: 1px solid var(--border);
-  }
-
-  .stat-value {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--text-primary);
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-
-  .stat-label {
-    font-size: 10px;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 500;
-  }
-
-  /* Modal */
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-
-  .modal {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    width: 360px;
-    max-width: 90vw;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-    animation: modalIn 0.15s ease-out;
-  }
-
-  @keyframes modalIn {
-    from {
-      opacity: 0;
-      transform: scale(0.95);
-    }
-    to {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .modal-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .modal-close {
-    width: 28px;
-    height: 28px;
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-secondary);
-    font-size: 18px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all var(--transition-fast);
-  }
-
-  .modal-close:hover {
-    background: var(--bg-tertiary);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .modal-body {
-    padding: 16px;
-  }
-
-  .form-label {
-    display: block;
-    font-size: 11px;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
-    font-weight: 500;
-  }
-
-  .modal-input {
-    width: 100%;
-    padding: 10px 12px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-primary);
-    font-size: 14px;
-    font-family: inherit;
-    transition: all var(--transition-fast);
-    box-sizing: border-box;
-  }
-
-  .modal-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-  }
-
-  .modal-footer {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-
-  .btn-cancel {
-    padding: 8px 16px;
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    font-family: inherit;
-    transition: all var(--transition-fast);
-  }
-
-  .btn-cancel:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-light);
-  }
-
-  .btn-confirm {
-    padding: 8px 16px;
-    background: var(--gradient-accent);
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: inherit;
-    transition: all var(--transition-fast);
-  }
-
-  .btn-confirm:hover:not(:disabled) {
-    box-shadow: var(--shadow-glow);
-    transform: translateY(-1px);
-  }
-
-  .btn-confirm:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-  }
+	/* ── Modal (create session) ──────────────────────────────────────── */
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		backdrop-filter: blur(4px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 100;
+	}
+	.modal {
+		background: var(--bg-secondary);
+		border: 1px solid var(--border, #2a2a33);
+		border-radius: 12px;
+		width: 360px;
+		max-width: 90vw;
+		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+		animation: modalIn 0.15s ease-out;
+	}
+	@keyframes modalIn {
+		from { opacity: 0; transform: scale(0.95); }
+		to { opacity: 1; transform: scale(1); }
+	}
+	.modal-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 14px 16px;
+		border-bottom: 1px solid var(--border, #2a2a33);
+	}
+	.modal-title {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+	.modal-close {
+		width: 28px;
+		height: 28px;
+		background: transparent;
+		border: 1px solid var(--border, #2a2a33);
+		border-radius: 6px;
+		color: var(--text-secondary);
+		font-size: 18px;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all var(--transition-fast);
+	}
+	.modal-close:hover {
+		background: var(--bg-tertiary);
+		border-color: var(--accent, #ff3e00);
+		color: var(--accent, #ff3e00);
+	}
+	.modal-body {
+		padding: 16px;
+	}
+	.form-label {
+		display: block;
+		margin-bottom: 6px;
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--text-secondary);
+	}
+	.modal-input {
+		width: 100%;
+		padding: 10px 12px;
+		background: var(--bg-primary);
+		border: 1px solid var(--border, #2a2a33);
+		border-radius: 8px;
+		color: var(--text-primary);
+		font-size: 14px;
+		font-family: inherit;
+		box-sizing: border-box;
+		transition: all var(--transition-fast);
+	}
+	.modal-input:focus {
+		outline: none;
+		border-color: var(--accent, #ff3e00);
+		box-shadow: 0 0 0 3px var(--accent-glow);
+	}
+	.modal-footer {
+		padding: 12px 16px;
+		border-top: 1px solid var(--border, #2a2a33);
+		display: flex;
+		justify-content: flex-end;
+		gap: 10px;
+	}
+	.btn-cancel {
+		padding: 8px 16px;
+		background: var(--bg-tertiary);
+		color: var(--text-secondary);
+		border: 1px solid var(--border, #2a2a33);
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 13px;
+		font-family: inherit;
+		transition: all var(--transition-fast);
+	}
+	.btn-cancel:hover {
+		background: var(--bg-hover, #2f2f38);
+		border-color: var(--border-light, #4a4a55);
+	}
+	.btn-confirm {
+		padding: 8px 16px;
+		background: var(--gradient-accent, var(--gradient-btn));
+		color: #fff;
+		border: none;
+		border-radius: 6px;
+		cursor: pointer;
+		font-size: 13px;
+		font-weight: 600;
+		font-family: inherit;
+		transition: all var(--transition-fast);
+	}
+	.btn-confirm:hover:not(:disabled) {
+		box-shadow: var(--shadow-glow, var(--accent-glow));
+		transform: translateY(-1px);
+	}
+	.btn-confirm:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+		transform: none;
+		box-shadow: none;
+	}
 </style>
