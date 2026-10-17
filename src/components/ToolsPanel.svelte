@@ -233,38 +233,10 @@
 		focus.level === 'tag' ? findTag(focusedPipe, (focus as any).segmentId, (focus as any).tagId) : null
 	);
 
-	// Breadcrumb of the focus path — gives orientation without a big header.
-	// Each ancestor is a real ComposerFocus you can click to MOVE UP a level
-	// (the user "can't deselect a pipe" today; the session crumb fixes that).
-	const focusPath = $derived.by((): { label: string; target: ComposerFocus }[] => {
-		const sid = (focus as ComposerFocus & { id?: string }).id ?? session?.id ?? '';
-		const sessionF: ComposerFocus = { level: 'session', id: sid };
-		const p: { label: string; target: ComposerFocus }[] = [];
-		if (focus.level === 'project') {
-			p.push({ label: 'Project', target: { level: 'project' } });
-			return p;
-		}
-		p.push({ label: session?.name ?? 'Session', target: sessionF });
-		if (focus.level === 'session') return p;
-		if (focusedPipe) p.push({ label: focusedPipe.name || 'Pipe', target: { level: 'pipe', pipeId: focusedPipe.id } });
-		if (focus.level === 'pipe') return p;
-		if (focusedSegment) p.push({ label: `Seg ${focusedSegment.frameStart}–${focusedSegment.frameEnd}`, target: { level: 'segment', pipeId: focusedPipe!.id, segmentId: focusedSegment.id } });
-		if (focus.level === 'segment') return p;
-		if (focusedTag) p.push({ label: focusedTag.tag, target: { level: 'tag', pipeId: focusedPipe!.id, segmentId: focusedSegment!.id, tagId: focusedTag.id } });
-		return p;
-	});
-
-	// Click a breadcrumb ancestor to move the focus up to that level.
-	function goToFocus(level: number) {
-		const crumb = focusPath[level];
-		if (!crumb || level === focusPath.length - 1) return; // last is current, no-op
-		onfocuschange?.(crumb.target);
-	}
-
 	// P3: remember the most-recently-active pipe so that after the user browses
-	// UP to session level (breadcrumb), a "continue on <pipe>" chip in the
-	// context box offers a one-click jump back — and it occupies the same
-	// vertical space as the pipe video, so the hero never jumps height (P1).
+	// UP to session level (breadcrumb), the last pipe is still available both
+	// as a dimmed jump-back crumb in the "Session / Pipe" row and as a quiet
+	// "Back to <pipe>" link in the context card — a one-click return.
 	let lastPipeId = $state<string | null>(null);
 	$effect(() => {
 		const fp = focusedPipe?.id ?? null;
@@ -278,6 +250,44 @@
 	);
 	function resumeLastPipe() {
 		if (lastPipeId) onfocuschange?.({ level: 'pipe', pipeId: lastPipeId });
+	}
+
+	// Breadcrumb of the focus path — gives orientation without a big header.
+	// Each ancestor is a real ComposerFocus you can click to MOVE UP a level
+	// (the user "can't deselect a pipe" today; the session crumb fixes that).
+	// P3: at SESSION level we still append the LAST pipe as a dimmed,
+	// clickable crumb so the "Session / Pipe" row stays structurally stable
+	// (always two chips) — it never shrinks to a single chip and jumps height.
+	const focusPath = $derived.by((): { label: string; target: ComposerFocus; current: boolean }[] => {
+		const sid = (focus as ComposerFocus & { id?: string }).id ?? session?.id ?? '';
+		const sessionF: ComposerFocus = { level: 'session', id: sid };
+		const p: { label: string; target: ComposerFocus; current: boolean }[] = [];
+		if (focus.level === 'project') {
+			p.push({ label: 'Project', target: { level: 'project' }, current: true });
+			return p;
+		}
+		const pipeTarget: ComposerFocus = { level: 'pipe', pipeId: focusedPipe?.id ?? lastPipeId ?? '' };
+		if (focus.level === 'session') {
+			// Session level: the session crumb is current; append the last pipe
+			// as a dimmed jump-back crumb (only if one exists & is valid).
+			p.push({ label: session?.name ?? 'Session', target: sessionF, current: true });
+			if (lastPipeExists) p.push({ label: lastPipeName, target: pipeTarget, current: false });
+			return p;
+		}
+		p.push({ label: session?.name ?? 'Session', target: sessionF, current: false });
+		if (focusedPipe) p.push({ label: focusedPipe.name || 'Pipe', target: { level: 'pipe', pipeId: focusedPipe.id }, current: focus.level === 'pipe' });
+		if (focus.level === 'pipe') return p;
+		if (focusedSegment) p.push({ label: `Seg ${focusedSegment.frameStart}–${focusedSegment.frameEnd}`, target: { level: 'segment', pipeId: focusedPipe!.id, segmentId: focusedSegment.id }, current: focus.level === 'segment' });
+		if (focus.level === 'segment') return p;
+		if (focusedTag) p.push({ label: focusedTag.tag, target: { level: 'tag', pipeId: focusedPipe!.id, segmentId: focusedSegment!.id, tagId: focusedTag.id }, current: true });
+		return p;
+	});
+
+	// Click a breadcrumb ancestor to move the focus up to that level.
+	function goToFocus(level: number) {
+		const crumb = focusPath[level];
+		if (!crumb || crumb.current) return; // the current crumb is a no-op
+		onfocuschange?.(crumb.target);
 	}
 
 	// Busy state for the pipe-level Generate button (drives the inline
@@ -331,13 +341,13 @@
 		<div class="hero-crumbs" aria-label="Focus path">
 			{#each focusPath as crumb, i (i + crumb.label)}
 				{#if i > 0}<span class="crumb-sep" aria-hidden="true">/</span>{/if}
-				{#if i === focusPath.length - 1}
+				{#if crumb.current}
 					<span class="crumb crumb-current">{crumb.label}</span>
 				{:else}
 					<button
-						class="crumb crumb-link"
+						class="crumb crumb-link crumb-dim"
 						onclick={() => goToFocus(i)}
-						title="Go to {crumb.label} level"
+						title={crumb.label}
 						aria-label="Go to {crumb.label} level">
 						{crumb.label}
 						<span class="crumb-up" aria-hidden="true">↑</span>
@@ -764,6 +774,17 @@
 		font-weight: 700;
 		background: color-mix(in srgb, var(--accent, #ff3e00) 14%, var(--bg-tertiary, #27272a));
 		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
+	}
+	/* The dimmed "previous pipe" crumb shown at SESSION level — same size as
+	   the others so the "Session / Pipe" row never jumps width, but styled
+	   lighter to signal "you were here, click to go back". */
+	.crumb-dim {
+		color: var(--text-muted);
+		font-weight: 500;
+		background: transparent;
+	}
+	.crumb-dim:hover {
+		color: var(--text-primary);
 	}
 	.crumb-sep {
 		font-size: 11px;
