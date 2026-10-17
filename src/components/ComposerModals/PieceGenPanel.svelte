@@ -14,6 +14,7 @@
 	import { modelsFor, getPreset } from '$lib/settings/catalog';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { flashToast } from '$lib/flashToast';
+	import ImageLightbox from './ImageLightbox.svelte';
 	import {
 		generatePiece,
 		listPieceHistory,
@@ -85,6 +86,18 @@
 	let sourceRemote = $state<string | null>(null);
 	let history = $state<PieceHistoryEntry[]>([]);
 	let historyThumbs = $state<(string | null)[]>([]);
+
+	// Fullscreen zoom + pan preview of any piece image (click a preview →
+	// lightbox; double-click a history thumb works too).
+	let lbOpen = $state(false);
+	let lbSrc = $state<string | null>(null);
+	let lbTitle = $state('');
+	function openPreview(src: string | null, title: string) {
+		if (!src) return;
+		lbSrc = src;
+		lbTitle = title;
+		lbOpen = true;
+	}
 
 	// Seed the image-model picker from the profile's default (mirrors
 	// GenerateModal): read-only / pending models are filtered out.
@@ -298,12 +311,12 @@
 			<figure class="pg-preview">
 				<figcaption>Source</figcaption>
 				{#if sourceUrl}
-					<div class="pg-imgwrap">
+					<div class="pg-imgwrap" onclick={() => openPreview(sourceUrl, 'Source')}>
 						<img src={sourceUrl} alt="Source image" />
 						{#if sourceRemote || sourceUrl}
-							<button class="pg-copy" onclick={() => copyUrl(sourceRemote, sourceUrl)} title="Copy URL" aria-label="Copy source image URL">⧉</button>
+							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(sourceRemote, sourceUrl); }} title="Copy URL" aria-label="Copy source image URL">⧉</button>
 						{/if}
-						<button class="pg-open" onclick={() => openInViewer(sourcePath, sourceUrl)} title="Open in viewer" aria-label="Open source image in viewer">⛶</button>
+						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(sourcePath, sourceUrl); }} title="Open in viewer" aria-label="Open source image in viewer">⛶</button>
 					</div>
 				{:else}
 					<div class="pg-empty">No source</div>
@@ -312,12 +325,12 @@
 			<figure class="pg-preview">
 				<figcaption>Generated</figcaption>
 				{#if generatedUrl}
-					<div class="pg-imgwrap">
+					<div class="pg-imgwrap" onclick={() => openPreview(generatedUrl, 'Generated')}>
 						<img src={generatedUrl} alt="Generated image" />
 						{#if generatedRemote || generatedUrl}
-							<button class="pg-copy" onclick={() => copyUrl(generatedRemote, generatedUrl)} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
+							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
 						{/if}
-						<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
 					</div>
 				{:else}
 					<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
@@ -328,12 +341,12 @@
 		<figure class="pg-preview pg-preview-single">
 			<figcaption>Generated</figcaption>
 			{#if generatedUrl}
-				<div class="pg-imgwrap">
+				<div class="pg-imgwrap" onclick={() => openPreview(generatedUrl, 'Generated')}>
 					<img src={generatedUrl} alt="Generated image" />
 					{#if generatedRemote || generatedUrl}
-						<button class="pg-copy" onclick={() => copyUrl(generatedRemote, generatedUrl)} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
+						<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
 					{/if}
-					<button class="pg-open" onclick={() => openInViewer(generatedPath, generatedUrl)} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+					<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
 				</div>
 			{:else}
 				<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
@@ -343,13 +356,14 @@
 
 	{#if history.length > 0}
 		<div class="pg-history">
-			<span class="pg-history-label">History ({history.length})</span>
+			<span class="pg-history-label">History ({history.length}) · double-click to zoom</span>
 			<div class="pg-history-thumbs">
 				{#each history as h, i (h.localPath + ':' + h.ts)}
 					<button
 						class="pg-thumb"
 						class:pg-thumb-active={generatedUrl === historyThumbs[i]}
 						onclick={() => selectGeneration(h, i)}
+						ondblclick={() => historyThumbs[i] && openPreview(historyThumbs[i], `Generation ${i + 1}`)}
 						title="{h.model}{h.ts ? ' · ' + new Date(h.ts).toLocaleString() : ''}"
 						aria-label="Preview generation"
 					>
@@ -363,6 +377,8 @@
 			</div>
 		</div>
 	{/if}
+
+	<ImageLightbox bind:open={lbOpen} src={lbSrc} title={lbTitle} />
 </section>
 
 <style>

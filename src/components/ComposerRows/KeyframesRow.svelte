@@ -3,6 +3,7 @@
 	import { getVisibleKeyframeSlots } from '$lib/keyframeSlots';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
 	import { refDotState, type RefDotState } from '$lib/refReadiness';
+	import ImageLightbox from '../ComposerModals/ImageLightbox.svelte';
 	import '../composer-row.css';
 
 	// Keyframes row — display slots come from the shared keyframeSlots lib
@@ -169,6 +170,18 @@
 				.map((k: PipeKeyframe) => `${pipe.id}:${k.id}`),
 		);
 	});
+
+	// Fullscreen zoom + pan preview of a keyframe thumbnail (click the thumb).
+	let lbOpen = $state(false);
+	let lbSrc = $state<string | null>(null);
+	let lbTitle = $state('');
+	function openKfPreview(kf: PipeKeyframe) {
+		const src = kfSrc(kf);
+		if (!src) return;
+		lbSrc = src;
+		lbTitle = `Keyframe ${kf.slotIndex} · ${kfTypeLabel(kf)}`;
+		lbOpen = true;
+	}
 </script>
 
 	<div class="row-group">
@@ -209,6 +222,7 @@
 								class="kf-img"
 								style={aspect ? `aspect-ratio: ${aspect};` : ''}
 								alt="keyframe"
+								onclick={(e) => { e.stopPropagation(); openKfPreview(kf); }}
 								onerror={() => markKfImageFailed(kf)}
 							/>
 						{:else}
@@ -250,6 +264,7 @@
 			{/each}
 		{/each}
 	</div>
+	<ImageLightbox bind:open={lbOpen} src={lbSrc} title={lbTitle} />
 </div>
 
 <style>

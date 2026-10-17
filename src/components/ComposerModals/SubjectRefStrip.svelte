@@ -1,14 +1,17 @@
 <script lang="ts">
 	/**
 	 * Compact subject-reference strip for prompt modals. A horizontal row of
-	 * small thumbnails (each with a `+N` insert badge, N = 1-based position in
-	 * the reference list). Click a thumbnail → a FULLSCREEN lightbox preview
-	 * (image at up to 90vw × 85vh, click/Esc to close) — no small side box.
-	 * The strip itself is one compact row, so the prompt area is never
-	 * squeezed; it only appears when the pipe actually has subject refs.
+	 * cards (44px thumbnail + a corner number = 1-based position in the
+	 * reference list). Each card carries a small overlay "+" button that
+	 * inserts the `[SubjectN]` token into the prompt; clicking the card
+	 * itself opens the FULLSCREEN lightbox (ImageLightbox, zoom + pan).
+	 *
+	 * The strip is one compact block, so the prompt area is never squeezed;
+	 * it only appears when the pipe actually has subject refs.
 	 */
 	import type { SubjectReference } from '$types';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
+	import ImageLightbox from './ImageLightbox.svelte';
 
 	let {
 		refs,
@@ -27,19 +30,11 @@
 	function closePreview() {
 		previewIdx = null;
 	}
-	const previewRef = $derived(previewIdx !== null ? refs[previewIdx] : null);
-	const previewSrc = $derived(previewRef ? srcFor(previewRef) : null);
-
-	// Esc closes the lightbox while it's up (window-level, the lightbox div
-	// is not focusable-friendly inside a modal).
+	let lightboxOpen = $state(false);
 	$effect(() => {
-		if (previewIdx === null) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') closePreview();
-		};
-		window.addEventListener('keydown', onKey);
-		return () => window.removeEventListener('keydown', onKey);
+		lightboxOpen = previewIdx !== null;
 	});
+	const previewSrc = $derived(previewIdx !== null ? srcFor(refs[previewIdx]) : null);
 
 	// Resolve local media paths to WebView blob URLs (same priority as
 	// SubjectRefsRow: previewLocalPath first, then the remote imageUrl).
@@ -83,12 +78,12 @@
 <aside class="srp-strip" aria-label="Subject references">
 	<div class="srp-head">
 		<span class="srp-title">Subjects</span>
-		<span class="srp-hint">click → preview · +N → insert</span>
+		<span class="srp-hint">click → preview · + → insert token</span>
 	</div>
 	<div class="srp-list">
 		{#each refs as r, i (r.id)}
 			{@const src = srcFor(r)}
-			<div class="srp-item">
+			<div class="srp-card">
 				<button
 					class="srp-thumb"
 					onclick={() => openPreview(i)}
@@ -107,27 +102,22 @@
 					onclick={() => onInsert?.(tokenFor(r))}
 					title={`Insert [Subject${i + 1}] into the prompt`}
 					aria-label={`Insert Subject ${i + 1} token into the prompt`}
-				>+{i + 1}</button>
+				>+</button>
 			</div>
 		{/each}
 	</div>
 </aside>
 
-{#if previewIdx !== null && previewSrc}
-	<!-- Fullscreen lightbox: covers the whole window ABOVE the modal overlay
-	     (z-index 3000 > 2000), so the image reads at up to 90vw × 85vh —
-	     never a cramped side box. Click anywhere or Esc to dismiss. -->
-	<div class="srp-lightbox" role="dialog" aria-modal="true" aria-label="Subject image preview"
-		onclick={() => closePreview()}>
-		<button class="srp-close" aria-label="Close preview"
-			onclick={(e) => { e.stopPropagation(); closePreview(); }}>×</button>
-		<img src={previewSrc} alt="Subject preview" onerror={() => closePreview()} />
-		<div class="srp-caption">Subject {(previewIdx ?? 0) + 1} · click or Esc to close</div>
-	</div>
+{#if previewIdx !== null}
+	<ImageLightbox
+		bind:open={lightboxOpen}
+		src={previewSrc}
+		title={`Subject ${(previewIdx ?? 0) + 1} of ${refs.length}`}
+	/>
 {/if}
 
 <style>
-	/* One compact block: a header row + a single horizontal thumbnail row.
+	/* One compact block: a header row + a single horizontal card row.
 	   Never squeezes the prompt — it just adds ~60px of height when the pipe
 	   has subject refs. */
 	.srp-strip {
@@ -168,20 +158,19 @@
 		gap: 8px;
 	}
 
-	.srp-item {
-		display: flex;
-		align-items: center;
-		gap: 5px;
+	/* Card: 44px square thumbnail with two overlays — a corner number
+	   (Subject N index) and a small "+" insert button on the right edge,
+	   mirroring the pg-open / pg-copy overlay pattern of PieceGenPanel. */
+	.srp-card {
+		position: relative;
+		flex: 0 0 auto;
 	}
 
-	/* Thumbnail: square 44px, click → fullscreen preview. A tiny number
-	   corner marks the Subject N index. */
 	.srp-thumb {
 		position: relative;
 		width: 44px;
 		height: 44px;
 		padding: 0;
-		flex: 0 0 auto;
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 		border: 1px solid var(--border-color, #3f3f46);
 		border-radius: 8px;
@@ -227,79 +216,37 @@
 		line-height: 13px;
 	}
 
-	/* +N: insert the [SubjectN] token into the prompt at the cursor. */
+	/* "+" insert button: a small overlay on the card's right edge (only
+	   visible on hover / focus, like pg-open / pg-copy). The click target
+	   stopPropagation implicitly — it's a separate <button> over the card. */
 	.srp-insert {
-		width: 30px;
-		height: 44px;
-		flex: 0 0 auto;
-		padding: 0;
-		background: transparent;
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 8px;
-		color: var(--text-secondary, #a1a1aa);
-		font-size: 10px;
-		font-weight: 700;
-		font-family: var(--font-mono, monospace);
-		cursor: pointer;
-		transition: all 0.15s ease;
-	}
-	.srp-insert:hover {
-		border-color: var(--accent-color, #ff3e00);
-		color: var(--accent-color, #ff3e00);
-		background: color-mix(in srgb, var(--accent-color, #ff3e00) 10%, transparent);
-	}
-
-	/* ── Fullscreen lightbox: above the modal overlay, covers the window ── */
-	.srp-lightbox {
-		position: fixed;
-		inset: 0;
-		z-index: 3000; /* above .modal-overlay's 2000 */
-		background: rgba(0, 0, 0, 0.88);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		cursor: zoom-out;
-	}
-
-	.srp-lightbox img {
-		max-width: 90vw;
-		max-height: 85vh;
-		object-fit: contain;
-		border-radius: 8px;
-		box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
-	}
-
-	.srp-caption {
 		position: absolute;
-		bottom: 20px;
-		left: 50%;
-		transform: translateX(-50%);
-		padding: 5px 12px;
-		border-radius: 6px;
-		background: rgba(0, 0, 0, 0.55);
-		border: 1px solid var(--border-color, #3f3f46);
-		color: var(--text-secondary, #a1a1aa);
-		font-size: 12px;
-		white-space: nowrap;
-	}
-
-	.srp-close {
-		position: absolute;
-		top: 16px;
-		right: 20px;
-		width: 36px;
-		height: 36px;
+		top: -4px;
+		right: -4px;
+		width: 18px;
+		height: 18px;
 		padding: 0;
 		border: 1px solid var(--border-color, #3f3f46);
 		border-radius: 50%;
-		background: rgba(0, 0, 0, 0.55);
-		color: var(--text-primary, #fff);
-		font-size: 20px;
+		background: color-mix(in srgb, var(--bg-secondary, #14141f) 82%, transparent);
+		color: var(--text-secondary, #a1a1aa);
+		font-size: 12px;
+		font-weight: 700;
 		line-height: 1;
 		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		opacity: 0;
+		transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 	}
-	.srp-close:hover {
-		border-color: var(--accent-color, #ff3e00);
+	.srp-card:hover .srp-insert,
+	.srp-card:focus-within .srp-insert,
+	.srp-insert:focus-visible {
+		opacity: 1;
+	}
+	.srp-insert:hover {
 		color: var(--accent-color, #ff3e00);
+		border-color: var(--accent-color, #ff3e00);
 	}
 </style>

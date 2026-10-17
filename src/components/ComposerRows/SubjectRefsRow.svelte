@@ -2,6 +2,7 @@
 	import type { PipeRow, SubjectReference, KeyframeType } from '$types';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
 	import { refDotState, type RefDotState } from '$lib/refReadiness';
+	import ImageLightbox from '../ComposerModals/ImageLightbox.svelte';
 	import '../composer-row.css';
 
 	// Subject references row — pure chrome. The panel owns the subject-ref
@@ -156,6 +157,18 @@
 				.map((r: SubjectReference) => `${pipe.id}:${r.id}`),
 		);
 	});
+
+	// Fullscreen zoom + pan preview of a subject thumbnail (click the img).
+	let lbOpen = $state(false);
+	let lbSrc = $state<string | null>(null);
+	let lbTitle = $state('');
+	function openSrPreview(sr: SubjectReference) {
+		const src = srSrc(sr);
+		if (!src) return;
+		lbSrc = src;
+		lbTitle = `Subject · ${srTypeLabel(sr)}${sr.useFrames ? ` · ${sr.frameStart}–${sr.frameEnd}` : ''}`;
+		lbOpen = true;
+	}
 </script>
 
 	<div class="row-group">
@@ -193,6 +206,7 @@
 								class="sr-img"
 								style={aspect ? `aspect-ratio: ${aspect};` : ''}
 								alt="subject ref"
+								onclick={(e) => { e.stopPropagation(); openSrPreview(sr); }}
 								onerror={() => markSrImageFailed(sr)}
 							/>
 						{:else}
@@ -231,6 +245,7 @@
 			</button>
 		{/if}
 	</div>
+	<ImageLightbox bind:open={lbOpen} src={lbSrc} title={lbTitle} />
 </div>
 
 <style>
