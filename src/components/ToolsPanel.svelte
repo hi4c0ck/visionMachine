@@ -746,7 +746,6 @@
 		cursor: pointer;
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
 		transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 	}
 	.crumb-link:hover {
@@ -759,15 +758,18 @@
 		border-color: var(--accent, #ff3e00);
 		box-shadow: 0 0 0 3px var(--accent-glow);
 	}
-	/* The little up-arrow: signals "this is a level you can jump back to". */
+	/* The little up-arrow: signals "this is a level you can jump back to".
+	   display:none when idle so the inactive crumb occupies NO extra width
+	   (only the label, same as the current one); it appears on hover. */
 	.crumb-up {
+		display: none;
 		font-size: 9px;
-		opacity: 0;
+		margin-left: 4px;
 		color: var(--accent, #ff3e00);
-		transition: opacity 0.15s ease;
 	}
-	.crumb-link:hover .crumb-up {
-		opacity: 1;
+	.crumb-link:hover .crumb-up,
+	.crumb-link:focus-visible .crumb-up {
+		display: inline-block;
 	}
 	.crumb-current {
 		color: var(--text-primary);
