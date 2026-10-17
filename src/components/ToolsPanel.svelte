@@ -303,18 +303,37 @@
 		</div>
 
 		<div class="hero-body">
-			<!-- One action row; its content follows the focus level so the
-			     Generate / Compose affordances are never duplicated. -->
-			{#if focus.level === 'session'}
+			<!-- One action row: Compose is a session-level action, so it stays
+			     visible on EVERY focus level; Generate's role follows the focus
+			     (session → generate session, pipe → generate pipe; at
+			     segment/tag focus there is no generate, compose only). -->
+			{#if session && focus.level !== 'project'}
 				<div class="hero-btns">
-					<button
-						class="gen-btn"
-						onclick={ongenerate}
-						disabled={!session?.pipes?.length}
-						title={session?.pipes?.length ? APP_CONSTANTS.strings.generate : 'Add a pipe first'}>
-						<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-						<span>{APP_CONSTANTS.strings.generate}</span>
-					</button>
+					{#if focus.level === 'session'}
+						<button
+							class="gen-btn"
+							onclick={ongenerate}
+							disabled={!session.pipes?.length}
+							title={session.pipes?.length ? APP_CONSTANTS.strings.generate : 'Add a pipe first'}>
+							<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+							<span>{APP_CONSTANTS.strings.generate}</span>
+						</button>
+					{:else if focus.level === 'pipe'}
+						<button
+							class="gen-btn"
+							class:busy={genBusy}
+							onclick={() => focusedPipe && ongeneratepipe?.(focusedPipe.id)}
+							disabled={genBusy || !focusedPipe}
+							title={genBusy ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}>
+							{#if genBusy}
+								<span class="gen-progress" aria-hidden="true"></span>
+								<span>Generating…</span>
+							{:else}
+								<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+								<span>{APP_CONSTANTS.strings.generate}</span>
+							{/if}
+						</button>
+					{/if}
 					<button
 						class="compose-btn"
 						class:busy={composing}
@@ -327,23 +346,6 @@
 						<span>{composing ? (compositionLabel || 'Composing…') : APP_CONSTANTS.strings.composeSessionVideo}</span>
 					</button>
 				</div>
-
-			{:else if focus.level === 'pipe'}
-				<button
-					class="gen-btn gen-wide"
-					class:busy={genBusy}
-					onclick={() => focusedPipe && ongeneratepipe?.(focusedPipe.id)}
-					disabled={genBusy || !focusedPipe}
-					title={genBusy ? APP_CONSTANTS.strings.generationInProgress : 'Generate this pipe'}>
-					{#if genBusy}
-						<span class="gen-progress" aria-hidden="true"></span>
-						<span>Generating…</span>
-					{:else}
-						<svg class="gen-ico" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-						<span>{APP_CONSTANTS.strings.generate}</span>
-					{/if}
-				</button>
-
 			{:else if focus.level === 'project'}
 				<p class="hero-hint">Select a session to configure video settings &amp; pipes.</p>
 			{/if}
