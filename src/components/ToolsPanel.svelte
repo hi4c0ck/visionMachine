@@ -3,7 +3,7 @@
 	import { APP_CONSTANTS } from '$constants';
 	import { compilePrompt } from '$lib/compiler';
 	import { toMediaUrl } from '$lib/mediaUrl';
-	import { effectiveTargetDims, targetDimsLabel } from '$types';
+	import { effectiveTargetDims } from '$types';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
 	import { availableResolutionsForModel, videoRatiosForOrientation, effectiveVideoAspect } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
@@ -105,18 +105,6 @@
 	let fpsValue = $derived.by(() => {
 		const cur = Number(session?.fps);
 		return Number.isFinite(cur) && cur > 0 ? String(cur) : '24';
-	});
-
-	// 0012: the session's effective target size label (W×H · ratio), reflecting
-	// the custom override when set, else the resolution preset + orientation.
-	const targetLabel = $derived.by(() => {
-		if (!session) return '—';
-		return targetDimsLabel(
-			session.resolution,
-			session.orientation,
-			session.customWidth,
-			session.customHeight,
-		);
 	});
 
 	// 0012 (5.4): the preview video's aspect follows the SESSION TARGET
@@ -422,7 +410,6 @@
             <option value="vertical">Vertical</option>
             <option value="square">Square (1:1)</option>
           </select>
-          <div class="setting-hint">Orientation filters the Video sizes shown below; changing it regenerates settled image pieces in the new aspect.</div>
         </div>
 
         {#if ratioOptions.length}
@@ -438,14 +425,7 @@
                 <option value={r} selected={session.videoRatio === r}>{r}</option>
               {/each}
             </select>
-            <div class="setting-hint">
-              {#if effectiveAspect}
-                Sends aspect_ratio <b>{effectiveAspect}</b> · {targetLabel}.
-                Changing this regenerates settled image pieces in the new aspect (not a crop).
-              {:else}
-                No aspect sent (model default).
-              {/if}
-            </div>
+            <div class="setting-hint">{effectiveAspect ?? 'auto'}</div>
           </div>
         {/if}
 
@@ -463,10 +443,6 @@
             <option value="exact">Exact (stretch)</option>
             <option value="none">Auto (center if mixed)</option>
           </select>
-          <div class="setting-hint">
-            Applies to all session videos at compose; older clips are normalized to
-            {targetLabel}.
-          </div>
         </div>
 
         <div class="setting-row">
