@@ -777,16 +777,18 @@
 		background: color-mix(in srgb, var(--accent, #ff3e00) 14%, var(--bg-tertiary, #27272a));
 		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
 	}
-	/* The dimmed "previous pipe" crumb shown at SESSION level — same size as
-	   the others so the "Session / Pipe" row never jumps width, but styled
-	   lighter to signal "you were here, click to go back". */
+	/* The dimmed "previous pipe" crumb shown at SESSION level — the SAME
+	   filled box as the active crumb (identical height/font/border, so the
+	   row reads as two equal chips, not "active smaller / inactive bigger").
+	   Only the tint differs: neutral, to signal "you were here". */
 	.crumb-dim {
 		color: var(--text-muted);
 		font-weight: 500;
-		background: transparent;
+		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 60%, transparent);
 	}
 	.crumb-dim:hover {
 		color: var(--text-primary);
+		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
 	}
 	.crumb-sep {
 		font-size: 11px;
