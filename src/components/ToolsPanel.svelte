@@ -725,11 +725,18 @@
 		gap: 3px;
 		padding: 10px 12px 8px;
 	}
+	/* Base crumb box — IDENTICAL geometry for active (span) and inactive
+	   (button): same display/line-height/padding/font-weight. The ONLY thing
+	   that differs between levels is the tint, so chips never look like one
+	   is "bigger" than the other. */
 	.crumb {
+		display: inline-flex;
+		align-items: center;
 		font-size: 11px;
 		font-weight: 500;
+		line-height: 1;
 		color: var(--text-secondary);
-		padding: 2px 8px;
+		padding: 4px 8px;
 		border-radius: 6px;
 		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 60%, transparent);
 		border: 1px solid var(--panel-right-border);
@@ -738,14 +745,13 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	/* Ancestor crumbs are real buttons — navigate UP the focus hierarchy. */
+	/* Ancestor crumbs are real buttons — navigate UP the focus hierarchy.
+	   Geometry + font come ENTIRELY from .crumb (do NOT use `font: inherit`
+	   here — that would override .crumb's 11px with the inherited parent size
+	   and make the inactive chip bigger than the active one). */
 	.crumb-link {
 		appearance: none;
-		font: inherit;
-		line-height: inherit;
 		cursor: pointer;
-		display: inline-flex;
-		align-items: center;
 		transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 	}
 	.crumb-link:hover {
@@ -759,21 +765,25 @@
 		box-shadow: 0 0 0 3px var(--accent-glow);
 	}
 	/* The little up-arrow: signals "this is a level you can jump back to".
-	   display:none when idle so the inactive crumb occupies NO extra width
-	   (only the label, same as the current one); it appears on hover. */
+	   Absolutely positioned so it NEVER changes the chip's box/size. */
+	.crumb {
+		position: relative;
+	}
 	.crumb-up {
 		display: none;
+		position: absolute;
+		left: 100%;
+		top: 50%;
+		transform: translate(4px, -50%);
 		font-size: 9px;
-		margin-left: 4px;
 		color: var(--accent, #ff3e00);
 	}
 	.crumb-link:hover .crumb-up,
 	.crumb-link:focus-visible .crumb-up {
-		display: inline-block;
+		display: block;
 	}
 	.crumb-current {
 		color: var(--text-primary);
-		font-weight: 700;
 		background: color-mix(in srgb, var(--accent, #ff3e00) 14%, var(--bg-tertiary, #27272a));
 		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
 	}
