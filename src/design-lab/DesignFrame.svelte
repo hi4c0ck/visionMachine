@@ -16,6 +16,7 @@
 	} from '$lib/frameGeometry';
 	import { PIPE, FIXTURE_PROJECT, FRAME_IMAGES, SESSION_FPS, SELECTED_TAG_ID } from './fixture';
 	import './design-lab.css';
+	import ChromeIcon from '../components/ChromeIcon.svelte';
 	import './template-a.css';
 	import './template-b.css';
 	import './template-c.css';
@@ -93,8 +94,8 @@
 				<span class="crumb crumb-pipe">{pipe.name}</span>
 			</div>
 			<div class="dl-layout-controls">
-				<button class="dl-layout-btn active" title="Landscape">⬜</button>
-				<button class="dl-layout-btn" title="Portrait">⬛</button>
+				<button class="dl-layout-btn active" title="Landscape"><ChromeIcon id="layout-landscape" size={16} /></button>
+				<button class="dl-layout-btn" title="Portrait"><ChromeIcon id="layout-portrait" size={16} /></button>
 			</div>
 		</div>
 
@@ -105,9 +106,9 @@
 			<div class="dl-frame-controls">
 				<span class="ctl-time">{(selectedFrame / fps).toFixed(1)}s / {totalSeconds}s</span>
 				<span class="ctl-cluster">
-					<button class="ctl-btn" title="Play">▶</button>
-					<button class="ctl-btn" title="Loop">⟳</button>
-					<button class="ctl-btn" title="Carousel">≣</button>
+					<button class="ctl-btn" title="Play"><ChromeIcon id="play" size={14} /></button>
+					<button class="ctl-btn" title="Loop"><ChromeIcon id="loop" size={14} /></button>
+					<button class="ctl-btn" title="Carousel"><ChromeIcon id="menu" size={14} /></button>
 				</span>
 			</div>
 			<div class="dl-scrub" style="--scrub-pct: {((selectedFrame / totalFrames) * 100).toFixed(2)}%" aria-hidden="true"></div>
@@ -160,9 +161,9 @@
 					<span class="dl-pipe-ops">
 						<button title="Move up" disabled>↑</button>
 						<button title="Move down">↓</button>
-						<button title="Duplicate">⧉</button>
+						<button title="Duplicate"><ChromeIcon id="copy" size={14} /></button>
 						<label class="dl-pipe-len"><span>len</span><span class="dl-pipe-len-val">{pipe.lengthFrames}</span></label>
-						<button title="Edit length">✎</button>
+						<button title="Edit length"><ChromeIcon id="edit" size={14} /></button>
 						<button class="dl-pipe-del" title="Remove">×</button>
 					</span>
 				</div>
@@ -251,7 +252,7 @@
 						<!-- Sound lane -->
 						<div class="dl-global-lane sound">
 							<div class="dl-pill sound" style="left: {px(soundEl.frameStart)}px; width: {wpx(soundEl.frameStart, soundEl.frameEnd)}px;">
-								<span class="dl-pill-label">♪ Sound</span>
+								<span class="dl-pill-label"><ChromeIcon id="music" size={14} /> Sound</span>
 								<span class="dl-pill-text">{soundEl.prompt}</span>
 							</div>
 						</div>

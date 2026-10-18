@@ -5,6 +5,7 @@
 	// the settings store mirrors it into the backend locator chain.
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { flashToast } from '$lib/flashToast';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import '../composer-modal.css';
 
 	let {
@@ -121,9 +122,9 @@
 	</div>
 
 	{#if probeStatus === 'ok'}
-		<div class="probe-line probe-ok" aria-live="polite">✓ {probeLabel}</div>
+		<div class="probe-line probe-ok" aria-live="polite"><ChromeIcon id="success" size={14} /> {probeLabel}</div>
 	{:else if probeStatus === 'none'}
-		<div class="probe-line probe-err" aria-live="polite">✕ {probeLabel}</div>
+		<div class="probe-line probe-err" aria-live="polite"><ChromeIcon id="error" size={14} /> {probeLabel}</div>
 	{:else if probeLabel}
 		<div class="probe-line" aria-live="polite">{probeLabel}</div>
 	{/if}

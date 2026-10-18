@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ProjectData, SessionData } from '$types';
   import { APP_CONSTANTS } from '$constants';
+  import ChromeIcon from './ChromeIcon.svelte';
 
   let {
     projects, 
@@ -189,12 +190,12 @@
                     <button 
                       class="session-action-btn"
                       onclick={(e) => { e.stopPropagation(); handleCopySession(session.id); }}
-                      title="Copy session">⧉</button>
+                      title="Copy session"><ChromeIcon id="copy" size={14} /></button>
                   {/if}
                   <button 
                     class="delete-session-btn"
                     onclick={(e) => { e.stopPropagation(); handleDeleteSession(project.id, session.id); }}
-                    title="Delete Session">×</button>
+                    title="Delete Session"><ChromeIcon id="trash" size={14} /></button>
                 </span>
               </div>
             {/each}

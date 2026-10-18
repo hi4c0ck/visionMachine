@@ -315,7 +315,7 @@
 					<div class="pg-imgwrap" onclick={() => openPreview(sourceUrl, 'Source')}>
 						<img src={sourceUrl} alt="Source image" />
 						{#if sourceRemote || sourceUrl}
-							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(sourceRemote, sourceUrl); }} title="Copy URL" aria-label="Copy source image URL">⧉</button>
+							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(sourceRemote, sourceUrl); }} title="Copy URL" aria-label="Copy source image URL"><ChromeIcon id="copy" size={14} /></button>
 						{/if}
 						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(sourcePath, sourceUrl); }} title="Open in viewer" aria-label="Open source image in viewer"><ChromeIcon id="eye" size={14} /></button>
 					</div>
@@ -329,7 +329,7 @@
 					<div class="pg-imgwrap" onclick={() => openPreview(generatedUrl, 'Generated')}>
 						<img src={generatedUrl} alt="Generated image" />
 						{#if generatedRemote || generatedUrl}
-							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
+							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL"><ChromeIcon id="copy" size={14} /></button>
 						{/if}
 						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer"><ChromeIcon id="eye" size={14} /></button>
 					</div>
@@ -345,7 +345,7 @@
 				<div class="pg-imgwrap" onclick={() => openPreview(generatedUrl, 'Generated')}>
 					<img src={generatedUrl} alt="Generated image" />
 					{#if generatedRemote || generatedUrl}
-						<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
+						<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL"><ChromeIcon id="copy" size={14} /></button>
 					{/if}
 					<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer"><ChromeIcon id="eye" size={14} /></button>
 				</div>

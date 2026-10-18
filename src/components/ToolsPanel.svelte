@@ -8,6 +8,7 @@
 	import { availableResolutionsForModel, videoRatiosForOrientation, effectiveVideoAspect } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import { onMount } from 'svelte';
+	import ChromeIcon from './ChromeIcon.svelte';
 
 	let {
 		session,
@@ -617,7 +618,7 @@
 						<span>Re-compose (size changed)</span>
 						{#if oncomposesession && ffmpegAvailable}
 							<button class="btn-icon" type="button" title="Re-compose with the current size/crop"
-								onclick={() => oncomposesession?.()}>↻</button>
+								onclick={() => oncomposesession?.()}><ChromeIcon id="regen" size={16} /></button>
 						{/if}
 					</div>
 				{/if}

@@ -207,7 +207,6 @@
 						title={broken
 							? `Frame ${kf.frame} · ${kfTypeLabel(kf)} · URL not accessible · Click to fix`
 							: `Frame ${kf.frame} · ${kfTypeLabel(kf)} · Click to edit`}
-						aria-invalid={broken || undefined}
 						>
 					{#if broken}
 						<span class="kf-broken-mark" aria-hidden="true"><ChromeIcon id="warning" size={14} /></span>

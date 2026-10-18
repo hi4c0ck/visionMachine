@@ -105,9 +105,9 @@
 	}>();
 
 	const layouts = [
-		{ id: 'landscape', label: 'Landscape', icon: '⬜' },
-		{ id: 'portrait', label: 'Portrait', icon: '⬛' },
-		{ id: 'single', label: 'Single', icon: '🖥' },
+		{ id: 'landscape', label: 'Landscape', iconId: 'layout-landscape' },
+		{ id: 'portrait', label: 'Portrait', iconId: 'layout-portrait' },
+		{ id: 'single', label: 'Single', iconId: 'layout-single' },
 	];
 
 	let previewImage = $state<string | null>(null);
@@ -344,7 +344,7 @@
 			<img src="/icons/vm-mark-64.png" alt="VisionMachine" class="logo-icon" width="28" height="28" />
 			<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
 			{#if showWelcome}
-				<span class="welcome-badge">✨ New</span>
+				<span class="welcome-badge"><ChromeIcon id="sparkle" size={14} /> New</span>
 			{/if}
 		</div>
 
@@ -378,7 +378,7 @@
 					onclick={() => setLayout(layout.id)}
 					title={layout.label}
 				>
-					{layout.icon} {layout.label}
+					<ChromeIcon id={layout.iconId} size={16} /> {layout.label}
 				</button>
 			{/each}
 		</div>
@@ -485,7 +485,7 @@
 					<span class="ctl-cluster">
 						<button class="ctl-btn" class:active={loopEnabled} onclick={toggleLoop}
 							title={APP_CONSTANTS.strings.loopHint} aria-pressed={loopEnabled}>
-							⟳
+							<ChromeIcon id="loop" size={14} />
 						</button>
 						<select class="ctl-speed" value={String(playbackRate)}
 							onchange={(e) => applySpeed(e.currentTarget.value)}
@@ -601,7 +601,7 @@
 				 lists the top-panel shortcuts on hover/focus. CSS-only popover;
 				 a real <button> so it is focusable + screen-reader labelled. -->
 			<button type="button" class="kb-hint" aria-label={APP_CONSTANTS.strings.kbShortcutsHint}>
-				⌨
+				<ChromeIcon id="keyboard" size={14} />
 				<span class="kb-pop" role="tooltip">
 					<span class="kb-row"><b>← / →</b> {APP_CONSTANTS.strings.kbStep}</span>
 					<span class="kb-row"><b>Space</b> {APP_CONSTANTS.strings.kbPlay}</span>
