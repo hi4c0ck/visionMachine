@@ -247,7 +247,11 @@
 									onclick={browseLocal}
 									title="Pick a local image as the img2img base"
 									aria-label="Browse local reference image"
-								>{localBusy ? '…' : '📁'}</button>
+								>{#if localBusy}
+									…
+								{:else}
+									<ChromeIcon id="open-folder" size={16} />
+								{/if}</button>
 							{/if}
 						</div>
 					</div>

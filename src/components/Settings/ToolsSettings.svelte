@@ -117,7 +117,7 @@
 			{testing ? 'Testing…' : 'Test'}
 		</button>
 		{#if draft.tools.ffmpegPath}
-			<button class="btn-clear" onclick={clearPath} title="Clear path">×</button>
+			<button class="btn-clear" onclick={clearPath} title="Clear path"><ChromeIcon id="error" size={14} /></button>
 		{/if}
 	</div>
 

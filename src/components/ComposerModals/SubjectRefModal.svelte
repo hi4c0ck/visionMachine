@@ -5,6 +5,7 @@
 		updateSubjectRef as updateSubjectRefAction,
 	} from '$lib/composerStore';
 import PieceGenPanel from './PieceGenPanel.svelte';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { pickImageFile, readUserImage } from '$lib/localImage';
@@ -197,7 +198,11 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 									onclick={browseLocal}
 									title="Pick a local image as the img2img base"
 									aria-label="Browse local reference image"
-								>{localBusy ? '…' : '📁'}</button>
+								>{#if localBusy}
+									…
+								{:else}
+									<ChromeIcon id="open-folder" size={16} />
+								{/if}</button>
 							{/if}
 						</div>
 					</div>

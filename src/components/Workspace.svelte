@@ -5,6 +5,7 @@
 	import ComposerPanel from './ComposerPanel.svelte';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
+	import ChromeIcon from './ChromeIcon.svelte';
 	import GenerateModal from './ComposerModals/GenerateModal.svelte';
 	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
@@ -2593,7 +2594,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				/>
 			{:else}
 				<div class="composer-empty">
-					<div class="empty-icon">🎬</div>
+					<div class="empty-icon"><ChromeIcon id="proj-reel" size={40} /></div>
 					<h2>Select a Session</h2>
 					<p>Create a project and add a session to start editing</p>
 				</div>

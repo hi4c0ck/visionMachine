@@ -129,20 +129,19 @@
           tabindex="0"
           onkeydown={(e) => e.key === 'Enter' && handleSelectProject(project.id)}
         >
-          <span class="project-icon">📁</span>
+          <span class="project-icon"><ChromeIcon id="proj-folder" size={16} /></span>
           <span class="project-name">{project.name}</span>
           <span class="session-count">{project.sessions.length}</span>
           {#if onopenprojectfolder}
             <button
               class="project-action-btn"
               onclick={(e) => { e.stopPropagation(); handleOpenProjectFolder(project.id); }}
-              title="Open folder">
-              📂</button>
+              title="Open folder"><ChromeIcon id="open-folder" size={16} /></button>
           {/if}
           <button 
             class="delete-project-btn"
             onclick={(e) => { e.stopPropagation(); handleDeleteProject(project.id); }}
-            title="Delete Project">×</button>
+            title="Delete Project"><ChromeIcon id="trash" size={14} /></button>
         </div>
         
         <!-- Sessions for this project -->
@@ -156,7 +155,7 @@
                 tabindex="0"
                 onkeydown={(e) => e.key === 'Enter' && handleSelectSession(session.id)}
               >
-                <span class="session-icon">🎬</span>
+                <span class="session-icon"><ChromeIcon id="proj-reel" size={16} /></span>
                 <input 
                   type="text" 
                   class="session-name-input"
@@ -184,7 +183,7 @@
                     <button 
                       class="session-action-btn"
                       onclick={(e) => { e.stopPropagation(); handleOpenSessionFolder(session.id); }}
-                      title="Open folder">📂</button>
+                      title="Open folder"><ChromeIcon id="open-folder" size={16} /></button>
                   {/if}
                   {#if oncopysession}
                     <button 
@@ -215,7 +214,7 @@
       <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-project-title">
         <div class="modal-header">
           <span class="modal-title" id="create-project-title">{APP_CONSTANTS.strings.createProject}</span>
-          <button class="modal-close" onclick={closeCreateProjectModal} aria-label="Close">×</button>
+          <button class="modal-close" onclick={closeCreateProjectModal} aria-label="Close"><ChromeIcon id="error" size={14} /></button>
         </div>
         
         <div class="modal-body">
