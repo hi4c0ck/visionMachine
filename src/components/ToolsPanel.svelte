@@ -782,27 +782,29 @@
 	.crumb-link:focus-visible .crumb-up {
 		display: block;
 	}
-	/* CURRENT level — the accent-emphasised crumb. Same geometry as the
-	   others (identical box), but it's the one you're ON, so it reads
-	   clearly: bold text, brighter accent fill + accent border. */
+	/* CURRENT level crumb — clearly emphasized: accent text, bold, full accent
+	   border. The "you are here" signal. Same size as the dim one, but much
+	   more visually active (color/weight/border, not dimensions). */
 	.crumb-current {
-		color: var(--text-primary);
+		color: var(--accent, #ff3e00);
 		font-weight: 700;
-		background: color-mix(in srgb, var(--accent, #ff3e00) 22%, var(--bg-tertiary, #27272a));
-		border-color: color-mix(in srgb, var(--accent, #ff3e00) 70%, var(--panel-right-border));
+		background: color-mix(in srgb, var(--accent, #ff3e00) 18%, var(--bg-tertiary, #27272a));
+		border-color: var(--accent, #ff3e00);
 	}
-	/* Inactive "previous pipe" crumb at SESSION level — same box size, but
-	   visually recessed: regular weight, neutral (unfilled) background, plain
-	   border, muted text. Reads as "you were here, click to go back". */
+	/* INACTIVE "previous pipe" crumb at SESSION level — same box size, but
+	   visually recessed: regular weight, plain border, muted text, slight
+	   opacity drop. Reads as "you were here, click to go back". */
 	.crumb-dim {
 		color: var(--text-muted);
 		font-weight: 500;
 		background: transparent;
-		border-color: color-mix(in srgb, var(--panel-right-border) 70%, transparent);
+		border-color: var(--panel-right-border);
+		opacity: 0.75;
 	}
 	.crumb-dim:hover {
 		color: var(--text-primary);
 		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
+		opacity: 1;
 	}
 	.crumb-sep {
 		font-size: 11px;
@@ -909,32 +911,34 @@
 		box-shadow: none;
 	}
 
-	/* P4 (revised): the pipe-level Generate keeps the SAME icon/text as the
-	   session button — the only differences are a slight corner tab (a 10px
-	   accent "bracket" at the top-left, signals "you're operating on one
-	   pipe, not the whole session") + a slightly softer fill + the scope
-	   caption beneath. */
+	/* P4: pipe-level Generate — SAME icon/text as the session button, but with
+	   a visible corner NOTCH (light "L" bracket at top-left) + a slightly
+	   softer fill + the scope caption beneath. The notch is the only foreign
+	   visual — subtle, not a foreign icon. */
 	.act-scope-pipe {
-		filter: saturate(0.88);
+		filter: saturate(0.85);
 		box-shadow: 0 1px 5px var(--accent-glow);
 	}
 	.act-scope-pipe:hover:not(:disabled) {
 		box-shadow: 0 2px 9px var(--accent-glow);
 	}
-	/* The corner "bracket" — a small accent tab at top-left that reads as
-	   "this is a pipe-scoped action". Only visible on the pipe-level button. */
+	/* The corner "notch" — a light L-bracket at top-left. Light (not accent)
+	   so it actually reads on the filled accent button. Signals "pipe-scoped". */
 	.act-scope-pipe::before {
 		content: "";
 		position: absolute;
-		top: 4px;
-		left: 4px;
-		width: 10px;
-		height: 10px;
-		border-left: 2px solid var(--accent, #ff3e00);
-		border-top: 2px solid var(--accent, #ff3e00);
-		border-radius: 2px 0 0 0;
-		opacity: 0.85;
+		top: 5px;
+		left: 5px;
+		width: 12px;
+		height: 12px;
+		border-left: 2px solid rgba(255, 255, 255, 0.9);
+		border-top: 2px solid rgba(255, 255, 255, 0.9);
+		border-radius: 3px 0 0 0;
+		opacity: 0.9;
 		pointer-events: none;
+	}
+	.act-scope-pipe:disabled::before {
+		opacity: 0.35;
 	}
 	.act-scope-pipe:hover:not(:disabled)::before {
 		opacity: 1;
