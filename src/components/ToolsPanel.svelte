@@ -782,19 +782,23 @@
 	.crumb-link:focus-visible .crumb-up {
 		display: block;
 	}
+	/* CURRENT level — the accent-emphasised crumb. Same geometry as the
+	   others (identical box), but it's the one you're ON, so it reads
+	   clearly: bold text, brighter accent fill + accent border. */
 	.crumb-current {
 		color: var(--text-primary);
-		background: color-mix(in srgb, var(--accent, #ff3e00) 14%, var(--bg-tertiary, #27272a));
-		border-color: color-mix(in srgb, var(--accent, #ff3e00) 50%, var(--panel-right-border));
+		font-weight: 700;
+		background: color-mix(in srgb, var(--accent, #ff3e00) 22%, var(--bg-tertiary, #27272a));
+		border-color: color-mix(in srgb, var(--accent, #ff3e00) 70%, var(--panel-right-border));
 	}
-	/* The dimmed "previous pipe" crumb shown at SESSION level — the SAME
-	   filled box as the active crumb (identical height/font/border, so the
-	   row reads as two equal chips, not "active smaller / inactive bigger").
-	   Only the tint differs: neutral, to signal "you were here". */
+	/* Inactive "previous pipe" crumb at SESSION level — same box size, but
+	   visually recessed: regular weight, neutral (unfilled) background, plain
+	   border, muted text. Reads as "you were here, click to go back". */
 	.crumb-dim {
 		color: var(--text-muted);
 		font-weight: 500;
-		background: color-mix(in srgb, var(--bg-tertiary, #27272a) 60%, transparent);
+		background: transparent;
+		border-color: color-mix(in srgb, var(--panel-right-border) 70%, transparent);
 	}
 	.crumb-dim:hover {
 		color: var(--text-primary);
@@ -906,15 +910,34 @@
 	}
 
 	/* P4 (revised): the pipe-level Generate keeps the SAME icon/text as the
-	   session button — the only differences are a slightly softer treatment
-	   (muted fill, smaller glow) + the scope caption beneath ("all 3 pipes ·
-	   360f" vs "Pipe A · 120f"). Slight, not foreign. */
+	   session button — the only differences are a slight corner tab (a 10px
+	   accent "bracket" at the top-left, signals "you're operating on one
+	   pipe, not the whole session") + a slightly softer fill + the scope
+	   caption beneath. */
 	.act-scope-pipe {
-		filter: saturate(0.82);
+		filter: saturate(0.88);
 		box-shadow: 0 1px 5px var(--accent-glow);
 	}
 	.act-scope-pipe:hover:not(:disabled) {
 		box-shadow: 0 2px 9px var(--accent-glow);
+	}
+	/* The corner "bracket" — a small accent tab at top-left that reads as
+	   "this is a pipe-scoped action". Only visible on the pipe-level button. */
+	.act-scope-pipe::before {
+		content: "";
+		position: absolute;
+		top: 4px;
+		left: 4px;
+		width: 10px;
+		height: 10px;
+		border-left: 2px solid var(--accent, #ff3e00);
+		border-top: 2px solid var(--accent, #ff3e00);
+		border-radius: 2px 0 0 0;
+		opacity: 0.85;
+		pointer-events: none;
+	}
+	.act-scope-pipe:hover:not(:disabled)::before {
+		opacity: 1;
 	}
 
 	/* Compose = secondary: equal-width slot, quieter. Same flat language —
