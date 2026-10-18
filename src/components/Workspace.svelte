@@ -2564,12 +2564,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			<ProfilePanel
 				{userName}
 				{projects}
-				{selectedProjectId}
-				{selectedSessionId}
 				onopensettings={() => {
 					settingsTab = 'defaults';
 					showSettings = true;
 				}}
+				onlogout={handleLogout}
 			/>
 		</div>
 

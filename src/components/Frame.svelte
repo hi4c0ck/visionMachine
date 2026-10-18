@@ -605,15 +605,11 @@
 			</button>
 		</div>
 
-		{#if userName}
-			<div class="user-section">
-				<div class="user-badge">
-					<span class="avatar">{userName.charAt(0).toUpperCase()}</span>
-					<span class="name">{userName}</span>
-				</div>
-				<button class="logout-btn" onclick={onlogout}>↗ Logout</button>
-			</div>
-		{/if}
+		<!-- The profile row (avatar + name + Settings + Logout) now lives in
+		     the compact ProfilePanel at the bottom of the left column, so it
+		     is reachable in EVERY layout mode. The top bar no longer carries
+		     a duplicate sign-out. (userName / onlogout props remain declared
+		     for backward compatibility; Frame itself no longer renders them.) -->
 	</div>
 </header>
 
@@ -1277,56 +1273,7 @@
 		box-shadow: 0 0 0 2px var(--accent-glow);
 	}
 
-	.user-section {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-	}
-
-	.user-badge {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 5px 12px;
-		background: var(--bg-tertiary);
-		border-radius: 20px;
-		border: 1px solid var(--border);
-	}
-
-	.avatar {
-		width: 22px;
-		height: 22px;
-		border-radius: 50%;
-		background: var(--gradient-accent);
-		color: white;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		font-size: 0.7rem;
-		font-weight: 700;
-	}
-
-	.name {
-		font-size: 0.85rem;
-		color: var(--text-primary);
-		font-weight: 500;
-	}
-
-	.logout-btn {
-		padding: 5px 12px;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		color: var(--text-muted);
-		cursor: pointer;
-		font-size: 0.8rem;
-		transition: all var(--transition-fast);
-		font-family: inherit;
-	}
-
-	.logout-btn:hover {
-		background: rgba(220, 38, 38, 0.15);
-		color: #ff6b6b;
-		border-color: rgba(220, 38, 38, 0.3);
-	}
+	/* The profile row (avatar + name + Settings + Logout) was moved to the
+	   compact ProfilePanel; the user-section / user-badge / logout styles
+	   that lived here are gone with it. */
 </style>
