@@ -2,6 +2,7 @@
 	import type { PipeRow, Segment, TagElement, GlobalElement, SoundElement } from '$types';
 	import { TAG_SPECIFICATIONS, type TagType } from '$types';
 	import FrameRuler from '../FrameRuler.svelte';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import '../composer-timeline.css';
 	import {
 		createFrameGeometry,
@@ -616,7 +617,7 @@
 								onpointerdown={(e) => handleElementPointerDown(e, 'sound', sound.id, sound.id, 'body', sound.frameStart ?? 0, sound.frameEnd ?? totalFrames - 1)}
 								onpointermove={handlePointerMove}
 								onpointerup={handlePointerUp}>
-								<span class="pill-label">♪ Sound</span>
+								<span class="pill-label"><ChromeIcon id="music" size={14} /> Sound</span>
 								{#if sText}<span class="pill-text">{sText}</span>{/if}
 								<button
 									class="pill-toggle"

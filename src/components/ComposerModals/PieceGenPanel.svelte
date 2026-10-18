@@ -15,6 +15,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { flashToast } from '$lib/flashToast';
 	import ImageLightbox from './ImageLightbox.svelte';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import {
 		generatePiece,
 		listPieceHistory,
@@ -316,7 +317,7 @@
 						{#if sourceRemote || sourceUrl}
 							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(sourceRemote, sourceUrl); }} title="Copy URL" aria-label="Copy source image URL">⧉</button>
 						{/if}
-						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(sourcePath, sourceUrl); }} title="Open in viewer" aria-label="Open source image in viewer">⛶</button>
+						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(sourcePath, sourceUrl); }} title="Open in viewer" aria-label="Open source image in viewer"><ChromeIcon id="preview" size={14} /></button>
 					</div>
 				{:else}
 					<div class="pg-empty">No source</div>
@@ -330,7 +331,7 @@
 						{#if generatedRemote || generatedUrl}
 							<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
 						{/if}
-						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+						<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer"><ChromeIcon id="preview" size={14} /></button>
 					</div>
 				{:else}
 					<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>
@@ -346,7 +347,7 @@
 					{#if generatedRemote || generatedUrl}
 						<button class="pg-copy" onclick={(e) => { e.stopPropagation(); copyUrl(generatedRemote, generatedUrl); }} title="Copy URL" aria-label="Copy generated image URL">⧉</button>
 					{/if}
-					<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer">⛶</button>
+					<button class="pg-open" onclick={(e) => { e.stopPropagation(); openInViewer(generatedPath, generatedUrl); }} title="Open in viewer" aria-label="Open generated image in viewer"><ChromeIcon id="preview" size={14} /></button>
 				</div>
 			{:else}
 				<div class="pg-empty">{busy ? 'Working…' : 'No generation yet'}</div>

@@ -189,4 +189,5 @@ design-sketches-temp/
 .zed/
 sc-out.txt
 
-".svelte-check/"  
+# Svelte type-check output
+.svelte-check/

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { PipeRow } from '$types';
+	import ChromeIcon from '../ChromeIcon.svelte';
 
 	// Pipe header row — pure chrome. The panel owns pipe ordering/length
 	// store actions; this component just renders and fires callbacks.
@@ -61,15 +62,15 @@
 		</span>
 	{/if}
 	<span class="pipe-ops">
-		<button class="btn-icon" onclick={() => onMove(-1)} disabled={idx === 0} title="Move pipe up">↑</button>
-		<button class="btn-icon" onclick={() => onMove(1)} disabled={idx === pipeCount - 1} title="Move pipe down">↓</button>
-		<button class="btn-icon" onclick={onDuplicate} title="Duplicate pipe">⧉</button>
+		<button class="btn-icon" onclick={() => onMove(-1)} disabled={idx === 0} title="Move pipe up"><ChromeIcon id="step-prev" size={14} /></button>
+		<button class="btn-icon" onclick={() => onMove(1)} disabled={idx === pipeCount - 1} title="Move pipe down"><ChromeIcon id="step-next" size={14} /></button>
+		<button class="btn-icon" onclick={onDuplicate} title="Duplicate pipe"><ChromeIcon id="copy" size={14} /></button>
 		<label class="pipe-len" title="Pipe length in frames (min 41) — click to edit">
 			<span>len</span>
 			<input type="number" min="41" step="8" value={pipe.lengthFrames}
 				onchange={handleLenInput} onfocus={() => onLengthEdit()} />
 		</label>
-		<button class="btn-icon" onclick={onLengthEdit} title="Edit length (frames / seconds)">✎</button>
+		<button class="btn-icon" onclick={onLengthEdit} title="Edit length (frames / seconds)"><ChromeIcon id="edit" size={14} /></button>
 		<button class="btn-icon pipe-del" onclick={onRemove} title="Remove pipe">×</button>
 	</span>
 </div>

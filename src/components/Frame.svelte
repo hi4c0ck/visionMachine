@@ -4,6 +4,7 @@
 	import type { ProviderStatusSnapshot } from '$lib/settings/guards';
 	import ProviderStatus from './Settings/ProviderStatus.svelte';
 	import FrameCarousel from './FrameCarousel.svelte';
+	import ChromeIcon from './ChromeIcon.svelte';
 
 	let {
 		userName,
@@ -411,13 +412,13 @@
 						title={APP_CONSTANTS.strings.playOutsideHint}
 						aria-label={APP_CONSTANTS.strings.playOutside}
 					>
-						↗
+						<ChromeIcon id="external" size={16} />
 					</button>
 				{/if}
 				{#if sessionVideoDetached}
 					<button class="session-pill" onclick={handleOpenSessionPreview}
 						title={APP_CONSTANTS.strings.openSessionPreviewHint}>
-						▸ {APP_CONSTANTS.strings.openInPreview}
+						<ChromeIcon id="session-pill" size={14} /> {APP_CONSTANTS.strings.openInPreview}
 					</button>
 				{/if}
 			{:else}
@@ -470,7 +471,7 @@
 					     session video without leaving the top panel. -->
 					<button class="session-pill" onclick={handleOpenSessionPreview}
 						title={APP_CONSTANTS.strings.openSessionPreviewHint}>
-						▸ {APP_CONSTANTS.strings.openInPreview}
+						<ChromeIcon id="session-pill" size={14} /> {APP_CONSTANTS.strings.openInPreview}
 					</button>
 				{/if}
 				<!-- 2a/2b cluster, professional composition: a time chip floats
@@ -496,7 +497,7 @@
 						{#if onplayoutside}
 							<button class="ctl-btn" onclick={handlePlayOutside}
 								title={APP_CONSTANTS.strings.playOutsideHint} aria-label={APP_CONSTANTS.strings.playOutside}>
-								↗
+								<ChromeIcon id="external" size={14} />
 							</button>
 						{/if}
 						{#if carouselReady}
@@ -509,7 +510,7 @@
 								title={mode === 'carousel' ? APP_CONSTANTS.strings.frameCarouselToPlayback : APP_CONSTANTS.strings.frameCarouselHint}
 								aria-label={APP_CONSTANTS.strings.frameCarousel}
 							>
-								≣
+								<ChromeIcon id="menu" size={14} />
 							</button>
 						{/if}
 						<button
@@ -518,7 +519,11 @@
 							title={videoPlaying ? 'Pause' : 'Play'}
 							aria-label={videoPlaying ? 'Pause video' : 'Play video'}
 						>
-							{videoPlaying ? '❚❚' : '▶'}
+							{#if videoPlaying}
+								<ChromeIcon id="pause" size={14} />
+							{:else}
+								<ChromeIcon id="play" size={14} />
+							{/if}
 						</button>
 					</span>
 				</div>
@@ -550,7 +555,7 @@
 			<img src={previewImage} alt="Frame preview" class="preview-img" onclick={handlePreviewClick} />
 		{:else}
 			<div class="preview-empty" onclick={handlePreviewClick}>
-				<span class="preview-icon">▶</span>
+				<span class="preview-icon"><ChromeIcon id="play" size={18} /></span>
 				<span class="preview-label">Frame &lt;img-video-container&gt;</span>
 			</div>
 		{/if}

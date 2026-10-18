@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ChromeIcon from '../ChromeIcon.svelte';
 	// [+] add-track dropdown — pure chrome. The panel owns position + the
 	// store calls (handleAddTimeline / handleAddGlobal); this only renders.
 	let {
@@ -22,13 +23,13 @@
 	<div class="dropdown-menu" role="menu" tabindex="-1" style="left: {x}px; top: {y}px;"
 		onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 		<button class="dropdown-item" onclick={onAddTimeline}>
-			<span class="dropdown-icon">▬</span> Timeline
+			<span class="dropdown-icon"><ChromeIcon id="pipe-clip" size={14} /></span> Timeline
 		</button>
 		<button class="dropdown-item" onclick={onAddGlobal}>
-			<span class="dropdown-icon">◈</span> Global
+			<span class="dropdown-icon"><ChromeIcon id="tag-label" size={14} /></span> Global
 		</button>
 		<button class="dropdown-item" onclick={onAddSound}>
-			<span class="dropdown-icon">♪</span> Sound
+			<span class="dropdown-icon"><ChromeIcon id="music" size={14} /></span> Sound
 		</button>
 	</div>
 {/if}

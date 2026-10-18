@@ -3,6 +3,7 @@
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
 	import { refDotState, type RefDotState } from '$lib/refReadiness';
 	import ImageLightbox from '../ComposerModals/ImageLightbox.svelte';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import '../composer-row.css';
 
 	// Subject references row — pure chrome. The panel owns the subject-ref
@@ -193,7 +194,7 @@
 					: `Frame ${sr.frameStart ?? '—'}–${sr.frameEnd ?? '—'} · ${srTypeLabel(sr)} · Click to edit`}
 				> 
 					{#if broken}
-						<span class="sr-broken-mark" aria-hidden="true">⚠</span>
+						<span class="sr-broken-mark" aria-hidden="true"><ChromeIcon id="warning" size={14} /></span>
 					{/if}
 					<!-- Media box: thumbnail when a source resolves, dashed
 						 placeholder when not. The small status dot badge overlays

@@ -3,6 +3,7 @@
 	import { addKeyframe as addKeyframeAction, setTrimBoundary, setPipeCropOverride } from '$lib/composerStore';
 	import { getSettings } from '$lib/settings/store';
 	import PieceGenPanel from './PieceGenPanel.svelte';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
 	import { isTauri } from '@tauri-apps/api/core';
@@ -214,7 +215,11 @@
 									onclick={useLastFrame}
 									title={`Use last frame of ${prevPipe?.name ?? 'previous pipe'} (its last-gen video)`}
 									aria-label="Use previous pipe last frame"
-								>{lastFrameBusy ? '…' : '⏮'}</button>
+								>{#if lastFrameBusy}
+									…
+								{:else}
+									<ChromeIcon id="step-prev" size={16} />
+								{/if}</button>
 							{/if}
 						</div>
 						{#if kfUrlPreviewable}

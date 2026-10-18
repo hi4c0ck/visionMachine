@@ -2,6 +2,7 @@
   import type { GenerationTaskView, PipeRow } from '$types';
   import { groupStaleUiState, groupComposeUiState } from '$lib/compactPipes';
   import '../composer-modal.css';
+  import ChromeIcon from '../ChromeIcon.svelte';
 
   let {
     open = $bindable(false),
@@ -178,11 +179,19 @@
         {/each}
       </div>
       {#if staleUi.stale}
-        <div class="gen-stale-note" role="status"><span class="gen-stale-note-icon" aria-hidden="true">⚠</span>{staleUi.note}</div>
+        <div class="gen-stale-note" role="status"><span class="gen-stale-note-icon" aria-hidden="true"><ChromeIcon id="warning" size={14} /></span>{staleUi.note}</div>
       {/if}
       {#if composeUi.visible}
         <div class="gen-compose-note" class:ok={composeUi.tone === 'ok'} class:warning={composeUi.tone === 'warning' || composeUi.tone === 'info'} class:error={composeUi.tone === 'error'} role={composeUi.tone === 'error' ? 'alert' : 'status'}>
-          <span class="gen-compose-icon" aria-hidden="true">{composeUi.tone === 'ok' ? '✓' : composeUi.tone === 'error' ? '✕' : '◷'}</span>
+          <span class="gen-compose-icon" aria-hidden="true">
+            {#if composeUi.tone === 'ok'}
+              <ChromeIcon id="done" size={14} />
+            {:else if composeUi.tone === 'error'}
+              <ChromeIcon id="error" size={14} />
+            {:else}
+              <ChromeIcon id="loading" size={14} />
+            {/if}
+          </span>
           <div class="gen-compose-text">
             <span class="gen-compose-label">{composeUi.label}</span>
             {#if composeUi.detail}<span class="gen-compose-detail">{composeUi.detail}</span>{/if}

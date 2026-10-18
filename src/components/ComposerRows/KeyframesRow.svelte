@@ -4,6 +4,7 @@
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
 	import { refDotState, type RefDotState } from '$lib/refReadiness';
 	import ImageLightbox from '../ComposerModals/ImageLightbox.svelte';
+	import ChromeIcon from '../ChromeIcon.svelte';
 	import '../composer-row.css';
 
 	// Keyframes row — display slots come from the shared keyframeSlots lib
@@ -209,7 +210,7 @@
 						aria-invalid={broken || undefined}
 						>
 					{#if broken}
-						<span class="kf-broken-mark" aria-hidden="true">⚠</span>
+						<span class="kf-broken-mark" aria-hidden="true"><ChromeIcon id="warning" size={14} /></span>
 					{/if}
 					<!-- Media box: thumbnail when a source resolves, dashed
 						 placeholder when not. The small status dot badge overlays

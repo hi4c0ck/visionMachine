@@ -3,6 +3,7 @@
 	can confirm a recurring error is reproducible before dismissing it). -->
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import ChromeIcon from './ChromeIcon.svelte';
 
 	let { error, fallback, children }: { 
 		error?: Error | null;
@@ -59,7 +60,7 @@
 			{@render fallback(displayedError ?? error ?? null)}
 		{:else}
 			<div class="error-container">
-				<div class="error-icon">⚠️</div>
+				<div class="error-icon"><ChromeIcon id="warning" size={18} /></div>
 				<h2>Something went wrong</h2>
 				<p class="error-message">{getErrorMessage(displayedError ?? error ?? null)}</p>
 				<p class="error-hint">The app stays usable — keep exploring; this error will pop up again if it's reproducible.</p>
