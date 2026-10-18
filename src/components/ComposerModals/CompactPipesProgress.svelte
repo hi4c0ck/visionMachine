@@ -185,11 +185,11 @@
         <div class="gen-compose-note" class:ok={composeUi.tone === 'ok'} class:warning={composeUi.tone === 'warning' || composeUi.tone === 'info'} class:error={composeUi.tone === 'error'} role={composeUi.tone === 'error' ? 'alert' : 'status'}>
           <span class="gen-compose-icon" aria-hidden="true">
             {#if composeUi.tone === 'ok'}
-              <ChromeIcon id="done" size={14} />
+              <ChromeIcon id="success" size={14} />
             {:else if composeUi.tone === 'error'}
               <ChromeIcon id="error" size={14} />
             {:else}
-              <ChromeIcon id="loading" size={14} />
+              <ChromeIcon id="spinner" size={14} />
             {/if}
           </span>
           <div class="gen-compose-text">
