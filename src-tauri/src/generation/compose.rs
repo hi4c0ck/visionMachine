@@ -854,6 +854,18 @@ fn parse_ffmpeg_stream_metadata(stderr: &str) -> Result<(String, u32, u32), Stri
     Ok((codec, dimensions.0, dimensions.1))
 }
 
+/// Detect whether the probed input carries an audio stream, from the ffmpeg
+/// decode probe's stderr Input block. Even a video-only decode (`-map 0:v:0
+/// -f null`) still lists every input stream under `Input #`, so an
+/// `Audio:` stream line is present whenever the source has sound. This is
+/// the light-variant (no ffprobe) path to the same fact `parse_ffprobe_video`
+/// reads from JSON.
+fn has_audio_in_stderr(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .any(|line| line.trim_start().starts_with("Stream #") && line.contains("Audio:"))
+}
+
 fn inspect_video(
     ffmpeg: &FfmpegAvailability,
     ffprobe: Option<&Path>,
@@ -904,17 +916,16 @@ fn inspect_video(
     }
     let (frame_count, duration_seconds) = parse_ffmpeg_decode_progress(&stdout)?;
     let (codec, width, height) = parse_ffmpeg_stream_metadata(&stderr)?;
-    // No ffprobe available (tiny variant): audio can't be probed reliably via
-    // the video-only decode probe, so conservatively report no audio. The
-    // re-encode path then uses a silent-audio fallback rather than dropping
-    // the (unprobed) stream.
+    // No ffprobe available (light variant): detect audio from the same
+    // ffmpeg probe's Input block (it lists ALL streams including Audio).
+    let has_audio = has_audio_in_stderr(&stderr);
     Ok(VideoMetadata {
         codec,
         width,
         height,
         duration_seconds,
         frame_count,
-        has_audio: false,
+        has_audio,
         fps: 25.0,
     })
 }
@@ -1550,6 +1561,16 @@ mod tests {
             parse_ffmpeg_stream_metadata(stderr2).unwrap(),
             ("h264".into(), 1280, 720)
         );
+    }
+
+    #[test]
+    fn detects_audio_stream_in_stderr() {
+        // A source WITH an audio stream lists `Stream #0:1: Audio: aac ...`.
+        let with_audio = "Input #0, mov,mp4, from 'in.mp4':\n  Stream #0:0: Video: h264, 1088x832\n  Stream #0:1: Audio: aac, 44100 Hz, stereo\nOutput #0, null:\n  Stream #0:0: Video: wrapped_avframe\n";
+        assert!(has_audio_in_stderr(with_audio));
+        // A video-only source has just the Video stream line — no Audio.
+        let video_only = "Input #0, mov,mp4, from 'in.mp4':\n  Stream #0:0: Video: h264, 1088x832\nOutput #0, null:\n  Stream #0:0: Video: wrapped_avframe\n";
+        assert!(!has_audio_in_stderr(video_only));
     }
 
     #[test]
