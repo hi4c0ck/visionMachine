@@ -129,7 +129,7 @@
           tabindex="0"
           onkeydown={(e) => e.key === 'Enter' && handleSelectProject(project.id)}
         >
-          <span class="project-icon"><ChromeIcon id="proj-folder" size={16} /></span>
+          <span class="project-icon"><ChromeIcon id="proj-folder" size={18} /></span>
           <span class="project-name">{project.name}</span>
           <span class="session-count">{project.sessions.length}</span>
           {#if onopenprojectfolder}
@@ -155,7 +155,7 @@
                 tabindex="0"
                 onkeydown={(e) => e.key === 'Enter' && handleSelectSession(session.id)}
               >
-                <span class="session-icon"><ChromeIcon id="proj-reel" size={16} /></span>
+                <span class="session-icon"><ChromeIcon id="proj-reel" size={18} /></span>
                 <input 
                   type="text" 
                   class="session-name-input"
@@ -345,9 +345,10 @@
   }
 
   .project-icon {
-    opacity: 0.8;
+    opacity: 0.9;
     display: inline-flex;
     align-items: center;
+    color: var(--panel-left-text, var(--text-secondary));
   }
 
   .project-name {
@@ -400,7 +401,8 @@
     padding: 2px 4px;
     border-radius: 3px;
     opacity: 0;
-    transition: opacity var(--transition-fast);
+    color: var(--text-secondary);
+    transition: opacity var(--transition-fast), color var(--transition-fast);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -412,6 +414,7 @@
 
   .project-action-btn:hover {
     background: var(--bg-tertiary);
+    color: var(--text-primary);
   }
 
   /* Sessions Container */
@@ -445,9 +448,10 @@
   }
 
   .session-icon {
-    opacity: 0.7;
+    opacity: 0.85;
     display: inline-flex;
     align-items: center;
+    color: var(--panel-left-text, var(--text-secondary));
   }
 
   .session-name-input {
@@ -490,7 +494,7 @@
     cursor: pointer;
     padding: 1px 3px;
     border-radius: 2px;
-    color: var(--text-secondary);
+    color: var(--panel-left-text, var(--text-secondary));
     transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
     opacity: 0.55;
     display: inline-flex;

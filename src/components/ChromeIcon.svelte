@@ -31,7 +31,9 @@
 	}>();
 
 	const href = $derived('#chrome-' + id);
-	const svgStyle = $derived(color ? `color:${color}` : '');
+	// Default to a themed color so the icon is never an unstyled black mark.
+	// An explicit `color` prop (or a parent that sets `color`) overrides it.
+	const svgStyle = $derived(color ? `color:${color}` : 'color:var(--text-secondary,#a0a0b0)');
 
 	// Module-scope singleton: fetch + inject the chrome sprite once.
 	let spriteReady = false;
