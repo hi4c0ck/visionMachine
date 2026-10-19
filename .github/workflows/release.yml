@@ -104,6 +104,49 @@ jobs:
           Copy-Item src-tauri/target/release/bundle/msi/*.msi ./release-msi/tiny.msi -Force
           Get-ChildItem ./release-msi | Write-Host
 
+      # ── Portable variant (no installer, no ffmpeg) ─────────────────────────
+      # The tiny MSI build above already compiled the raw native executable at
+      # src-tauri/target/release/vision-machine.exe (Tauri builds the binary
+      # first, then wraps it in the MSI). We capture that exe and package it
+      # as a plain zip — no installer, no admin, no registry. Ships WITHOUT the
+      # bundled ffmpeg sidecar (same as the tiny MSI), so it is the smallest
+      # artifact. Runs BEFORE the full-variant build so we grab the tiny
+      # (sidecar-free) binary, not one rewritten by the ffmpeg build.
+      - name: Package portable zip (no ffmpeg)
+        shell: pwsh
+        run: |
+          $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path ./release-portable | Out-Null
+          Copy-Item src-tauri/target/release/vision-machine.exe ./release-portable/ -Force
+          @'
+          VisionMachine (portable) — no installer, no admin, no registry.
+
+          1. Unzip to any folder you like.
+          2. Double-click vision-machine.exe.
+
+          Requires the Microsoft Edge WebView2 runtime, which is preinstalled
+          on Windows 10/11. On an older system, install it once from
+          https://developer.microsoft.com/en-us/microsoft-edge/webview2/.
+
+          Your projects, sessions and generation history live in a per-user
+          app-data folder under your Windows user profile. Move that folder to
+          carry your work between machines; delete it to reset the app.
+
+          This portable build does NOT bundle ffmpeg, so session-video compose
+          needs an ffmpeg path in Settings -> Tools. Pipe generation works out
+          of the box.
+          '@ | Set-Content ./release-portable/README-portable.txt -Encoding ascii
+          $zip = "VisionMachine_${v}_windows_x64_portable.zip"
+          Compress-Archive -Path ./release-portable/* -DestinationPath "./$zip" -Force
+          Move-Item "./$zip" "./release-portable/$zip"
+          Get-ChildItem ./release-portable | Write-Host
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: visionmachine-portable
+          path: ./release-portable/*.zip
+
       # ── Variant 2: full (bundled ffmpeg sidecar, ~155 MB) ────────────────
       # fetch-ffmpeg.mjs downloads the pinned Btbn GPL build for the target
       # triple and stages it into src-tauri/binaries/ (kept out of git);
@@ -235,6 +278,12 @@ jobs:
           name: visionmachine-appimage
           path: ./release-assets
 
+      - name: Download portable zip
+        uses: actions/download-artifact@v8
+        with:
+          name: visionmachine-portable
+          path: ./release-assets
+
       # Release body = the user-facing changelog (top section of
       # release-notes.md, written per docs/CHANGELOG_STYLE.md) plus the
       # installer notes. generate_release_notes is intentionally OFF: it
@@ -256,6 +305,14 @@ jobs:
           - **full.msi** — ships a bundled ffmpeg sidecar (~155 MB); session
             compose works out of the box. A user-set ffmpeg path still
             takes precedence.
+
+          **Windows (portable)** — no installer:
+
+          - **_portable.zip** — a plain zip of the native executable + a
+            short README. No admin, no registry; unzip and run
+            `vision-machine.exe`. Requires the Edge WebView2 runtime
+            (preinstalled on Windows 10/11). No bundled ffmpeg, so
+            session compose needs an ffmpeg path in Settings -> Tools.
 
           **Linux (AppImage)** — full variant with bundled ffmpeg, works
           out of the box. AppArmor may prompt on first launch.
@@ -281,4 +338,5 @@ jobs:
           files: |
             ./release-assets/*.msi
             ./release-assets/*.AppImage
+            ./release-assets/*.zip
           body: ${{ steps.release-body.outputs.release-body }}

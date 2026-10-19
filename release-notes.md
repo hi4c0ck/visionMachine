@@ -1,22 +1,17 @@
 # VisionMachine v0.7.8
 
-### Model cleanup
-- All sub-2.5 Agnes API models are now marked obsolete: hidden from every
-  model picker, kept in the catalog so stored sessions still resolve
+### Models
+- Removed **agnes-image-2.1-flash** and **agnes-video-v2.0** from all model
+  pickers (provider presets, generate modals, ToolsPanel). Stored sessions
+  that reference them still load and resolve.
 
 ### UI
-- App-chrome icon atlas wired into every panel and modal — raw unicode
-  glyphs are gone
-- Projects-panel icons use the panel's gold tint (no more tiny black marks)
-- Profile panel compacted: stats as one mono strip, Settings/Logout as
-  icon buttons beside the avatar
-- Breadcrumb chips equalized; pipe-level Generate carries a subtle corner
-  notch to signal scope
-
-### Docs
-- README gained per-section neon-dither icons and a collapsed details
-  block for release/branch/troubleshooting info
-- Model catalog gained a session-size model section
+- Replaced all remaining raw unicode glyphs with the app-chrome icon set
+  across panels, modals, and settings
+- Profile panel: stats collapsed into one compact line; Settings and Logout
+  moved next to the avatar as icon buttons
+- Pipe-level Generate button now visually distinct from session-level (corner
+  notch), so the current scope is obvious at a glance
 
 # VisionMachine v0.7.7
 
