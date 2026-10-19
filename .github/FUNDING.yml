@@ -1,0 +1,5 @@
+# Funding: crypto donations. GitHub renders a "Donations" sidebar button
+# that links to the SUPPORT.md file in this repo. No fiat, no tiers, no
+# external aggregator — the wallet addresses live in SUPPORT.md.
+custom:
+  - "https://github.com/hi4c0ck/visionMachine/blob/develop/SUPPORT.md"

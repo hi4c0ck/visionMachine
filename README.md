@@ -231,6 +231,13 @@ Check browser console for errors. Common causes:
 - Clear target directory: `Remove-Item src-tauri\target -Recurse -Force`
 - Rebuild: `npm run tauri build -- --debug`
 
+## Support development
+
+Paid models are on the roadmap — donations fund testing and development of
+those tiers. The core app stays free & open source.
+
+Wallet addresses (BTC / ETH / SOL / USDT-TRC20 / TON): [SUPPORT.md](SUPPORT.md)
+
 ## License
 
 **VisionMachine** is licensed under **GPL-3.0-or-later**, with an attribution
