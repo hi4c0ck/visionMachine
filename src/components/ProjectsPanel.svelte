@@ -345,10 +345,9 @@
   }
 
   .project-icon {
-    opacity: 0.9;
     display: inline-flex;
     align-items: center;
-    color: var(--panel-left-text, var(--text-secondary));
+    color: var(--panel-left-text, #d4a84b);
   }
 
   .project-name {
