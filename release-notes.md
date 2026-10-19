@@ -1,17 +1,19 @@
 # VisionMachine v0.7.8
 
 ### Models
-- Removed **agnes-image-2.1-flash** and **agnes-video-v2.0** from all model
-  pickers (provider presets, generate modals, ToolsPanel). Stored sessions
-  that reference them still load and resolve.
+- Removed agnes-image-2.1-flash and agnes-video-v2.0
+
+### Subject references
+- Subject refs in prompt modals (lightbox preview, [SubjectN] insert)
+
+### Pipes & session
+- Per-pipe crop override
+- Session video aspect-ratio and resolution pickers (model-filtered)
+- Image size is now session-level
 
 ### UI
-- Replaced all remaining raw unicode glyphs with the app-chrome icon set
-  across panels, modals, and settings
-- Profile panel: stats collapsed into one compact line; Settings and Logout
-  moved next to the avatar as icon buttons
-- Pipe-level Generate button now visually distinct from session-level (corner
-  notch), so the current scope is obvious at a glance
+- ToolsPanel hero with session/pipe breadcrumb navigation
+- Compact profile panel
 
 # VisionMachine v0.7.7
 
