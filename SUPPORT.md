@@ -8,16 +8,38 @@ All donations are anonymous. The core app remains free and open source
 
 ## Wallets
 
-| Coin | Address | Network |
-|------|---------|---------|
-| **BTC** | `bc1q9vx5ztytq05266htae89zwqk6wulex2xdc6ztz` | Bitcoin mainnet |
-| **ETH** | `0x940ecd543b9bd415afb9399bade5385628bdf353` | Ethereum / BNB / Base / Polygon / Hype |
-| **SOL** | `69NM1nS3nBC2Q1kcbP2uTwJAuJ4xaHZ6SpktiPPWxQUq` | Solana mainnet |
-| **USDT** | `TFSgBoRMM8nwfJyF2hkUZKVuRkevLbRUnh` | **TRC-20 (Tron only)** |
-| **TON** | `UQDagIIxtU6R9oYBBzwTshBWzhUr3_QNlmMhPCIOgNtSPdPp` | TON mainnet |
+### BTC (Bitcoin)
 
-> **EVM note:** The ETH address is identical on all EVM-compatible chains
-> (Ethereum, BNB Chain, Base, Polygon, Hype) — one key, one address.
+```
+bc1q9vx5ztytq05266htae89zwqk6wulex2xdc6ztz
+```
 
-> **USDT:** Send **only** on TRC-20 (Tron network). Transfers on ERC-20,
-> BEP-20, or any other network will be lost.
+### ETH / EVM chains
+
+Same address on all EVM-compatible networks
+(Ethereum, BNB Chain, Base, Polygon, Hype):
+
+```
+0x940ecd543b9bd415afb9399bade5385628bdf353
+```
+
+### SOL (Solana)
+
+```
+69NM1nS3nBC2Q1kcbP2uTwJAuJ4xaHZ6SpktiPPWxQUq
+```
+
+### USDT (Tron TRC-20)
+
+> ⚠️ Send **only** on TRC-20 (Tron network).
+> Transfers on ERC-20, BEP-20, or any other network will be lost.
+
+```
+TFSgBoRMM8nwfJyF2hkUZKVuRkevLbRUnh
+```
+
+### GRAM (TON network)
+
+```
+UQDagIIxtU6R9oYBBzwTshBWzhUr3_QNlmMhPCIOgNtSPdPp
+```

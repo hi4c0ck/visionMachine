@@ -236,7 +236,7 @@ Check browser console for errors. Common causes:
 Paid models are on the roadmap — donations fund testing and development of
 those tiers. The core app stays free & open source.
 
-Wallet addresses (BTC / ETH / SOL / USDT-TRC20 / TON): [SUPPORT.md](SUPPORT.md)
+Wallet addresses (BTC / ETH / SOL / USDT-TRC20 / GRAM): [SUPPORT.md](SUPPORT.md)
 
 ## License
 
