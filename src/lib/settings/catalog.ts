@@ -32,13 +32,14 @@ export const AGNES_PRESET: PresetSpec = {
                 sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
       supportsSeed: false },
-    { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash (fallback)',
+    { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
       limits: { resolutions: ['1K', '2K', '3K', '4K'],
                 ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'],
                 sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
-      supportsSeed: false },
+      supportsSeed: false,
+      obsolete: true },
     // VIDEO — 2.5-flash first = default (free tier, 720P only, seconds 4–12).
     { id: 'agnes-video-2.5-flash', kind: 'video', label: 'Agnes Video 2.5 Flash (free)',
       endpoint: '/v1/videos', sync: false,
@@ -52,13 +53,14 @@ export const AGNES_PRESET: PresetSpec = {
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
       supportsSeed: true,
       media: { modes: ['keyframes', 'reference'],
-               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
+               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 },
+      obsolete: true },
     // V2.0 — legacy model ID. Official docs mark it "retired" (2026-09-25),
     // but the provider keeps serving the ID through the 2.5-series engine
     // (live log: HTTP 200 with 2.5-style perf_params). User decision
     // 2026-10-04: run it on the 2.5 config (seconds/size/reference media),
     // the legacy frames shape (video-job-frames) is no longer maintained.
-    { id: 'agnes-video-v2.0', kind: 'video', label: 'Agnes Video V2.0 (legacy · 2.5 config)',
+    { id: 'agnes-video-v2.0', kind: 'video', label: 'Agnes Video V2.0',
       endpoint: '/v1/videos', sync: false,
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
       requestFormat: 'video-job-seconds',
@@ -87,7 +89,8 @@ export const AGNES_PRESET: PresetSpec = {
                // (string when one, array for multiple), not `images[]`
                // (live probes 2026-10-04: 200 on `image`, 400 on `images`).
                imageField: 'image',
-               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
+               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 },
+      obsolete: true },
     // 2.5 PAID — READ-ONLY entry (Q3): inspect in Settings, never generable.
     // Dual media mode (first/last_frame + images/audios/videos) is the
     // future extension point (Q7).

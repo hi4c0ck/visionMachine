@@ -111,6 +111,9 @@ export interface ModelSpec {
   label?: string;
   /** Read-only entry: viewable/inspectable in Settings, never generatable. */
   readOnly?: boolean;
+  /** Obsolete (< 2.5) model: kept in the catalog so stored sessions still
+   *  resolve, but hidden from every new-model picker in the UI. */
+  obsolete?: boolean;
   /** Model accepts a `seed` parameter (reproducible runs). */
   supportsSeed?: boolean;
   /**

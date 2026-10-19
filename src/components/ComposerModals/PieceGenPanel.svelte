@@ -108,7 +108,7 @@
 		if (imageModelSeedKey === key) return;
 		imageModelSeedKey = key;
 		const ip = getPreset(s.providers.image.preset);
-		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly);
+		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly && !m.obsolete);
 		imageModel = s.providers.image.model;
 		if (!imageModels.some((m) => m.id === imageModel))
 			imageModel = imageModels.find((m) => !m.pending)?.id ?? imageModel;

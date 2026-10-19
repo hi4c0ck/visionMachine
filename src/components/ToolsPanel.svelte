@@ -132,7 +132,7 @@
 		void settingsRev;
 		const s = getSettings();
 		const vp = getPreset(s.providers.video.preset);
-		const models = (vp ? modelsFor(vp, 'video') : []).filter((m) => !m.readOnly);
+		const models = (vp ? modelsFor(vp, 'video') : []).filter((m) => !m.readOnly && !m.obsolete);
 		const id = s.providers.video.model;
 		const m = models.find((mm) => mm.id === id) ?? models.find((mm) => !mm.pending) ?? null;
 		return m;

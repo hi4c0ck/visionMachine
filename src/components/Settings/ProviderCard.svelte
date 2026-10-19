@@ -34,8 +34,17 @@
 
 	const preset = $derived(getPreset(slot.preset) ?? PRESETS[0]);
 	const presetOptions = $derived(PRESETS.filter((p) => p.kinds.includes(kind)));
-	const modelOptions = $derived(modelsFor(preset, kind));
-	const selectedModel = $derived(modelOptions.find((m) => m.id === slot.model) ?? null);
+	const modelOptions = $derived(modelsFor(preset, kind).filter((m) => !m.obsolete));
+	// Self-heal the value: a stored slot may still name an obsolete (<2.5)
+	// model that's no longer offered. Show the first usable option instead so
+	// the select never renders a dangling value; the stored id is untouched
+	// until the user interacts.
+	const effectiveModel = $derived(
+		modelOptions.some((m) => m.id === slot.model)
+			? slot.model
+			: (modelOptions.find((m) => !m.pending) ?? modelOptions[0])?.id ?? slot.model,
+	);
+	const selectedModel = $derived(modelOptions.find((m) => m.id === effectiveModel) ?? null);
 	// Read-only (paid) models: the user inspects these parameters here
 	// (docs/agnes-model-catalog.md, Q3) — show the concrete limits.
 	const modelLimitsText = $derived.by(() => {
@@ -57,7 +66,7 @@
 	function setPreset(id: string) {
 		const next = getPreset(id);
 		if (!next || next.id === slot.preset) return;
-		const models = modelsFor(next, kind);
+		const models = modelsFor(next, kind).filter((m) => !m.obsolete);
 		const model = models.find((m) => !m.pending) ?? models[0];
 		onslotchange({
 			...slot,
@@ -139,7 +148,7 @@
 
 	<div class="field">
 		<label for="prov-model-{kind}">Model</label>
-		<select id="prov-model-{kind}" value={slot.model} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
+		<select id="prov-model-{kind}" value={effectiveModel} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
 			{#each modelOptions as m (m.id)}
 				<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
 			{/each}

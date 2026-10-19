@@ -238,8 +238,8 @@
 		videoModel = s.providers.video.model;
 		const ip = getPreset(s.providers.image.preset);
 		const vp = getPreset(s.providers.video.preset);
-		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly);
-		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly);
+		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly && !m.obsolete);
+		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly && !m.obsolete);
 		// Self-heal: a saved default that is no longer selectable (read-only /
 		// unknown) must not leave the select empty — fall back to the first
 		// generable model of the kind.
