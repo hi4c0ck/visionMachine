@@ -51,6 +51,8 @@ gives you a **composer** — the same way a video editor gives you a timeline:
    into the finished video.
 </details>
 
+*You can use free image/video generation at the native [AgnesCode chat application](https://app.agnes-ai.com/referral/B7PUF8).*
+
 ## <img src="img/icons/get-app.png" width="36" align="absmiddle" alt=""> Get the app (Windows)
 
 | | |

@@ -1,3 +1,23 @@
+# VisionMachine v0.7.8
+
+### Model cleanup
+- All sub-2.5 Agnes API models are now marked obsolete: hidden from every
+  model picker, kept in the catalog so stored sessions still resolve
+
+### UI
+- App-chrome icon atlas wired into every panel and modal — raw unicode
+  glyphs are gone
+- Projects-panel icons use the panel's gold tint (no more tiny black marks)
+- Profile panel compacted: stats as one mono strip, Settings/Logout as
+  icon buttons beside the avatar
+- Breadcrumb chips equalized; pipe-level Generate carries a subtle corner
+  notch to signal scope
+
+### Docs
+- README gained per-section neon-dither icons and a collapsed details
+  block for release/branch/troubleshooting info
+- Model catalog gained a session-size model section
+
 # VisionMachine v0.7.7
 
 ### Composer & focus
