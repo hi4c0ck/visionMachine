@@ -129,7 +129,7 @@
           tabindex="0"
           onkeydown={(e) => e.key === 'Enter' && handleSelectProject(project.id)}
         >
-          <span class="project-icon"><ChromeIcon id="proj-folder" size={18} /></span>
+          <span class="project-icon"><ChromeIcon id="proj-folder" size={20} /></span>
           <span class="project-name">{project.name}</span>
           <span class="session-count">{project.sessions.length}</span>
           {#if onopenprojectfolder}
@@ -155,7 +155,7 @@
                 tabindex="0"
                 onkeydown={(e) => e.key === 'Enter' && handleSelectSession(session.id)}
               >
-                <span class="session-icon"><ChromeIcon id="proj-reel" size={18} /></span>
+                <span class="session-icon"><ChromeIcon id="proj-reel" size={20} /></span>
                 <input 
                   type="text" 
                   class="session-name-input"
