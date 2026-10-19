@@ -400,7 +400,7 @@
     padding: 2px 4px;
     border-radius: 3px;
     opacity: 0;
-    color: var(--text-secondary);
+    color: var(--panel-left-text, var(--text-secondary));
     transition: opacity var(--transition-fast), color var(--transition-fast);
     display: inline-flex;
     align-items: center;
@@ -413,7 +413,7 @@
 
   .project-action-btn:hover {
     background: var(--bg-tertiary);
-    color: var(--text-primary);
+    color: var(--panel-left-text, var(--text-primary));
   }
 
   /* Sessions Container */
