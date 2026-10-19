@@ -876,8 +876,6 @@ fn inspect_video(
         let args = vec![
             "-v".to_string(),
             "error".to_string(),
-            "-select_streams".to_string(),
-            "v:0".to_string(),
             "-count_frames".to_string(),
             "-show_streams".to_string(),
             "-show_format".to_string(),
