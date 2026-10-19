@@ -7,7 +7,7 @@ it all into one finished clip. Runs on your machine. No subscription, no
 per-frame fees.
 
 <p align="center">
-  <img src="img/screenshot-composer.png" alt="VisionMachine composer" width="100%">
+  <img src="img/screenshots/01-workspace-full.png" alt="VisionMachine — full workspace: composer timeline, tools panel, projects, profile" width="100%">
 </p>
 
 ## Why VisionMachine
@@ -68,28 +68,63 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 Here's what you'll see in the app — each image shows one moment from a
 real workflow, so you can picture the flow before you start.
 
-**The composer** — where you design a shot. Pipes, keyframes, the
-segment/tag timeline, and the tools panel, all in one view:
+**The full workspace** — composer timeline in the center, settings/tools
+on the right, your library on the left, profile anchored bottom-left:
 
 <p align="center">
-  <img src="img/composer-preview.gif" alt="The composer in motion" width="480">
+  <img src="img/screenshots/01-workspace-full.png" alt="VisionMachine full workspace" width="900">
 </p>
 
-**Your library** — every project and session you create stays right there
-in the side panel, ready to open again:
+**Your library** — every project and session you create, gold-tinted with
+the new app-chrome icons, ready to open again:
 
 <p align="center">
-  <img src="img/projects-panel.gif" alt="The projects and sessions panel" width="320">
+  <img src="img/screenshots/02-projects-panel.png" alt="The projects and sessions panel" width="320">
 </p>
 
-**Provider settings** — where a provider's base URL + API key live
-(Settings → Providers). [Get Agnes API Key](https://agnes-ai.com):
+**The tools panel** — the progressive hero: a focus breadcrumb
+(Session / Pipe), the Generate & Compose actions, and the settings grid:
 
 <p align="center">
-  <img src="img/provider-settings.gif" alt="Navigating to Settings → Providers" width="300">
+  <img src="img/screenshots/05-toolspanel-session.png" alt="The tools panel at session level" width="420">
 </p>
 
 Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
+
+## What's new in 0.7.7
+
+The 0.7.x line focused on a tighter composer, first-class media controls,
+and a custom icon language. Highlights:
+
+- **Progressive focus in the tools panel.** A clickable *Session / Pipe*
+  breadcrumb walks you up and down the focus level; the hero shows the
+  right Generate/Compose actions for whatever you're focused on, and the
+  pipe-level Generate carries a subtle corner notch to distinguish it.
+
+- **Subject references you can preview & cite.** Reference images live
+  inline in the pipe; click one to open the shared **lightbox** (zoom +
+  pan), or insert it into a prompt as a `[SubjectN]` token from the
+  reference strip in any prompt modal.
+
+- **Precise media controls.** Resolution presets are filtered to what the
+  selected video model actually supports, an orientation-aware
+  **video-size** picker clamps to the model's declared limits, and image
+  pieces auto-invalidate when the target size changes. Per-pipe **crop**
+  override and preemptive downscaling of oversized local images keep
+  generation honest.
+
+- **A custom app-chrome icon set.** 50 hand-drawn marks in the Atlas
+  gold language replace ad-hoc unicode glyphs across the panels, so the
+  whole UI reads as one system.
+
+<details>
+<summary>More 0.7.7 screenshots</summary>
+
+| Composer pipes | Keyframe modal | Settings |
+|:--:|:--:|:--:|
+| <img src="img/screenshots/06-composer-panel.png" width="480"> | <img src="img/screenshots/08-keyframe-modal.png" width="480"> | <img src="img/screenshots/10-settings-modal.png" width="480"> |
+
+</details>
 
 ## Try it in 5 minutes
 
