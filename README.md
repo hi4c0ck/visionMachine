@@ -202,20 +202,23 @@ model, and how to submit issues and pull requests.
   [Feature request](.github/ISSUE_TEMPLATE/feature_request.md)
 - [Pull request template](.github/PULL_REQUEST_TEMPLATE.md)
 
-## Releases
+<details>
+<summary><b>Releases, branch strategy &amp; troubleshooting</b></summary>
+
+### Releases
 
 Prebuilt Windows MSI installers are published to [GitHub
 Releases](../../releases) from the `production` branch. A tagged
 release (`vX.Y.Z` on `production`) triggers the build-on-tag workflow in
 `.github/workflows/release.yml`.
 
-## Branch strategy
+### Branch strategy
 
 - `develop` — active development branch
 - `production` — stable releases only
 - Feature branches created from `develop`
 
-## Troubleshooting
+### Troubleshooting
 
 ### White screen issue
 Check browser console for errors. Common causes:
@@ -230,6 +233,8 @@ Check browser console for errors. Common causes:
 ### Build failures
 - Clear target directory: `Remove-Item src-tauri\target -Recurse -Force`
 - Rebuild: `npm run tauri build -- --debug`
+
+</details>
 
 ## Support development
 
