@@ -229,12 +229,16 @@ fn all_clips_match_target(sources: &[VideoMetadata], target_w: u32, target_h: u3
 
 /// Re-encode args: per-clip `[i:v] <normalize?> <trim?> [v{i}]` (labelled
 /// pads) or the raw `[i:v]` stream when nothing is applied, then
-/// `concat=n=N:v=1:a=0[v]` + libx264. Byte-identical to the classic filter
-/// when no target is set and nothing is trimmed, so the existing tests stay
-/// green. When a target IS set, every clip is normalized to W x H under the
-/// crop mode (`none` → auto-center, plan 3.10) BEFORE the optional trim.
+/// Re-encode args: per-clip `[i:v] <normalize?> <trim?> [v{i}]` (labeled
+/// pads) or the raw `[i:v]` stream when nothing is applied, then
+/// `concat=n=N:v=1:a=A[v]([a])` + libx264. `A` is 1 when every source
+/// carries audio, 0 otherwise (byte-identical to the classic filter when
+/// no audio is present). When a target IS set, every clip is normalized to
+/// W x H under the crop mode BEFORE the optional trim. Audio is trimmed
+/// in lock-step with video (atrim start = trim_frames / fps).
 pub fn filter_args(
     sources: &[SourceVideo],
+    metas: &[VideoMetadata],
     out_path: &Path,
     target_w: u32,
     target_h: u32,
@@ -245,66 +249,102 @@ pub fn filter_args(
     let any_trim = trim_active(sources);
     let normalize = target_set(target_w, target_h);
     let labeled = any_trim || normalize;
-    // Each labeled clip is its own filter chain (`[i:v] <normalize?> <trim?>
-    // [v{i}]`); the final `concat` is another chain. Within a single
-    // `-filter_complex` multiple chains MUST be `;`-separated — gluing them
-    // with no separator makes ffmpeg treat the whole graph as one chain and
-    // report "Trailing garbage after a filter: concat=…" (the exit -22 crash
-    // on a normalized single-clip compose).
+    // Preserve audio only when EVERY source carries an audio stream.
+    let has_audio = metas.iter().all(|m| m.has_audio);
+
     let mut chains: Vec<String> = Vec::new();
     for (i, s) in sources.iter().enumerate() {
         args.push("-i".into());
         args.push(s.path.clone());
         if labeled {
-            // Per-clip filter chain, in order: size normalization then the
-            // optional head-trim. Joined with commas; a clip that needs
-            // neither (because *another* clip forced the re-encode) still
-            // must produce its [v{i}] pad, so it gets a `null` no-op.
-            let mut parts: Vec<String> = Vec::new();
+            // Per-clip VIDEO chain.
+            let mut v_parts: Vec<String> = Vec::new();
             if normalize {
-                // 0012 D2: a clip with its own crop override is normalized under
-                // that mode; otherwise the session-global crop mode applies.
                 let clip_mode = s.crop_mode
                     .as_deref()
                     .filter(|m| !m.is_empty())
                     .unwrap_or(crop_mode);
-                parts.push(normalize_filter(clip_mode, target_w, target_h));
+                v_parts.push(normalize_filter(clip_mode, target_w, target_h));
             }
             if s.trim_frames > 0 {
-                parts.push(format!("trim=start_frame={}", s.trim_frames));
+                v_parts.push(format!("trim=start_frame={}", s.trim_frames));
             }
-            let body = if parts.is_empty() {
+            let v_body = if v_parts.is_empty() {
                 String::from("null")
             } else {
-                parts.join(",")
+                v_parts.join(",")
             };
-            chains.push(format!("[{i}:v]{body}[v{i}]"));
+            chains.push(format!("[{i}:v]{v_body}[v{i}]"));
+
+            // Per-clip AUDIO chain (only when preserving audio).
+            if has_audio {
+                let mut a_parts: Vec<String> = Vec::new();
+                if s.trim_frames > 0 && metas[i].fps > 0.0 {
+                    let start = s.trim_frames as f64 / metas[i].fps;
+                    a_parts.push(format!("atrim=start={start:.4}"));
+                    a_parts.push("asetpts=N/SR/TB".to_string());
+                }
+                let a_body = if a_parts.is_empty() {
+                    String::from("anull")
+                } else {
+                    a_parts.join(",")
+                };
+                chains.push(format!("[{i}:a]{a_body}[a{i}]"));
+            }
         }
-        // No-label clips feed the raw [i:v] stream straight into the concat.
     }
-    let concat_inputs: String = if labeled {
-        (0..n).map(|i| format!("[v{i}]")).collect()
+
+    // Final concat chain (interleaved v+a when audio is preserved).
+    if has_audio {
+        let concat_inputs: String = if labeled {
+            (0..n).map(|i| format!("[v{i}][a{i}]")).collect::<Vec<_>>().join("")
+        } else {
+            (0..n).map(|i| format!("[{i}:v][{i}:a]")).collect::<Vec<_>>().join("")
+        };
+        chains.push(format!("{concat_inputs}concat=n={n}:v=1:a=1[v][a]"));
     } else {
-        (0..n).map(|i| format!("[{i}:v]")).collect()
-    };
-    chains.push(format!("{concat_inputs}concat=n={n}:v=1:a=0[v]"));
-    // The classic (no normalize, no trim) graph is a single chain — no `;`.
-    // The labeled graph is one chain per clip + the concat chain, `;`-joined.
+        let concat_inputs: String = if labeled {
+            (0..n).map(|i| format!("[v{i}]")).collect::<Vec<_>>().join("")
+        } else {
+            (0..n).map(|i| format!("[{i}:v]")).collect::<Vec<_>>().join("")
+        };
+        chains.push(format!("{concat_inputs}concat=n={n}:v=1:a=0[v]"));
+    }
+
     let filter = chains.join(";");
     args.extend_from_slice(&[
         "-filter_complex".into(),
         filter,
         "-map".into(),
         "[v]".into(),
-        "-c:v".into(),
-        "libx264".into(),
-        "-preset".into(),
-        "veryfast".into(),
-        "-crf".into(),
-        "20".into(),
-        "-pix_fmt".into(),
-        "yuv420p".into(),
     ]);
+    if has_audio {
+        args.extend_from_slice(&[
+            "-map".into(),
+            "[a]".into(),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "veryfast".into(),
+            "-crf".into(),
+            "20".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+            "-c:a".into(),
+            "aac".into(),
+        ]);
+    } else {
+        args.extend_from_slice(&[
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "veryfast".into(),
+            "-crf".into(),
+            "20".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+        ]);
+    }
     args.extend_from_slice(&[
         "-movflags".into(),
         "+faststart".into(),
@@ -382,6 +422,11 @@ pub struct VideoMetadata {
     pub height: u32,
     pub duration_seconds: f64,
     pub frame_count: u64,
+    pub has_audio: bool,
+    /// Average frame rate (for converting the head-trim from frames to the
+    /// seconds used to align the audio `atrim`). Defaults to 25 when the
+    /// probe can't read it.
+    pub fps: f64,
 }
 
 /// The source-derived values the final output must satisfy. Duration and
@@ -442,6 +487,20 @@ pub fn resolve_ffprobe(ffmpeg: &FfmpegAvailability) -> Option<PathBuf> {
 /// longer than its video, the source's true timeline is the longer one.
 /// Using only the video stream's duration underpredicts the composed
 /// output's duration and makes the validator reject valid outputs.
+/// Parse a ffprobe rate string of the form `"num/den"` (e.g. `"30000/1001"`)
+/// into a floating frame/audio rate. Returns `None` when either side is
+/// missing, not numeric, or the denominator is zero.
+fn parse_rate(rate: &str) -> Option<f64> {
+    let (num, den) = rate.split_once('/')?;
+    let n: f64 = num.trim().parse().ok()?;
+    let d: f64 = den.trim().parse().ok()?;
+    if d == 0.0 {
+        None
+    } else {
+        Some(n / d)
+    }
+}
+
 pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
     let root: Value =
         serde_json::from_str(json).map_err(|e| format!("invalid ffprobe JSON: {e}"))?;
@@ -474,6 +533,12 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
         .ok_or_else(|| {
             "video stream has no numeric nb_frames; ffprobe must use -count_frames".to_string()
         })?;
+    // Detect whether this clip carries an audio stream (needed so the
+    // re-encode path can preserve audio instead of dropping it).
+    let has_audio = streams.iter().any(|s| {
+        s.get("codec_type").and_then(Value::as_str) == Some("audio")
+            && s.get("codec_name").and_then(Value::as_str).is_some_and(|c| !c.is_empty())
+    });
     // Effective clip timeline: the container (format) duration, which is the
     // longest stream's duration by definition, plus a per-stream sweep in
     // case ffprobe omits the format duration but reports stream durations.
@@ -506,12 +571,21 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
     if width == 0 || height == 0 || frame_count == 0 || !(effective > 0.0) {
         return Err("video stream has zero resolution or frame count".into());
     }
+    // Average frame rate for the audio-trim seconds conversion. Read
+    // `avg_frame_rate` ("num/den") with a 25 fps fallback.
+    let fps = stream
+        .get("avg_frame_rate")
+        .and_then(Value::as_str)
+        .and_then(|rf| parse_rate(rf))
+        .unwrap_or(25.0);
     Ok(VideoMetadata {
         codec,
         width,
         height,
         duration_seconds: effective,
         frame_count,
+        has_audio,
+        fps,
     })
 }
 
@@ -830,12 +904,18 @@ fn inspect_video(
     }
     let (frame_count, duration_seconds) = parse_ffmpeg_decode_progress(&stdout)?;
     let (codec, width, height) = parse_ffmpeg_stream_metadata(&stderr)?;
+    // No ffprobe available (tiny variant): audio can't be probed reliably via
+    // the video-only decode probe, so conservatively report no audio. The
+    // re-encode path then uses a silent-audio fallback rather than dropping
+    // the (unprobed) stream.
     Ok(VideoMetadata {
         codec,
         width,
         height,
         duration_seconds,
         frame_count,
+        has_audio: false,
+        fps: 25.0,
     })
 }
 
@@ -994,7 +1074,11 @@ pub fn compose_session_video(
 
     // 2) Re-encode fallback (and the ONLY path when trim/normalize is active).
     let (code2, filter_tail, filter_timeout, filter_cancelled) =
-        run_ffmpeg(ffmpeg, &filter_args(sources, out_path, target_w, target_h, crop_mode), cancel);
+        run_ffmpeg(
+            ffmpeg,
+            &filter_args(sources, &source_metadata, out_path, target_w, target_h, crop_mode),
+            cancel,
+        );
     if filter_cancelled {
         return Err(ComposeError::Cancelled);
     }
@@ -1047,6 +1131,55 @@ mod tests {
         ]
     }
 
+    /// Default probe metadata matching `srcs()` (two clips, 720p, NO audio) —
+    /// keeps the classic `a=0` filter assertions green.
+    fn metas() -> Vec<VideoMetadata> {
+        vec![
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 2.0,
+                frame_count: 48,
+                has_audio: false,
+                fps: 24.0,
+            },
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 2.0,
+                frame_count: 48,
+                has_audio: false,
+                fps: 24.0,
+            },
+        ]
+    }
+
+    /// Audio-bearing metadata (for the preserve-audio / audio-trim tests).
+    fn metas_audio() -> Vec<VideoMetadata> {
+        vec![
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 2.0,
+                frame_count: 48,
+                has_audio: true,
+                fps: 24.0,
+            },
+            VideoMetadata {
+                codec: "h264".into(),
+                width: 720,
+                height: 1280,
+                duration_seconds: 2.0,
+                frame_count: 48,
+                has_audio: true,
+                fps: 24.0,
+            },
+        ]
+    }
+
     #[test]
     fn manifest_uses_forward_slashes_and_single_quotes() {
         let m = build_concat_manifest(&srcs());
@@ -1087,7 +1220,7 @@ mod tests {
 
     #[test]
     fn filter_args_shape() {
-        let a = filter_args(&srcs(), Path::new("out.mp4"), 0, 0, "center");
+        let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 0, 0, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         // -i x -i y -filter_complex [0:v][1:v]concat=n=2:v=1:a=0[v] -map [v] …
         assert_eq!(s[0], "-i");
@@ -1105,7 +1238,7 @@ mod tests {
         // The interior pipe drops 8 frames; the first stays whole.
         srcs[1].trim_frames = BOUNDARY_TRIM_FRAMES;
         assert!(trim_active(&srcs));
-        let a = filter_args(&srcs, Path::new("out.mp4"), 0, 0, "center");
+        let a = filter_args(&srcs, &metas(), Path::new("out.mp4"), 0, 0, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
         let fc = &s[fc_idx + 1];
@@ -1120,7 +1253,7 @@ mod tests {
     #[test]
     fn filter_args_target_center_covers_and_crops() {
         // A target forces the labeled path on every clip, even with no trim.
-        let a = filter_args(&srcs(), Path::new("out.mp4"), 720, 1280, "center");
+        let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 720, 1280, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
         let fc = &s[fc_idx + 1];
@@ -1152,7 +1285,7 @@ mod tests {
         // be a valid `;`-separated chain set, not a single glued string.
         let mut srcs = srcs();
         srcs.truncate(1); // single clip
-        let a = filter_args(&srcs, Path::new("out.mp4"), 720, 1280, "center");
+        let a = filter_args(&srcs, &metas(), Path::new("out.mp4"), 720, 1280, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         // Two chains: the normalize chain and the (n=1) concat chain.
@@ -1170,7 +1303,7 @@ mod tests {
         let mut srcs = srcs();
         srcs[0].crop_mode = Some("fit".into()); // pipe 0 overrides to fit
         // srcs[1] has crop_mode: None -> uses the session "top" mode.
-        let a = filter_args(&srcs, Path::new("out.mp4"), 1280, 720, "top");
+        let a = filter_args(&srcs, &metas(), Path::new("out.mp4"), 1280, 720, "top");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         // Pipe 0 (fit) gets the pad-black filter; pipe 1 (session top) gets
@@ -1187,7 +1320,7 @@ mod tests {
 
     #[test]
     fn filter_args_target_fit_pads_black() {
-        let a = filter_args(&srcs(), Path::new("out.mp4"), 1280, 720, "fit");
+        let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 1280, 720, "fit");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         assert!(
@@ -1199,7 +1332,7 @@ mod tests {
     #[test]
     fn filter_args_target_none_autocenters() {
         // `none` resolves to center for the normalize step (plan 3.10).
-        let a = filter_args(&srcs(), Path::new("out.mp4"), 720, 1280, "none");
+        let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 720, 1280, "none");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         assert!(
@@ -1211,10 +1344,60 @@ mod tests {
     #[test]
     fn filter_args_no_target_no_trim_is_classic() {
         // Byte-identical to the classic filter: no labeled pads, raw [i:v].
-        let a = filter_args(&srcs(), Path::new("out.mp4"), 0, 0, "center");
+        let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 0, 0, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         assert_eq!(fc, "[0:v][1:v]concat=n=2:v=1:a=0[v]");
+    }
+
+    #[test]
+    fn filter_args_preserves_audio_when_sources_have_audio() {
+        // No target, no trim, but BOTH clips carry audio -> the classic raw
+        // path must now concat a=1 and map [a] with an aac codec.
+        let a = filter_args(&srcs(), &metas_audio(), Path::new("out.mp4"), 0, 0, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        assert_eq!(fc, "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]");
+        // Audio is mapped and encoded.
+        assert!(s.iter().any(|x| *x == "[a]"), "missing -map [a]: {s:?}");
+        assert!(s.iter().any(|x| *x == "aac"), "missing -c:a aac: {s:?}");
+    }
+
+    #[test]
+    fn filter_args_audio_trim_aligns_with_video_trim() {
+        // Pipe 1 drops 8 frames. With audio present, the audio must be
+        // atrim'd in lock-step (8 frames @ 24fps = 0.3333s) and reset so
+        // timestamps don't drift.
+        let mut srcs = srcs();
+        srcs[1].trim_frames = BOUNDARY_TRIM_FRAMES;
+        let mut metas = metas_audio();
+        metas[1].fps = 24.0;
+        let a = filter_args(&srcs, &metas, Path::new("out.mp4"), 0, 0, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        // Video trim on the trimmed clip.
+        assert!(fc.contains("trim=start_frame=8"), "fc: {fc}");
+        // Matching audio atrim + reset (8/24 = 0.3333s).
+        assert!(fc.contains("[1:a]atrim=start=0.3333,asetpts=N/SR/TB[a1]"), "fc: {fc}");
+        // Un-trimmed clip's audio is a no-op pad.
+        assert!(fc.contains("[0:a]anull[a0]"), "fc: {fc}");
+        // Concat carries audio.
+        assert!(fc.contains("concat=n=2:v=1:a=1[v][a]"), "fc: {fc}");
+        assert!(s.iter().any(|x| *x == "aac"));
+    }
+
+    #[test]
+    fn filter_args_mixed_audio_falls_back_to_video_only() {
+        // If only SOME clips carry audio, the concat filter can't mix a
+        // stream that's absent from one input, so we stay on the classic
+        // a=0 path (preserve only when ALL sources have audio).
+        let mut mixed = metas_audio();
+        mixed[1].has_audio = false;
+        let a = filter_args(&srcs(), &mixed, Path::new("out.mp4"), 0, 0, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        assert_eq!(fc, "[0:v][1:v]concat=n=2:v=1:a=0[v]");
+        assert!(!s.iter().any(|x| *x == "aac"), "must not map aac: {s:?}");
     }
 
     #[test]
@@ -1226,6 +1409,8 @@ mod tests {
                 height: 1280,
                 duration_seconds: 1.0,
                 frame_count: 24,
+                has_audio: false,
+                fps: 25.0,
             },
             VideoMetadata {
                 codec: "h264".into(),
@@ -1233,6 +1418,8 @@ mod tests {
                 height: 1280,
                 duration_seconds: 1.0,
                 frame_count: 24,
+                has_audio: false,
+                fps: 25.0,
             },
         ];
         assert!(all_clips_match_target(&ok, 720, 1280));
@@ -1243,6 +1430,8 @@ mod tests {
                 height: 1280,
                 duration_seconds: 1.0,
                 frame_count: 24,
+                has_audio: false,
+                fps: 25.0,
             },
             VideoMetadata {
                 codec: "h264".into(),
@@ -1250,6 +1439,8 @@ mod tests {
                 height: 720, // a landscape clip in a vertical session
                 duration_seconds: 1.0,
                 frame_count: 24,
+                has_audio: false,
+                fps: 25.0,
             },
         ];
         assert!(!all_clips_match_target(&mixed, 720, 1280));
@@ -1266,6 +1457,8 @@ mod tests {
                 height: 360,
                 duration_seconds: 1.0,
                 frame_count: 24,
+                has_audio: false,
+                fps: 25.0,
             },
             VideoMetadata {
                 codec: "h264".into(),
@@ -1273,6 +1466,8 @@ mod tests {
                 height: 360,
                 duration_seconds: 2.0,
                 frame_count: 48,
+                has_audio: false,
+                fps: 25.0,
             },
         ];
         // No trim: the classic totals.
@@ -1366,6 +1561,8 @@ mod tests {
                 height: 360,
                 duration_seconds: 1.0,
                 frame_count: 24,
+                has_audio: false,
+                fps: 25.0,
             },
             VideoMetadata {
                 codec: "h264".into(),
@@ -1373,6 +1570,8 @@ mod tests {
                 height: 360,
                 duration_seconds: 2.0,
                 frame_count: 48,
+                has_audio: false,
+                fps: 25.0,
             },
         ];
         let expected = plan_expected_metadata(&sources).unwrap();
@@ -1384,7 +1583,9 @@ mod tests {
                 width: 640,
                 height: 360,
                 duration_seconds: 3.0,
-                frame_count: 72
+                frame_count: 72,
+                has_audio: false,
+                fps: 25.0,
             },
             &expected
         )
@@ -1396,7 +1597,9 @@ mod tests {
                 width: 640,
                 height: 360,
                 duration_seconds: 2.96,
-                frame_count: 71
+                frame_count: 71,
+                has_audio: false,
+                fps: 25.0,
             },
             &expected
         )
@@ -1411,6 +1614,8 @@ mod tests {
             height: 360,
             duration_seconds: 3.5,
             frame_count: 96,
+            has_audio: false,
+            fps: 25.0,
         };
         assert!(validate_metadata(&out_longer, &expected).is_ok());
         // A wildly LONGER output (dropped-frame / duplicated-segment bug)
@@ -1421,6 +1626,8 @@ mod tests {
             height: 360,
             duration_seconds: 20.042,
             frame_count: 480,
+            has_audio: false,
+            fps: 25.0,
         };
         assert!(validate_metadata(&out_wildly_longer, &expected).is_err());
         // Truncated outputs are still rejected: materially SHORTER than the
@@ -1431,6 +1638,8 @@ mod tests {
             height: 360,
             duration_seconds: 1.0,
             frame_count: 24,
+            has_audio: false,
+            fps: 25.0,
         };
         assert!(validate_metadata(&out_short, &expected).is_err());
         assert!(plan_filter_metadata(&sources, 0, 0, 0).unwrap().codec == "h264");
