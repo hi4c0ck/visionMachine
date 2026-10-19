@@ -250,7 +250,8 @@ addendum. © 2026 @Horizones Machines.
 
 Full license text: [LICENSE](LICENSE) · quick guide: [NOTICE.md](NOTICE.md)
 
-### Third-party dependencies & bundled components
+<details>
+<summary><b>Third-party dependencies &amp; bundled components (FFmpeg sidecar)</b></summary>
 
 Most of the runtime stack is compiled into the app and covered by its own
 permissive license (MIT / Apache-2.0 / BSD). The full-variant installer also
@@ -266,3 +267,5 @@ Source Offer (GPL §6 compliance)** section in [NOTICE.md](NOTICE.md) for the
 full source-offer statement, and
 [src-tauri/binaries/NOTICE.txt](src-tauri/binaries/NOTICE.txt) for provenance
 and SHA-256 verification.
+
+</details>
