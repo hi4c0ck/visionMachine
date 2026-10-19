@@ -191,3 +191,7 @@ sc-out.txt
 
 # Svelte type-check output
 .svelte-check/
+
+# local dev helpers
+start-dev.cjs
+devserver.log

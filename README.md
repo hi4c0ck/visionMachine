@@ -7,7 +7,7 @@ it all into one finished clip. Runs on your machine. No subscription, no
 per-frame fees.
 
 <p align="center">
-  <img src="img/screenshots/feature-workspace.png" alt="VisionMachine workspace — composer, tools panel, projects, profile" width="100%">
+  <img src="img/screenshot-composer.png" alt="VisionMachine composer" width="100%">
 </p>
 
 ## Why VisionMachine
@@ -65,24 +65,28 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 
 ## A quick look
 
-Here's what you'll see in the app — each image shows a real moment from
-the composer, so you can picture the flow before you start.
+Here's what you'll see in the app — each image shows one moment from a
+real workflow, so you can picture the flow before you start.
 
-**Subject references** — a pipe holds up to 5 reference images. Switch the
-pipe to *Reference* media mode and add them; each chip shows a live
-thumbnail, its readiness dot, and its range:
+**The composer** — where you design a shot. Pipes, keyframes, the
+segment/tag timeline, and the tools panel, all in one view:
 
 <p align="center">
-  <img src="img/screenshots/feature-subject-refs.png" alt="The subject-refs row with thumbnails" width="820">
+  <img src="img/composer-preview.gif" alt="The composer in motion" width="480">
 </p>
 
-**Preview any image in a lightbox** — click a reference (or a keyframe)
-thumbnail and it opens in a full-bleed lightbox: wheel to zoom (0.2–8×),
-drag to pan, double-click to toggle, and the toolbar shows the scale and a
-reset. The same viewer is shared by every image preview in the app:
+**Your library** — every project and session you create stays right there
+in the side panel, ready to open again:
 
 <p align="center">
-  <img src="img/screenshots/feature-lightbox.png" alt="The image lightbox with zoom/pan toolbar" width="900">
+  <img src="img/projects-panel.gif" alt="The projects and sessions panel" width="320">
+</p>
+
+**Provider settings** — where a provider's base URL + API key live
+(Settings → Providers). [Get Agnes API Key](https://agnes-ai.com):
+
+<p align="center">
+  <img src="img/provider-settings.gif" alt="Navigating to Settings → Providers" width="300">
 </p>
 
 **Cite a subject in any prompt** — prompt modals (tag, global, sound)
@@ -91,7 +95,7 @@ lightbox; click **+** to drop a `[SubjectN]` token into the prompt, where
 *N* is the subject's position in the list:
 
 <p align="center">
-  <img src="img/screenshots/feature-subject-strip.png" alt="The subject strip in a prompt modal" width="900">
+  <img src="img/screenshots/feature-subject-strip.png" alt="The subject strip in a prompt modal" width="720">
 </p>
 
 Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
