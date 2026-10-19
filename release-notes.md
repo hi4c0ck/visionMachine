@@ -1,28 +1,84 @@
 # VisionMachine v0.7.7
 
-### New: generate images for keyframes and subjects
-- You can now generate an image for a keyframe or subject right from its
-  modal — type a prompt (or pick a reference for img2img), hit Generate,
-  and the result previews in place. Every generation is kept, so you can
-  flip back through earlier attempts and pick one to keep.
-- A small ⛶ icon on each preview opens the image in your system's default
-  viewer.
+### Composer & focus
+- The tools panel is a progressive hero: a clickable **Session / Pipe**
+  breadcrumb walks you up and down the focus level; the right
+  Generate/Compose actions appear for whatever you're focused on. The
+  pipe-level **Generate** carries a subtle corner notch so you can tell
+  the scope at a glance.
+- **Per-pipe crop override** (D2): each pipe can pin its own crop mode,
+  independent of the session default. The override survives a session
+  load round-trip.
+- **Model-filtered resolution presets**: the RESOLUTION dropdown now
+  shows only the tiers the selected video model actually supports.
+  Arbitrary W×H pixel inputs are gone — the API takes discrete tiers.
 
-### Top panel and playback
-- A new top-panel cluster gives you transport controls plus "play outside"
+### Subject references
+- **Preview & cite a subject ref.** Click a subject-ref thumbnail to open
+  the shared **lightbox** (wheel-zoom 0.2–8×, drag-to-pan, double-click
+  toggle, reset button). The lightbox is reused for every image preview
+  in the project.
+- **`[SubjectN]` tokens.** Any prompt modal (tag, global, sound) shows
+  the pipe's subject refs in a compact footer strip: click a thumbnail to
+  open the lightbox, click **+** to insert `[SubjectN]` into the prompt
+  (N = order in the refs list).
+- Subject-ref modal drops per-piece size override and "Use frame range"
+  — those now live at the session level.
+
+### Keyframes
+- **Piece history** — clicking a keyframe or subject-ref thumbnail opens
+  the in-place lightbox; the modal's history strip keeps every prior
+  generation and switching to one persists the selection.
+- **Keyframe modal** drops the "Use frame range" toggle and the
+  per-piece Size selector — it now carries a **pipe crop override**
+  select that matches the per-pipe override in the hero.
+
+### Media controls
+- **Video-size picker** clamps to the model's declared limits and is
+  orientation-aware (a 16:9 ratio won't appear in a vertical session).
+- When the target video size changes, settled image pieces are marked
+  `forceRegen=true` so they re-generate at the new size; the video
+  pre-seed is skipped for those.
+- **Preemptive image downscale (D4)**: local images larger than 5760px on
+  the longer side are downscaled with ffmpeg before the provider sees
+  them, so an oversized reference no longer 413's.
+
+### Top panel & playback
+- The top-panel cluster gives you transport controls plus "play outside"
   (opens the current preview in your system player).
-- Frame carousel: an Immersive Snaps toggle (`[i]`) plus two auto-scroll
-  speeds (`[>]` steady, `[>>]` fast) — steady is a constant-velocity roll
-  so cards no longer snap or flicker.
+- Frame carousel: an Immersive Snaps toggle plus two auto-scroll speeds —
+  steady is a constant-velocity roll so cards no longer snap or flicker.
+
+### Icon set
+- A custom **50-mark app-chrome icon atlas** in the Atlas gold language
+  replaces ad-hoc unicode glyphs across every panel (projects, profile,
+  top panel, composer, status, misc). The atlas ships as
+  `public-static/icons/app-chrome-sprite.svg` and is injected once at
+  startup via `<ChromeIcon>`.
+
+### Profile & settings
+- **Compact profile panel**: the stats strip is one line of mono text at
+  the bottom of the panel; Settings and Logout are icon buttons next to
+  the avatar.
+- Settings modal is driven by the icon set — no raw unicode in the tabs.
 
 ### Stability and generation flow
-- The running-generation pill is now compact and status-driven, and it
-  shows the same percentage as the progress modal — no more "10 % here,
-  80 % there".
-- A URL pasted into a keyframe's URL field no longer leaks into the
-  prompt field when you switch modes.
-- Generation logs now carry a human-readable timestamp next to the
+- The running-generation pill is compact and status-driven, and shows
+  the same percentage as the progress modal.
+- ffmpeg filter chains are `;`-separated — the old un-separated glue
+  caused "Trailing garbage after a filter: concat" crashes on compose.
+- Generation logs carry a human-readable timestamp next to the
   machine-readable one.
+
+### Rust backend
+- `ComposerConfig` gains `video_ratio`; `Pipe` gains `crop_override`.
+  `StageContext` carries `video_ratio` through the shaper, and
+  `guard_supported` clamps a session's tier/ratio to the model's
+  declared limits before it reaches the provider.
+- `ratio_compatible_with_orientation` gates the video_ratio override:
+  a 16:9 ratio is ignored in a vertical session.
+- All constructor sites updated; `crop_mode` threaded through
+  `SourceVideo` and the compose filter chain.
 
 # VisionMachine v0.7.6
 

@@ -7,7 +7,7 @@ it all into one finished clip. Runs on your machine. No subscription, no
 per-frame fees.
 
 <p align="center">
-  <img src="img/screenshots/01-workspace-full.png" alt="VisionMachine — full workspace: composer timeline, tools panel, projects, profile" width="100%">
+  <img src="img/screenshots/feature-workspace.png" alt="VisionMachine workspace — composer, tools panel, projects, profile" width="100%">
 </p>
 
 ## Why VisionMachine
@@ -65,66 +65,36 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 
 ## A quick look
 
-Here's what you'll see in the app — each image shows one moment from a
-real workflow, so you can picture the flow before you start.
+Here's what you'll see in the app — each image shows a real moment from
+the composer, so you can picture the flow before you start.
 
-**The full workspace** — composer timeline in the center, settings/tools
-on the right, your library on the left, profile anchored bottom-left:
+**Subject references** — a pipe holds up to 5 reference images. Switch the
+pipe to *Reference* media mode and add them; each chip shows a live
+thumbnail, its readiness dot, and its range:
 
 <p align="center">
-  <img src="img/screenshots/01-workspace-full.png" alt="VisionMachine full workspace" width="900">
+  <img src="img/screenshots/feature-subject-refs.png" alt="The subject-refs row with thumbnails" width="820">
 </p>
 
-**Your library** — every project and session you create, gold-tinted with
-the new app-chrome icons, ready to open again:
+**Preview any image in a lightbox** — click a reference (or a keyframe)
+thumbnail and it opens in a full-bleed lightbox: wheel to zoom (0.2–8×),
+drag to pan, double-click to toggle, and the toolbar shows the scale and a
+reset. The same viewer is shared by every image preview in the app:
 
 <p align="center">
-  <img src="img/screenshots/02-projects-panel.png" alt="The projects and sessions panel" width="320">
+  <img src="img/screenshots/feature-lightbox.png" alt="The image lightbox with zoom/pan toolbar" width="900">
 </p>
 
-**The tools panel** — the progressive hero: a focus breadcrumb
-(Session / Pipe), the Generate & Compose actions, and the settings grid:
+**Cite a subject in any prompt** — prompt modals (tag, global, sound)
+carry a compact subject strip in the footer. Hover a thumbnail to open the
+lightbox; click **+** to drop a `[SubjectN]` token into the prompt, where
+*N* is the subject's position in the list:
 
 <p align="center">
-  <img src="img/screenshots/05-toolspanel-session.png" alt="The tools panel at session level" width="420">
+  <img src="img/screenshots/feature-subject-strip.png" alt="The subject strip in a prompt modal" width="900">
 </p>
 
 Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
-
-## What's new in 0.7.7
-
-The 0.7.x line focused on a tighter composer, first-class media controls,
-and a custom icon language. Highlights:
-
-- **Progressive focus in the tools panel.** A clickable *Session / Pipe*
-  breadcrumb walks you up and down the focus level; the hero shows the
-  right Generate/Compose actions for whatever you're focused on, and the
-  pipe-level Generate carries a subtle corner notch to distinguish it.
-
-- **Subject references you can preview & cite.** Reference images live
-  inline in the pipe; click one to open the shared **lightbox** (zoom +
-  pan), or insert it into a prompt as a `[SubjectN]` token from the
-  reference strip in any prompt modal.
-
-- **Precise media controls.** Resolution presets are filtered to what the
-  selected video model actually supports, an orientation-aware
-  **video-size** picker clamps to the model's declared limits, and image
-  pieces auto-invalidate when the target size changes. Per-pipe **crop**
-  override and preemptive downscaling of oversized local images keep
-  generation honest.
-
-- **A custom app-chrome icon set.** 50 hand-drawn marks in the Atlas
-  gold language replace ad-hoc unicode glyphs across the panels, so the
-  whole UI reads as one system.
-
-<details>
-<summary>More 0.7.7 screenshots</summary>
-
-| Composer pipes | Keyframe modal | Settings |
-|:--:|:--:|:--:|
-| <img src="img/screenshots/06-composer-panel.png" width="480"> | <img src="img/screenshots/08-keyframe-modal.png" width="480"> | <img src="img/screenshots/10-settings-modal.png" width="480"> |
-
-</details>
 
 ## Try it in 5 minutes
 
