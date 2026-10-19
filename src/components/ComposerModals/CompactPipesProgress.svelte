@@ -242,10 +242,10 @@
 
   /* ── Notes: tinted, icon-led, full-width bands ── */
   .gen-stale-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 9px 12px; border: 1px solid var(--warning-color, #fbbf24); border-radius: 7px; color: var(--warning-color, #fbbf24); background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent); font-size: 12px; line-height: 1.45; }
-  .gen-stale-note-icon { flex: none; }
+  .gen-stale-note-icon { flex: none; display: flex; align-items: center; }
 
   .gen-compose-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 9px 12px; border: 1px solid var(--border-color, #3f3f46); border-radius: 7px; font-size: 12px; line-height: 1.45; }
-  .gen-compose-icon { flex: none; font-weight: 700; }
+  .gen-compose-icon { flex: none; font-weight: 700; display: flex; align-items: center; }
   .gen-compose-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .gen-compose-note.ok { color: var(--success-color, #4ade80); border-color: color-mix(in srgb, var(--success-color, #4ade80) 40%, transparent); background: color-mix(in srgb, var(--success-color, #4ade80) 8%, transparent); }
   .gen-compose-note.warning, .gen-compose-note.info { color: var(--warning-color, #fbbf24); border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 40%, transparent); background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent); }

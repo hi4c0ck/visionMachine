@@ -60,7 +60,7 @@
 			{@render fallback(displayedError ?? error ?? null)}
 		{:else}
 			<div class="error-container">
-				<div class="error-icon"><ChromeIcon id="warning" size={18} /></div>
+				<div class="error-icon"><ChromeIcon id="warning" size={48} /></div>
 				<h2>Something went wrong</h2>
 				<p class="error-message">{getErrorMessage(displayedError ?? error ?? null)}</p>
 				<p class="error-hint">The app stays usable — keep exploring; this error will pop up again if it's reproducible.</p>
@@ -112,8 +112,9 @@
 	}
 
 	.error-icon {
-		font-size: 64px;
 		margin-bottom: 20px;
+		display: flex;
+		justify-content: center;
 	}
 
 	.error-container h2 {

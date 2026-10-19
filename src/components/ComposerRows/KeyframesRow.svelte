@@ -429,8 +429,9 @@
 
 	.kf-broken-mark {
 		color: #ef4444;
-		font-size: 11px;
 		font-weight: 700;
 		flex: 0 0 auto;
+		display: inline-flex;
+		align-items: center;
 	}
 </style>

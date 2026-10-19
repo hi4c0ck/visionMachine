@@ -277,8 +277,9 @@
 		background: transparent;
 		color: var(--text-muted, #71717a);
 		cursor: pointer;
-		font-size: 0.8rem;
-		line-height: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.btn-clear:hover {
@@ -290,6 +291,9 @@
 		font-size: 0.72rem;
 		color: var(--text-muted, #71717a);
 		font-family: 'JetBrains Mono', monospace;
+		display: flex;
+		align-items: center;
+		gap: 4px;
 	}
 
 	.probe-ok {

@@ -121,8 +121,10 @@
 		cursor: pointer;
 		padding: 4px 8px;
 		border-radius: 4px;
-		font-size: 14px;
 		transition: all 0.2s;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.btn-icon:hover {
@@ -133,7 +135,6 @@
 	.pipe-ops .btn-icon {
 		min-width: 24px;
 		height: 24px;
-		font-size: 14px;
 	}
 
 	.pipe-ops .btn-icon:disabled {

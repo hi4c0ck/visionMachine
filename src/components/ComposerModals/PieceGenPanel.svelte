@@ -506,8 +506,6 @@
 		border-radius: 4px;
 		background: color-mix(in srgb, var(--bg-secondary, #14141f) 82%, transparent);
 		color: var(--text-secondary, #a1a1aa);
-		font-size: 11px;
-		line-height: 1;
 		display: flex;
 		align-items: center;
 		justify-content: center;

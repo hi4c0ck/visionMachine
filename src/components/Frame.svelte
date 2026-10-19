@@ -664,6 +664,9 @@
 		font-weight: 700;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
 	}
 
 	.layout-controls {
@@ -940,7 +943,6 @@
 		background: transparent;
 		color: rgba(255, 255, 255, 0.7);
 		cursor: pointer;
-		font-size: 0.72rem;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -1014,6 +1016,9 @@
 		color: var(--text-primary);
 		cursor: pointer;
 		white-space: nowrap;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
 	}
 	.session-pill:hover {
 		background: var(--bg-hover);
@@ -1035,7 +1040,6 @@
 		background: var(--bg-tertiary);
 		color: var(--text-primary);
 		cursor: pointer;
-		font-size: 0.85rem;
 		display: flex;
 		align-items: center;
 		justify-content: center;

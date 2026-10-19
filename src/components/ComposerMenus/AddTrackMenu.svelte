@@ -66,6 +66,7 @@
 	}
 
 	.dropdown-icon {
-		font-size: 14px;
+		display: inline-flex;
+		align-items: center;
 	}
 </style>

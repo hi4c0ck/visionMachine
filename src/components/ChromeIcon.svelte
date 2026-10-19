@@ -64,7 +64,7 @@
 
 <svg
 	class={cls}
-	style={svgStyle}
+	style={`display:inline-block;vertical-align:middle;flex-shrink:0;${svgStyle}`}
 	width={size}
 	height={size}
 	viewBox="0 0 28 28"

@@ -345,8 +345,9 @@
   }
 
   .project-icon {
-    font-size: 13px;
     opacity: 0.8;
+    display: inline-flex;
+    align-items: center;
   }
 
   .project-name {
@@ -374,12 +375,13 @@
     border: none;
     color: var(--text-muted);
     cursor: pointer;
-    font-size: 13px;
     padding: 2px 4px;
     border-radius: 3px;
     opacity: 0;
     transition: opacity var(--transition-fast);
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .project-item:hover .delete-project-btn {
@@ -395,12 +397,13 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 12px;
     padding: 2px 4px;
     border-radius: 3px;
     opacity: 0;
     transition: opacity var(--transition-fast);
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .project-item:hover .project-action-btn {
@@ -442,8 +445,9 @@
   }
 
   .session-icon {
-    font-size: 11px;
     opacity: 0.7;
+    display: inline-flex;
+    align-items: center;
   }
 
   .session-name-input {
@@ -484,13 +488,14 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 11px;
     padding: 1px 3px;
     border-radius: 2px;
     color: var(--text-secondary);
     transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-    line-height: 1;
     opacity: 0.55;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .session-item:hover .session-action-btn,
@@ -595,10 +600,11 @@
     background: none;
     border: none;
     color: var(--text-muted);
-    font-size: 20px;
     cursor: pointer;
     padding: 4px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .modal-close:hover {
