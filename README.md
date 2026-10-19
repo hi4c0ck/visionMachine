@@ -10,7 +10,7 @@ per-frame fees.
   <img src="img/screenshot-composer.png" alt="VisionMachine composer" width="100%">
 </p>
 
-## Why VisionMachine
+## <img src="img/icons/why-visionmachine.png" width="36" align="absmiddle" alt=""> Why VisionMachine
 
 Most AI video tools give you a prompt box and a dice roll. VisionMachine
 gives you a **composer** — the same way a video editor gives you a timeline:
@@ -51,7 +51,7 @@ gives you a **composer** — the same way a video editor gives you a timeline:
    into the finished video.
 </details>
 
-## Get the app (Windows)
+## <img src="img/icons/get-app.png" width="36" align="absmiddle" alt=""> Get the app (Windows)
 
 | | |
 |---|---|
@@ -63,7 +63,7 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 [Releases page](https://github.com/hi4c0ck/visionMachine/releases) ·
 [What's new in v0.7.7](https://github.com/hi4c0ck/visionMachine/releases)
 
-## A quick look
+## <img src="img/icons/quick-look.png" width="36" align="absmiddle" alt=""> A quick look
 
 Here's what you'll see in the app — each image shows one moment from a
 real workflow, so you can picture the flow before you start.
@@ -100,7 +100,7 @@ lightbox; click **+** to drop a `[SubjectN]` token into the prompt, where
 
 Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
 
-## Try it in 5 minutes
+## <img src="img/icons/try-it.png" width="36" align="absmiddle" alt=""> Try it in 5 minutes
 
 1. Install the MSI (or `npm run tauri dev` from source).
 2. Enter your name — that's your local account; everything stays on disk.
@@ -113,13 +113,13 @@ Ready to try it? Jump to [Try it in 5 minutes](#try-it-in-5-minutes).
 
 Deeper usage: see [Usage](#usage) below.
 
-## Tech under the hood
+## <img src="img/icons/tech-hood.png" width="36" align="absmiddle" alt=""> Tech under the hood
 
 - **Frontend**: Svelte 5 (runes), TypeScript, Vite
 - **Backend**: Tauri 2, Rust, SQLite — the database is the source of truth
 - **Styling**: CSS custom properties (dark/light theming)
 
-## Getting started (developers)
+## <img src="img/icons/getting-started.png" width="36" align="absmiddle" alt=""> Getting started (developers)
 
 | Goal | Path |
 | --- | --- |
@@ -160,7 +160,7 @@ src/
 └── constants.ts            # App constants and presets
 ```
 
-## Usage
+## <img src="img/icons/usage.png" width="36" align="absmiddle" alt=""> Usage
 
 ### Creating your first project
 
@@ -184,7 +184,7 @@ src/
 - Projects/sessions also cached to `localStorage` in browser/E2E mode (no Tauri backend)
 - Logs at `%LOCALAPPDATA%\com.visionmachine.desktop\logs\`
 
-## Documentation
+## <img src="img/icons/documentation.png" width="36" align="absmiddle" alt=""> Documentation
 
 - [Composer timeline rules (SLA)](docs/composer-timeline-sla.md) — the 8-frame
   engine floor, the ≈1s zone guideline, and the tag composition model
@@ -192,7 +192,7 @@ src/
   limits, and URL configuration
 - [Release notes](release-notes.md)
 
-## Contributing
+## <img src="img/icons/contributing.png" width="36" align="absmiddle" alt=""> Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, the branch
 model, and how to submit issues and pull requests.
@@ -236,14 +236,14 @@ Check browser console for errors. Common causes:
 
 </details>
 
-## Support development
+## <img src="img/icons/support.png" width="36" align="absmiddle" alt=""> Support development
 
 Paid models are on the roadmap — donations fund testing and development of
 those tiers. The core app stays free & open source.
 
 Wallet addresses (BTC / ETH / SOL / USDT-TRC20 / GRAM): [SUPPORT.md](SUPPORT.md)
 
-## License
+## <img src="img/icons/license.png" width="36" align="absmiddle" alt=""> License
 
 **VisionMachine** is licensed under **GPL-3.0-or-later**, with an attribution
 addendum. © 2026 @Horizones Machines.
