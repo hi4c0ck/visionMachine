@@ -206,7 +206,31 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				{#if srType === 'url'}
 					<div class="modal-field">
 						<label id="sr-url-label">Image URL</label>
-						<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-url-label" />
+						<div class="modal-url-row">
+							<input type="text" bind:value={srImageUrl} placeholder="https://... or pick a file" class="modal-input" aria-labelledby="sr-url-label" />
+							{#if isTauri()}
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={browseLocal}
+									title="Pick a local image"
+									aria-label="Browse local image"
+								>{#if localBusy}
+									…
+								{:else}
+									<ChromeIcon id="open-folder" size={16} />
+								{/if}</button>
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => (browserOpen = true)}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
+							{/if}
+						</div>
 					</div>
 				{:else if srType === 'txt2img'}
 					<div class="modal-field">
