@@ -34,6 +34,7 @@
 		prompt,
 		referenceUrl,
 		onGenerated,
+		onBusyChange,
 		initialLocal = null,
 		initialRemote = null,
 	} = $props<{
@@ -48,6 +49,10 @@
 		referenceUrl?: string;
 		/** Fires after a successful generation with (localPath, remoteUrl). */
 		onGenerated?: (localPath: string, remoteUrl: string | null) => void;
+		/** Notifies the parent when a standalone generation starts/finishes,
+		 *  so the modal can hold its Confirm button while the piece is in
+		 *  flight (the saved record must not race the running generation). */
+		onBusyChange?: (busy: boolean) => void;
 		/** The piece's persisted generation preview (local path / remote URL).
 		 *  When set, the panel opens on THIS artifact instead of the newest
 		 *  on-disk entry — so a re-opened modal shows the user's last choice. */
@@ -60,6 +65,14 @@
 	let imageModels = $state<ModelSpec[]>([]);
 	let imageModel = $state('');
 	let busy = $state(false);
+	// Last standalone-generation failure (shown as a problem cue, cleared on
+	// the next attempt). The "in-queue / generating" cue is `busy` itself.
+	let lastError = $state<string | null>(null);
+	// Notify the parent modal whenever a standalone generation starts/finishes
+	// so it can hold its Confirm button while this piece is in flight.
+	$effect(() => {
+		onBusyChange?.(busy);
+	});
 	// Seed at most once per distinct model/preset config. Without this guard
 	// the effect below reassigns the imageModels $state array (a fresh
 	// reference) on every pass, and Svelte 5 re-invalidates this very effect
@@ -246,6 +259,7 @@
 	async function doGenerate() {
 		if (busy || !prompt.trim()) return;
 		busy = true;
+		lastError = null;
 		try {
 			const res = await generatePiece({
 				sessionId,
@@ -280,7 +294,8 @@
 			flashToast('Image generated', 'info');
 		} catch (e) {
 			console.error('[PieceGenPanel] generate failed:', e);
-			flashToast(e instanceof Error ? e.message : String(e), 'error');
+			lastError = e instanceof Error ? e.message : String(e);
+			flashToast(lastError, 'error');
 		} finally {
 			busy = false;
 		}
@@ -305,6 +320,17 @@
 		<button class="pg-generate" onclick={doGenerate} disabled={busy || !prompt.trim()}>
 			{busy ? 'Generating…' : 'Generate'}
 		</button>
+		{#if busy}
+			<span class="pg-busy-cue" role="status" aria-live="polite">
+				<ChromeIcon id="spinner" size={14} />
+				<span>In queue / generating…</span>
+			</span>
+		{:else if lastError}
+			<span class="pg-busy-cue pg-busy-cue-error" role="status" aria-live="polite">
+				<ChromeIcon id="warning" size={14} />
+				<span title={lastError}>Generation failed</span>
+			</span>
+		{/if}
 	</div>
 
 	{#if isImg2Img}
@@ -441,6 +467,37 @@
 	.pg-generate:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+
+	/* Live generation cue: a compact "in-queue / generating" line that appears
+	   next to the Generate button while a standalone image run is in flight,
+	   and a red "failed" cue on error — so the modal reads OK-vs-problem
+	   without leaving it. */
+	.pg-busy-cue {
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		height: 34px;
+		padding: 0 10px;
+		font-size: 12px;
+		color: var(--text-secondary, #a1a1aa);
+		background: var(--bg-tertiary, #1c1c22);
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+	}
+
+	.pg-busy-cue svg {
+		color: var(--accent-color, #ff3e00);
+	}
+
+	.pg-busy-cue-error {
+		color: #ef4444;
+		border-color: rgba(239, 68, 68, 0.4);
+	}
+
+	.pg-busy-cue-error svg {
+		color: #ef4444;
 	}
 
 	.pg-preview-pair {

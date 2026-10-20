@@ -124,6 +124,9 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	// img2img reference). Also persists a durable copy under the pipe's
 	// user-images dir. The provider accepts data URIs (assert_media_fetchable).
 	let localBusy = $state(false);
+	// The panel's standalone generation lifecycle: while a piece image is in
+	// flight the modal's Confirm is held.
+	let pieceBusy = $state(false);
 	async function browseLocal() {
 		if (!sessionId || localBusy) return;
 		const path = await pickImageFile();
@@ -291,6 +294,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 						prompt={srPrompt}
 						referenceUrl={srType === 'img2img' ? srImageUrl : undefined}
 						onGenerated={(l, r) => { srGenLocal = l; srGenRemote = r ?? ''; }}
+						onBusyChange={(b) => { pieceBusy = b; }}
 						initialLocal={srGenLocal || null}
 						initialRemote={srGenRemote || null}
 					/>
@@ -298,7 +302,14 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
-				<button class="btn-confirm" onclick={confirm} disabled={!srValid}>Confirm</button>
+				<button
+					class="btn-confirm"
+					onclick={confirm}
+					disabled={!srValid || pieceBusy}
+					title={pieceBusy ? 'Wait for the in-flight generation to finish' : undefined}
+				>
+					{pieceBusy ? 'Confirm (waiting…)' : 'Confirm'}
+				</button>
 			</div>
 		</div>
 	</div>

@@ -104,6 +104,10 @@
 	// final frame into this keyframe. "Browse local": pick an image file as
 	// the img2img reference base. Both yield a base64 data URI (provider-ready)
 	// and also persist a durable copy under the pipe's user-images dir.
+	// The panel's standalone generation lifecycle: while a piece image is in
+	// flight the modal's Confirm is held (a saved record must not race the
+	// running generation, and re-open must not orphan it).
+	let pieceBusy = $state(false);
 	let lastFrameBusy = $state(false);
 	let localBusy = $state(false);
 	// Session-image browser ("browse session images" affordance next to the
@@ -342,6 +346,7 @@
 						prompt={kfPrompt}
 						referenceUrl={kfType === 'img2img' ? kfReferenceUrl : undefined}
 						onGenerated={(l, r) => { kfGenLocal = l; kfGenRemote = r ?? ''; }}
+						onBusyChange={(b) => { pieceBusy = b; }}
 						initialLocal={kfGenLocal || null}
 						initialRemote={kfGenRemote || null}
 					/>
@@ -387,7 +392,14 @@
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirm} disabled={!kfValid}>Confirm</button>
+				<button
+					class="btn-confirm"
+					onclick={confirm}
+					disabled={!kfValid || pieceBusy}
+					title={pieceBusy ? 'Wait for the in-flight generation to finish' : undefined}
+				>
+					{pieceBusy ? 'Confirm (waiting…)' : 'Confirm'}
+				</button>
 			</div>
 		</div>
 	</div>
