@@ -8,6 +8,7 @@
 	import { snapTo8 } from '$lib/frameMath';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { pickImageFile, readUserImage, extractPipeLastFrame } from '$lib/localImage';
+	import SessionImageBrowser from './SessionImageBrowser.svelte';
 
 	let {
 		pipe,
@@ -105,6 +106,26 @@
 	// and also persist a durable copy under the pipe's user-images dir.
 	let lastFrameBusy = $state(false);
 	let localBusy = $state(false);
+	// Session-image browser ("browse session images" affordance next to the
+	// "pick local file" button). Reuses readUserImage so the provider gets a
+	// data URI + a durable copy under this pipe's user-images dir.
+	let browserOpen = $state(false);
+	async function pickFromSession(entry: import('$lib/pieceGeneration').SessionImageEntry) {
+		if (!sessionId || localBusy) return;
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, kfRefId || 'local', entry.localPath);
+			kfReferenceUrl = res.dataUri;
+			kfGenLocal = res.localPath || '';
+			kfGenRemote = '';
+			flashToast(`From ${entry.pipeName || 'session'} · ${entry.label}`, 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load session image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
 	const canUseLastFrame = $derived(
 		isTauri() &&
 			kfType === 'url' &&
@@ -252,6 +273,14 @@
 								{:else}
 									<ChromeIcon id="open-folder" size={16} />
 								{/if}</button>
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => (browserOpen = true)}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
 							{/if}
 						</div>
 					</div>
@@ -320,6 +349,11 @@
 			</div>
 		</div>
 	</div>
+	<SessionImageBrowser
+		open={browserOpen}
+		sessionId={sessionId}
+		onPick={(e) => pickFromSession(e)}
+	/>
 {/if}
 
 <style>
