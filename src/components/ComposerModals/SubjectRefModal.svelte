@@ -9,6 +9,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { pickImageFile, readUserImage } from '$lib/localImage';
+	import SessionImageBrowser from './SessionImageBrowser.svelte';
 
 	let {
 		pipe,
@@ -70,7 +71,12 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			srUseFrames = false;
 			srStart = 0;
 			srEnd = Math.min(8, maxFrames - 1);
-			srRefId = `sr-new${Date.now()}`;
+			// crypto.randomUUID() instead of Date.now() — two "Add Subject Ref"
+			// clicks in the same ms would collide on a time-based provisional
+			// id, and the resulting duplicate-id pair would share the same
+			// pieces/<kind>/<refId>/ history dir (the "two refs share one
+			// image" bug). UUIDs are collision-free in practice.
+			srRefId = crypto.randomUUID();
 			srGenLocal = '';
 			srGenRemote = '';
 		}
@@ -85,6 +91,28 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			? srPrompt.trim().length > 0
 			: srImageUrl.trim().length > 0 && srPrompt.trim().length > 0,
 	);
+
+	// Session-image browser ("browse session images" affordance next to the
+	// "pick local file" button). Reuses the existing readUserImage path so
+	// the provider gets a data URI + a durable copy under this pipe's
+	// user-images dir — zero new backend surface.
+	let browserOpen = $state(false);
+	async function pickFromSession(entry: import('$lib/pieceGeneration').SessionImageEntry) {
+		if (!sessionId || localBusy) return;
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, srRefId || 'local', entry.localPath);
+			srImageUrl = res.dataUri;
+			srGenLocal = res.localPath || '';
+			srGenRemote = '';
+			flashToast(`From ${entry.pipeName || 'session'} · ${entry.label}`, 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load session image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
 
 	// ── Local file as img2img reference base ──────────────────────────────────
 	// Pick a local image → base64 data URI → stored in `srImageUrl` (the
@@ -203,6 +231,14 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 								{:else}
 									<ChromeIcon id="open-folder" size={16} />
 								{/if}</button>
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => (browserOpen = true)}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
 							{/if}
 						</div>
 					</div>
@@ -232,4 +268,9 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			</div>
 		</div>
 	</div>
+	<SessionImageBrowser
+		open={browserOpen}
+		sessionId={sessionId}
+		onPick={(e) => pickFromSession(e)}
+	/>
 {/if}
