@@ -42,8 +42,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		showWelcome,
 		onlogout,
 		onthemeChange,
-		onlayoutChange,
-		onprojectsupdate
+		onlayoutChange
 	} = $props<{
 		userName: string;
 		selectedTheme: string;
@@ -52,7 +51,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		onlogout?: () => void;
 		onthemeChange?: (theme: string) => void;
 		onlayoutChange?: (mode: string) => void;
-		onprojectsupdate?: (projects: ProjectData[]) => void;
 	}>();
 
 	// User profile
@@ -964,10 +962,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					}
 				}
 			}
-
-			if (onprojectsupdate) {
-				onprojectsupdate(projects);
-			}
 		} catch (e) {
 			console.error('[Workspace] Failed to load projects:', e);
 			error = `Failed to load projects: ${e}`;
@@ -1011,10 +1005,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 							selectedSessionId = savedSession;
 						}
 					}
-				}
-				
-				if (onprojectsupdate) {
-					onprojectsupdate(projects);
 				}
 			}
 		} catch (e) {
@@ -1079,10 +1069,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				if (selectedSessionId) {
 					localStorage.setItem(`vm-selected-session-${userName}`, selectedSessionId);
 				}
-			}
-
-			if (onprojectsupdate) {
-				onprojectsupdate(projects);
 			}
 		} catch (e) {
 			console.error('[Workspace] Failed to save projects:', e);

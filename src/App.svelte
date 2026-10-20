@@ -47,20 +47,6 @@
 	let isNameEmpty = $derived(!userName.trim().length);
 	let canLogin = $derived(userName.trim().length > 0);
 	
-	// Load saved data from localStorage
-	function loadAppData() {
-		try {
-			const savedProjects = localStorage.getItem('vm-projects');
-			if (savedProjects) {
-				return JSON.parse(savedProjects);
-			}
-		} catch (e) {
-			console.error('[App] Failed to load projects:', e);
-			runtimeError = e instanceof Error ? e : new Error('Failed to load saved data');
-		}
-		return null;
-	}
-	
 	// Functions
 	function applyTheme(theme: string) {
 		document.documentElement.setAttribute('data-theme', theme);
@@ -115,15 +101,6 @@
 		}
 	}
 	
-	function handleProjectsUpdate(projects: any[]) {
-		try {
-			localStorage.setItem('vm-projects', JSON.stringify(projects));
-		} catch (e) {
-			console.error('[App] Failed to save projects:', e);
-			runtimeError = e instanceof Error ? e : new Error('Failed to save projects');
-		}
-	}
-
 	// ── Welcome-page accounts ────────────────────────────────────────────
 	async function loadAccounts() {
 		if (!isTauri()) {
@@ -205,6 +182,21 @@
 			
 			applyTheme(selectedTheme);
 			loadAccounts();
+
+			// One-time reclaim of the legacy global `vm-projects` key. Older
+			// builds mirrored the whole composer tree (now carrying base64
+			// data URIs) into that key, and a single oversized value eats the
+			// entire localStorage quota — every other setItem in the app fails
+			// with QuotaExceeded. The key is now dead (its writer pipeline was
+			// removed; real data lives in SQLite on desktop / the per-user
+			// key in browser), so evicting it is safe and frees the quota.
+			try {
+				if (localStorage.getItem('vm-projects')) {
+					localStorage.removeItem('vm-projects');
+				}
+			} catch (e) {
+				console.error('[App] Failed to reclaim legacy vm-projects key:', e);
+			}
 
 			// Renderer liveness ping (backend `ui_heartbeat` checker): every 5 s
 			// tell the backend the webview is alive; when the pings stop the
@@ -333,7 +325,6 @@
 					onlogout={handleLogout}
 					onthemeChange={handleThemeChange}
 					onlayoutChange={handleLayoutChange}
-					onprojectsupdate={handleProjectsUpdate}
 				/>
 			</div>
 		{/if}
