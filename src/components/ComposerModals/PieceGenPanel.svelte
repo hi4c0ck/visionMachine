@@ -319,18 +319,16 @@
 		</label>
 		<button class="pg-generate" onclick={doGenerate} disabled={busy || !prompt.trim()}>
 			{busy ? 'Generating…' : 'Generate'}
+			{#if busy}
+				<span class="pg-gen-cue" role="status" aria-label="In queue / generating">
+					<span class="pg-gen-dot" />
+				</span>
+			{:else if lastError}
+				<span class="pg-gen-cue pg-gen-cue-error" role="status" aria-label="Generation failed" title={lastError}>
+					<ChromeIcon id="warning" size={12} />
+				</span>
+			{/if}
 		</button>
-		{#if busy}
-			<span class="pg-busy-cue" role="status" aria-live="polite">
-				<ChromeIcon id="spinner" size={14} />
-				<span>In queue / generating…</span>
-			</span>
-		{:else if lastError}
-			<span class="pg-busy-cue pg-busy-cue-error" role="status" aria-live="polite">
-				<ChromeIcon id="warning" size={14} />
-				<span title={lastError}>Generation failed</span>
-			</span>
-		{/if}
 	</div>
 
 	{#if isImg2Img}
@@ -469,35 +467,36 @@
 		cursor: not-allowed;
 	}
 
-	/* Live generation cue: a compact "in-queue / generating" line that appears
-	   next to the Generate button while a standalone image run is in flight,
-	   and a red "failed" cue on error — so the modal reads OK-vs-problem
-	   without leaving it. */
-	.pg-busy-cue {
-		flex: none;
+	/* Minimal in-button generation cue: a small status dot (in-queue /
+	   generating) that appears inside the Generate button while a standalone
+	   image run is in flight, and a small red warning on error. No separate
+	   panel / box — just a compact indicator next to the button's label. */
+	.pg-gen-cue {
 		display: inline-flex;
 		align-items: center;
-		gap: 5px;
-		height: 34px;
-		padding: 0 10px;
-		font-size: 12px;
-		color: var(--text-secondary, #a1a1aa);
-		background: var(--bg-tertiary, #1c1c22);
-		border: 1px solid var(--border-color);
-		border-radius: 6px;
+		justify-content: center;
+		margin-left: 8px;
 	}
 
-	.pg-busy-cue svg {
-		color: var(--accent-color, #ff3e00);
+	.pg-gen-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--accent-color, #ff3e00);
+		animation: pg-gen-pulse 1s ease-in-out infinite;
 	}
 
-	.pg-busy-cue-error {
+	.pg-gen-cue-error {
 		color: #ef4444;
-		border-color: rgba(239, 68, 68, 0.4);
 	}
 
-	.pg-busy-cue-error svg {
+	.pg-gen-cue-error svg {
 		color: #ef4444;
+	}
+
+	@keyframes pg-gen-pulse {
+		0%, 100% { opacity: 1; transform: scale(1); }
+		50% { opacity: 0.35; transform: scale(0.8); }
 	}
 
 	.pg-preview-pair {
