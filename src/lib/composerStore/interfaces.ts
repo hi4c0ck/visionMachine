@@ -148,6 +148,13 @@ export interface SubjectReferenceService {
       frameEnd?: number;
       type?: KeyframeType;
       prompt?: string;
+      /** 0012 Phase 4: explicit per-piece size override. */
+      imageOverride?: { size?: string | null; ratio?: string | null };
+      /** Persisted generated-preview pair (the piece's last standalone
+       *  generation). Carried on edit-confirm so the chip reflects the new
+       *  artifact — mirrors the keyframe upsert's preview carry-through. */
+      previewLocalPath?: string;
+      previewRemoteUrl?: string;
     },
   ): Promise<ServiceResult>;
 }

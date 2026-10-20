@@ -167,6 +167,11 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				frameEnd: srUseFrames ? srEnd : undefined,
 				type: srType,
 				prompt: srPrompt,
+				// Carry the piece's current generation preview so the chip
+				// reflects the artifact (was dropped on edit-confirm, leaving
+				// a stale thumbnail — the "confirmed but no change" bug).
+				previewLocalPath: srGenLocal || undefined,
+				previewRemoteUrl: srGenRemote || undefined,
 			});
 			if (result.errors.length === 0) onSaved?.(editingRefId);
 		} else {
