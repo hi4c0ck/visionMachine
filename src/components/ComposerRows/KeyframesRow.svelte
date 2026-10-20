@@ -17,6 +17,7 @@
 		onRemoveKeyframe,
 		aspect,
 		containsBroken,
+		containsWorking,
 		onRegenerate,
 	} = $props<{
 		pipe: PipeRow;
@@ -28,6 +29,9 @@
 		aspect?: string;
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
+		/** Live "in-queue / generating" cue — the chip dot shows a working
+		 * state while a generation task for this ref is in flight. */
+		containsWorking?: (id: string) => boolean;
 		/** Queue a keyframe for regeneration on the next run (non-destructive:
 		 *  the settled preview data stays). Fired by the status dot. */
 		onRegenerate?: (kfId: string) => void;
@@ -47,6 +51,17 @@
 	// local path (first run / a recovery backfill) and a re-linked artifact
 	// would never resolve, leaving the chip on the "image not loaded" glyph.
 	let kfImageUrlsFor = $state<Map<string, string>>(new Map());
+	// The source that ACTUALLY feeds generation for the ACTIVE mode — so the
+	// thumbnail answers "which image goes into generation" instead of showing
+	// a leftover artifact from a previously-selected mode:
+	//   url       -> the url source (imageSrc)
+	//   txt2img   -> the generated output (previewLocalPath)
+	//   img2img   -> the generated output (the reference is only INPUT)
+	// Sibling fields survive a mode switch (the text isn't lost), but the
+	// thumbnail must track the ACTIVE mode's source, not the stale one.
+	function kfSourceFor(kf: PipeKeyframe): string {
+		return kf.type === 'url' ? kf.imageSrc ?? '' : kf.previewLocalPath ?? '';
+	}
 	// Sources we've already attempted to resolve, so a `toMediaUrl` that
 	// settled to null (file missing / not under a media root) doesn't
 	// re-trigger an IPC call on every effect re-run. Cleared when the source
@@ -58,8 +73,8 @@
 	let failedKfSources = $state<Set<string>>(new Set());
 	$effect(() => {
 		for (const kf of pipe.keyframes ?? []) {
-			// Resolve the best source for each keyframe.
-			const src = kf.previewLocalPath || kf.imageSrc || '';
+			// Resolve the ACTIVE-mode source for each keyframe.
+			const src = kfSourceFor(kf);
 			if (!src || !isLocalPath(src)) continue;
 			// Re-fetch when the source CHANGED since the last cached URL
 			// (new artifact, backfill) — not just when the ref is new. A
@@ -86,8 +101,9 @@
 	});
 
 	function kfSrc(kf: PipeKeyframe): string | null {
-		// Generated local preview takes precedence over the raw source.
-		const src = kf.previewLocalPath || kf.imageSrc || null;
+		// The ACTIVE mode's feeding source (see kfSourceFor) — not a stale
+		// leftover artifact from a previously-selected mode.
+		const src = kfSourceFor(kf) || null;
 		if (!src || failedKfSources.has(kf.id)) return null;
 		// A local path with a STALE cached URL (source changed) must not
 		// render the old blob: fall back to the placeholder until the effect
@@ -103,7 +119,7 @@
 	 *  of the browser's broken-image glyph. Covers both local (toMediaUrl /
 	 *  missing media file) and remote (expired provider URL) sources. */
 	function markKfImageFailed(kf: PipeKeyframe) {
-		const src = kf.previewLocalPath || kf.imageSrc || null;
+		const src = kfSourceFor(kf) || null;
 		if (!src) return;
 		if (isLocalPath(src)) {
 			const next = new Map(kfImageUrls);
@@ -195,6 +211,7 @@
 			{#each [pipe.keyframes.find((kf: PipeKeyframe) => kf.slotIndex === kfNum)] as kf}
 				{#if kf}
 					{@const broken = containsBroken?.(kf.id) ?? false}
+					{@const working = containsWorking?.(kf.id) ?? false}
 					{@const dot = kfDot(kf)}
 					{@const kfSrcResolved = kfSrc(kf)}
 					<div
@@ -230,12 +247,13 @@
 						{/if}
 						<button
 							class="kf-status"
-							class:kf-status-ready={dot === 'ready'}
+							class:kf-status-ready={dot === 'ready' && !working}
 							class:kf-status-broken={dot === 'broken'}
 							class:kf-status-queued={kf.forceRegen === true}
+							class:kf-status-working={working}
 							onclick={(e) => { e.stopPropagation(); onRegenerate?.(kf.id); }}
-							title={kfDotTitleFor(kf, dot)}
-							aria-label={kfDotTitleFor(kf, dot)}
+							title={working ? 'Generating — in queue / running' : kfDotTitleFor(kf, dot)}
+							aria-label={working ? 'Generating' : kfDotTitleFor(kf, dot)}
 						></button>
 					</div>
 						<span class="kf-meta">
@@ -361,6 +379,22 @@
 	.kf-status-queued {
 		background: #f59e0b;
 		animation: kf-status-pulse 1.4s ease-in-out infinite;
+	}
+
+	/* Live "in-queue / generating" cue: a blue dot with a soft rotating
+	   spinner ring — reads as "moving forward, in the queue" (not a problem). */
+	.kf-status-working {
+		background: #3b82f6;
+		animation: kf-status-spin 1s linear infinite;
+	}
+
+	@keyframes kf-status-spin {
+		0%, 100% {
+			box-shadow: 0 0 0 0 color-mix(in srgb, #3b82f6 60%, transparent);
+		}
+		50% {
+			box-shadow: 0 0 0 4px color-mix(in srgb, #3b82f6 0%, transparent);
+		}
 	}
 
 	@keyframes kf-status-pulse {

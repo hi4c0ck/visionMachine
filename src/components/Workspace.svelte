@@ -407,6 +407,30 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// brokenRefs: `${pipeId}:${refId}` of references whose URL failed the
 	// accessibility check (D5) — chips are red-out until re-validated.
 	let brokenRefs = $state<Set<string>>(new Set());
+	// Live "working" refs: `${pipeId}:${refId}` of image stages in an ACTIVE
+	// (non-terminal) task that are queued / generating / rate-limited. Drives
+	// a blue "in-queue" cue on the chip dot (the "is my generation moving?"
+	// signal). Terminal errors already flip the ref's own status to 'error'
+	// (red dot), so only the in-flight positive state needs this derived set.
+	const workingRefs = $derived.by(() => {
+		const s = new Set<string>();
+		const views = [activeTask, ...Object.values(groupTaskViews)].filter(
+			(v): v is GenerationTaskView => !!v && !isTerminalTaskStatus(v.status),
+		);
+		for (const v of views) {
+			for (const stage of v.stages) {
+				if (stage.kind === 'video') continue;
+				if (
+					stage.status === 'generating' ||
+					stage.status === 'rate-limited' ||
+					stage.status === 'pending'
+				) {
+					s.add(`${v.pipeId}:${stage.sourceId}`);
+				}
+			}
+		}
+		return s;
+	});
 	// Last task's terminal view, kept after the active watch ends so a later
 	// refresh on the SAME task (focus / refresh button) still works: the
 	// in-memory registry drops terminal tasks once it sees them, so the
@@ -2586,6 +2610,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					localFrameForPipe={localFrameForPipe}
 					pipeStartForPipe={pipeStartForPipe}
 					brokenRefs={brokenRefs}
+					workingRefs={workingRefs}
 					onRefSaved={recheckRef}
 					videoModel={videoModelSpec}
 					onmediamodechange={(pipeId, mode) => {
