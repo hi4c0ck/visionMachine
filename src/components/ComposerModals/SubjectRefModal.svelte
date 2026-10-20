@@ -97,6 +97,11 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	// the provider gets a data URI + a durable copy under this pipe's
 	// user-images dir — zero new backend surface.
 	let browserOpen = $state(false);
+	// When the parent modal closes, force the browser sub-state closed too so
+	// it never auto-reopens when the parent is re-opened (stale `true` bug).
+	$effect(() => {
+		if (!open) browserOpen = false;
+	});
 	async function pickFromSession(entry: import('$lib/pieceGeneration').SessionImageEntry) {
 		if (!sessionId || localBusy) return;
 		localBusy = true;
@@ -293,7 +298,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 		</div>
 	</div>
 	<SessionImageBrowser
-		open={browserOpen}
+		bind:open={browserOpen}
 		sessionId={sessionId}
 		onPick={(e) => pickFromSession(e)}
 	/>

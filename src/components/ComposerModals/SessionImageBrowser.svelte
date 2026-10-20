@@ -175,7 +175,18 @@
 
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
-				<button class="btn-confirm" onclick={() => picked && onPick(picked)} disabled={!picked}>
+				<button
+					class="btn-confirm"
+					onclick={() => {
+						if (picked) {
+							onPick(picked);
+							// Close atomically with the pick so the caller's state
+							// (bind:open) resets and the parent button works again.
+							open = false;
+						}
+					}}
+					disabled={!picked}
+				>
 					Use this image
 				</button>
 			</div>
