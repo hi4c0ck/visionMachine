@@ -53,8 +53,7 @@ export const AGNES_PRESET: PresetSpec = {
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
       supportsSeed: true,
       media: { modes: ['keyframes', 'reference'],
-               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 },
-      obsolete: true },
+               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
     // V2.0 — legacy model ID. Official docs mark it "retired" (2026-09-25),
     // but the provider keeps serving the ID through the 2.5-series engine
     // (live log: HTTP 200 with 2.5-style perf_params). User decision

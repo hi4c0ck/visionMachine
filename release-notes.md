@@ -1,3 +1,14 @@
+# VisionMachine v0.7.9
+
+### Image browser (new)
+- Reuse any image from the session — generated, extracted from a frame, or uploaded — for any keyframe or subject
+
+### Live generation feedback
+- While a piece is generating you see it working, and it swaps to the finished picture the moment it's ready
+
+### Fixes
+- Sorted out a number of bugs and rough edges you've been running into
+
 # VisionMachine v0.7.8
 
 ### Models

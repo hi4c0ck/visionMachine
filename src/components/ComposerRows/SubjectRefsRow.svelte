@@ -17,6 +17,7 @@
 		onEdit,
 		aspect,
 		containsBroken,
+		containsWorking,
 		onRegenerate,
 	} = $props<{
 		pipe: PipeRow;
@@ -30,6 +31,9 @@
 		aspect?: string;
 		/** Red-out state for refs whose URL failed the accessibility check (D5). */
 		containsBroken?: (id: string) => boolean;
+		/** Live "in-queue / generating" cue — the chip dot shows a working
+		 *  state while a generation task for this ref is in flight. */
+		containsWorking?: (id: string) => boolean;
 		/**
 		 * Queue a piece for regeneration on the next run (non-destructive:
 		 * the settled preview data stays). Fired by the status dot badge.
@@ -56,6 +60,19 @@
 		return SR_TYPE_LABEL[t] ?? t;
 	}
 
+	// The source that ACTUALLY feeds generation for the ACTIVE mode — so the
+	// thumbnail answers "which image goes into generation" instead of a stale
+	// leftover from a previously-selected mode:
+	//   url     -> the url source (imageUrl)
+	//   txt2img -> the generated output (previewLocalPath)
+	//   img2img -> the generated output (imageUrl is only the INPUT)
+	// Sibling fields survive a mode switch, but the thumbnail tracks the
+	// ACTIVE mode's feeding source.
+	function srSourceFor(sr: SubjectReference): string {
+		const t = (sr.type ?? 'url') as KeyframeType;
+		return t === 'url' ? sr.imageUrl ?? '' : sr.previewLocalPath ?? '';
+	}
+
 	// Resolve a subject image source to a renderable URL. Priority:
 	//  1. previewLocalPath — the generated artifact (local media-tree file),
 	//     the most current representation after a successful run.
@@ -76,7 +93,7 @@
 	let failedSrSources = $state<Set<string>>(new Set());
 	$effect(() => {
 		for (const sr of refs) {
-			const src = sr.previewLocalPath || sr.imageUrl || '';
+			const src = srSourceFor(sr);
 			if (!src || !isLocalPath(src)) continue;
 			if (srImageUrlsFor.get(sr.id) === src) continue;
 			if (srAttempted.get(sr.id) === src) continue;
@@ -92,7 +109,9 @@
 	});
 
 	function srSrc(sr: SubjectReference): string | null {
-		const src = sr.previewLocalPath || sr.imageUrl || null;
+		// The ACTIVE mode's feeding source (see srSourceFor) — not a stale
+		// leftover artifact from a previously-selected mode.
+		const src = srSourceFor(sr) || null;
 		if (!src || failedSrSources.has(sr.id)) return null;
 		if (isLocalPath(src)) {
 			const cached = srImageUrls.get(sr.id);
@@ -104,7 +123,7 @@
 	/** Drop the cached entry so srSrc() falls back to the placeholder instead
 	 *  of the browser's broken-image glyph. */
 	function markSrImageFailed(sr: SubjectReference) {
-		const src = sr.previewLocalPath || sr.imageUrl || null;
+		const src = srSourceFor(sr) || null;
 		if (!src) return;
 		if (isLocalPath(src)) {
 			const next = new Map(srImageUrls);
@@ -180,6 +199,7 @@
 	<div class="sr-row">
 		{#each refs as sr (sr.id)}
 			{@const broken = containsBroken?.(sr.id) ?? false}
+			{@const working = containsWorking?.(sr.id) ?? false}
 			{@const dot = srDot(sr)}
 			{@const srSrcResolved = srSrc(sr)}
 			<div
@@ -215,12 +235,13 @@
 						{/if}
 						<button
 							class="sr-status"
-							class:sr-status-ready={dot === 'ready'}
+							class:sr-status-ready={dot === 'ready' && !working}
 							class:sr-status-broken={dot === 'broken'}
 							class:sr-status-queued={sr.forceRegen === true}
+							class:sr-status-working={working}
 							onclick={(e) => { e.stopPropagation(); onRegenerate?.(sr.id); }}
-							title={dotTitleFor(sr, dot)}
-							aria-label={dotTitleFor(sr, dot)}
+							title={working ? 'Generating — in queue / running' : dotTitleFor(sr, dot)}
+							aria-label={working ? 'Generating' : dotTitleFor(sr, dot)}
 						></button>
 					</div>
 					<span class="sr-meta">
@@ -327,6 +348,22 @@
 	.sr-status-queued {
 		background: #f59e0b;
 		animation: sr-status-pulse 1.4s ease-in-out infinite;
+	}
+
+	/* Live "in-queue / generating" cue: a blue dot with a soft pulsing ring —
+	   reads as "moving forward, in the queue" (not a problem). */
+	.sr-status-working {
+		background: #3b82f6;
+		animation: sr-status-spin 1s linear infinite;
+	}
+
+	@keyframes sr-status-spin {
+		0%, 100% {
+			box-shadow: 0 0 0 0 color-mix(in srgb, #3b82f6 60%, transparent);
+		}
+		50% {
+			box-shadow: 0 0 0 4px color-mix(in srgb, #3b82f6 0%, transparent);
+		}
 	}
 
 	@keyframes sr-status-pulse {

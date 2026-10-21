@@ -8,6 +8,7 @@
 	import { snapTo8 } from '$lib/frameMath';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { pickImageFile, readUserImage, extractPipeLastFrame } from '$lib/localImage';
+	import SessionImageBrowser from './SessionImageBrowser.svelte';
 
 	let {
 		pipe,
@@ -103,8 +104,64 @@
 	// final frame into this keyframe. "Browse local": pick an image file as
 	// the img2img reference base. Both yield a base64 data URI (provider-ready)
 	// and also persist a durable copy under the pipe's user-images dir.
+	// The panel's standalone generation lifecycle: while a piece image is in
+	// flight the modal's Confirm is held (a saved record must not race the
+	// running generation, and re-open must not orphan it).
+	let pieceBusy = $state(false);
 	let lastFrameBusy = $state(false);
 	let localBusy = $state(false);
+	// Session-image browser ("browse session images" affordance next to the
+	// "pick local file" button). Reuses readUserImage so the provider gets a
+	// data URI + a durable copy under this pipe's user-images dir. `browserMode`
+	// routes the pick to the right field: 'url' (the Image URL field) or
+	// 'ref' (the img2img reference field).
+	let browserOpen = $state(false);
+	let browserMode = $state<'url' | 'ref'>('ref');
+	function openBrowser(mode: 'url' | 'ref') {
+		browserMode = mode;
+		browserOpen = true;
+	}
+	// When the parent modal closes, force the browser sub-state closed too so
+	// it never auto-reopens when the parent is re-opened (stale `true` bug).
+	$effect(() => {
+		if (!open) browserOpen = false;
+	});
+	async function pickFromSession(entry: import('$lib/pieceGeneration').SessionImageEntry) {
+		if (!sessionId || localBusy) return;
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, kfRefId || 'local', entry.localPath);
+			kfReferenceUrl = res.dataUri;
+			kfGenLocal = res.localPath || '';
+			kfGenRemote = '';
+			flashToast(`From ${entry.pipeName || 'session'} · ${entry.label}`, 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load session image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
+	// URL-tab variant: drop a session image straight into the url field (this
+	// keyframe becomes a `url` preset whose source is a session artifact).
+	async function pickFromSessionUrl(entry: import('$lib/pieceGeneration').SessionImageEntry) {
+		if (!sessionId || localBusy) return;
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, kfRefId || 'local', entry.localPath);
+			kfUrl = res.dataUri;
+			kfType = 'url';
+			// A session-sourced url keyframe's own preview = the source itself.
+			kfGenLocal = res.localPath || '';
+			kfGenRemote = '';
+			flashToast(`From ${entry.pipeName || 'session'} · ${entry.label}`, 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load session image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
 	const canUseLastFrame = $derived(
 		isTauri() &&
 			kfType === 'url' &&
@@ -221,6 +278,16 @@
 									<ChromeIcon id="step-prev" size={16} />
 								{/if}</button>
 							{/if}
+							{#if isTauri()}
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => openBrowser('url')}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
+							{/if}
 						</div>
 						{#if kfUrlPreviewable}
 							<div class="kf-url-thumb" title="Keyframe preview">
@@ -252,6 +319,14 @@
 								{:else}
 									<ChromeIcon id="open-folder" size={16} />
 								{/if}</button>
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => openBrowser('ref')}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
 							{/if}
 						</div>
 					</div>
@@ -271,6 +346,7 @@
 						prompt={kfPrompt}
 						referenceUrl={kfType === 'img2img' ? kfReferenceUrl : undefined}
 						onGenerated={(l, r) => { kfGenLocal = l; kfGenRemote = r ?? ''; }}
+						onBusyChange={(b) => { pieceBusy = b; }}
 						initialLocal={kfGenLocal || null}
 						initialRemote={kfGenRemote || null}
 					/>
@@ -316,10 +392,22 @@
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => open = false}>Cancel</button>
-				<button class="btn-confirm" onclick={confirm} disabled={!kfValid}>Confirm</button>
+				<button
+					class="btn-confirm"
+					onclick={confirm}
+					disabled={!kfValid || pieceBusy}
+					title={pieceBusy ? 'Wait for the in-flight generation to finish' : undefined}
+				>
+					{pieceBusy ? 'Confirm (waiting…)' : 'Confirm'}
+				</button>
 			</div>
 		</div>
 	</div>
+	<SessionImageBrowser
+		bind:open={browserOpen}
+		sessionId={sessionId}
+		onPick={(e) => (browserMode === 'url' ? pickFromSessionUrl(e) : pickFromSession(e))}
+	/>
 {/if}
 
 <style>

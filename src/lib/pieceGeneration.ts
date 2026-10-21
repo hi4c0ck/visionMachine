@@ -87,3 +87,32 @@ export async function listPieceHistory(
   });
   return Array.isArray(raw) ? (raw as PieceHistoryEntry[]) : [];
 }
+
+/** One enumerable image artifact in a session (from the browser command). */
+export interface SessionImageEntry {
+  /** Absolute on-disk path (read back via the media-root guards). */
+  localPath: string;
+  /** Human pipe name ("" for a session-level file with no pipe owner). */
+  pipeName: string;
+  /** Owning pipe id ("" when unknown / session-level). */
+  pipeId: string;
+  /** "piece" | "user" | "task" | "other". */
+  sourceKind: string;
+  /** Human label ("Keyframe slot 2 · txt2img", "Subject 3 · img2img", …). */
+  label: string;
+  /** 1-based generation ordinal within a piece's history (0 for non-piece). */
+  generationNo: number;
+  mtimeMs: number;
+  sizeBytes: number;
+}
+
+/**
+ * Enumerate every image artifact in the session's media tree, newest-first.
+ * Backs the "browse session images" affordance: pick any previously generated
+ * / extracted / user-picked image and drop it into the current piece.
+ */
+export async function listSessionImages(sessionId: string): Promise<SessionImageEntry[]> {
+  if (!isTauri()) return [];
+  const raw = await invoke('list_session_images', { input: { sessionId } });
+  return Array.isArray(raw) ? (raw as SessionImageEntry[]) : [];
+}

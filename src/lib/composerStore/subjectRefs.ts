@@ -154,6 +154,11 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
        *  the stored override (an edit without touching size); `{size: null,
        *  ratio: null}` = reset to the session default. */
       imageOverride?: { size?: string | null; ratio?: string | null };
+      /** Persisted generated-preview pair. Carried on edit-confirm so the
+       *  chip reflects the piece's last standalone generation (mirrors the
+       *  keyframe upsert). Absent/empty = keep the stored preview. */
+      previewLocalPath?: string;
+      previewRemoteUrl?: string;
     },
   ): Promise<ServiceResult> {
     const pipe = this.getPipe(pipeId);
@@ -205,6 +210,12 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
         ref.imageSize = update.imageOverride.size ?? null;
         ref.imageRatio = update.imageOverride.ratio ?? null;
       }
+      // Persisted generated-preview pair: when the caller carries one (the
+      // modal's standalone "Generate" result), it becomes this ref's current
+      // artifact — the chip thumbnail + the video stage's fetchable source.
+      // Absent/empty = keep whatever preview the ref already had.
+      if (update.previewLocalPath?.trim()) ref.previewLocalPath = update.previewLocalPath;
+      if (update.previewRemoteUrl?.trim()) ref.previewRemoteUrl = update.previewRemoteUrl;
     }
 
     return { errors };
