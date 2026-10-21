@@ -8,11 +8,13 @@
 	 *  - drag         : pan
 	 *  - double-click : toggle 1× / 2.5× at the cursor
 	 *  - toolbar      : − / % / + and reset (click the % to reset)
-	 *  - Esc / click on the dark backdrop : close
+	 *  - Esc / click anywhere outside the image : close
 	 *
 	 * The image is `pointer-events: auto` so drags start on top of it; a
-	 * click that lands on the image (no drag) does NOT close — only the
-	 * backdrop does, so a double-click zoom can never lose the preview.
+	 * click that lands ON the image (no drag) does NOT close — but any click
+	 * in the dark area around it (the transparent letterbox stage and the
+	 * outer backdrop) DOES, so a double-click zoom can never lose the
+	 * preview yet "click outside the picture" dismisses it as expected.
 	 */
 	let {
 		open = $bindable(false),
@@ -28,6 +30,7 @@
 	}>();
 
 	let boxEl = $state<HTMLDivElement | null>(null);
+	let imgEl = $state<HTMLImageElement | null>(null);
 	let scale = $state(1);
 	let tx = $state(0);
 	let ty = $state(0);
@@ -90,8 +93,9 @@
 	});
 
 	// Drag to pan: window-level move/up so a fast drag outside the box still
-	// tracks; a click with no movement only closes when it lands on the
-	// backdrop itself (not on the image).
+	// tracks; a click with no movement closes anywhere OUTSIDE the picture
+	// (the dark backdrop, the letterbox stage around it, the toolbar
+	// margin) but never on the image itself.
 	function onPointerDown(e: PointerEvent) {
 		if (e.button !== 0) return;
 		dragging = true;
@@ -107,7 +111,11 @@
 			dragging = false;
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
-			if (!moved && ev.target === boxEl) close();
+			if (moved) return;
+			const target = ev.target as Node | null;
+			// The close button / toolbar stop propagation themselves, so a
+			// click here is on the image or on empty space around it.
+			if (!(imgEl && imgEl.contains(target))) close();
 		};
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
@@ -136,7 +144,7 @@
 			style={`transform: translate(${tx}px, ${ty}px) scale(${scale});`}
 			ondblclick={onDoubleClick}
 		>
-			<img src={src} alt={title || 'Image preview'} draggable={false} />
+			<img bind:this={imgEl} src={src} alt={title || 'Image preview'} draggable={false} />
 		</div>
 		<button
 			class="lb-close"
