@@ -2,7 +2,7 @@
 //! The progress modal polls `get_generation_task`; live state comes from the
 //! in-memory registry, terminal tasks fall back to the DB row.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tauri::{AppHandle, Emitter, State};
 
@@ -882,6 +882,229 @@ pub async fn list_piece_history(
         .collect();
     entries.sort_by(|a, b| b.ts.cmp(&a.ts)); // newest first
     Ok(entries)
+}
+
+// ── Session image browser: enumerate every image artifact in a session ─────
+//
+// A read-only, bounded walk of the session media tree that classifies each
+// artifact so the UI can offer "use this image in this pipe / piece" from
+// anywhere. The shapes scanned mirror the writers in this module:
+//   <session>/<pipe>/pieces/{keyframes,subjects}/<refId>/<ms>.png  (history)
+//   <session>/<pipe>/user-images/<file>                             (user base)
+//   <session>/<pipe>/<taskId>/images/<file>                         (task out)
+// It never mutates; images are consumed via the existing read_media_file /
+// read_user_image guards when the user picks one.
+
+/// Input for `list_session_images`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionImagesInput {
+    pub session_id: String,
+}
+
+/// One enumerable image artifact in a session, classified for the browser.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionImageEntry {
+    /// Absolute on-disk path (read back through the media-root guards).
+    pub local_path: String,
+    /// Human pipe name ("" for a session-level file with no pipe owner).
+    pub pipe_name: String,
+    /// Owning pipe id ("" when unknown / session-level).
+    pub pipe_id: String,
+    /// "piece" | "user" | "task" | "other".
+    pub source_kind: String,
+    /// Human label of the owning piece ("Keyframe slot 2 · txt2img",
+    /// "Subject 3 · img2img", …) or the raw file name for non-piece kinds.
+    pub label: String,
+    /// 1-based generation ordinal within a piece's history dir (newest = the
+    /// largest filename; 0 for non-piece kinds).
+    pub generation_no: u32,
+    pub mtime_ms: i64,
+    pub size_bytes: u64,
+}
+
+/// Bound on the walk — a session's image tree is small in practice; this
+/// protects a pathological tree from an unbounded recursive read.
+const SESSION_IMAGE_MAX: usize = 500;
+
+/// Enumerate the session's image artifacts, newest-first.
+#[tauri::command]
+pub async fn list_session_images(
+    input: ListSessionImagesInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<SessionImageEntry>, String> {
+    let media_root = {
+        let db = &state.db.lock().await;
+        match resolve_media_root(db, &input.session_id).await {
+            Some(r) if !r.trim().is_empty() => r,
+            _ => return Ok(Vec::new()),
+        }
+    };
+    let (session_name, pipes) = {
+        let db = &state.db.lock().await;
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        (composer.name, composer.pipes)
+    };
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&session_name));
+    if !session_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    Ok(collect_session_images(&session_root, &pipes))
+}
+
+/// Pure, filesystem-only scan of a session root (no DB): walk the image tree,
+/// classify every artifact by the writer's layout, and number piece-history
+/// generations. Extracted from `list_session_images` so the edge cases are
+/// unit-testable against a temp dir without a live composer.
+pub fn collect_session_images(
+    session_root: &std::path::Path,
+    pipes: &[crate::models::composer::Pipe],
+) -> Vec<SessionImageEntry> {
+    // Map sanitized pipe dir → (pipe_name, pipe_id) and the on-disk piece dir
+    // (pipe_dir/pieces/<kind>/<refDir>) → human label, so a discovered file
+    // can be annotated without re-opening the composer per file.
+    let mut pipe_dir_to_pipe: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    let mut piece_labels: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for p in pipes {
+        let dir = crate::generation::safe_dir_name(&p.name);
+        pipe_dir_to_pipe
+            .entry(dir.clone())
+            .or_insert((p.name.clone(), p.id.clone()));
+        for (i, kf) in p.keyframes.iter().enumerate() {
+            let refd = crate::generation::safe_dir_name(&kf.id);
+            let kind = if kf.kind.is_empty() { "url" } else { kf.kind.as_str() };
+            piece_labels.insert(
+                format!("{dir}/pieces/keyframes/{refd}"),
+                format!("Keyframe slot {} · frame {} · {kind}", i + 1, kf.frame),
+            );
+        }
+        for (i, sr) in p.subject_references.iter().enumerate() {
+            let refd = crate::generation::safe_dir_name(&sr.id);
+            let kind = if sr.kind.is_empty() { "url" } else { sr.kind.as_str() };
+            piece_labels
+                .insert(format!("{dir}/pieces/subjects/{refd}"), format!("Subject {} · {kind}", i + 1));
+        }
+    }
+
+    // Recursive, bounded walk collecting image files (newest mtime last;
+    // sorting happens at the end).
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    fn is_image(p: &std::path::Path) -> bool {
+        match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+            Some(ext) => matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp"),
+            None => false,
+        }
+    }
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> bool {
+        let iter = match std::fs::read_dir(dir) {
+            Ok(i) => i,
+            Err(_) => return true,
+        };
+        for entry in iter.flatten() {
+            if out.len() >= SESSION_IMAGE_MAX {
+                return false; // stop the whole walk
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                if !walk(&path, out) {
+                    return false;
+                }
+            } else if is_image(&path) {
+                out.push(path);
+            }
+        }
+        true
+    }
+    walk(session_root, &mut files);
+
+    // Pre-number each piece-history dir's generations (filename ascending →
+    // a stable 1..N ordinal). Group the walked piece files by their owning
+    // ref dir, then read + sort each dir once.
+    let mut piece_files_by_dir: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for f in &files {
+        let rel = f.strip_prefix(session_root).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        let segs: Vec<&str> = rel.split('/').collect();
+        if segs.len() >= 4 && segs[1] == "pieces" {
+            let key = format!("{}/{}/{}/{}", segs[0], segs[1], segs[2], segs[3]);
+            if let Some(name) = f.file_name().map(|n| n.to_string_lossy().to_string()) {
+                piece_files_by_dir.entry(key).or_default().push(name);
+            }
+        }
+    }
+    // Per-file ordinal: within a ref dir, `<unixMs>.png` names sort
+    // ascending == generation order, so a file's 1-based rank is its
+    // position in the sorted list (newest = the largest).
+    let mut gen_no: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (key, names) in &piece_files_by_dir {
+        let mut sorted = names.clone();
+        sorted.sort();
+        for (idx, name) in sorted.iter().enumerate() {
+            // key is `<pipe>/pieces/<kind>/<ref>`; the file key appends the name.
+            gen_no.insert(format!("{key}/{name}"), (idx + 1) as u32);
+        }
+    }
+
+    let mut out: Vec<SessionImageEntry> = files
+        .iter()
+        .filter_map(|path| {
+            let meta = std::fs::metadata(path).ok()?;
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            // Relative-to-session-root path, forward-slashed for matching.
+            let rel = path.strip_prefix(session_root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+            let segs: Vec<&str> = rel.split('/').collect();
+            // segs[0] = pipe dir; the remainder shapes the classification.
+            let pipe_dir = segs[0];
+            let (pipe_name, pipe_id) = pipe_dir_to_pipe.get(pipe_dir).cloned().unwrap_or_default();
+
+            let (source_kind, label, generation_no): (&str, String, u32) = if segs.len() >= 4
+                && segs[1] == "pieces"
+            {
+                // <pipe>/pieces/<kind>/<ref>/<file>
+                let key = format!("{pipe_dir}/pieces/{}/{}", segs[2], segs[3]);
+                let file_name = segs[4];
+                let gen = gen_no.get(&format!("{key}/{file_name}")).copied().unwrap_or(0);
+                let label = piece_labels
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| format!("piece · {}", segs[3]));
+                ("piece", label, gen)
+            } else if segs.len() >= 2 && segs[1] == "user-images" {
+                ("user", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
+            } else if segs.len() >= 3 && segs[2] == "images" {
+                // <pipe>/<taskId>/images/<file> → task-scoped output.
+                ("task", format!("generation · task {}", segs[1]), 0)
+            } else {
+                ("other", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
+            };
+
+            Some(SessionImageEntry {
+                local_path: path.to_string_lossy().into_owned(),
+                pipe_name,
+                pipe_id,
+                source_kind: source_kind.to_string(),
+                label,
+                generation_no,
+                mtime_ms: mtime,
+                size_bytes: meta.len(),
+            })
+        })
+        .collect();
+
+    // Newest-first (stable: ties keep walk order).
+    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    out
 }
 
 // ── User-sourced image assets (extracted last frames + local img2img bases) ──
@@ -1898,6 +2121,117 @@ mod tests {
         assert_eq!(payload["details"]["copy"], "copy failed");
         assert_eq!(payload["details"]["filter"], "filter failed");
         assert!(payload["message"].as_str().unwrap().contains("compose"));
+    }
+
+    // ── collect_session_images edge cases (filesystem-only, no DB) ──────────
+
+    use crate::models::composer::{Keyframe, Pipe, SubjectReference};
+    use std::fs;
+
+    /// Build a pipe with one keyframe and one subject ref, returning it plus
+    /// the (stable) ref ids so a test can lay out the matching on-disk dirs.
+    fn test_pipes() -> (Vec<Pipe>, String, String) {
+        let mut pipe = Pipe::new("Pipe A", 121);
+        let mut kf = Keyframe::new(1, 0);
+        kf.id = "kf-1".into();
+        pipe.keyframes.push(kf);
+        let mut sr = SubjectReference::new("url".into(), false);
+        sr.id = "sr-1".into();
+        sr.kind = "txt2img".into();
+        pipe.subject_references.push(sr);
+        (vec![pipe], "kf-1".into(), "sr-1".into())
+    }
+
+    fn write_file(dir: &std::path::Path, rel: &str) -> std::path::PathBuf {
+        let p = dir.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, b"img").unwrap();
+        p
+    }
+
+    #[test]
+    fn session_images_classifies_piece_user_task_and_session_level() {
+        let (pipes, kf, sr) = test_pipes();
+        let root = std::env::temp_dir().join(format!("sib-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::create_dir_all(&root);
+
+        // Piece history (one generation each).
+        write_file(&root, &format!("Pipe A/pieces/keyframes/{kf}/1111111111.png"));
+        write_file(&root, &format!("Pipe A/pieces/subjects/{sr}/2222222222.png"));
+        // User-picked base.
+        write_file(&root, "Pipe A/user-images/local-x.png");
+        // Task-scoped output.
+        write_file(&root, "Pipe A/t9/images/last.png");
+        // Session-level file with no pipe-owner shape.
+        write_file(&root, "session-meta.png");
+
+        let out = collect_session_images(&root, &pipes);
+        let _ = fs::remove_dir_all(&root);
+
+        let by_kind: std::collections::HashMap<&str, usize> = out
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut m, e| {
+                *m.entry(e.source_kind.as_str()).or_insert(0) += 1;
+                m
+            });
+        assert_eq!(by_kind.get("piece"), Some(&2));
+        assert_eq!(by_kind.get("user"), Some(&1));
+        assert_eq!(by_kind.get("task"), Some(&1));
+        assert_eq!(by_kind.get("other"), Some(&1));
+    }
+
+    #[test]
+    fn session_images_numbers_piece_generations() {
+        let (pipes, kf, _) = test_pipes();
+        let root = std::env::temp_dir().join(format!("sib-gen-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let base = root.join(format!("Pipe A/pieces/keyframes/{kf}"));
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("100.png"), b"a").unwrap();
+        fs::write(base.join("200.png"), b"b").unwrap();
+        fs::write(base.join("300.png"), b"c").unwrap();
+
+        let out = collect_session_images(&root, &pipes);
+        let _ = fs::remove_dir_all(&root);
+
+        let gens: std::collections::HashMap<&str, u32> = out
+            .iter()
+            .map(|e| (e.local_path.as_str(), e.generation_no))
+            .collect();
+        assert_eq!(out.len(), 3);
+        assert!(gens.values().any(|&g| g == 1));
+        assert!(gens.values().any(|&g| g == 2));
+        assert!(gens.values().any(|&g| g == 3));
+        // The largest (newest) file is the highest generation.
+        let newest = out.iter().find(|e| e.label.ends_with("300.png") || e.local_path.ends_with("300.png")).unwrap();
+        assert_eq!(newest.generation_no, 3);
+    }
+
+    #[test]
+    fn session_images_missing_root_is_empty() {
+        let (pipes, _, _) = test_pipes();
+        let root = std::env::temp_dir().join(format!("sib-none-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // The dir does not exist → collect must return empty, not panic.
+        let out = collect_session_images(&root, &pipes);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn session_images_ignores_non_image_files() {
+        let (pipes, _, _) = test_pipes();
+        let root = std::env::temp_dir().join(format!("sib-nonimg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_file(&root, "Pipe A/t9/images/notes.txt");
+        write_file(&root, "Pipe A/t9/images/video.mp4");
+        write_file(&root, "Pipe A/t9/images/real.png");
+
+        let out = collect_session_images(&root, &pipes);
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(out.len(), 1, "only .png counted");
+        assert!(out[0].local_path.ends_with("real.png"));
     }
 
     #[test]

@@ -478,6 +478,9 @@ class ComposerStoreImpl implements ComposerStore {
       prompt?: string;
       /** 0012 Phase 4: explicit per-piece size override (undefined = keep). */
       imageOverride?: { size?: string | null; ratio?: string | null };
+      /** Persisted generated-preview pair (carried on edit-confirm). */
+      previewLocalPath?: string;
+      previewRemoteUrl?: string;
     },
   ): Promise<ServiceResult> {
     const s = this.getService(sessionId);

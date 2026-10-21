@@ -8,11 +8,14 @@
 	 *  - drag         : pan
 	 *  - double-click : toggle 1× / 2.5× at the cursor
 	 *  - toolbar      : − / % / + and reset (click the % to reset)
-	 *  - Esc / click on the dark backdrop : close
+	 *  - Esc / click outside the rendered picture : close
 	 *
-	 * The image is `pointer-events: auto` so drags start on top of it; a
-	 * click that lands on the image (no drag) does NOT close — only the
-	 * backdrop does, so a double-click zoom can never lose the preview.
+	 * The click-outside test measures the point against the object-fit:
+	 * contain content box (the visible picture, including letterbox bars),
+	 * not the <img> element box. A click that lands ON the picture (no
+	 * drag) does NOT close; the dark stage around it DOES, so a
+	 * double-click zoom can never lose the preview yet "click outside the
+	 * picture" dismisses it as expected.
 	 */
 	let {
 		open = $bindable(false),
@@ -28,6 +31,7 @@
 	}>();
 
 	let boxEl = $state<HTMLDivElement | null>(null);
+	let imgEl = $state<HTMLImageElement | null>(null);
 	let scale = $state(1);
 	let tx = $state(0);
 	let ty = $state(0);
@@ -89,25 +93,60 @@
 		return () => window.removeEventListener('keydown', onKey);
 	});
 
+	// Is the point inside the RENDERED picture, i.e. the object-fit:contain
+	// content box of the image (after the current pan/zoom transform)? The
+	// <img> element fills the whole stage, so the dark "letterbox bars"
+	// around the picture are transparent parts of the element, not of the
+	// page — closing on element-box alone would leave an invisible border
+	// where clicks don't dismiss. getBoundingClientRect() reflects the
+	// translate+scale transform, and the contain box stays centered in it.
+	function pointInsidePicture(cx: number, cy: number): boolean {
+		if (!imgEl) return true; // unknown → be conservative, don't close
+		const r = imgEl.getBoundingClientRect();
+		const nw = imgEl.naturalWidth;
+		const nh = imgEl.naturalHeight;
+		if (!nw || !nh || !r.width || !r.height) {
+			// Still loading / broken: fall back to the element box.
+			return cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom;
+		}
+		const s = Math.min(r.width / nw, r.height / nh);
+		const cw = nw * s;
+		const ch = nh * s;
+		const left = r.left + (r.width - cw) / 2;
+		const top = r.top + (r.height - ch) / 2;
+		return cx >= left && cx <= left + cw && cy >= top && cy <= top + ch;
+	}
+
 	// Drag to pan: window-level move/up so a fast drag outside the box still
-	// tracks; a click with no movement only closes when it lands on the
-	// backdrop itself (not on the image).
+	// tracks; a click with no movement closes anywhere OUTSIDE the rendered
+	// picture (backdrop, stage, letterbox bars) but never on the picture
+	// itself.
 	function onPointerDown(e: PointerEvent) {
 		if (e.button !== 0) return;
 		dragging = true;
+		const downX = e.clientX;
+		const downY = e.clientY;
 		const startX = e.clientX - tx;
 		const startY = e.clientY - ty;
+		// A "click" may jitter a couple of pixels while pressed; only
+		// treat it as a pan (and thus a non-close) past 3 px, so a
+		// near-still outside click still dismisses the preview.
 		let moved = false;
 		const onMove = (ev: PointerEvent) => {
 			tx = ev.clientX - startX;
 			ty = ev.clientY - startY;
-			moved = true;
+			if (!moved && Math.hypot(ev.clientX - downX, ev.clientY - downY) > 3) moved = true;
 		};
 		const onUp = (ev: PointerEvent) => {
 			dragging = false;
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
-			if (!moved && ev.target === boxEl) close();
+			if (moved) return;
+			// The close button / toolbar stop propagation themselves, so a
+			// click reaching here is on the image element or on empty
+			// space. Close when the point is outside the rendered picture.
+			if (pointInsidePicture(ev.clientX, ev.clientY)) return;
+			close();
 		};
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
@@ -136,7 +175,7 @@
 			style={`transform: translate(${tx}px, ${ty}px) scale(${scale});`}
 			ondblclick={onDoubleClick}
 		>
-			<img src={src} alt={title || 'Image preview'} draggable={false} />
+			<img bind:this={imgEl} src={src} alt={title || 'Image preview'} draggable={false} />
 		</div>
 		<button
 			class="lb-close"

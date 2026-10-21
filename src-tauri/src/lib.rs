@@ -344,6 +344,7 @@ pub fn run() {
             commands::generation::generation_active_task_count,
 commands::generation::generate_piece_image,
 commands::generation::list_piece_history,
+commands::generation::list_session_images,
 commands::generation::read_user_image,
 commands::generation::extract_pipe_last_frame,
             commands::generation::compose_session_video,

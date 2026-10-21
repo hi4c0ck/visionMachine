@@ -54,6 +54,7 @@ import { flashToast } from '$lib/flashToast';
 			focus = $bindable({ level: 'project' } as ComposerFocus),
 			onframechange,
 			brokenRefs,
+			workingRefs,
 			onRefSaved,
 			videoModel = null,
 			onmediamodechange,
@@ -71,6 +72,9 @@ import { flashToast } from '$lib/flashToast';
 			onframechange?: (frame: number) => void;
 			/** Broken reference ids (D5), keyed `${pipeId}:${refId}` — chips are red-out. */
 			brokenRefs?: Set<string>;
+			/** Live "in-queue / generating" refs, keyed `${pipeId}:${refId}` — the
+			 * chip dot shows a working cue (is my generation moving?). */
+			workingRefs?: Set<string>;
 			/** A keyframe/subject reference was just saved → re-validate its URL. */
 			onRefSaved?: (pipeId: string, refId: string) => void;
 			/** The configured video model spec — drives the pipe-level media-mode
@@ -867,6 +871,7 @@ import { flashToast } from '$lib/flashToast';
 					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
 					onRegenerate={(kfId) => handleQueueRegen(pipe, 'keyframe', kfId)}
 					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+					containsWorking={(id) => workingRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}
 
@@ -881,6 +886,7 @@ import { flashToast } from '$lib/flashToast';
 					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}
 					onRegenerate={(refId) => handleQueueRegen(pipe, 'subject', refId)}
 					containsBroken={(id) => brokenRefs?.has(`${pipe.id}:${id}`) ?? false}
+					containsWorking={(id) => workingRefs?.has(`${pipe.id}:${id}`) ?? false}
 				/>
 			{/if}
 

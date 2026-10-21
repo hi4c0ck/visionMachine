@@ -9,6 +9,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { isTauri } from '@tauri-apps/api/core';
 	import { pickImageFile, readUserImage } from '$lib/localImage';
+	import SessionImageBrowser from './SessionImageBrowser.svelte';
 
 	let {
 		pipe,
@@ -70,7 +71,12 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			srUseFrames = false;
 			srStart = 0;
 			srEnd = Math.min(8, maxFrames - 1);
-			srRefId = `sr-new${Date.now()}`;
+			// crypto.randomUUID() instead of Date.now() — two "Add Subject Ref"
+			// clicks in the same ms would collide on a time-based provisional
+			// id, and the resulting duplicate-id pair would share the same
+			// pieces/<kind>/<refId>/ history dir (the "two refs share one
+			// image" bug). UUIDs are collision-free in practice.
+			srRefId = crypto.randomUUID();
 			srGenLocal = '';
 			srGenRemote = '';
 		}
@@ -86,11 +92,41 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			: srImageUrl.trim().length > 0 && srPrompt.trim().length > 0,
 	);
 
+	// Session-image browser ("browse session images" affordance next to the
+	// "pick local file" button). Reuses the existing readUserImage path so
+	// the provider gets a data URI + a durable copy under this pipe's
+	// user-images dir — zero new backend surface.
+	let browserOpen = $state(false);
+	// When the parent modal closes, force the browser sub-state closed too so
+	// it never auto-reopens when the parent is re-opened (stale `true` bug).
+	$effect(() => {
+		if (!open) browserOpen = false;
+	});
+	async function pickFromSession(entry: import('$lib/pieceGeneration').SessionImageEntry) {
+		if (!sessionId || localBusy) return;
+		localBusy = true;
+		try {
+			const res = await readUserImage(sessionId, pipe.id, srRefId || 'local', entry.localPath);
+			srImageUrl = res.dataUri;
+			srGenLocal = res.localPath || '';
+			srGenRemote = '';
+			flashToast(`From ${entry.pipeName || 'session'} · ${entry.label}`, 'success');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			flashToast(msg.startsWith('{') ? 'Could not load session image' : msg, 'error');
+		} finally {
+			localBusy = false;
+		}
+	}
+
 	// ── Local file as img2img reference base ──────────────────────────────────
 	// Pick a local image → base64 data URI → stored in `srImageUrl` (the
 	// img2img reference). Also persists a durable copy under the pipe's
 	// user-images dir. The provider accepts data URIs (assert_media_fetchable).
 	let localBusy = $state(false);
+	// The panel's standalone generation lifecycle: while a piece image is in
+	// flight the modal's Confirm is held.
+	let pieceBusy = $state(false);
 	async function browseLocal() {
 		if (!sessionId || localBusy) return;
 		const path = await pickImageFile();
@@ -134,6 +170,11 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				frameEnd: srUseFrames ? srEnd : undefined,
 				type: srType,
 				prompt: srPrompt,
+				// Carry the piece's current generation preview so the chip
+				// reflects the artifact (was dropped on edit-confirm, leaving
+				// a stale thumbnail — the "confirmed but no change" bug).
+				previewLocalPath: srGenLocal || undefined,
+				previewRemoteUrl: srGenRemote || undefined,
 			});
 			if (result.errors.length === 0) onSaved?.(editingRefId);
 		} else {
@@ -178,7 +219,31 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				{#if srType === 'url'}
 					<div class="modal-field">
 						<label id="sr-url-label">Image URL</label>
-						<input type="text" bind:value={srImageUrl} placeholder="https://..." class="modal-input" aria-labelledby="sr-url-label" />
+						<div class="modal-url-row">
+							<input type="text" bind:value={srImageUrl} placeholder="https://... or pick a file" class="modal-input" aria-labelledby="sr-url-label" />
+							{#if isTauri()}
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={browseLocal}
+									title="Pick a local image"
+									aria-label="Browse local image"
+								>{#if localBusy}
+									…
+								{:else}
+									<ChromeIcon id="open-folder" size={16} />
+								{/if}</button>
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => (browserOpen = true)}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
+							{/if}
+						</div>
 					</div>
 				{:else if srType === 'txt2img'}
 					<div class="modal-field">
@@ -203,6 +268,14 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 								{:else}
 									<ChromeIcon id="open-folder" size={16} />
 								{/if}</button>
+								<button
+									class="btn-icon"
+									type="button"
+									disabled={localBusy}
+									onclick={() => (browserOpen = true)}
+									title="Browse images generated in this session"
+									aria-label="Browse session images"
+								><ChromeIcon id="eye" size={16} /></button>
 							{/if}
 						</div>
 					</div>
@@ -221,6 +294,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 						prompt={srPrompt}
 						referenceUrl={srType === 'img2img' ? srImageUrl : undefined}
 						onGenerated={(l, r) => { srGenLocal = l; srGenRemote = r ?? ''; }}
+						onBusyChange={(b) => { pieceBusy = b; }}
 						initialLocal={srGenLocal || null}
 						initialRemote={srGenRemote || null}
 					/>
@@ -228,8 +302,20 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 			</div>
 			<div class="modal-footer">
 				<button class="btn-cancel" onclick={() => (open = false)}>Cancel</button>
-				<button class="btn-confirm" onclick={confirm} disabled={!srValid}>Confirm</button>
+				<button
+					class="btn-confirm"
+					onclick={confirm}
+					disabled={!srValid || pieceBusy}
+					title={pieceBusy ? 'Wait for the in-flight generation to finish' : undefined}
+				>
+					{pieceBusy ? 'Confirm (waiting…)' : 'Confirm'}
+				</button>
 			</div>
 		</div>
 	</div>
+	<SessionImageBrowser
+		bind:open={browserOpen}
+		sessionId={sessionId}
+		onPick={(e) => pickFromSession(e)}
+	/>
 {/if}
