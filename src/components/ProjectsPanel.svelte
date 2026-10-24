@@ -281,23 +281,25 @@
   }
 
   .panel-title {
-    font-size: 11px;
+    /* Template A: natural-case section title. */
+    font-size: 12px;
     font-weight: 700;
     color: var(--panel-left-text);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
   }
 
   .add-btn {
+    /* Template A: soft ghost square — whisper of a translucent surface,
+      hairline, generous radius; accent wash on hover (no filled chip, no
+      glow). */
     width: 22px;
     height: 22px;
-    border-radius: 5px;
-    background: var(--panel-left-border);
-    color: var(--panel-left-text);
-    border: 1px solid var(--panel-left-border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
     cursor: pointer;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -305,9 +307,9 @@
   }
 
   .add-btn:hover {
-    background: var(--panel-left-active);
-    border-color: var(--panel-left-text);
-    box-shadow: 0 0 8px var(--panel-left-border);
+    background: var(--accent-bg);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    color: var(--text-primary);
   }
 
   /* Projects List */
@@ -514,22 +516,26 @@
   }
 
   .add-session-btn {
+    /* Template A: soft ghost — whisper of a translucent surface, hairline,
+       generous radius; recedes until hover. */
     width: 100%;
     padding: 5px;
-    background: transparent;
-    border: 1px dashed var(--panel-left-border);
-    border-radius: 5px;
-    color: var(--panel-left-text);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-secondary);
     cursor: pointer;
     font-size: 10px;
+    font-weight: 500;
     margin-top: 4px;
     transition: all var(--transition-fast);
     font-family: inherit;
   }
 
   .add-session-btn:hover {
-    border-color: var(--panel-left-text);
-    background: var(--panel-left-active);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    background: var(--accent-bg);
+    color: var(--text-primary);
   }
 
   /* Empty State */
@@ -545,11 +551,13 @@
   }
 
   .btn-create {
+    /* Template A: quiet ghost CTA — transparent hairline, accent on hover,
+       no glow. */
     padding: 8px 16px;
-    background: var(--panel-left-border);
-    color: var(--panel-left-text);
-    border: 1px solid var(--panel-left-border);
-    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
     cursor: pointer;
     font-size: 12px;
     font-weight: 500;
@@ -557,8 +565,9 @@
   }
 
   .btn-create:hover {
-    background: var(--panel-left-active);
-    box-shadow: 0 0 12px var(--panel-left-border);
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--text-primary);
   }
 
   /* Modal */

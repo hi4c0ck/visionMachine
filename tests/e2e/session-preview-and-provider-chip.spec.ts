@@ -48,7 +48,7 @@ async function login(page: Page, name: string) {
  * to test the "not set" state.
  */
 async function saveVideoKey(page: Page, key?: string) {
-  await page.locator('.settings-entry').click();
+  await page.locator('.profile-icon.settings').click();
   await page.locator('.tab-btn:has-text("Providers")').click();
   const videoCard = page.locator('.provider-card').nth(2); // text=0, image=1, video=2
   if (key !== undefined) {
@@ -162,13 +162,14 @@ test.describe('ToolsPanel session preview', () => {
     const toolsPanel = page.locator('.tools-panel');
     await expect(toolsPanel).toBeVisible();
 
-    // No composed video → the fallback preview block shows the session name +
-    // pipe count (the `preview-video-box` is absent).
-    const previewArea = toolsPanel.locator('.preview-section');
+    // No composed video → the hero card's pipe-level context shows the
+    // "No preview available" fallback (`.pipe-empty`); a composed output
+    // would render as `.pipe-video` instead (absent here).
+    const previewArea = toolsPanel.locator('.tp-hero');
     await expect(previewArea).toBeVisible();
-    await expect(previewArea.locator('.preview-active')).toBeVisible();
-    await expect(previewArea.locator('.preview-video-box')).toHaveCount(0);
-    await expect(previewArea.locator('.preview-name')).toBeVisible();
+    await expect(previewArea.locator('.hero-card')).toBeVisible();
+    await expect(previewArea.locator('.pipe-video')).toHaveCount(0);
+    await expect(previewArea.locator('.pipe-empty')).toBeVisible();
   });
 
   test('new session has a pipe with default settings shown in the panel', async ({ page }) => {
@@ -182,7 +183,7 @@ test.describe('ToolsPanel session preview', () => {
 
     const toolsPanel = page.locator('.tools-panel');
     // Settings section shows the FPS select (session default 24).
-    const fpsSelect = toolsPanel.locator('.setting-select').first();
+    const fpsSelect = toolsPanel.locator('.set-select').first();
     await expect(fpsSelect).toBeVisible();
     await expect(fpsSelect).toHaveValue('24');
   });

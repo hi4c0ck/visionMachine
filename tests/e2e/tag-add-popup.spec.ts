@@ -109,7 +109,7 @@ test.describe('Add-tag popup (TagSelectorMenu)', () => {
 	async function setFps(page: any, fps: number) {
 		// The FPS select is the only settings select offering value "18".
 		const fpsSelect = page
-			.locator('select.setting-select')
+			.locator('select.set-select')
 			.filter({ has: page.locator('option[value="18"]') });
 		await expect(fpsSelect).toBeVisible();
 		await fpsSelect.selectOption(String(fps));

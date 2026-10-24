@@ -15,7 +15,7 @@ test.describe('Settings', () => {
   });
 
   test('opens the settings modal from the profile panel', async ({ page }) => {
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     const modal = page.locator('.settings-modal');
     await expect(modal).toBeVisible();
     // Defaults tab is the entry point from the profile panel
@@ -23,7 +23,7 @@ test.describe('Settings', () => {
   });
 
   test('provider settings persist to storage and re-seed on reopen', async ({ page }) => {
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const card = page.locator('.provider-card').first(); // text provider
     // Use the custom preset for this round-trip: it is /v1-native, while the
@@ -45,7 +45,7 @@ test.describe('Settings', () => {
     expect(saved.providers.text.apiKey).toBe('sk-test-key-123');
 
     // Reopen: values re-seed into the draft and the card reads Configured
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const card2 = page.locator('.provider-card').first();
     await expect(card2.locator('#prov-preset-text')).toHaveValue('custom');
@@ -55,7 +55,7 @@ test.describe('Settings', () => {
   });
 
   test('API key input masks by default and toggles show/hide', async ({ page }) => {
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const card = page.locator('.provider-card').first();
     const keyInput = card.locator('#prov-key-text');
@@ -68,7 +68,7 @@ test.describe('Settings', () => {
   });
 
   test('new sessions inherit the saved generation defaults', async ({ page }) => {
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     await page.locator('#sd-fps').selectOption('30');
     await page.locator('.settings-modal .btn-confirm').click();
     await expect(page.locator('.settings-modal')).toBeHidden();
@@ -81,12 +81,12 @@ test.describe('Settings', () => {
     await page.locator('.session-item').first().click();
 
     // Tools panel FPS select reflects the inherited default (30)
-    const fps = page.locator('.tools-panel .setting-select').first();
+    const fps = page.locator('.tools-panel .set-select').first();
     await expect(fps).toHaveValue('30');
   });
 
   test('always-new-seed toggle defaults on and persists off', async ({ page }) => {
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     const box = page.locator('#sd-newseed');
     await expect(box).toBeChecked();
     await box.uncheck();
@@ -98,7 +98,7 @@ test.describe('Settings', () => {
   });
 
   test('paid read-only video model shows a badge + limits in the provider card', async ({ page }) => {
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const videoCard = page.locator('.provider-card').nth(2);
     await videoCard.locator('#prov-model-video').selectOption('agnes-video-2.5');

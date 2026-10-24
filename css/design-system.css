@@ -35,20 +35,24 @@
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.14);
 
-  /* Panel accent colors (sketch-coded) */
-  --panel-left-bg: rgba(255, 215, 0, 0.06);
-  --panel-left-border: rgba(255, 215, 0, 0.35);
-  --panel-left-text: rgba(255, 215, 0, 0.75);
-  --panel-left-active: rgba(255, 215, 0, 0.12);
+  /* Panel surfaces (Template A — Open Canvas: one continuous workspace.
+     The sketch-coded yellow/red/pink column tints were neutralized to the
+     theme's own surface + border tokens, so regions read as one canvas with
+     hairline separators. The *text/active* accents keep a neutral
+     secondary/accent treatment instead of the sketch colors. */
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--accent-bg);
 
-  --panel-center-bg: rgba(255, 70, 70, 0.05);
-  --panel-center-border: rgba(255, 70, 70, 0.3);
-  --panel-center-text: rgba(255, 90, 90, 0.8);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(255, 120, 190, 0.06);
-  --panel-right-border: rgba(255, 120, 190, 0.35);
-  --panel-right-text: rgba(255, 120, 190, 0.75);
-  --panel-right-active: rgba(255, 120, 190, 0.12);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--accent-bg);
 
   /* Tag colors */
   --tag-red: #e85050;
@@ -70,13 +74,19 @@
   --shadow-md: 0 8px 32px rgba(0,0,0,0.5);
   --shadow-lg: 0 16px 60px rgba(0,0,0,0.6);
   --shadow-glow: 0 0 30px var(--accent-glow);
-  --shadow-panel-left: inset 0 0 40px rgba(255,215,0,0.03);
-  --shadow-panel-right: inset 0 0 40px rgba(255,120,190,0.03);
+  --shadow-panel-left: none;
+  --shadow-panel-right: none;
 
   /* Transitions */
   --transition-fast: 0.15s ease;
   --transition-med: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Typefaces — reserved for genuinely technical values (timecodes, frame
+     numbers, seeds, numeric readouts). Composer CSS already references
+     var(--font-mono, …); defining it here activates that rule everywhere.
+     Purely additive: no existing property changes. */
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
 }
 
 /* ── JetBrains Dark ───────────────────────────────────────────── */
@@ -108,19 +118,20 @@
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.16);
 
-  --panel-left-bg: rgba(255, 215, 0, 0.04);
-  --panel-left-border: rgba(255, 215, 0, 0.25);
-  --panel-left-text: rgba(255, 215, 0, 0.65);
-  --panel-left-active: rgba(255, 215, 0, 0.08);
+  /* Panel surfaces — neutralized to theme tokens (Template A grammar). */
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--accent-bg);
 
-  --panel-center-bg: rgba(255, 70, 70, 0.04);
-  --panel-center-border: rgba(255, 70, 70, 0.22);
-  --panel-center-text: rgba(255, 90, 90, 0.7);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(255, 120, 190, 0.05);
-  --panel-right-border: rgba(255, 120, 190, 0.28);
-  --panel-right-text: rgba(255, 120, 190, 0.65);
-  --panel-right-active: rgba(255, 120, 190, 0.1);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--accent-bg);
 
   --tag-red: #e85050;
   --tag-yellow: #e8c840;
@@ -163,19 +174,20 @@
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.16);
 
-  --panel-left-bg: rgba(247, 201, 72, 0.05);
-  --panel-left-border: rgba(247, 201, 72, 0.3);
-  --panel-left-text: rgba(247, 201, 72, 0.7);
-  --panel-left-active: rgba(247, 201, 72, 0.1);
+  /* Panel surfaces — neutralized to theme tokens (Template A grammar). */
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--accent-bg);
 
-  --panel-center-bg: rgba(255, 107, 53, 0.05);
-  --panel-center-border: rgba(255, 107, 53, 0.28);
-  --panel-center-text: rgba(255, 130, 80, 0.75);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(247, 201, 72, 0.05);
-  --panel-right-border: rgba(247, 201, 72, 0.28);
-  --panel-right-text: rgba(247, 201, 72, 0.65);
-  --panel-right-active: rgba(247, 201, 72, 0.1);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--accent-bg);
 
   --tag-red: #ff6b35;
   --tag-yellow: #f7c948;
@@ -218,19 +230,20 @@
   --danger-color: #d32f2f;
   --danger-bg: rgba(211, 47, 47, 0.12);
 
-  --panel-left-bg: rgba(200, 160, 0, 0.06);
-  --panel-left-border: rgba(200, 160, 0, 0.3);
-  --panel-left-text: rgba(160, 120, 0, 0.7);
-  --panel-left-active: rgba(200, 160, 0, 0.1);
+  /* Panel surfaces — neutralized to theme tokens (Template A grammar). */
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--accent-bg);
 
-  --panel-center-bg: rgba(200, 50, 50, 0.05);
-  --panel-center-border: rgba(200, 50, 50, 0.25);
-  --panel-center-text: rgba(200, 60, 60, 0.7);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(200, 80, 160, 0.06);
-  --panel-right-border: rgba(200, 80, 160, 0.28);
-  --panel-right-text: rgba(200, 80, 160, 0.7);
-  --panel-right-active: rgba(200, 80, 160, 0.1);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--accent-bg);
 
   --tag-red: #d32f2f;
   --tag-yellow: #f9a825;

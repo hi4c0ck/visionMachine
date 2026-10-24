@@ -2919,8 +2919,8 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		min-height: 0; /* needed so the ProjectsPanel child can shrink/scroll
 		                 instead of pushing the ProfilePanel out of the viewport */
 		background: var(--bg-secondary, #14141f);
-		border-right: 1px solid var(--panel-left-border, rgba(255, 215, 0, 0.35));
-		box-shadow: var(--shadow-panel-left, inset 0 0 40px rgba(255, 215, 0, 0.03));
+		border-right: 1px solid var(--panel-left-border, var(--border, #2a2a3a));
+		box-shadow: var(--shadow-panel-left, none);
 	}
 
 	.composer-area {
@@ -2928,9 +2928,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		position: relative;
 		overflow-y: auto;
 		overflow-x: hidden;
-		background: var(--panel-center-bg, rgba(255, 70, 70, 0.05));
-		border-left: 1px solid var(--panel-center-border, rgba(255, 70, 70, 0.3));
-		border-right: 1px solid var(--panel-right-border, rgba(255, 120, 190, 0.35));
+		background: var(--panel-center-bg, transparent);
+		border-left: 1px solid var(--panel-center-border, var(--border, #2a2a3a));
+		border-right: 1px solid var(--panel-right-border, var(--border, #2a2a3a));
 	}
 
 	.composer-empty {

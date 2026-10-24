@@ -1061,7 +1061,10 @@ import { flashToast } from '$lib/flashToast';
 
 		background: var(--bg-secondary);
 
-		border-radius: 8px;
+		/* Template A (Open Canvas): square region geometry — the pipe sits
+		   directly on the composer canvas; selection is a precise 1px accent
+		   edge, not a glow ring. */
+		border-radius: 0;
 
 		border: 1px solid var(--border-color);
 
@@ -1073,7 +1076,7 @@ import { flashToast } from '$lib/flashToast';
 
 		border-color: var(--accent-color);
 
-		box-shadow: 0 0 0 2px var(--accent-color);
+		box-shadow: none;
 
 	}
 
@@ -1081,22 +1084,17 @@ import { flashToast } from '$lib/flashToast';
 
 	.btn-add-pipe {
 
-		background: var(--bg-tertiary);
-
-		border: 1px dashed var(--border-color);
-
+		/* Template A: soft ghost button — translucent surface, hairline border,
+	   generous radius; recedes on the canvas, accent wash on hover. */
+		background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+		border: 1px solid var(--border-color);
 		color: var(--text-secondary);
-
 		cursor: pointer;
-
-		padding: 6px 12px;
-
-		border-radius: 6px;
-
+		padding: 6px 14px;
+		border-radius: 10px;
 		font-size: 12px;
-
+		font-weight: 500;
 		transition: all 0.2s;
-
 		align-self: flex-start;
 
 	}
@@ -1105,9 +1103,11 @@ import { flashToast } from '$lib/flashToast';
 
 	.btn-add-pipe:hover {
 
-		border-color: var(--accent-color);
+		border-color: color-mix(in srgb, var(--accent-color) 50%, transparent);
 
-		color: var(--accent-color);
+		color: var(--text-primary);
+
+		background: var(--accent-bg);
 
 	}
 

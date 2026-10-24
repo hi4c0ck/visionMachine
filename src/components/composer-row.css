@@ -21,11 +21,11 @@
 	gap: 8px;
 	min-height: 24px;
 	padding: 2px 2px;
-	font-size: 11px;
+	/* Template A (Open Canvas): natural capitalization — hierarchy comes
+	   from weight + spacing, not decorative uppercase labels. */
+	font-size: 12px;
 	font-weight: 600;
 	color: var(--text-secondary);
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
 }
 
 .row-label {

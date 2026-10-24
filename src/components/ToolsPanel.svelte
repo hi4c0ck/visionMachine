@@ -711,10 +711,10 @@
 	}
 
 	/* ── HERO: focus breadcrumb + smart actions ─────────────────────── */
+	/* Template A: flat hero — the accent wash gradient is decorative; the
+	   region reads as one continuous inspector surface. */
 	.tp-hero {
 		border-bottom: 1px solid var(--panel-right-border);
-		background:
-			linear-gradient(180deg, color-mix(in srgb, var(--accent, #ff3e00) 9%, transparent), transparent 70%);
 	}
 
 	/* Breadcrumb chips: the current level is the accent, the ancestors are
@@ -875,7 +875,8 @@
 		height: 40px;
 		padding: 0 12px;
 		overflow: hidden;
-		border-radius: 10px;
+		/* Template A: one small-radius convention for interactive controls. */
+		border-radius: 3px;
 		font-size: 13px;
 		font-weight: 700;
 		letter-spacing: 0.02em;
@@ -895,17 +896,18 @@
 		flex: 0 0 auto;
 	}
 
-	/* Generate = primary: filled accent, the star of the panel. Flat — the
-	   weight comes from the solid fill + a soft glow, not a 3D shadow. */
+	/* Generate = primary: solid accent fill, the star of the panel.
+	   Template A: no decorative gradient/glow — the fill alone carries
+	   the emphasis; hover lifts the tone, not a shadow. */
 	.act-primary {
-		color: #fff;
-		background: var(--gradient-btn);
-		border: none;
-		box-shadow: 0 2px 10px var(--accent-glow);
+		color: var(--text-inverse, #0a0a0f);
+		background: var(--accent);
+		border: 1px solid var(--accent);
+		box-shadow: none;
 	}
 	.act-primary:hover:not(:disabled) {
-		background: var(--gradient-btn-hover);
-		box-shadow: 0 4px 16px var(--accent-glow);
+		background: var(--accent-hover);
+		border-color: var(--accent-hover);
 	}
 	.act-primary:disabled {
 		filter: saturate(0.4) brightness(0.9);
@@ -918,10 +920,6 @@
 	   visual — subtle, not a foreign icon. */
 	.act-scope-pipe {
 		filter: saturate(0.85);
-		box-shadow: 0 1px 5px var(--accent-glow);
-	}
-	.act-scope-pipe:hover:not(:disabled) {
-		box-shadow: 0 2px 9px var(--accent-glow);
 	}
 	/* The corner "notch" — a light L-bracket at top-left. Light (not accent)
 	   so it actually reads on the filled accent button. Signals "pipe-scoped". */
@@ -1106,11 +1104,11 @@
 		padding: 9px 12px;
 	}
 	.sec-title {
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-		color: var(--panel-right-text);
+		/* Template A: natural-case section headings — hierarchy from
+		   weight + quiet secondary color, not decorative uppercase. */
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-secondary);
 	}
 	.out-meta {
 		font-size: 10px;
@@ -1141,10 +1139,9 @@
 		width: 100%;
 	}
 	.set-lab {
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
+		/* Template A: natural-case control labels; quiet, not shouty. */
+		font-size: 10px;
+		font-weight: 600;
 		color: var(--text-muted);
 	}
 	/* The "sends 16:9" echo — one line, value in the accent mono. */
@@ -1170,7 +1167,8 @@
 		color: var(--text-primary);
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 9px;
+		/* Template A: consistent small-radius control geometry. */
+		border-radius: 3px;
 		cursor: pointer;
 		-webkit-appearance: none;
 		appearance: none;
@@ -1413,10 +1411,9 @@
 		color: var(--text-primary);
 	}
 	.stat span {
-		font-size: 8px;
-		font-weight: 600;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
+		/* Template A: quiet secondary metadata, natural case. */
+		font-size: 9px;
+		font-weight: 500;
 		color: var(--text-muted);
 	}
 
@@ -1525,11 +1522,12 @@
 		border-color: var(--border-light, #4a4a55);
 	}
 	.btn-confirm {
+		/* Template A: solid accent, small-radius control geometry, no glow. */
 		padding: 8px 16px;
-		background: var(--gradient-accent, var(--gradient-btn));
-		color: #fff;
-		border: none;
-		border-radius: 6px;
+		background: var(--accent);
+		color: var(--text-inverse, #0a0a0f);
+		border: 1px solid var(--accent);
+		border-radius: 3px;
 		cursor: pointer;
 		font-size: 13px;
 		font-weight: 600;
@@ -1537,13 +1535,11 @@
 		transition: all var(--transition-fast);
 	}
 	.btn-confirm:hover:not(:disabled) {
-		box-shadow: var(--shadow-glow, var(--accent-glow));
-		transform: translateY(-1px);
+		background: var(--accent-hover);
+		border-color: var(--accent-hover);
 	}
 	.btn-confirm:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
-		transform: none;
-		box-shadow: none;
 	}
 </style>
