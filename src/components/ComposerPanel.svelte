@@ -198,6 +198,26 @@ import { flashToast } from '$lib/flashToast';
 		}
 	});
 
+	// ── Auto-scroll: keep the composer column following the top-panel playhead.
+	//    Sweeping the session video (or stepping frames) makes Workspace set
+	//    activePipeIdx to the pipe the frame lands in — that pipe becomes
+	//    `.pipe.active`. When a pipe is focused it must be visible, so we
+	//    scroll the active pipe's element into view. block:'nearest' only
+	//    scrolls the minimum needed, so a pipe that is already on screen is
+	//    a no-op (manual clicks on a visible pipe never jump the view).
+	//    The map is keyed by pipe index: when {#each} recreates a pipe's
+	//    element the action re-runs and overwrites the entry, so no
+	//    per-element cleanup is needed (component-level onDestroy below
+	//    drops the whole map on unmount).
+	const pipeEls = new Map<number, HTMLElement>();
+	function pipeEl(node: HTMLElement, idx: number) {
+		pipeEls.set(idx, node);
+	}
+	$effect(() => {
+		if (activePipeIdx === null) return;
+		pipeEls.get(activePipeIdx)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	});
+
 	// ── Focus for the context-sensitive tool panel ─────────────────────────
 	// Previous pipe in timeline order (for the slot-1 "use last frame" feature).
 	const prevPipe = $derived(
@@ -818,7 +838,7 @@ import { flashToast } from '$lib/flashToast';
 
 	<div class="composer-panel">
 	{#each pipes as pipe, pipeIdx (pipe.id)}
-		<div class="pipe" class:active={activePipeIdx === pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>
+		<div class="pipe" class:active={activePipeIdx === pipeIdx} use:pipeEl={pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>
 			<!-- ═══ PIPE HEADER ═══ -->
 			<PipeHeader
 				{pipe}
