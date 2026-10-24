@@ -94,19 +94,189 @@ fn init_database_sync(app_data_dir: &std::path::Path) -> Result<Database, String
     })
 }
 
-pub fn run() {
-    // Force WebView2 to use a unique isolated profile per process to avoid resource conflicts
-    let unique_profile = format!(
-        "C:\\Users\\Public\\Documents\\visionmachine_webview_{}",
-        std::process::id()
-    );
-    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &unique_profile);
+/// One-time sweep of the orphaned per-PID webview profiles the old build
+/// left in `C:\Users\Public\Documents\visionmachine_webview_{pid}`.
+/// Best-effort: it never blocks startup, and it SKIPS any folder still in
+/// use (recently modified) so a concurrently running *legacy* build is not
+/// broken mid-session.
+fn cleanup_legacy_webview_profiles() {
+    // Legacy location (the old per-PID hack). Nothing new is ever written
+    // here anymore, so this is safe to reclaim over time.
+    let base = std::path::Path::new(r"C:\Users\Public\Documents");
+    let Ok(entries) = base.read_dir() else {
+        return;
+    };
 
-    if let Err(e) = std::fs::create_dir_all(&unique_profile) {
-        eprintln!("Warning: Failed to create webview profile: {}", e);
+    let fresh = std::time::SystemTime::now();
+    let mut removed = 0usize;
+    let mut skipped = 0usize;
+    for entry in entries.flatten() {
+        let fname = entry.file_name(); // owned, outlives the `to_string_lossy` borrow
+        let name_str = fname.to_string_lossy();
+        // Only the exact legacy pattern; never touch anything else.
+        if !name_str.starts_with("visionmachine_webview_") {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // Freshness guard: if ANY file under it was modified within the last
+        // 2 hours, a legacy instance may still own it → leave it alone.
+        let newest =
+            newest_item_mtime(&path, 3).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if fresh.duration_since(newest).is_ok_and(|d| d < std::time::Duration::from_secs(2 * 3600)) {
+            skipped += 1;
+            continue;
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                removed += 1;
+                log::info!("[Cleanup] removed legacy webview profile {path:?}");
+            }
+            Err(e) => {
+                log::warn!("[Cleanup] could not remove {path:?}: {e}");
+            }
+        }
     }
+    if removed > 0 || skipped > 0 {
+        log::info!(
+            "[Cleanup] legacy webview profiles: {removed} removed, {skipped} still-in-use kept"
+        );
+    }
+}
 
-    log::info!("[WebView2] Using isolated profile: {}", unique_profile);
+/// Most-recently-modified file under `root` (bounded to `depth` levels).
+/// `None` when the tree is empty or unreadable.
+fn newest_item_mtime(root: &std::path::Path, depth: u32) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    fn walk(dir: &std::path::Path, depth: u32, newest: &mut Option<std::time::SystemTime>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let mtime = entry.metadata().ok().and_then(|m| m.modified().ok());
+            if let Some(m) = mtime {
+                if newest.is_none() || m > newest.unwrap() {
+                    *newest = Some(m);
+                }
+            }
+            if depth > 0 && entry.path().is_dir() {
+                walk(&entry.path(), depth - 1, newest);
+            }
+        }
+    }
+    walk(root, depth, &mut newest);
+    newest
+}
+
+/// One-time recovery of the UI state (theme, username, layout, settings)
+/// that the old per-PID profile wiped on every launch: copy the most recent
+/// legacy profile's Local Storage into the new stable profile — but ONLY
+/// when the stable profile has no Local Storage yet (i.e. first launch
+/// after the fix). A leveldb store is a set of plain files, so a recursive
+/// copy while no WebView is holding it is safe; on a running *legacy*
+/// build the source may be in use, so this is best-effort and never
+/// blocks startup.
+fn migrate_legacy_webview_profile(stable_dir: &std::path::Path) {
+    let target = stable_dir.join("EBWebView").join("Default").join("Local Storage");
+    if target.exists() {
+        return; // stable profile already owns a Local Storage — don't clobber
+    }
+    let base = std::path::Path::new(r"C:\Users\Public\Documents");
+    let Ok(entries) = base.read_dir() else {
+        return;
+    };
+    // Most recently touched legacy profile that actually has a leveldb store.
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in entries.flatten() {
+        let fname = entry.file_name(); // owned, outlives the `to_string_lossy` borrow
+        if !fname.to_string_lossy().starts_with("visionmachine_webview_") {
+            continue;
+        }
+        let ls = entry.path().join("EBWebView").join("Default").join("Local Storage");
+        if !ls.join("leveldb").exists() {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if newest
+            .as_ref()
+            .map(|(t, _)| *t)
+            .is_none_or(|t| mtime > t)
+        {
+            newest = Some((mtime, ls));
+        }
+    }
+    match newest {
+        Some((_, src)) => {
+            match copy_dir_recursive(&src, &target) {
+                Ok(()) => log::info!(
+                    "[Migration] restored Local Storage into the stable webview profile (from {src:?})"
+                ),
+                Err(e) => log::warn!("[Migration] could not copy {src:?} -> {target:?}: {e}"),
+            }
+        }
+        None => {}
+    }
+}
+
+/// Copy a directory tree (files only are meaningful here — a leveldb is a
+/// handful of top-level files). Best-effort, used once at startup.
+fn copy_dir_recursive(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn run() {
+    // ── App data directory (before the Tauri builder) ───────────────────
+    // One stable home for all app state: SQLite DB, media trees, logs — and
+    // the WebView2 profile (where localStorage lives: vm-theme, vm-username,
+    // vm-layout, vm-settings-*).
+    let app_data_dir = dirs::data_local_dir()
+        .map(|d| d.join("com.visionmachine.desktop"))
+        .unwrap_or_else(|| std::env::temp_dir().join("visionmachine"));
+
+    // WebView2 user data folder: ONE stable profile per app. WebView2 stores
+    // localStorage inside it. (Former bug: a unique per-PID profile under
+    // C:\Users\Public\Documents, so every launch started with a FRESH EMPTY
+    // localStorage — theme/username/layout never survived a restart, and
+    // hundreds of MB of orphaned profile folders piled up.)
+    //
+    // Sharing the folder across concurrent instances is safe: they all use
+    // the same (default) CoreWebView2EnvironmentOptions, which is the only
+    // case WebView2 allows on one user-data folder.
+    let webview_profile = app_data_dir.clone();
+    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", &webview_profile);
+    if let Err(e) = std::fs::create_dir_all(&webview_profile) {
+        eprintln!("Warning: Failed to create webview profile dir: {e}");
+    }
+    log::info!(
+        "[Setup] App data directory: {:?} (WebView2 profile: {}/EBWebView)",
+        app_data_dir,
+        app_data_dir.display()
+    );
+
+    // One-time sweep of the orphaned per-PID profiles the old build left
+    // behind (best-effort; recent ones are skipped so a still-running
+    // legacy build is never broken).
+    cleanup_legacy_webview_profiles();
+
+    // One-time recovery of the UI state (theme / username / layout /
+    // settings) the old per-PID profile kept wiping: seed the new stable
+    // profile's Local Storage from the most recent legacy profile, but ONLY
+    // when the stable profile has none yet (first launch after the fix).
+    // Runs before the Tauri webview boots, so the leveldb is not locked.
+    migrate_legacy_webview_profile(&webview_profile);
 
     // Run pre-flight checks
     let report = run_preflight_checks();
@@ -118,14 +288,9 @@ pub fn run() {
         std::process::exit(1);
     }
 
-    // Get app data directory early (before Tauri builder)
-    let app_data_dir = dirs::data_local_dir()
-        .map(|d| d.join("com.visionmachine.desktop"))
-        .unwrap_or_else(|| std::env::temp_dir().join("visionmachine"));
-
-    log::info!("[Setup] App data directory: {:?}", app_data_dir);
-
     // Initialize database synchronously (outside Tauri runtime)
+    // (`app_data_dir` + WebView2 profile were resolved above, before the
+    // webview boots — that ordering is what makes localStorage persist).
     let db = match init_database_sync(&app_data_dir) {
         Ok(db) => db,
         Err(e) => {
