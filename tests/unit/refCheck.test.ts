@@ -123,21 +123,25 @@ describe('refCheck.checkRemoteUrls', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('marks unreachable urls as broken (http error)', async () => {
+  it('marks an HTTP error response as broken', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 404 });
     const targets = [{ refKind: 'keyframe', refId: 'k1', url: 'https://a.com/k1.png' }];
     const broken = await checkRemoteUrls(targets);
     expect(broken.map((t) => t.refId)).toEqual(['k1']);
   });
 
-  it('marks network failures as broken', async () => {
-    fetchMock.mockRejectedValue(new Error('network down'));
-    const targets = [{ refKind: 'subject', refId: 's1', url: 'https://a.com/s1.png' }];
+  it('does NOT mark a thrown fetch (CORS/network) as broken — the engine checks authoritatively', async () => {
+    // A cross-origin media URL the browser cannot READ (CORS) throws exactly
+    // like a down host does; the app already displays the image via <img>,
+    // so only a definitive HTTP error counts. The provider engine (reqwest,
+    // no CORS) is the authoritative reachability check.
+    fetchMock.mockRejectedValue(new Error('Failed to fetch (CORS)'));
+    const targets = [{ refKind: 'keyframe', refId: 'k1', url: 'https://a.com/k1.png' }];
     const broken = await checkRemoteUrls(targets);
-    expect(broken.map((t) => t.refId)).toEqual(['s1']);
+    expect(broken).toEqual([]);
   });
 
-  it('marks a target as broken when the fetch times out', async () => {
+  it('does NOT mark a timeout as broken (uncheckable → engine decides)', async () => {
     vi.useFakeTimers();
     fetchMock.mockImplementation((_url: string, opts: { signal?: AbortSignal }) => {
       return new Promise((_resolve, reject) => {
@@ -149,6 +153,6 @@ describe('refCheck.checkRemoteUrls', () => {
     const p = checkRemoteUrls(targets, 100);
     await vi.advanceTimersByTimeAsync(150);
     const broken = await p;
-    expect(broken.map((t) => t.refId)).toEqual(['k1']);
+    expect(broken).toEqual([]);
   });
 });
