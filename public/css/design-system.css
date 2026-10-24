@@ -35,20 +35,23 @@
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.14);
 
-  /* Panel accent colors (sketch-coded) */
-  --panel-left-bg: rgba(255, 215, 0, 0.06);
-  --panel-left-border: rgba(255, 215, 0, 0.35);
-  --panel-left-text: rgba(255, 215, 0, 0.75);
-  --panel-left-active: rgba(255, 215, 0, 0.12);
+  /* Panel surfaces (Template A — Open Canvas): the sketch-coded yellow /
+     red / pink column tints are neutralized to the theme's own surface +
+     border + text tokens, so the three columns read as one continuous
+     canvas with hairline separators and no colored noise. */
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--bg-hover);
 
-  --panel-center-bg: rgba(255, 70, 70, 0.05);
-  --panel-center-border: rgba(255, 70, 70, 0.3);
-  --panel-center-text: rgba(255, 90, 90, 0.8);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(255, 120, 190, 0.06);
-  --panel-right-border: rgba(255, 120, 190, 0.35);
-  --panel-right-text: rgba(255, 120, 190, 0.75);
-  --panel-right-active: rgba(255, 120, 190, 0.12);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--bg-hover);
 
   /* Tag colors */
   --tag-red: #e85050;
@@ -60,8 +63,8 @@
 
   /* Gradients */
   --gradient-accent: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
-  --gradient-panel-left: linear-gradient(180deg, rgba(255,215,0,0.08) 0%, transparent 100%);
-  --gradient-panel-right: linear-gradient(180deg, rgba(255,120,190,0.08) 0%, transparent 100%);
+  --gradient-panel-left: none;
+  --gradient-panel-right: none;
   --gradient-btn: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
   --gradient-btn-hover: linear-gradient(135deg, var(--accent-hover) 0%, #c9a0ff 100%);
 
@@ -70,8 +73,8 @@
   --shadow-md: 0 8px 32px rgba(0,0,0,0.5);
   --shadow-lg: 0 16px 60px rgba(0,0,0,0.6);
   --shadow-glow: 0 0 30px var(--accent-glow);
-  --shadow-panel-left: inset 0 0 40px rgba(255,215,0,0.03);
-  --shadow-panel-right: inset 0 0 40px rgba(255,120,190,0.03);
+  --shadow-panel-left: none;
+  --shadow-panel-right: none;
 
   /* Transitions */
   --transition-fast: 0.15s ease;
@@ -108,19 +111,19 @@
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.16);
 
-  --panel-left-bg: rgba(255, 215, 0, 0.04);
-  --panel-left-border: rgba(255, 215, 0, 0.25);
-  --panel-left-text: rgba(255, 215, 0, 0.65);
-  --panel-left-active: rgba(255, 215, 0, 0.08);
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--bg-hover);
 
-  --panel-center-bg: rgba(255, 70, 70, 0.04);
-  --panel-center-border: rgba(255, 70, 70, 0.22);
-  --panel-center-text: rgba(255, 90, 90, 0.7);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(255, 120, 190, 0.05);
-  --panel-right-border: rgba(255, 120, 190, 0.28);
-  --panel-right-text: rgba(255, 120, 190, 0.65);
-  --panel-right-active: rgba(255, 120, 190, 0.1);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--bg-hover);
 
   --tag-red: #e85050;
   --tag-yellow: #e8c840;
@@ -163,19 +166,19 @@
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.16);
 
-  --panel-left-bg: rgba(247, 201, 72, 0.05);
-  --panel-left-border: rgba(247, 201, 72, 0.3);
-  --panel-left-text: rgba(247, 201, 72, 0.7);
-  --panel-left-active: rgba(247, 201, 72, 0.1);
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--bg-hover);
 
-  --panel-center-bg: rgba(255, 107, 53, 0.05);
-  --panel-center-border: rgba(255, 107, 53, 0.28);
-  --panel-center-text: rgba(255, 130, 80, 0.75);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(247, 201, 72, 0.05);
-  --panel-right-border: rgba(247, 201, 72, 0.28);
-  --panel-right-text: rgba(247, 201, 72, 0.65);
-  --panel-right-active: rgba(247, 201, 72, 0.1);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--bg-hover);
 
   --tag-red: #ff6b35;
   --tag-yellow: #f7c948;
@@ -218,19 +221,19 @@
   --danger-color: #d32f2f;
   --danger-bg: rgba(211, 47, 47, 0.12);
 
-  --panel-left-bg: rgba(200, 160, 0, 0.06);
-  --panel-left-border: rgba(200, 160, 0, 0.3);
-  --panel-left-text: rgba(160, 120, 0, 0.7);
-  --panel-left-active: rgba(200, 160, 0, 0.1);
+  --panel-left-bg: var(--bg-secondary);
+  --panel-left-border: var(--border);
+  --panel-left-text: var(--text-secondary);
+  --panel-left-active: var(--bg-hover);
 
-  --panel-center-bg: rgba(200, 50, 50, 0.05);
-  --panel-center-border: rgba(200, 50, 50, 0.25);
-  --panel-center-text: rgba(200, 60, 60, 0.7);
+  --panel-center-bg: transparent;
+  --panel-center-border: var(--border);
+  --panel-center-text: var(--text-secondary);
 
-  --panel-right-bg: rgba(200, 80, 160, 0.06);
-  --panel-right-border: rgba(200, 80, 160, 0.28);
-  --panel-right-text: rgba(200, 80, 160, 0.7);
-  --panel-right-active: rgba(200, 80, 160, 0.1);
+  --panel-right-bg: var(--bg-tertiary);
+  --panel-right-border: var(--border);
+  --panel-right-text: var(--text-secondary);
+  --panel-right-active: var(--bg-hover);
 
   --tag-red: #d32f2f;
   --tag-yellow: #f9a825;
