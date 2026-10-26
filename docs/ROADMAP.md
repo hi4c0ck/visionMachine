@@ -35,10 +35,11 @@ shippable — each links to the doc/component that owns the detail. Anything
 
 ---
 
-## Next release (v0.7.8)
+## Next release (v0.7.11)
 
-Target items for the version after v0.7.7. Each is small and shippable; the
-linked doc/component owns the detail.
+Open items carried forward from the v0.7.8/v0.7.9 targets (none of these
+blocked v0.7.10, which shipped the persistence/provider/design fixes). Each
+is small and shippable; the linked doc/component owns the detail.
 
 - [ ] **Remove legacy Agnes Video V2.0** — the provider has retired it
       (v0.7.7 already marks it obsolete / legacy-terms in the catalog). Drop the
@@ -119,14 +120,17 @@ Two distinct fixes (do both):
       `CODE_OF_CONDUCT.md`, and the `CODEOWNERS`/`dependabot`/issue+PR
       templates already on `production`. `main` can stay as a stale reference
       or be deleted once the switch is confirmed.
-- [ ] **Make `LICENSE` the verbatim canonical GPL-3.0 text** so the detector
-      tags it `GPL-3.0` (choosealicense fuzzy-matches the *whole* file; the
-      custom preamble + appended `VISIONMACHINE ATTRIBUTION ADDENDUM` break the
-      match). Move the addendum fully into `NOTICE.md` (the standards-
-      compliant home for copyright + extra conditions; the §4/§14 legal effect
-      is unchanged). The "others" the community page still lists as absent:
+- [x] **Make `LICENSE` the verbatim canonical GPL-3.0 text** (shipped
+      v0.7.10): the file is now a byte-exact copy of the GNU distributed
+      `gpl-3.0.txt` (verified against two independent mirrors), no custom
+      preamble, complete tail. The copyright + the full `VISIONMACHINE
+      ATTRIBUTION ADDENDUM` live in `NOTICE.md` (the standards-compliant home
+      for copyright + extra conditions; the §4/§14 legal effect is
+      unchanged), and `NOTICE.md`'s stale "addendum is in LICENSE" reference
+      was fixed. The "others" the community page still lists as absent:
       a `FUNDING.yml` (optional), repo **topics**, and `CONTRIBUTING`/
-      `CODE_OF_CONDUCT` *on the default branch*.
+      `CODE_OF_CONDUCT` *on the default branch* — all gated on the
+      default-branch switch below.
 
 ---
 

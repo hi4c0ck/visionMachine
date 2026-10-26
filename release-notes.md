@@ -1,3 +1,18 @@
+# VisionMachine v0.7.10
+
+### Your work stays put
+- Your settings, theme choice, and saved layouts now persist across app restarts instead of quietly resetting to defaults.
+
+### Generation & provider
+- Finished videos now download correctly instead of the run stalling partway through.
+- A generation that fails now clearly reads "Generation failed" rather than claiming success.
+- Media links that actually work no longer block a single pipe from generating.
+
+### A calmer interface
+- The timeline now scrolls the active pipe into view as playback moves past it.
+- The generation and settings dialogs are easier to read and stay consistent with the rest of the app.
+- The projects panel selection is calmer, with more familiar folder icons.
+
 # VisionMachine v0.7.9
 
 ### Image browser (new)
