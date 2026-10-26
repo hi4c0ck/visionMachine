@@ -351,7 +351,7 @@
 
 	.gen-stage-status {
 		color: var(--text-muted, #71717a);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 11px;
 		text-align: right;
 	}
@@ -389,7 +389,7 @@
 		display: inline-block;
 		font-size: 10px;
 		color: var(--warning-color, #fbbf24);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		animation: pulse-rl 1.2s ease-in-out infinite;
 	}
 
@@ -397,7 +397,7 @@
 		display: block;
 		font-size: 10px;
 		color: var(--text-muted, #71717a);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		margin-top: 2px;
 		font-style: italic;
 	}
@@ -454,7 +454,7 @@
 
 	.gen-models-sub {
 		display: block;
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 11px;
 		color: var(--text-muted, #71717a);
 		margin-top: 4px;
@@ -464,7 +464,7 @@
 		display: block;
 		font-size: 10px;
 		color: var(--text-muted, #71717a);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 	}
 
 	.gen-cancel-all {
@@ -477,7 +477,7 @@
 
 	.gen-elapsed {
 		margin-left: auto;
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 11px;
 		color: var(--text-muted, #71717a);
 	}
@@ -487,7 +487,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		font-size: 10px;
 		color: var(--text-muted, #71717a);
 		opacity: 0.8;
@@ -540,7 +540,7 @@
 		border-radius: 6px;
 		color: var(--text-muted, #71717a);
 		font-size: 11px;
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		padding: 5px 10px;
 		cursor: pointer;
 	}
@@ -564,7 +564,7 @@
 		border-radius: 6px;
 		padding: 8px 10px;
 		font-size: 10px;
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		color: var(--text-muted, #71717a);
 		white-space: pre-wrap;
 		word-break: break-all;
@@ -575,7 +575,7 @@
 		margin-top: 10px;
 		font-size: 11px;
 		color: var(--text-muted, #71717a);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 	}
 
 	.gen-refresh {
@@ -584,13 +584,13 @@
 		border-radius: 6px;
 		color: var(--text-muted, #71717a);
 		font-size: 11px;
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		padding: 5px 10px;
 		cursor: pointer;
 	}
 
 	.gen-refresh:hover {
 		color: var(--text-primary, #fff);
-		background: rgba(255, 255, 255, 0.08);
+		background: var(--bg-hover, rgba(255, 255, 255, 0.08));
 	}
 </style>

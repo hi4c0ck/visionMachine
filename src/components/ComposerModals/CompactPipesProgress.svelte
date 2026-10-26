@@ -250,7 +250,7 @@
   .gen-compose-note.ok { color: var(--success-color, #4ade80); border-color: color-mix(in srgb, var(--success-color, #4ade80) 40%, transparent); background: color-mix(in srgb, var(--success-color, #4ade80) 8%, transparent); }
   .gen-compose-note.warning, .gen-compose-note.info { color: var(--warning-color, #fbbf24); border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 40%, transparent); background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent); }
   .gen-compose-note.error { color: var(--error-color, #f87171); border-color: color-mix(in srgb, var(--error-color, #f87171) 40%, transparent); background: color-mix(in srgb, var(--error-color, #f87171) 8%, transparent); }
-  .gen-compose-detail { font: 11px 'JetBrains Mono', monospace; opacity: 0.85; overflow-wrap: anywhere; }
+  .gen-compose-detail { font: 11px var(--font-mono, 'JetBrains Mono', monospace); opacity: 0.85; overflow-wrap: anywhere; }
 
   /* ── Footer: consistent with the shared modal-footer button sizing ── */
   .gen-group-footer { padding: 14px 20px; gap: 10px; }

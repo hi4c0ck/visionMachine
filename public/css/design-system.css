@@ -83,6 +83,12 @@
   --transition-fast: 0.15s ease;
   --transition-med: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Typography — global (not theme-specific). The UI face comes from the
+     <body> rule below; these tokens give components a single source of truth
+     so they stop hardcoding 'JetBrains Mono' / 'Inter' inline. */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
 /* ── JetBrains Dark ───────────────────────────────────────────── */

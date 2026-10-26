@@ -290,7 +290,7 @@
 	.probe-line {
 		font-size: 0.72rem;
 		color: var(--text-muted, #71717a);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		display: flex;
 		align-items: center;
 		gap: 4px;

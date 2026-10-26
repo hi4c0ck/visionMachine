@@ -211,7 +211,7 @@
 
 	.status-badge.ok {
 		color: var(--success-color, #4ade80);
-		border-color: rgba(74, 222, 128, 0.4);
+		border-color: color-mix(in srgb, var(--success-color, #4ade80) 40%, transparent);
 	}
 
 	.field {
