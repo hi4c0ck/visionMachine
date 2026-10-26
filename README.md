@@ -7,7 +7,7 @@ it all into one finished clip. Runs on your machine. No subscription, no
 per-frame fees.
 
 <p align="center">
-  <img src="img/screenshot-composer.png" alt="VisionMachine composer" width="100%">
+  <img src="img/composer-hero.gif" alt="VisionMachine composer in motion — keyframes, timeline tags, and generated footage" width="720">
 </p>
 
 ## <img src="img/icons/why-visionmachine.png" width="36" align="absmiddle" alt=""> Why VisionMachine
