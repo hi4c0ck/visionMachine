@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { GenerationTaskView, PipeRow } from '$types';
-  import { groupStaleUiState, groupComposeUiState } from '$lib/compactPipes';
+  import { groupStaleUiState, groupComposeUiState, stageStatusWord, stageStateClass } from '$lib/compactPipes';
   import '../composer-modal.css';
   import ChromeIcon from '../ChromeIcon.svelte';
 
@@ -165,10 +165,15 @@
                   </div>
                   <ul class="gen-stage-list">
                     {#each task.stages as stage (stage.id + ':' + stage.label)}
-                      <li class="gen-stage" class:done={stage.status === 'done' || stage.status === 'ready'} class:error={stage.status === 'error'} class:cancelled={stage.status === 'cancelled'} class:ratelimited={stage.status === 'rate-limited'}>
-                        <span class="gen-stage-label">{stage.label}</span>
-                        <span class="gen-stage-status">{stage.status}{stage.error ? ` · ${stage.error}` : ''}</span>
-                        {#if stage.lastEvent}<span class="gen-stage-lastevent">{stage.lastEvent}</span>{/if}
+                      {@const stateCls = stageStateClass(stage.status)}
+                      <li class="gen-stage {stateCls ?? ''}" data-stage-status={stage.status}>
+                        <span class="gen-stage-dot" aria-hidden="true"></span>
+                        <div class="gen-stage-main">
+                          <span class="gen-stage-label">{stage.label}</span>
+                          {#if stage.error}<span class="gen-stage-error">{stage.error}</span>{/if}
+                          {#if stage.lastEvent}<span class="gen-stage-lastevent">{stage.lastEvent}</span>{/if}
+                        </div>
+                        <span class="gen-stage-status">{stageStatusWord(stage.status)}</span>
                       </li>
                     {/each}
                   </ul>
@@ -254,15 +259,4 @@
 
   /* ── Footer: consistent with the shared modal-footer button sizing ── */
   .gen-group-footer { padding: 14px 20px; gap: 10px; }
-
-  /* ── Local overrides for the shared gen-progress-* geometry ── */
-  .gen-progress-fill { height: 100%; background: var(--accent-color, #ff3e00); transition: width 0.25s ease; }
-  .gen-progress-bar { height: 7px; border-radius: 4px; }
-  .gen-progress-bar .gen-progress-fill { height: 100%; border-radius: 4px; }
-  .gen-progress-track-fill { height: 100%; }
-  .gen-progress-track-fill.done { background: var(--success-color, #4ade80); }
-
-  /* Minimize button (D10) — matches GenerationProgressModal's affordance. */
-  .btn-minimize { padding: 10px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid var(--border-color, #3f3f46); background: var(--bg-tertiary, rgba(255, 255, 255, 0.04)); color: var(--text-secondary, #a1a1aa); }
-  .btn-minimize:hover { border-color: var(--accent-color, #ff3e00); color: var(--text-primary, #fff); }
 </style>

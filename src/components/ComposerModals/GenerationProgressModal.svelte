@@ -6,6 +6,7 @@
 	import type { GenerationLogEntry, GenerationLogPiece, GenerationTaskView } from '$types';
 	import { readMediaText } from '$lib/mediaUrl';
 	import { generationFailureMessage } from '$lib/generationErrors';
+	import { stageStatusWord, stageStateClass } from '$lib/compactPipes';
 	import '../composer-modal.css';
 
 	let {
@@ -199,29 +200,28 @@
 							 previously-persisted task rows whose stage ids predate the
 							 unique-id fix (multiple keyframes shared one id). -->
 						{#each task.stages as stage (stage.id + ':' + stage.label)}
-							<li
-								class="gen-stage"
-								class:done={stage.status === 'done' || stage.status === 'ready'}
-								class:error={stage.status === 'error'}
-								class:cancelled={stage.status === 'cancelled'}
-								class:ratelimited={stage.status === 'rate-limited'}
-							>
-								<span class="gen-stage-label">{stage.label}</span>
-								<span class="gen-stage-status">
+							{@const stateCls = stageStateClass(stage.status)}
+							<li class="gen-stage {stateCls ?? ''}" data-stage-status={stage.status}>
+								<span class="gen-stage-dot" aria-hidden="true"></span>
+								<div class="gen-stage-main">
+									<span class="gen-stage-label">{stage.label}</span>
 									{#if modelFor(stage)}
 										<span class="gen-stage-model">{modelFor(stage)}</span>
 									{/if}
-									{#if stage.status === 'rate-limited'}
-										<span class="gen-stage-ratehint" aria-live="polite">rate-limited — waiting for provider window…</span>
-									{:else}
-										{stage.status}{stage.error ? ` · ${stage.error}` : ''}
-									{/if}
+									{#if stage.error}<span class="gen-stage-error">{stage.error}</span>{/if}
 									<!-- Live engine state line (lastEvent): the terse "what it's
 									     doing now" (e.g. "queue full — retry in 30 s", "rendering
 									     42%") so a long provider wait reads as alive, not stuck.
 									     Full detail stays in the redacted request log below. -->
 									{#if stage.lastEvent}
 										<span class="gen-stage-lastevent" aria-live="polite">{stage.lastEvent}</span>
+									{/if}
+								</div>
+								<span class="gen-stage-status" aria-live="polite">
+									{#if stage.status === 'rate-limited'}
+										<span class="gen-stage-ratehint">rate-limited — waiting for provider window…</span>
+									{:else}
+										{stageStatusWord(stage.status)}
 									{/if}
 								</span>
 							</li>
@@ -310,147 +310,12 @@
 {/if}
 
 <style>
-	.gen-progress-bar {
-		height: 6px;
-		border-radius: 3px;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.06));
-		overflow: hidden;
-		margin-bottom: 12px;
-	}
-
-	.gen-progress-fill {
-		height: 100%;
-		background: var(--accent-color, #ff3e00);
-		transition: width 0.3s ease;
-	}
-
-	.gen-stage-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.gen-stage {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 7px 10px;
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 6px;
-		font-size: 12px;
-	}
-
-	.gen-stage-label {
-		color: var(--text-primary, #fff);
-		font-weight: 500;
-	}
-
-	.gen-stage-status {
-		color: var(--text-muted, #71717a);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		font-size: 11px;
-		text-align: right;
-	}
-
-	.gen-stage.done {
-		border-color: color-mix(in srgb, var(--success-color, #4ade80) 50%, transparent);
-	}
-
-	.gen-stage.done .gen-stage-status {
-		color: var(--success-color, #4ade80);
-	}
-
-	.gen-stage.error {
-		border-color: color-mix(in srgb, var(--error-color, #f87171) 50%, transparent);
-	}
-
-	.gen-stage.error .gen-stage-status {
-		color: var(--error-color, #f87171);
-	}
-
-	.gen-stage.cancelled .gen-stage-status {
-		color: var(--text-muted, #71717a);
-	}
-
-	.gen-stage.ratelimited {
-		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 50%, transparent);
-		background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
-	}
-
-	.gen-stage.ratelimited .gen-stage-status {
-		color: var(--warning-color, #fbbf24);
-	}
-
-	.gen-stage-ratehint {
-		display: inline-block;
-		font-size: 10px;
-		color: var(--warning-color, #fbbf24);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		animation: pulse-rl 1.2s ease-in-out infinite;
-	}
-
-	.gen-stage-lastevent {
-		display: block;
-		font-size: 10px;
-		color: var(--text-muted, #71717a);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		margin-top: 2px;
-		font-style: italic;
-	}
-
-	.gen-stage.ratelimited .gen-stage-lastevent {
-		color: var(--warning-color, #fbbf24);
-	}
-
-	@keyframes pulse-rl {
-		0%, 100% { opacity: 0.55; }
-		50% { opacity: 1; }
-	}
-
-	.gen-task-error {
-		margin: 10px 0 0;
-		font-size: 12px;
-		color: var(--error-color, #f87171);
-	}
-
-	.gen-task-pending {
-		margin: 8px 0 0;
-		font-size: 12px;
-		color: var(--text-muted, #71717a);
-	}
-
-	.gen-task-cancelled {
-		margin: 10px 0 0;
-		font-size: 12px;
-		color: var(--text-muted, #71717a);
-	}
-
-	.gen-overload {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 10px;
-		margin: 10px 0 0;
-		padding: 10px 12px;
-		border: 1px solid color-mix(in srgb, var(--warning-color, #fbbf24) 40%, transparent);
-		border-radius: 6px;
-		background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
-	}
-
-	.gen-overload p {
-		flex: 1 1 220px;
-		margin: 0;
-		font-size: 12px;
-		color: var(--warning-color, #fbbf24);
-	}
-
-	.gen-overload .gen-reset {
-		flex: 0 0 auto;
-	}
+	/* GPM-specific chrome. The shared stage anatomy (.gen-stage-*,
+	   .gen-stage-list), progress tracks (.gen-progress-*), task notes
+	   (.gen-task-*), the overload band (.gen-overload), the log expander
+	   (.gen-log-*), and the minimize affordance (.btn-minimize) all live
+	   in composer-modal.css — only the header/footer monospace pieces
+	   below are specific to this full progress modal. */
 
 	.gen-models-sub {
 		display: block;
@@ -458,13 +323,6 @@
 		font-size: 11px;
 		color: var(--text-muted, #71717a);
 		margin-top: 4px;
-	}
-
-	.gen-stage-model {
-		display: block;
-		font-size: 10px;
-		color: var(--text-muted, #71717a);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 	}
 
 	.gen-cancel-all {
@@ -491,91 +349,6 @@
 		font-size: 10px;
 		color: var(--text-muted, #71717a);
 		opacity: 0.8;
-	}
-
-	.btn-minimize {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		background: var(--bg-tertiary, #1e1e2e);
-		border: 1px solid var(--border-color, #2a2a3a);
-		border-radius: 6px;
-		color: var(--text-secondary, #a0a0b0);
-		font-size: 12px;
-		font-weight: 500;
-		letter-spacing: 0.2px;
-		padding: 8px 14px;
-		cursor: pointer;
-		transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-	}
-
-	.btn-minimize:hover {
-		color: var(--text-primary, #fff);
-		border-color: var(--accent-color, #59b5ff);
-		background: var(--accent-bg, rgba(89, 181, 255, 0.12));
-		box-shadow: 0 2px 12px var(--accent-glow, rgba(89, 181, 255, 0.35));
-	}
-
-	.btn-minimize:active {
-		transform: translateY(0);
-		box-shadow: none;
-	}
-
-	.btn-minimize:focus-visible {
-		outline: 2px solid var(--accent-color, #59b5ff);
-		outline-offset: 2px;
-	}
-
-	.btn-minimize-icon {
-		font-size: 13px;
-		line-height: 1;
-		color: var(--accent-color, #59b5ff);
-		padding: 0 1px;
-	}
-
-	.gen-log-toggle {
-		margin-top: 10px;
-		background: none;
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 6px;
-		color: var(--text-muted, #71717a);
-		font-size: 11px;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		padding: 5px 10px;
-		cursor: pointer;
-	}
-
-	.gen-log-toggle:disabled {
-		opacity: 0.55;
-		cursor: not-allowed;
-	}
-
-	.gen-log-toggle:hover {
-		color: var(--text-primary, #fff);
-		border-color: var(--text-muted, #71717a);
-	}
-
-	.gen-log-body {
-		margin: 8px 0 0;
-		max-height: 180px;
-		overflow: auto;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 6px;
-		padding: 8px 10px;
-		font-size: 10px;
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
-		color: var(--text-muted, #71717a);
-		white-space: pre-wrap;
-		word-break: break-all;
-	}
-
-	.gen-log-loading {
-		display: block;
-		margin-top: 10px;
-		font-size: 11px;
-		color: var(--text-muted, #71717a);
-		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 	}
 
 	.gen-refresh {

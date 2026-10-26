@@ -386,3 +386,276 @@
 	border-radius: 4px;
 }
 .gen-progress-bar > * { height: 100%; border-radius: 4px; }
+
+/* Accent fill used inside .gen-progress-bar (group header + pipe body).
+   The generic .gen-progress-track > * already styles the thin track fill;
+   this is the bar-specific fill so both modal consumers stop re-declaring
+   it locally. */
+.gen-progress-fill {
+	display: block;
+	height: 100%;
+	background: var(--accent-color, #ff3e00);
+	border-radius: 4px;
+	transition: width 0.3s ease;
+}
+
+/* Minimize affordance (shared by both progress modals): hide the dialog,
+   keep the task running, come back via the pill. */
+.btn-minimize {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background: var(--bg-tertiary, #1e1e2e);
+	border: 1px solid var(--border-color, #2a2a3a);
+	border-radius: 6px;
+	color: var(--text-secondary, #a0a0b0);
+	font-size: 12px;
+	font-weight: 500;
+	letter-spacing: 0.2px;
+	padding: 8px 14px;
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+.btn-minimize:hover {
+	color: var(--text-primary, #fff);
+	border-color: var(--accent-color, #59b5ff);
+	background: var(--accent-bg, rgba(89, 181, 255, 0.12));
+	box-shadow: 0 2px 12px var(--accent-glow, rgba(89, 181, 255, 0.35));
+}
+.btn-minimize:active {
+	transform: translateY(0);
+	box-shadow: none;
+}
+.btn-minimize:focus-visible {
+	outline: 2px solid var(--accent-color, #59b5ff);
+	outline-offset: 2px;
+}
+.btn-minimize-icon {
+	font-size: 13px;
+	line-height: 1;
+	color: var(--accent-color, #59b5ff);
+	padding: 0 1px;
+}
+
+/* ── Stage list (single source of truth: GenerationProgressModal's full
+   stage view + CompactPipesProgress' per-pipe body both consume this —
+   they used to re-declare it in scoped <style> blocks, which Svelte's
+   scope isolation silently broke the second consumer).
+
+   Each stage is a calm card: a quiet status dot (same visual language as
+   the provider chip dot), a label, and a friendly status word. Errors get
+   a dedicated red line. Rate-limited gets a pulsing amber dot so a long
+   provider wait reads as alive, not stuck. ── */
+.gen-stage-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.gen-stage {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 10px;
+	border: 1px solid var(--border-color, #3f3f46);
+	border-radius: 6px;
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	font-size: 12px;
+}
+
+.gen-stage-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--text-muted, #71717a);
+}
+
+/* Stage status word (right of the label). */
+.gen-stage-status {
+	margin-left: auto;
+	font-size: 11px;
+	color: var(--text-muted, #71717a);
+	white-space: nowrap;
+	text-align: right;
+}
+
+/* The model actually used for this stage (log-backed; compact view hides
+   it — only the full progress modal shows it). */
+.gen-stage-model {
+	display: block;
+	font-size: 10px;
+	color: var(--text-muted, #71717a);
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+/* Live engine state line (e.g. "queue full — retry in 30 s", "rendering
+   42%"): the terse "what it's doing now" so a long provider wait reads
+   as alive. */
+.gen-stage-lastevent {
+	display: block;
+	font-size: 10px;
+	color: var(--text-muted, #71717a);
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+	margin-top: 2px;
+	font-style: italic;
+}
+
+.gen-stage-label {
+	font-weight: 500;
+	color: var(--text-primary, #fff);
+}
+
+/* Label + model/error/event lines stack in a flex column so the card
+   stays one line when idle and expands cleanly under a busy stage. */
+.gen-stage-main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+/* ── Terminal state variants ── */
+.gen-stage.done .gen-stage-dot { background: var(--success-color, #4ade80); box-shadow: 0 0 6px color-mix(in srgb, var(--success-color, #4ade80) 60%, transparent); }
+.gen-stage.done .gen-stage-status { color: var(--success-color, #4ade80); }
+
+.gen-stage.error {
+	border-color: color-mix(in srgb, var(--error-color, #f87171) 50%, transparent);
+	background: color-mix(in srgb, var(--error-color, #f87171) 6%, transparent);
+}
+.gen-stage.error .gen-stage-dot { background: var(--error-color, #f87171); }
+.gen-stage.error .gen-stage-status { color: var(--error-color, #f87171); }
+
+.gen-stage-error {
+	display: block;
+	margin-top: 2px;
+	font-size: 10px;
+	color: var(--error-color, #f87171);
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+.gen-stage.cancelled .gen-stage-dot { background: var(--text-muted, #71717a); opacity: 0.6; }
+.gen-stage.cancelled .gen-stage-status { color: var(--text-muted, #71717a); }
+
+/* In-flight: a quiet accent dot that pulses so the stage reads as alive.
+   One accent word per running stage — calm, not a wall of color. */
+.gen-stage.active .gen-stage-dot {
+	background: var(--accent-color, #59B5FF);
+	animation: gen-dot-pulse 1.2s ease-in-out infinite;
+}
+.gen-stage.active .gen-stage-status { color: var(--accent-color, #59B5FF); }
+
+/* Rate-limited hint line (replaces the status word while the provider
+   window is closed). */
+.gen-stage-ratehint {
+	display: inline-block;
+	font-size: 10px;
+	color: var(--warning-color, #fbbf24);
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+	animation: gen-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.gen-stage.ratelimited {
+	border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 50%, transparent);
+	background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
+}
+.gen-stage.ratelimited .gen-stage-dot {
+	background: var(--warning-color, #fbbf24);
+	animation: gen-dot-pulse 1.2s ease-in-out infinite;
+}
+.gen-stage.ratelimited .gen-stage-status { color: var(--warning-color, #fbbf24); }
+.gen-stage.ratelimited .gen-stage-lastevent { color: var(--warning-color, #fbbf24); }
+
+@keyframes gen-dot-pulse {
+	0%, 100% { opacity: 0.55; }
+	50% { opacity: 1; }
+}
+
+/* ── Task-level notes (shared by both progress modals) ── */
+.gen-task-error {
+	margin: 10px 0 0;
+	font-size: 12px;
+	color: var(--error-color, #f87171);
+}
+
+.gen-task-pending {
+	margin: 8px 0 0;
+	font-size: 12px;
+	color: var(--text-muted, #71717a);
+}
+
+.gen-task-cancelled {
+	margin: 10px 0 0;
+	font-size: 12px;
+	color: var(--text-muted, #71717a);
+}
+
+.gen-overload {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	margin: 10px 0 0;
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--warning-color, #fbbf24) 40%, transparent);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
+}
+
+.gen-overload p {
+	flex: 1 1 220px;
+	margin: 0;
+	font-size: 12px;
+	color: var(--warning-color, #fbbf24);
+}
+
+.gen-overload .gen-reset {
+	flex: 0 0 auto;
+}
+
+/* ── Request log expander + body (full progress modal) ── */
+.gen-log-toggle {
+	margin-top: 10px;
+	background: none;
+	border: 1px solid var(--border-color, #3f3f46);
+	border-radius: 6px;
+	color: var(--text-secondary, #a1a1aa);
+	font-size: 11px;
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+	padding: 5px 10px;
+	cursor: pointer;
+}
+.gen-log-toggle:hover {
+	color: var(--text-primary, #fff);
+	background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+.gen-log-toggle:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+.gen-log-loading {
+	display: block;
+	margin-top: 8px;
+	font-size: 11px;
+	color: var(--text-muted, #71717a);
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+.gen-log-body {
+	margin: 8px 0 0;
+	max-height: 180px;
+	overflow: auto;
+	background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+	border: 1px solid var(--border-color, #3f3f46);
+	border-radius: 6px;
+	padding: 8px 10px;
+	font-size: 10px;
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+	color: var(--text-muted, #71717a);
+	white-space: pre-wrap;
+}
