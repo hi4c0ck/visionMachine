@@ -298,17 +298,22 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		padding: 8px 10px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 6px;
+		/* Template A (Open Canvas): thumbnails float directly on the pipe
+		   surface — no nested card frame (background/wash removed). The
+		   thumbnail is the content; the state is carried by the status dot
+		   and the inner placeholder, not a card behind it. */
+		padding: 4px;
+		background: transparent;
+		border: 1px solid transparent;
+		border-radius: 4px;
 		flex: 1 1 0;
 		min-width: 0;
 	}
 
 	.kf-filled {
-		background: var(--accent-bg);
-		border-color: var(--accent-color);
+		/* Filled slot = a genuine discrete object → one quiet 1px frame,
+		   not a card-in-card wash. */
+		border-color: var(--border-color);
 	}
 
 	.kf-empty {
@@ -318,7 +323,7 @@
 
 	.kf-empty:hover {
 		opacity: 1;
-		background: var(--bg-tertiary);
+		border-color: var(--border-color);
 	}
 
 	/* Thumbnail sized to the scene aspect ratio (width fixed, height from

@@ -4,6 +4,7 @@
 	import type { ProviderStatusSnapshot } from '$lib/settings/guards';
 	import ProviderStatus from './Settings/ProviderStatus.svelte';
 	import FrameCarousel from './FrameCarousel.svelte';
+	import WindowControls from './WindowControls.svelte';
 	import ChromeIcon from './ChromeIcon.svelte';
 
 	let {
@@ -338,15 +339,26 @@
 </script>
 
 <header class="frame">
-	<!-- Top section: logo + layout controls -->
-	<div class="frame-top">
-		<div class="logo">
+	<!-- Top section: the app's own window chrome (decorations off).
+	     Layout: [logo] [guaranteed empty drag strip, flex:1] [frame nav +
+	     layout switch] [theme · provider · kb-hint] [− □ ×].
+	     .frame-top + .topbar-center + .logo carry the bare
+	     data-tauri-drag-region marker: Tauri's drag script only fires on a
+	     DIRECT click to the marked element, so the empty strip + row padding
+	     drag the window at ANY width while every button/select in the row
+	     stays fully interactive (Tauri excludes CLICKABLE tags automatically). -->
+	<div class="frame-top" data-tauri-drag-region>
+		<div class="logo" data-tauri-drag-region>
 			<img src="/icons/vm-mark-64.png" alt="VisionMachine" class="logo-icon" width="28" height="28" />
 			<span class="logo-text">{APP_CONSTANTS.strings.appName}</span>
 			{#if showWelcome}
 				<span class="welcome-badge"><ChromeIcon id="sparkle" size={14} /> New</span>
 			{/if}
 		</div>
+
+		<!-- Guaranteed empty drag space: always present (min-width), grows
+		     with the window; nothing renders inside it. -->
+		<div class="topbar-center" data-tauri-drag-region aria-hidden="true"></div>
 
 		<div class="layout-controls">
 			{#if totalFrames !== null && fps !== null}
@@ -378,10 +390,41 @@
 					onclick={() => setLayout(layout.id)}
 					title={layout.label}
 				>
-					<ChromeIcon id={layout.iconId} size={16} /> {layout.label}
+					<ChromeIcon id={layout.iconId} size={16} /><span class="btn-label">{layout.label}</span>
 				</button>
 			{/each}
 		</div>
+
+		<!-- Status cluster: theme + provider (moved up from the removed
+		     .frame-bottom strip — that full row frees space for the panels). -->
+		<div class="topbar-status">
+			<div class="theme-selector">
+				<label for="theme-select">Theme:</label>
+				<select id="theme-select" value={selectedTheme} onchange={(e) => onthemeChange?.(e.currentTarget.value)}>
+					{#each APP_CONSTANTS.themes as theme}
+						<option value={theme.id}>{theme.name}</option>
+					{/each}
+				</select>
+			</div>
+
+			{#if providers && providerStatus && onopenprovidersettings}
+				<ProviderStatus {providers} providerStatus={providerStatus} loading={providerLoading} onopen={onopenprovidersettings} />
+			{/if}
+
+			<!-- 2e: keyboard layer discoverability — a quiet hint affordance
+			     that lists the top-panel shortcuts on hover/focus. CSS-only
+			     popover; a real <button> so it is focusable + labelled. -->
+			<button type="button" class="kb-hint" aria-label={APP_CONSTANTS.strings.kbShortcutsHint}>
+				<ChromeIcon id="keyboard" size={14} />
+				<span class="kb-pop" role="tooltip">
+					<span class="kb-row"><b>← / →</b> {APP_CONSTANTS.strings.kbStep}</span>
+					<span class="kb-row"><b>Space</b> {APP_CONSTANTS.strings.kbPlay}</span>
+					<span class="kb-row"><b>Esc</b> {APP_CONSTANTS.strings.kbEsc}</span>
+				</span>
+			</button>
+		</div>
+
+		<WindowControls />
 	</div>
 
 	<!-- Middle section: frame/video preview container -->
@@ -581,41 +624,10 @@
 		{/if}
 	</div>
 
-	<!-- Bottom section: theme selector + user info -->
-	<div class="frame-bottom">
-		<div class="frame-bottom-left">
-			<div class="theme-selector">
-				<label for="theme-select">Theme:</label>
-				<select id="theme-select" onchange={(e) => onthemeChange?.(e.currentTarget.value)}>
-					<option value="jetbrains-dark">JetBrains Dark</option>
-					<option value="steel-dark">Steel Machinery Dark</option>
-					<option value="light">Light</option>
-				</select>
-			</div>
-
-			{#if providers && providerStatus && onopenprovidersettings}
-				<ProviderStatus {providers} providerStatus={providerStatus} loading={providerLoading} onopen={onopenprovidersettings} />
-			{/if}
-
-			<!-- 2e: keyboard layer discoverability — a quiet hint affordance that
-				 lists the top-panel shortcuts on hover/focus. CSS-only popover;
-				 a real <button> so it is focusable + screen-reader labelled. -->
-			<button type="button" class="kb-hint" aria-label={APP_CONSTANTS.strings.kbShortcutsHint}>
-				<ChromeIcon id="keyboard" size={14} />
-				<span class="kb-pop" role="tooltip">
-					<span class="kb-row"><b>← / →</b> {APP_CONSTANTS.strings.kbStep}</span>
-					<span class="kb-row"><b>Space</b> {APP_CONSTANTS.strings.kbPlay}</span>
-					<span class="kb-row"><b>Esc</b> {APP_CONSTANTS.strings.kbEsc}</span>
-				</span>
-			</button>
-		</div>
-
-		<!-- The profile row (avatar + name + Settings + Logout) now lives in
-		     the compact ProfilePanel at the bottom of the left column, so it
-		     is reachable in EVERY layout mode. The top bar no longer carries
-		     a duplicate sign-out. (userName / onlogout props remain declared
-		     for backward compatibility; Frame itself no longer renders them.) -->
-	</div>
+	<!-- The theme selector, provider chip and keyboard-hint now live in
+	     .frame-top (top-right cluster). The profile row (avatar + name +
+	     Settings + Logout) lives in the compact ProfilePanel at the bottom
+	     of the left column, so it is reachable in EVERY layout mode. -->
 </header>
 
 <style>
@@ -628,23 +640,47 @@
 		user-select: none;
 	}
 
-	/* ── Top section ── */
+	/* ── Top section (the app's own window chrome; decorations are off) ──
+	   Single saturated row: [logo] [guaranteed empty drag strip] [frame nav +
+	   layout switch] [theme · provider · kb-hint] [− □ ×]. The bare
+	   data-tauri-drag-region markers fire only on DIRECT clicks to the marked
+	   element, so the empty strip + row padding drag at any width while every
+	   button/select stays interactive. */
 	.frame-top {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
-		padding: 12px 16px;
+		gap: 12px;
+		padding: 6px 10px;
+		min-height: 44px;
 		border-bottom: 1px solid var(--border);
+	}
+
+	/* Guaranteed empty drag space: always present (min-width), stretches with
+	   the window; never carries content. */
+	.topbar-center {
+		flex: 1 1 40px;
+		min-width: 40px;
+		height: 100%;
+	}
+
+	/* Status cluster (theme · provider · kb-hint): hugs the window controls,
+	   shrinks before the window ever has to. */
+	.topbar-status {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
 	}
 
 	.logo {
 		display: flex;
 		align-items: center;
-		gap: 12px;
-		font-size: 1.1rem;
+		gap: 10px;
+		font-size: 1rem;
 		font-weight: 700;
 		color: var(--text-primary);
 		letter-spacing: -0.02em;
+		flex-shrink: 0;
 	}
 
 	  .logo-icon {
@@ -656,14 +692,14 @@
 	}
 
 	.welcome-badge {
-		background: linear-gradient(135deg, #ff3e00, #ff7b00);
-		color: white;
+		/* Template A: the "New" marker is a real feature indicator, but a
+		   solid accent chip, not a hardcoded decorative gradient. */
+		background: var(--accent);
+		color: var(--text-inverse, #0a0a0f);
 		font-size: 0.65rem;
 		padding: 2px 8px;
-		border-radius: 10px;
+		border-radius: 3px;
 		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
@@ -696,10 +732,10 @@
 	}
 
 	.layout-btn.active {
-		background: var(--gradient-accent);
-		color: #fff;
-		border-color: transparent;
-		box-shadow: 0 2px 12px var(--accent-glow);
+		/* Template A: solid accent, consistent small-radius control geometry. */
+		background: var(--accent);
+		color: var(--text-inverse, #0a0a0f);
+		border-color: var(--accent);
 	}
 
 	/* ── Preview section ── */
@@ -1048,8 +1084,10 @@
 		background: var(--bg-hover);
 	}
 
-	/* 2e — keyboard-shortcut hint: a quiet affordance in the top panel's
-	   bottom bar; hover/focus reveals a CSS-only popover listing the keys. */
+	/* 2e — keyboard-shortcut hint: a quiet affordance in the saturated top
+	   row (top-right cluster); hover/focus reveals a CSS-only popover.
+	   It opens DOWNWARD — the row is now the top edge of the window, so an
+	   upward popover would clip off-screen. */
 	.kb-hint {
 		position: relative;
 		display: inline-flex;
@@ -1075,8 +1113,8 @@
 		visibility: hidden;
 		opacity: 0;
 		position: absolute;
-		bottom: calc(100% + 8px);
-		left: 0;
+		top: calc(100% + 8px);
+		right: 0;
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
@@ -1234,19 +1272,12 @@
 		transform: translateX(-50%);
 	}
 
-	/* ── Bottom section ── */
-	.frame-bottom {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 10px 16px;
-	}
-
-	.frame-bottom-left {
-		display: flex;
-		align-items: center;
-		gap: 14px;
-	}
+	/* ── Bottom section removed ──
+	   The theme selector, provider chip and keyboard hint now live in
+	   .frame-top (top-right cluster), so the full row is freed for the
+	   panels below the preview strip. The profile row (avatar + name +
+	   Settings + Logout) lives in the compact ProfilePanel at the bottom
+	   of the left column, reachable in EVERY layout mode. */
 
 	.theme-selector {
 		display: flex;
@@ -1259,8 +1290,6 @@
 	.theme-selector label {
 		font-size: 0.75rem;
 		color: var(--text-muted);
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
 		font-weight: 500;
 	}
 
@@ -1280,6 +1309,54 @@
 		outline: none;
 		border-color: var(--accent);
 		box-shadow: 0 0 0 2px var(--accent-glow);
+	}
+
+	/* The status cluster + layout controls shrink before the row ever has to
+	   clip: the theme select truncates, the provider chip ellipsizes, the
+	   layout buttons go icon-only, and the keyboard hint drops out. The
+	   guaranteed empty .topbar-center strip absorbs the freed space so there
+	   is always a draggable gap. */
+	.theme-selector {
+		min-width: 0;
+	}
+	.theme-selector select {
+		max-width: 120px;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		overflow: hidden;
+	}
+	.layout-controls {
+		min-width: 0;
+		flex-shrink: 0;
+	}
+
+	/* Narrow window: layout buttons → icon-only, drop the kb hint. */
+	@media (max-width: 1180px) {
+		.layout-btn .btn-label {
+			display: none;
+		}
+		.layout-btn {
+			padding: 6px 8px;
+		}
+		.kb-hint {
+			display: none;
+		}
+	}
+
+	/* Very narrow: drop the brand text (logo medallion remains) + the
+	   "Theme:" label so the select keeps its room. The provider chip is
+	   scoped to ProviderStatus.svelte (own max-width + ellipsis) and the
+	   kb hint is already dropped by the first breakpoint. */
+	@media (max-width: 900px) {
+		.logo-text {
+			display: none;
+		}
+		.theme-selector label {
+			display: none;
+		}
+		.theme-selector select {
+			max-width: 96px;
+		}
 	}
 
 	/* The profile row (avatar + name + Settings + Logout) was moved to the

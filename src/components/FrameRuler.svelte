@@ -185,11 +185,16 @@
 		left: 0;
 		width: 1px;
 		height: 7px;
-		background: #555;
+		/* Template A (Open Canvas): the ruler is fine-grained and subordinate
+		   to the content — quiet themed ticks, not chunky dark bars. */
+		background: var(--text-muted, #6b6b80);
+		opacity: 0.5;
 	}
 
 	.marker.major .tick {
 		height: 12px;
+		background: var(--text-secondary, #a0a0b0);
+		opacity: 0.7;
 	}
 
 	.label {
@@ -198,8 +203,9 @@
 		left: 50%;
 		transform: translateX(-50%);
 		font-size: 9px;
+		font-family: var(--font-mono, monospace);
 		white-space: nowrap;
-		color: #777;
+		color: var(--text-muted, #6b6b80);
 		pointer-events: none;
 	}
 
@@ -207,11 +213,25 @@
 		position: absolute;
 		top: 0;
 		bottom: 0;
-		width: 2px;
-		transform: translateX(-1px);
-		background: var(--accent-color, #6366f1);
+		/* Template A: a quiet 1px playhead with a small cap — easy to locate,
+		   not a heavy bar. */
+		width: 1px;
+		transform: translateX(-0.5px);
+		background: var(--accent-color, #59B5FF);
 		pointer-events: none;
 		z-index: 20;
+	}
+
+	.playhead::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--accent-color, #59B5FF);
 	}
 
 	/* Pin notice: tiny frame + seconds readout at the playhead position.

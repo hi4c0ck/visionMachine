@@ -673,22 +673,6 @@
 
 /* Zone lane (one shared horizontal line) */
 .dl-zone-lane { position: relative; width: 100%; height: 28px; }
-.dl-zone-lane-label {
-	position: absolute;
-	left: 6px;
-	top: 50%;
-	transform: translateY(-50%);
-	z-index: 4;
-	font-size: 9px;
-	font-weight: 700;
-	letter-spacing: 0.03em;
-	color: var(--text-secondary);
-	background: var(--surface, var(--bg-secondary));
-	padding: 1px 6px;
-	border-radius: var(--dl-radius-control);
-	box-shadow: 0 0 0 1px var(--border);
-	pointer-events: none;
-}
 .dl-zone {
 	position: absolute;
 	top: 3px;
@@ -704,7 +688,6 @@
 	z-index: 5;
 	cursor: grab;
 }
-.dl-zone-badge { font-weight: 700; font-size: 9px; flex: 0 0 auto; }
 .dl-zone-range {
 	font-family: var(--dl-font-mono);
 	font-size: 10px;
@@ -798,7 +781,6 @@
 	outline-offset: 1px;
 	z-index: 11;
 }
-.dl-tag-zone { font-weight: 700; font-size: 8px; flex: 0 0 auto; opacity: 0.9; }
 .dl-tag-prompt {
 	flex: 1 1 0;
 	min-width: 0;

@@ -281,23 +281,25 @@
   }
 
   .panel-title {
-    font-size: 11px;
+    /* Template A: natural-case section title. */
+    font-size: 12px;
     font-weight: 700;
     color: var(--panel-left-text);
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
   }
 
   .add-btn {
+    /* Template A: soft ghost square — whisper of a translucent surface,
+      hairline, generous radius; accent wash on hover (no filled chip, no
+      glow). */
     width: 22px;
     height: 22px;
-    border-radius: 5px;
-    background: var(--panel-left-border);
-    color: var(--panel-left-text);
-    border: 1px solid var(--panel-left-border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
     cursor: pointer;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -305,9 +307,9 @@
   }
 
   .add-btn:hover {
-    background: var(--panel-left-active);
-    border-color: var(--panel-left-text);
-    box-shadow: 0 0 8px var(--panel-left-border);
+    background: var(--accent-bg);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    color: var(--text-primary);
   }
 
   /* Projects List */
@@ -334,20 +336,30 @@
   }
 
   .project-item:hover {
-    background: var(--panel-left-active);
-    border-color: var(--panel-left-border);
+    background: var(--bg-hover);
   }
 
   .project-item.selected {
-    background: var(--panel-left-active);
-    border-left: 2px solid var(--panel-left-text);
-    border-color: var(--panel-left-border);
+    /* Calm, real selection: a whisper of an accent wash + ONE hairline accent
+       spine (inset shadow — no layout shift, unlike a wider border). Keeps the
+       "which project" affordance clear without filling the row with color. */
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  .project-item.selected .project-name {
+    color: var(--text-primary);
+    font-weight: 600;
   }
 
   .project-icon {
     display: inline-flex;
     align-items: center;
-    color: var(--panel-left-text, #d4a84b);
+    color: var(--text-muted);
+  }
+
+  .project-item.selected .project-icon {
+    color: var(--accent);
   }
 
   .project-name {
@@ -389,8 +401,8 @@
   }
 
   .delete-project-btn:hover {
-    background: rgba(220, 38, 38, 0.2);
-    color: #ff6b6b;
+    background: var(--danger-bg);
+    color: var(--danger-color);
   }
 
   .project-action-btn {
@@ -400,7 +412,7 @@
     padding: 2px 4px;
     border-radius: 3px;
     opacity: 0;
-    color: var(--panel-left-text, var(--text-secondary));
+    color: var(--text-muted);
     transition: opacity var(--transition-fast), color var(--transition-fast);
     display: inline-flex;
     align-items: center;
@@ -413,7 +425,7 @@
 
   .project-action-btn:hover {
     background: var(--bg-tertiary);
-    color: var(--panel-left-text, var(--text-primary));
+    color: var(--text-primary);
   }
 
   /* Sessions Container */
@@ -437,20 +449,29 @@
   }
 
   .session-item:hover {
-    background: var(--panel-left-active);
-    border-color: var(--panel-left-border);
+    background: var(--bg-hover);
   }
 
   .session-item.selected {
-    background: var(--panel-left-active);
-    border-color: var(--panel-left-border);
+    /* Calm selection matching the project row: whisper accent wash + a hairline
+       accent spine (inset shadow, no layout shift). */
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  .session-item.selected .session-name-input {
+    color: var(--text-primary);
   }
 
   .session-icon {
-    opacity: 0.85;
+    opacity: 0.9;
     display: inline-flex;
     align-items: center;
-    color: var(--panel-left-text, var(--text-secondary));
+    color: var(--text-muted);
+  }
+
+  .session-item.selected .session-icon {
+    color: var(--accent);
   }
 
   .session-name-input {
@@ -493,7 +514,7 @@
     cursor: pointer;
     padding: 1px 3px;
     border-radius: 2px;
-    color: var(--panel-left-text, var(--text-secondary));
+    color: var(--text-muted);
     transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
     opacity: 0.55;
     display: inline-flex;
@@ -513,23 +534,33 @@
     color: var(--text-primary);
   }
 
+  /* Trash: neutral gray at rest, danger tint only on hover. */
+  .delete-session-btn:hover {
+    background: var(--danger-bg);
+    color: var(--danger-color);
+  }
+
   .add-session-btn {
+    /* Template A: soft ghost — whisper of a translucent surface, hairline,
+       generous radius; recedes until hover. */
     width: 100%;
     padding: 5px;
-    background: transparent;
-    border: 1px dashed var(--panel-left-border);
-    border-radius: 5px;
-    color: var(--panel-left-text);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-secondary);
     cursor: pointer;
     font-size: 10px;
+    font-weight: 500;
     margin-top: 4px;
     transition: all var(--transition-fast);
     font-family: inherit;
   }
 
   .add-session-btn:hover {
-    border-color: var(--panel-left-text);
-    background: var(--panel-left-active);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    background: var(--accent-bg);
+    color: var(--text-primary);
   }
 
   /* Empty State */
@@ -545,11 +576,13 @@
   }
 
   .btn-create {
+    /* Template A: quiet ghost CTA — transparent hairline, accent on hover,
+       no glow. */
     padding: 8px 16px;
-    background: var(--panel-left-border);
-    color: var(--panel-left-text);
-    border: 1px solid var(--panel-left-border);
-    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
     cursor: pointer;
     font-size: 12px;
     font-weight: 500;
@@ -557,8 +590,9 @@
   }
 
   .btn-create:hover {
-    background: var(--panel-left-active);
-    box-shadow: 0 0 12px var(--panel-left-border);
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--text-primary);
   }
 
   /* Modal */

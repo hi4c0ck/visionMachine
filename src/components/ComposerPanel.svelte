@@ -198,6 +198,26 @@ import { flashToast } from '$lib/flashToast';
 		}
 	});
 
+	// ── Auto-scroll: keep the composer column following the top-panel playhead.
+	//    Sweeping the session video (or stepping frames) makes Workspace set
+	//    activePipeIdx to the pipe the frame lands in — that pipe becomes
+	//    `.pipe.active`. When a pipe is focused it must be visible, so we
+	//    scroll the active pipe's element into view. block:'nearest' only
+	//    scrolls the minimum needed, so a pipe that is already on screen is
+	//    a no-op (manual clicks on a visible pipe never jump the view).
+	//    The map is keyed by pipe index: when {#each} recreates a pipe's
+	//    element the action re-runs and overwrites the entry, so no
+	//    per-element cleanup is needed (component-level onDestroy below
+	//    drops the whole map on unmount).
+	const pipeEls = new Map<number, HTMLElement>();
+	function pipeEl(node: HTMLElement, idx: number) {
+		pipeEls.set(idx, node);
+	}
+	$effect(() => {
+		if (activePipeIdx === null) return;
+		pipeEls.get(activePipeIdx)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	});
+
 	// ── Focus for the context-sensitive tool panel ─────────────────────────
 	// Previous pipe in timeline order (for the slot-1 "use last frame" feature).
 	const prevPipe = $derived(
@@ -818,7 +838,7 @@ import { flashToast } from '$lib/flashToast';
 
 	<div class="composer-panel">
 	{#each pipes as pipe, pipeIdx (pipe.id)}
-		<div class="pipe" class:active={activePipeIdx === pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>
+		<div class="pipe" class:active={activePipeIdx === pipeIdx} use:pipeEl={pipeIdx} onclick={() => handlePipeSelect(pipeIdx)}>
 			<!-- ═══ PIPE HEADER ═══ -->
 			<PipeHeader
 				{pipe}
@@ -1061,7 +1081,10 @@ import { flashToast } from '$lib/flashToast';
 
 		background: var(--bg-secondary);
 
-		border-radius: 8px;
+		/* Template A (Open Canvas): square region geometry — the pipe sits
+		   directly on the composer canvas; selection is a precise 1px accent
+		   edge, not a glow ring. */
+		border-radius: 0;
 
 		border: 1px solid var(--border-color);
 
@@ -1073,7 +1096,7 @@ import { flashToast } from '$lib/flashToast';
 
 		border-color: var(--accent-color);
 
-		box-shadow: 0 0 0 2px var(--accent-color);
+		box-shadow: none;
 
 	}
 
@@ -1081,22 +1104,17 @@ import { flashToast } from '$lib/flashToast';
 
 	.btn-add-pipe {
 
-		background: var(--bg-tertiary);
-
-		border: 1px dashed var(--border-color);
-
+		/* Template A: soft ghost button — translucent surface, hairline border,
+	   generous radius; recedes on the canvas, accent wash on hover. */
+		background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+		border: 1px solid var(--border-color);
 		color: var(--text-secondary);
-
 		cursor: pointer;
-
-		padding: 6px 12px;
-
-		border-radius: 6px;
-
+		padding: 6px 14px;
+		border-radius: 10px;
 		font-size: 12px;
-
+		font-weight: 500;
 		transition: all 0.2s;
-
 		align-self: flex-start;
 
 	}
@@ -1105,9 +1123,11 @@ import { flashToast } from '$lib/flashToast';
 
 	.btn-add-pipe:hover {
 
-		border-color: var(--accent-color);
+		border-color: color-mix(in srgb, var(--accent-color) 50%, transparent);
 
-		color: var(--accent-color);
+		color: var(--text-primary);
+
+		background: var(--accent-bg);
 
 	}
 

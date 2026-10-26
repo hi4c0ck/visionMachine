@@ -7,7 +7,7 @@ it all into one finished clip. Runs on your machine. No subscription, no
 per-frame fees.
 
 <p align="center">
-  <img src="img/screenshot-composer.png" alt="VisionMachine composer" width="100%">
+  <img src="img/composer-hero.gif" alt="VisionMachine composer in motion — keyframes, timeline tags, and generated footage" width="720">
 </p>
 
 ## <img src="img/icons/why-visionmachine.png" width="36" align="absmiddle" alt=""> Why VisionMachine
@@ -57,13 +57,13 @@ gives you a **composer** — the same way a video editor gives you a timeline:
 
 | | |
 |---|---|
-| **Latest release** | [**v0.7.9 — download MSI**](https://github.com/hi4c0ck/visionMachine/releases/latest) |
+| **Latest release** | [**v0.7.10 — download MSI**](https://github.com/hi4c0ck/visionMachine/releases/latest) |
 | **System** | Windows 10/11, x64 |
 | **Install** | Run the MSI. SmartScreen will show an *"unknown publisher"* warning — the build is not code-signed yet. Click **More info → Run anyway**. |
 | **Provider access** | Free Agnes generation is built in; for other providers, set a base URL + API key in **Settings → Providers** (see [docs/agnes-model-catalog.md](docs/agnes-model-catalog.md)). |
 
 [Releases page](https://github.com/hi4c0ck/visionMachine/releases) ·
-[What's new in v0.7.9](https://github.com/hi4c0ck/visionMachine/releases)
+[What's new in v0.7.10](https://github.com/hi4c0ck/visionMachine/releases)
 
 ## <img src="img/icons/quick-look.png" width="36" align="absmiddle" alt=""> A quick look
 

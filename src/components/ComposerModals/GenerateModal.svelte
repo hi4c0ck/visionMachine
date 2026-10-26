@@ -128,10 +128,9 @@
 				<span class="modal-sub">Final prompt + models for this run</span>
 			</div>
 			<div class="modal-body">
-				<div class="gen-models" aria-label="Model selection for this run">
-					<span class="gen-section-title">Models</span>
-					<div class="gen-model-row">
-					<div class="gen-model">
+				<span class="gen-section-title">Models</span>
+				<div class="gen-grid" aria-label="Model selection for this run">
+					<div class="gen-fieldrow">
 						<label for="gen-image-model">Image model</label>
 						<select id="gen-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
 							{#each imageModels as m (m.id)}
@@ -139,7 +138,7 @@
 							{/each}
 						</select>
 					</div>
-					<div class="gen-model">
+					<div class="gen-fieldrow">
 						<label for="gen-video-model">Video model</label>
 						<select id="gen-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
 							{#each videoModels as m (m.id)}
@@ -148,7 +147,7 @@
 						</select>
 					</div>
 					{#if selectedVideoModel?.supportsSeed}
-						<div class="gen-model">
+						<div class="gen-fieldrow">
 							<label for="gen-seed">Seed (video)</label>
 							<input
 								id="gen-seed"
@@ -166,7 +165,6 @@
 						</div>
 					{/if}
 				</div>
-			</div>
 				<div class="gen-prompt-wrap">
 					<span class="gen-section-title">Final prompt</span>
 					<div class="gen-prompt-box">
@@ -208,13 +206,15 @@
 							{/each}
 						</ul>
 					{/if}
-				<div class="gen-presets" aria-label="Generation presets">
-					<span>{session.fps} fps</span>
-					<span>{session.resolution}</span>
-					<span>{session.orientation}</span>
-					<span>Q {pipe.qValue}</span>
-					<span>C {pipe.cValue}</span>
-					<span>{pipe.lengthFrames} frames</span>
+				<div class="gen-presets-section" aria-label="Generation presets">
+					<div class="gen-chips">
+						<span>{session.fps} fps</span>
+						<span>{session.resolution}</span>
+						<span>{session.orientation}</span>
+						<span>Q {pipe.qValue}</span>
+						<span>C {pipe.cValue}</span>
+						<span>{pipe.lengthFrames} frames</span>
+					</div>
 				</div>
 			</div>
 			<div class="modal-footer">
@@ -230,54 +230,12 @@
 {/if}
 
 <style>
-	.gen-section-title {
-		font-size: 0.7rem;
-		font-weight: 600;
-		color: var(--text-muted, #71717a);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-	}
-
-	.gen-models {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	.gen-model-row {
-		display: flex;
-		gap: 10px;
-		align-items: flex-end;
-	}
-
-	.gen-model {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-	}
-
-	.gen-model label {
-		font-size: 0.72rem;
-		font-weight: 500;
-		color: var(--text-secondary, #a1a1aa);
-	}
-
-	.gen-model select,
-	.gen-model input {
-		width: 100%;
-		padding: 9px 11px;
-		font-size: 0.85rem;
-		color: var(--text-primary, #fff);
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 6px;
-	}
-
-	.gen-model select:focus {
-		outline: none;
-		border-color: var(--accent-color, #ff3e00);
-	}
+	/* ── GenerateModal-specific chrome. The shared anatomy
+	   (.modal-overlay / .modal / .modal-header / .modal-body /
+	   .modal-footer / .gen-section-title / .gen-grid / .gen-fieldrow /
+	   .gen-chips / .modal-textarea) is in composer-modal.css; only the
+	   prompt box, its mini action buttons, the seconds hint, and the
+	   dashed divider section are GenerateModal-specific and live here. */
 
 	.gen-prompt-wrap {
 		display: flex;
@@ -338,16 +296,15 @@
 		background: var(--accent-bg, rgba(89, 181, 255, 0.1));
 	}
 
+	/* Read-only final prompt box — .modal-textarea supplies the shared
+	   input geometry; this rule adds only the read-only affordance
+	   (no vertical resize; the Expand button swaps the height). */
 	.gen-prompt {
 		color: var(--text-secondary, #a1a1aa);
 		line-height: 1.6;
-		font-size: 0.85rem;
 		resize: none;
 		scrollbar-width: thin;
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		width: 100%;
 		min-height: 140px;
-		padding: 12px 14px;
 	}
 
 	.gen-prompt:focus {
@@ -370,21 +327,10 @@
 		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 	}
 
-	.gen-presets {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
+	/* Dashed divider between the prompt box and the run-stat chips. */
+	.gen-presets-section {
 		padding-top: 12px;
 		border-top: 1px dashed var(--border-color, #3f3f46);
-	}
-
-	.gen-presets span {
-		padding: 3px 8px;
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 5px;
-		font-size: 11px;
-		color: var(--text-muted, #71717a);
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 	}
 
 	.gen-conflicts {

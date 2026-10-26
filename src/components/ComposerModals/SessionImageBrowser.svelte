@@ -260,7 +260,7 @@
 		aspect-ratio: 1;
 		border-radius: 5px;
 		overflow: hidden;
-		background: rgba(255, 255, 255, 0.04);
+		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
 	}
 	.sib-thumb img {
 		width: 100%;
@@ -293,7 +293,7 @@
 		text-transform: uppercase;
 		letter-spacing: 0.03em;
 		color: var(--text-secondary, #a1a1aa);
-		background: rgba(255, 255, 255, 0.06);
+		background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 		border-radius: 4px;
 		padding: 1px 5px;
 	}

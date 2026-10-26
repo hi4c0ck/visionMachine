@@ -290,18 +290,18 @@
 	.probe-line {
 		font-size: 0.72rem;
 		color: var(--text-muted, #71717a);
-		font-family: 'JetBrains Mono', monospace;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
 		display: flex;
 		align-items: center;
 		gap: 4px;
 	}
 
 	.probe-ok {
-		color: #4ade80;
+		color: var(--success-color, #4ade80);
 	}
 
 	.probe-err {
-		color: #f87171;
+		color: var(--error-color, #f87171);
 	}
 
 	.tools-divider {

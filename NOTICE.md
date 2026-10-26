@@ -23,7 +23,7 @@ condition (a permitted extra term under GPLv3 §7).
   distributed as a modified VisionMachine (plain re-licenses of
   clean-room rewrites are out of scope).
 
-The full license text and the complete addendum are in [LICENSE](LICENSE).
+The full license text is in [LICENSE](LICENSE) (verbatim GNU GPL-3.0). This file carries the copyright notice and the complete attribution addendum above.
 Where the addendum conflicts with the GPL, the GPL governs.
 
 ## Bundled Third-Party Components

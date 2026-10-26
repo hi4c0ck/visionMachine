@@ -2,6 +2,14 @@
 	// Delete-account confirmation: shows the data stats, and the
 	// unchecked-by-default "Delete all data" checkbox. Unchecked =
 	// generated data is preserved in the user cache folder first.
+	//
+	// Uses the shared modal chrome (composer-modal.css) so it follows the
+	// same design flow as every other dialog: .modal-overlay / .modal /
+	// .modal-header / .modal-body / .modal-footer with btn-cancel + a
+	// danger-tinted btn-confirm (the destructive action, so it reads red
+	// via the theme tokens instead of a hardcoded hex).
+	import './composer-modal.css';
+
 	let {
 		account = null,
 		busy = false,
@@ -38,56 +46,60 @@
 		onpointerdown={() => !busy && onCancel()}
 	>
 		<div
-			class="delete-modal"
+			class="modal"
 			role="dialog"
 			aria-modal="true"
 			aria-label="Delete {account.name}"
 			onpointerdown={(e) => e.stopPropagation()}
 		>
-			<h3 class="modal-title">Delete “{account.name}”?</h3>
-			<p class="modal-sub">
-				This account still has generated data. Unchecking “Delete all data”
-				saves it to your cache folder before the account is removed.
-			</p>
-
-			<div class="delete-stats">
-				<div class="stat">
-					<span class="stat-value">{account.videos}</span>
-					<span class="stat-label">videos</span>
-				</div>
-				<div class="stat">
-					<span class="stat-value">{account.images}</span>
-					<span class="stat-label">images</span>
-				</div>
-				<div class="stat">
-					<span class="stat-value">{account.sessions}</span>
-					<span class="stat-label">sessions</span>
-				</div>
+			<div class="modal-header">
+				<h3>Delete “{account.name}”?</h3>
+				<span class="modal-sub">
+					This account still has generated data. Unchecking “Delete all data”
+					saves it to your cache folder before the account is removed.
+				</span>
 			</div>
 
-			<p class="confirm-line">Are you sure you want to complete delete session?</p>
+			<div class="modal-body">
+				<div class="delete-stats">
+					<div class="stat">
+						<span class="stat-value">{account.videos}</span>
+						<span class="stat-label">videos</span>
+					</div>
+					<div class="stat">
+						<span class="stat-value">{account.images}</span>
+						<span class="stat-label">images</span>
+					</div>
+					<div class="stat">
+						<span class="stat-value">{account.sessions}</span>
+						<span class="stat-label">sessions</span>
+					</div>
+				</div>
 
-			<label class="delete-all">
-				<input
+				<p class="confirm-line">Are you sure you want to complete delete session?</p>
 
-					type="checkbox"
+				<label class="delete-all">
+					<input
 
-					checked={deleteAllData}
+						type="checkbox"
 
-					disabled={busy}
+						checked={deleteAllData}
 
-					onchange={(e) => (deleteAllData = (e.target as HTMLInputElement).checked)}
+						disabled={busy}
 
-				/>
-				<span>Delete all data</span>
-			</label>
+						onchange={(e) => (deleteAllData = (e.target as HTMLInputElement).checked)}
 
-			<div class="modal-actions">
-				<button class="action-btn cancel" disabled={busy} onclick={onCancel}>
+					/>
+					<span>Delete all data</span>
+				</label>
+			</div>
+
+			<div class="modal-footer">
+				<button class="btn-cancel" disabled={busy} onclick={onCancel}>
 					Cancel
 				</button>
 				<button
-					class="action-btn confirm"
+					class="btn-confirm btn-confirm-danger"
 					disabled={busy}
 					onclick={() => onConfirm(deleteAllData)}
 				>
@@ -99,45 +111,11 @@
 {/if}
 
 <style>
-	.modal-overlay {
-		position: fixed;
-		inset: 0;
-		z-index: 1000;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		background: rgba(0, 0, 0, 0.55);
-	}
-
-	.delete-modal {
-		width: 380px;
-		max-width: calc(100vw - 32px);
-		padding: 24px;
-		background: var(--bg-secondary);
-		border: 1px solid var(--border);
-		border-radius: 14px;
-		box-shadow: var(--shadow-md);
-		text-align: left;
-	}
-
-	.modal-title {
-		font-size: 1.15rem;
-		font-weight: 700;
-		color: var(--text-primary);
-		margin-bottom: 8px;
-	}
-
-	.modal-sub {
-		font-size: 0.85rem;
-		color: var(--text-muted);
-		margin-bottom: 18px;
-		line-height: 1.4;
-	}
-
+	/* Body-only chrome: the overlay, dialog shell, header/footer and the
+	   action buttons all come from the shared composer-modal.css. */
 	.delete-stats {
 		display: flex;
 		gap: 10px;
-		margin-bottom: 16px;
 	}
 
 	.stat {
@@ -148,7 +126,7 @@
 		gap: 2px;
 		padding: 10px 6px;
 		background: var(--bg-tertiary);
-		border: 1px solid var(--border);
+		border: 1px solid var(--border-color);
 		border-radius: 10px;
 	}
 
@@ -169,7 +147,7 @@
 		font-size: 0.9rem;
 		font-weight: 600;
 		color: var(--text-primary);
-		margin-bottom: 12px;
+		margin: 0;
 	}
 
 	.delete-all {
@@ -179,55 +157,13 @@
 		font-size: 0.85rem;
 		color: var(--text-primary);
 		cursor: pointer;
-		margin-bottom: 20px;
+		margin: 0;
 	}
 
 	.delete-all input {
 		width: 16px;
 		height: 16px;
-		accent-color: var(--accent);
+		accent-color: var(--accent-color);
 		cursor: pointer;
-	}
-
-	.modal-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: 10px;
-	}
-
-	.action-btn {
-		padding: 9px 20px;
-		border-radius: 8px;
-		font-size: 0.9rem;
-		font-weight: 600;
-		font-family: inherit;
-		cursor: pointer;
-		border: 1px solid var(--border);
-		transition: all var(--transition-fast);
-	}
-
-	.action-btn.cancel {
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-	}
-
-	.action-btn.cancel:hover:not(:disabled) {
-		border-color: var(--text-muted);
-	}
-
-	.action-btn.confirm {
-		background: #dc2626;
-		border-color: #dc2626;
-		color: #fff;
-	}
-
-	.action-btn.confirm:hover:not(:disabled) {
-		background: #b91c1c;
-		border-color: #b91c1c;
-	}
-
-	.action-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
 	}
 </style>

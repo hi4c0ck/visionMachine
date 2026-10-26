@@ -267,10 +267,8 @@
 
 							<!-- Zone lane: one main zone -->
 							<div class="dl-zone-lane">
-								<span class="dl-zone-lane-label">Zones</span>
 								{#each zones as zone, zi (zone.id)}
 									<div class="dl-zone" style="left: {px(zone.frameStart)}px; width: {wpx(zone.frameStart, zone.frameEnd)}px;">
-										<span class="dl-zone-badge">Z{zi + 1}</span>
 										<span class="dl-zone-range">{zone.frameStart}–{zone.frameEnd}</span>
 									</div>
 									<span class="dl-grip dl-grip-zone" style="left: {px(zone.frameStart)}px"></span>
@@ -285,7 +283,6 @@
 										<span class="dl-tag-lane-label">{lane.name}</span>
 										{#each lane.entries as t (t.id)}
 											<div class="dl-tag {t.id === SELECTED_TAG_ID ? 'selected' : ''}" style="left: {px(t.frameStart)}px; width: {wpx(t.frameStart, t.frameEnd)}px; --tag-color: {t.spec.color};">
-												<span class="dl-tag-zone">Z1</span>
 												<span class="dl-tag-prompt">{t.prompt}</span>
 											</div>
 											<span class="dl-grip dl-grip-tag" style="left: {px(t.frameStart)}px"></span>

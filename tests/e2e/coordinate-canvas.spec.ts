@@ -78,8 +78,9 @@ test.describe('Coordinate Canvas Consistency', () => {
 		// 10px handle centered on x=0
 		expect(Math.abs(((handleL as { x: number }).x + 5) - (canvas as { x: number }).x)).toBeLessThan(1);
 
-		// Global range bar shares the same coordinate space (spans full width)
-		const globalRange = await page.locator('.global-range').first().boundingBox();
+		// Global range bar shares the same coordinate space (spans full width).
+		// Pill-model DOM: the global range is .global-lane:not(.sound) .pill.
+		const globalRange = await page.locator('.global-lane:not(.sound) .pill').first().boundingBox();
 		expect(globalRange).toBeTruthy();
 		expect(Math.abs((globalRange as { x: number }).x - (canvas as { x: number }).x)).toBeLessThan(1);
 	});
