@@ -757,6 +757,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	const pillPct = $derived(
 		activeTask && anyTaskActive ? Math.round((activeTask.progress ?? 0) * 100) : null,
 	);
+	// Terminal-but-not-minimized fallback: a task ended (not active) with a
+	// non-`done` status but `pillTerminal` was never set (the group/pill
+	// markers only flip when minimized) would otherwise fall into the
+	// success catch-all and read as "Generation finished" on a FAILED run.
+	// This is true for any terminal, non-active task that did NOT finish `done`.
+	const pillIsError = $derived(
+		pillTerminal === 'error' ||
+		(activeTask !== null && !anyTaskActive && pillTerminal === null && activeTask.status !== 'done'),
+	);
 	// Live engine-state line for the minimized pill (e.g. "queue full —
 	// retry in 120 s"): the newest lastEvent, preferring IN-FLIGHT stages
 	// (generating / rate-limited) over finished ones. The preference matters
@@ -2711,16 +2720,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			{#if (activeTask || groupActive) && !showProgressModal && (progressMinimized || pillTerminal !== null || anyTaskActive)}
 				<button
 					class="gen-pill"
-					class:gen-pill-done={pillTerminal === 'done'}
-					class:gen-pill-error={pillTerminal === 'error'}
+					class:gen-pill-done={pillTerminal === 'done' && !pillIsError}
+					class:gen-pill-error={pillIsError}
 					onclick={restoreProgressModal}
 					title="Generation task — click to open the progress modal"
 				>
 					<span class="gen-pill-dot" aria-hidden="true"></span>
-					{#if pillTerminal === 'done'}
-						<span class="gen-pill-text">Generation complete</span>
-					{:else if pillTerminal === 'error'}
+					{#if pillIsError}
 						<span class="gen-pill-text">Generation failed</span>
+					{:else if pillTerminal === 'done'}
+						<span class="gen-pill-text">Generation complete</span>
 					{:else if activeTask && anyTaskActive}
 						<!-- Compact, status-driven: the pill shows the live
 					     request status (newest in-flight stage event —
