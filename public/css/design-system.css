@@ -34,6 +34,9 @@
   --surface-color: var(--bg-tertiary);
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.14);
+  --success-color: #4ade80;
+  --warning-color: #fbbf24;
+  --error-color: #f87171;
 
   /* Panel surfaces (Template A — Open Canvas): the sketch-coded yellow /
      red / pink column tints are neutralized to the theme's own surface +
@@ -110,6 +113,9 @@
   --surface-color: var(--bg-tertiary);
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.16);
+  --success-color: #4ade80;
+  --warning-color: #fbbf24;
+  --error-color: #f87171;
 
   --panel-left-bg: var(--bg-secondary);
   --panel-left-border: var(--border);
@@ -165,6 +171,9 @@
   --surface-color: var(--bg-tertiary);
   --danger-color: #ff6b6b;
   --danger-bg: rgba(255, 107, 107, 0.16);
+  --success-color: #4ade80;
+  --warning-color: #fbbf24;
+  --error-color: #f87171;
 
   --panel-left-bg: var(--bg-secondary);
   --panel-left-border: var(--border);
@@ -220,6 +229,9 @@
   --surface-color: var(--bg-tertiary);
   --danger-color: #d32f2f;
   --danger-bg: rgba(211, 47, 47, 0.12);
+  --success-color: #16a34a;
+  --warning-color: #d97706;
+  --error-color: #dc2626;
 
   --panel-left-bg: var(--bg-secondary);
   --panel-left-border: var(--border);

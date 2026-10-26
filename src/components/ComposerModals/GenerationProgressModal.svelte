@@ -357,19 +357,19 @@
 	}
 
 	.gen-stage.done {
-		border-color: rgba(34, 197, 94, 0.5);
+		border-color: color-mix(in srgb, var(--success-color, #4ade80) 50%, transparent);
 	}
 
 	.gen-stage.done .gen-stage-status {
-		color: #22c55e;
+		color: var(--success-color, #4ade80);
 	}
 
 	.gen-stage.error {
-		border-color: rgba(239, 68, 68, 0.5);
+		border-color: color-mix(in srgb, var(--error-color, #f87171) 50%, transparent);
 	}
 
 	.gen-stage.error .gen-stage-status {
-		color: #ef4444;
+		color: var(--error-color, #f87171);
 	}
 
 	.gen-stage.cancelled .gen-stage-status {
@@ -377,18 +377,18 @@
 	}
 
 	.gen-stage.ratelimited {
-		border-color: rgba(245, 158, 11, 0.5);
-		background: rgba(245, 158, 11, 0.08);
+		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 50%, transparent);
+		background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
 	}
 
 	.gen-stage.ratelimited .gen-stage-status {
-		color: #f59e0b;
+		color: var(--warning-color, #fbbf24);
 	}
 
 	.gen-stage-ratehint {
 		display: inline-block;
 		font-size: 10px;
-		color: #f59e0b;
+		color: var(--warning-color, #fbbf24);
 		font-family: 'JetBrains Mono', monospace;
 		animation: pulse-rl 1.2s ease-in-out infinite;
 	}
@@ -403,7 +403,7 @@
 	}
 
 	.gen-stage.ratelimited .gen-stage-lastevent {
-		color: #f59e0b;
+		color: var(--warning-color, #fbbf24);
 	}
 
 	@keyframes pulse-rl {
@@ -414,7 +414,7 @@
 	.gen-task-error {
 		margin: 10px 0 0;
 		font-size: 12px;
-		color: #ef4444;
+		color: var(--error-color, #f87171);
 	}
 
 	.gen-task-pending {
@@ -436,16 +436,16 @@
 		gap: 10px;
 		margin: 10px 0 0;
 		padding: 10px 12px;
-		border: 1px solid rgba(245, 158, 11, 0.4);
+		border: 1px solid color-mix(in srgb, var(--warning-color, #fbbf24) 40%, transparent);
 		border-radius: 6px;
-		background: rgba(245, 158, 11, 0.08);
+		background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
 	}
 
 	.gen-overload p {
 		flex: 1 1 220px;
 		margin: 0;
 		font-size: 12px;
-		color: #f59e0b;
+		color: var(--warning-color, #fbbf24);
 	}
 
 	.gen-overload .gen-reset {
@@ -468,11 +468,11 @@
 	}
 
 	.gen-cancel-all {
-		border: 1px solid rgba(239, 68, 68, 0.4);
+		border: 1px solid color-mix(in srgb, var(--error-color, #f87171) 40%, transparent);
 	}
 
 	.gen-cancel-all:hover {
-		background: rgba(239, 68, 68, 0.12);
+		background: color-mix(in srgb, var(--error-color, #f87171) 12%, transparent);
 	}
 
 	.gen-elapsed {

@@ -297,11 +297,11 @@
 	}
 
 	.probe-ok {
-		color: #4ade80;
+		color: var(--success-color, #4ade80);
 	}
 
 	.probe-err {
-		color: #f87171;
+		color: var(--error-color, #f87171);
 	}
 
 	.tools-divider {

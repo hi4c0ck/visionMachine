@@ -210,7 +210,7 @@
 	}
 
 	.status-badge.ok {
-		color: #4ade80;
+		color: var(--success-color, #4ade80);
 		border-color: rgba(74, 222, 128, 0.4);
 	}
 
@@ -276,11 +276,11 @@
 	}
 
 	.hint-readonly {
-		color: #fbbf24;
+		color: var(--warning-color, #fbbf24);
 	}
 
 	.hint-error {
-		color: #f87171;
+		color: var(--error-color, #f87171);
 	}
 
 	.test-row {
@@ -311,6 +311,6 @@
 	}
 
 	.test-result.ok {
-		color: #4ade80;
+		color: var(--success-color, #4ade80);
 	}
 </style>

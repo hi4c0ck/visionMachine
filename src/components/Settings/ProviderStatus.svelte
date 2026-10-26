@@ -200,21 +200,21 @@
 		height: 7px;
 		border-radius: 50%;
 		flex-shrink: 0;
-		background: #f59e0b;
+		background: var(--warning-color, #fbbf24);
 	}
 
 	.provider-chip.ok .chip-dot {
-		background: #22c55e;
+		background: var(--success-color, #4ade80);
 		box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
 	}
 
 	.provider-chip.warn .chip-dot {
-		background: #f59e0b;
+		background: var(--warning-color, #fbbf24);
 		box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
 	}
 
 	.provider-chip.error .chip-dot {
-		background: #ef4444;
+		background: var(--error-color, #f87171);
 		box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
 	}
 

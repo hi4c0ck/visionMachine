@@ -175,6 +175,18 @@
 	border: 1px solid var(--border-color);
 }
 
+/* Destructive confirm button variant (used for account / data deletes).
+   Inherits the modal footer button geometry; the fill uses the danger
+   tokens so it tracks the active theme instead of a hardcoded hex. */
+.modal-footer .btn-confirm-danger {
+	background: var(--danger-color);
+	color: var(--text-inverse);
+}
+.modal-footer .btn-confirm-danger:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
 /* Keyframe modal mode selector */
 .mode-selector {
 	display: flex;

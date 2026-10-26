@@ -487,11 +487,11 @@
 	}
 
 	.pg-gen-cue-error {
-		color: #ef4444;
+		color: var(--error-color, #f87171);
 	}
 
 	.pg-gen-cue-error svg {
-		color: #ef4444;
+		color: var(--error-color, #f87171);
 	}
 
 	@keyframes pg-gen-pulse {
