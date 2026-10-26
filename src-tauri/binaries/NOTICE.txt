@@ -6,8 +6,8 @@ scripts/build/fetch-ffmpeg.mjs from:
 
   BtbN/FFmpeg-Builds
   https://github.com/BtbN/FFmpeg-Builds
-  release: autobuild-2026-10-11-13-04 (immutable tag)
-  asset:   per-target, e.g. ffmpeg-N-127367-gb5902e69c7-win64-gpl.zip
+  release: autobuild-2026-10-25-13-00 (immutable tag)
+  asset:   per-target, e.g. ffmpeg-N-128094-g31855b2a70-win64-gpl.zip
 
 The staged binary is a GPL-enabled build. It is distributed as an executable
 sidecar only in the full build variant. The tiny variant does not bundle it.
@@ -36,8 +36,8 @@ in accordance with the written source-offer described in
 NOTICE.md ("FFmpeg Source Offer (GPL §6 compliance)"). Summary:
   - FFmpeg source: https://ffmpeg.org/download.html
     (Git: https://git.ffmpeg.org/gitweb/ffmpeg.git)
-  - Exact pinned build: BtbN/FFmpeg-Builds, tag autobuild-2026-10-11-13-04,
-    revision N-127367-gb5902e69c7
+  - Exact pinned build: BtbN/FFmpeg-Builds, tag autobuild-2026-10-25-13-00,
+    revision N-128094-g31855b2a70
     (https://github.com/BtbN/FFmpeg-Builds/releases)
   - GPL codec dependencies (x264, x265, ...): source from their upstream
     projects listed on the FFmpeg download page.

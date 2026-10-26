@@ -72,7 +72,7 @@ const binariesDir =
 //
 // `<tag>` is the release tag. "latest" always resolves to the most recent
 // auto-build. For a fully reproducible pin, replace "latest" with a specific
-// autobuild tag (e.g. "autobuild-2026-10-11-13-04") — check the repo's
+// autobuild tag (e.g. "autobuild-2026-10-25-13-00") — check the repo's
 // release list to find the tag matching your desired ffmpeg version.
 //
 // We use the "-shared" variants: they are smaller (~80 MB win64 vs ~185 MB
@@ -89,22 +89,22 @@ const binariesDir =
 //
 // PinnedVersions: the ffmpeg version line baked into the asset's revision
 // tag. The pinned ReleaseTag below ships the master-line build under that
-// revision string (e.g. N-127367-gb5902e69c7); the 9.0/8.1 versioned assets
+// revision string (e.g. N-128094-g31855b2a70); the 9.0/8.1 versioned assets
 // in the same release are NOT what we pin. Bump PinnedFfmpegVersion +
 // ReleaseTag together to re-fetch a different ffmpeg generation.
 const PinnedFfmpegVersion = '9.0';
-const ReleaseTag = 'autobuild-2026-10-11-13-04'; // immutable FFmpeg build tag
+const ReleaseTag = 'autobuild-2026-10-25-13-00'; // immutable FFmpeg build tag
 // SHA-256 published by the GitHub release API for the current pinned asset.
 // Update this together with ReleaseTag when deliberately refreshing FFmpeg.
 const PinnedAssetSha256 = {
-  'ffmpeg-N-127367-gb5902e69c7-win64-gpl.zip':
-    'e7a10f6e0a9c19d91ec4979ba60fe415a7da8588520bc46d75fec03d94fb9033',
-  'ffmpeg-N-127367-gb5902e69c7-winarm64-gpl.zip':
-    'f19f1cebc341cddf78961d54b2f201456ac50991febbf3e882d306b960cf8e31',
-  'ffmpeg-N-127367-gb5902e69c7-linux64-gpl.tar.xz':
-    '28acfa877b43944a3203b5a1ad32d5db23c31bd99c34e31f6911251e4aeaeb84',
-  'ffmpeg-N-127367-gb5902e69c7-linuxarm64-gpl.tar.xz':
-    '3c73d0ce9095ebe0b292e343a6a0a57516c689739787f4caa558b24a52924ded',
+  'ffmpeg-N-128094-g31855b2a70-win64-gpl.zip':
+    '94810842a634c7742936dc2690d6b4957561a38b05f00c27f045e07131924acc',
+  'ffmpeg-N-128094-g31855b2a70-winarm64-gpl.zip':
+    '73196a69262d6be099cde1d1fca98dca8130221ea92b06c7cc7483cbb90ddaa3',
+  'ffmpeg-N-128094-g31855b2a70-linux64-gpl.tar.xz':
+    'df26244c68c5523a656efdfcb6c70f3831665c4e3b31af313744484ee1e79a3a',
+  'ffmpeg-N-128094-g31855b2a70-linuxarm64-gpl.tar.xz':
+    '279086f1a945f3245edefbb101ebb9000b92f25913efe3271157d5dfb77881dd',
 };
 
 // Per-EXECUTABLE SHA-256 pins, keyed by `<ReleaseTag>/<asset>/<tool>`.
@@ -116,22 +116,22 @@ const PinnedAssetSha256 = {
 // GPL asset ships ffmpeg + ffprobe as one immutable pair per release tag, so
 // both hashes are pinned together with ReleaseTag / PinnedAssetSha256.
 const PinnedExecutableSha256 = {
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-win64-gpl.zip/ffmpeg':
-    '7a66dd4355a0c14a3842ea9632ea62f875037079c1a1d76a66aeb62575ca7e76',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-win64-gpl.zip/ffprobe':
-    '9996dddb28262041ac34c48aae60861285d378f5ca843ad9a9341fa864e2bfc3',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-winarm64-gpl.zip/ffmpeg':
-    '31cad935e4ef48e59b8dcc499d03ba94195d90cae70d357a07d059769a1f3474',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-winarm64-gpl.zip/ffprobe':
-    'c84079a21b5196c87b9bed3af259be6583a509311db3c3cf250b0e9361b72388',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-linux64-gpl.tar.xz/ffmpeg':
-    'bd3eda8dfc184ef91f13dc32d5f67dd365b29021013d7cc3f4d48390d2481804',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-linux64-gpl.tar.xz/ffprobe':
-    'ce9bfa4ff51ebac283a2909ee880bd828873349764ebef5bb1237479955f69a5',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-linuxarm64-gpl.tar.xz/ffmpeg':
-    '6601b448921b978277e5fecb2200303baccbddb7cb78a9a2f3ce765d570e21ef',
-  'autobuild-2026-10-11-13-04/ffmpeg-N-127367-gb5902e69c7-linuxarm64-gpl.tar.xz/ffprobe':
-    '111618786645a68a04479c673e76ba10ef6b0e2680eec806999ece5d9cead4a8',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-win64-gpl.zip/ffmpeg':
+    '0d8e1240f20fbbca5897f40d67e1ca3389dd6837830e71031b3e9dafde6c4e05',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-win64-gpl.zip/ffprobe':
+    '04734fdb925245df128957d42ecf822e3edd7d44891c1f4fa79202db1f7d2d44',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-winarm64-gpl.zip/ffmpeg':
+    'fa5fac2e4ade47415a2f76a2d40aca879e1f9ad164e30e9d5552a2621e8209cd',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-winarm64-gpl.zip/ffprobe':
+    'afc61b2cda029f19230b5a3c5aa263d9210759b596f4c596b9f6b9e18bcc8c8d',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-linux64-gpl.tar.xz/ffmpeg':
+    '25642aabaa92f0284a23f3be160f664655000ab670de4ddcd0ec68dbc77b728a',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-linux64-gpl.tar.xz/ffprobe':
+    '1d24b13a35058cb66ddb90f9022dfaa7dc118a37cfbc9cda0756532ac33d8f8a',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-linuxarm64-gpl.tar.xz/ffmpeg':
+    'd64069b91dd76b85619b0d161565f9d1d95343522254eb3d2ea3230c1733fa2f',
+  'autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-linuxarm64-gpl.tar.xz/ffprobe':
+    '41cd16c9fc5a6c24b57158fe094bb902cba34349dd830a277fef5a78c338f659',
 };
 
 // Pinned asset URLs per target triple prefix.
@@ -148,7 +148,7 @@ function assetForTarget(target) {
     // Immutable release assets use the N-<revision>-g<commit> naming scheme.
     const plat = arch === 'aarch64' ? 'winarm64' : 'win64';
     return {
-      url: `https://github.com/BtbN/FFmpeg-Builds/releases/download/${ReleaseTag}/ffmpeg-N-127367-gb5902e69c7-${plat}-gpl.zip`,
+      url: `https://github.com/BtbN/FFmpeg-Builds/releases/download/${ReleaseTag}/ffmpeg-N-128094-g31855b2a70-${plat}-gpl.zip`,
       ext: 'zip',
       arch: plat,
     };
@@ -157,7 +157,7 @@ function assetForTarget(target) {
   if (target.includes('linux') || target.includes('gnu') || target.includes('musl')) {
     const plat = arch === 'aarch64' ? 'linuxarm64' : 'linux64';
     return {
-      url: `https://github.com/BtbN/FFmpeg-Builds/releases/download/${ReleaseTag}/ffmpeg-N-127367-gb5902e69c7-${plat}-gpl.tar.xz`,
+      url: `https://github.com/BtbN/FFmpeg-Builds/releases/download/${ReleaseTag}/ffmpeg-N-128094-g31855b2a70-${plat}-gpl.tar.xz`,
       ext: 'tar.xz',
       arch: plat,
     };
