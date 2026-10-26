@@ -40,7 +40,7 @@ variant** and is not linked into VisionMachine's code:
 
 | Component | Source / provenance | License | How it ships |
 |-----------|---------------------|---------|--------------|
-| FFmpeg + ffprobe (sidecar) | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned tag `autobuild-2026-10-11-13-04`, rev `N-127367-gb5902e69c7` | FFmpeg core **GPLv2+** / **LGPL-2.1+** (dual-licensed); this build is the GPL-enabled variant with GPL codec dependencies (x264, x265, etc.) | Shipped as a separate `ffmpeg`/`ffprobe` executable sidecar in the full-variant installer. The **tiny variant does not bundle it.** |
+| FFmpeg + ffprobe (sidecar) | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), pinned tag `autobuild-2026-10-25-13-00`, rev `N-128094-g31855b2a70` | FFmpeg core **GPLv2+** / **LGPL-2.1+** (dual-licensed); this build is the GPL-enabled variant with GPL codec dependencies (x264, x265, etc.) | Shipped as a separate `ffmpeg`/`ffprobe` executable sidecar in the full-variant installer. The **tiny variant does not bundle it.** |
 
 Because the FFmpeg sidecar is a *separate, independent* program placed on the
 same medium as VisionMachine (a **GPLv3 "aggregate"** under §5), it does not
@@ -55,8 +55,8 @@ To comply with the GPL source-offer obligation for the FFmpeg + ffprobe
 sidecar in the **full-variant** installer, the corresponding source is
 available at no charge:
 
-- **FFmpeg release tag / revision:** `autobuild-2026-10-11-13-04` ·
-  `N-127367-gb5902e69c7` (the exact build staged by
+- **FFmpeg release tag / revision:** `autobuild-2026-10-25-13-00` ·
+  `N-128094-g31855b2a70` (the exact build staged by
   [scripts/build/fetch-ffmpeg.mjs](scripts/build/fetch-ffmpeg.mjs)).
 - **Corresponding source** (GPL FFmpeg source, matching that revision):
   - [https://ffmpeg.org/download.html](https://ffmpeg.org/download.html)
