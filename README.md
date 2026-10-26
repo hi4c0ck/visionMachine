@@ -261,7 +261,7 @@ bundles one standalone third-party program:
 
 | Component | Source | License | Ships in |
 |-----------|--------|---------|----------|
-| FFmpeg + ffprobe (sidecar) | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), tag `autobuild-2026-10-11-13-04` | GPL-2.0-or-later (FFmpeg core, dual LGPL-2.1-or-later; GPL-enabled build incl. x264/x265) | full variant only (tiny variant ships no binary) |
+| FFmpeg + ffprobe (sidecar) | [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), tag `autobuild-2026-10-25-13-00` | GPL-2.0-or-later (FFmpeg core, dual LGPL-2.1-or-later; GPL-enabled build incl. x264/x265) | full variant only (tiny variant ships no binary) |
 
 The bundled FFmpeg sidecar is distributed as a separate, unmodified
 executable and carries its own GPL source-offer duty. See the **FFmpeg
