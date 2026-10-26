@@ -205,17 +205,17 @@
 
 	.provider-chip.ok .chip-dot {
 		background: var(--success-color, #4ade80);
-		box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+		box-shadow: 0 0 6px color-mix(in srgb, var(--success-color, #4ade80) 60%, transparent);
 	}
 
 	.provider-chip.warn .chip-dot {
 		background: var(--warning-color, #fbbf24);
-		box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+		box-shadow: 0 0 6px color-mix(in srgb, var(--warning-color, #fbbf24) 60%, transparent);
 	}
 
 	.provider-chip.error .chip-dot {
 		background: var(--error-color, #f87171);
-		box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);
+		box-shadow: 0 0 6px color-mix(in srgb, var(--error-color, #f87171) 60%, transparent);
 	}
 
 	/* Neutral state while the active profile's settings are still loading —

@@ -95,6 +95,28 @@
 	resize: vertical;
 }
 
+/* Standalone textarea class for modals that render a textarea OUTSIDE a
+   .modal-field wrapper (e.g. GenerateModal's read-only final-prompt box,
+   TagPrompt/Keyframe/SubjectRef editable prompt editors). Shares the exact
+   geometry of .modal-field textarea so prompt editors stay consistent
+   whether they live in a plain field or a custom box. */
+.modal-textarea {
+	background: var(--bg-tertiary);
+	border: 1px solid var(--border-color);
+	border-radius: 6px;
+	padding: 10px 12px;
+	color: var(--text-primary);
+	font-size: 14px;
+	width: 100%;
+	min-height: 100px;
+	resize: vertical;
+}
+
+.modal-textarea:focus {
+	outline: none;
+	border-color: var(--accent-color);
+}
+
 .modal-field input[type="checkbox"] {
 	margin-right: 8px;
 }
@@ -185,6 +207,27 @@
 .modal-footer .btn-confirm-danger:disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
+}
+
+/* Shared warning box (PipeLength trim preview, etc.). A subtle amber
+   notification inside the modal body. Uses the theme's warning token
+   so the color tracks the active theme. */
+.gen-warning-box {
+	padding: 10px 12px;
+	border: 1px solid color-mix(in srgb, var(--warning-color, #fbbf24) 40%, transparent);
+	background: color-mix(in srgb, var(--warning-color, #fbbf24) 8%, transparent);
+	border-radius: 6px;
+	color: var(--text-secondary);
+	font-size: 12px;
+	line-height: 1.45;
+}
+.gen-warning-box p {
+	margin: 0;
+}
+.gen-warning-box .gen-warning-detail {
+	margin-top: 6px;
+	font-size: 11px;
+	color: var(--text-muted, var(--text-secondary));
 }
 
 /* Keyframe modal mode selector */
