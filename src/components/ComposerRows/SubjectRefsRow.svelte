@@ -283,10 +283,13 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		padding: 6px 10px;
-		background: var(--bg-tertiary);
+		/* Template A (Open Canvas): the thumbnail floats on the pipe surface —
+	   no nested card. A quiet 1px frame marks the chip as a discrete,
+	   clickable object without a card-in-card wash. */
+		padding: 4px 6px;
+		background: transparent;
 		border: 1px solid var(--border-color);
-		border-radius: 6px;
+		border-radius: 4px;
 		font-size: 12px;
 	}
 
@@ -416,19 +419,24 @@
 	}
 
 	.sr-add {
-		background: none;
-		border: 1px dashed var(--border-color);
+		/* Template A: soft ghost — translucent surface, hairline, generous
+	   radius; recedes until hover. */
+		background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+		border: 1px solid var(--border-color);
 		color: var(--text-secondary);
 		cursor: pointer;
-		padding: 6px 12px;
-		border-radius: 6px;
+		padding: 6px 14px;
+		border-radius: 9px;
 		font-size: 12px;
+		font-weight: 500;
 		align-self: center;
+		transition: all 0.15s ease;
 	}
 
 	.sr-add:hover {
-		border-color: var(--accent-color);
-		color: var(--accent-color);
+		border-color: color-mix(in srgb, var(--accent-color) 50%, transparent);
+		color: var(--text-primary);
+		background: var(--accent-bg);
 	}
 
 	/* Broken URL state (D5): red-out the chip whose reference failed the

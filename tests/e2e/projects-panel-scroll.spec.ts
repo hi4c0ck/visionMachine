@@ -52,7 +52,7 @@ test.describe('Left column never hides the profile panel', () => {
 
     // …and the Settings entry (last child of the profile panel) is fully
     // visible — inside the viewport, not clipped below it.
-    const settingsEntry = page.locator('.settings-entry');
+    const settingsEntry = page.locator('.profile-icon.settings');
     await expect(settingsEntry).toBeVisible();
     const box = await settingsEntry.boundingBox();
     expect(box).toBeTruthy();
@@ -68,7 +68,7 @@ test.describe('Left column never hides the profile panel', () => {
     await page.setViewportSize({ width: 1280, height: 520 });
     await setupProject(page);
     await seedManySessions(page, ['P2', 'P3', 'P4']);
-    await page.locator('.settings-entry').click();
+    await page.locator('.profile-icon.settings').click();
     await expect(page.locator('.settings-modal')).toBeVisible();
     await expect(
       page.locator('.settings-modal .tab-btn:has-text("Defaults")'),

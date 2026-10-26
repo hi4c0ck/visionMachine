@@ -47,22 +47,46 @@ export function collectRemoteUrls(pipe: PipeRow, videoMedia?: ModelMedia): RefUr
   return out;
 }
 
-/** Fetch-check every remote target; returns the ones that are unreachable. */
+/**
+ * Fetch-check every remote target; returns the ones that are DEFINITIVELY
+ * unreachable.
+ *
+ * Only a readable, non-OK HTTP response (e.g. 404/403) marks a target as
+ * broken. A *thrown* fetch (CORS-opaque cross-origin media, a timeout, or a
+ * plain network error) is treated as UNCHECKABLE and NOT marked broken:
+ *
+ *  - The app already shows the image via <img>, which loads cross-origin
+ *    media fine (CORS is only needed to READ a fetch body, not to display).
+ *  - In the Tauri webview, a cross-origin URL the browser can't read for CORS
+ *    reasons throws exactly like a down server does — we cannot distinguish
+ *    "CORS blocked the read" from "the host is unreachable" from the browser.
+ *  - The authoritative reachability check is the provider engine's own HTTP
+ *    client (Rust reqwest — no CORS), which runs later and reports the real
+ *    error if the URL is genuinely dead.
+ *
+ * So: a readable HTTP error = broken (catch it early); a throw = let it
+ * through to the engine instead of producing the classic "URL not accessible
+ * (but it is)" false positive.
+ */
 export async function checkRemoteUrls(targets: RefUrlTarget[], timeoutMs = 5000): Promise<RefUrlTarget[]> {
   const remote = targets.filter((t) => isRemoteUrl(t.url));
   const broken: RefUrlTarget[] = [];
   await Promise.all(
     remote.map(async (t) => {
+      const ctrl = new AbortController();
+      const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
+      let res: Response;
       try {
-        const ctrl = new AbortController();
-        const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
-        const res = await fetch(t.url, { method: 'GET', signal: ctrl.signal });
-        window.clearTimeout(timer);
-        if (!res.ok) broken.push(t);
+        res = await fetch(t.url, { method: 'GET', signal: ctrl.signal });
       } catch {
-        // network error, timeout abort, or CORS block → treat as broken
-        broken.push(t);
+        // CORS-opaque / timeout / network error: uncheckable from the browser
+        // (the engine will fetch it authoritatively) → do NOT mark broken.
+        window.clearTimeout(timer);
+        return;
       }
+      window.clearTimeout(timer);
+      // Only a readable, definitive HTTP error counts as "not accessible".
+      if (!res.ok) broken.push(t);
     }),
   );
   return broken;

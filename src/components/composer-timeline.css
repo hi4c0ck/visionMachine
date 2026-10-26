@@ -37,10 +37,14 @@
 		position: absolute;
 		top: 3px;
 		height: 20px;
-		background: var(--lane-color, #59B5FF);
-		border: 1px solid rgba(0, 0, 0, 0.4);
-		border-radius: 10px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+		/* Template A: a calm translucent wash of the lane color, not a solid
+		   box — with a precise colored edge + left spine, so the span reads as
+		   one defined element on the continuous canvas (no heavy fill, no
+		   drop shadow, no chunky slab border). */
+		background: color-mix(in srgb, var(--lane-color, #59B5FF) 30%, transparent);
+		border: 1px solid color-mix(in srgb, var(--lane-color, #59B5FF) 55%, transparent);
+		box-shadow: inset 2px 0 0 var(--lane-color, #59B5FF);
+		border-radius: 2px;
 		cursor: grab;
 		z-index: 2;
 		box-sizing: border-box;
@@ -58,7 +62,7 @@
 	.pill-label {
 		font-size: 9px;
 		font-weight: 700;
-		color: rgba(255, 255, 255, 0.9);
+		color: var(--text-primary);
 		margin: 0 4px;
 		letter-spacing: 0.3px;
 		flex: 0 0 auto;
@@ -71,7 +75,7 @@
 	.pill-text {
 		font-size: 9px;
 		font-weight: 600;
-		color: #fff;
+		color: var(--text-secondary);
 		white-space: nowrap;
 		text-overflow: ellipsis;
 		overflow: hidden;
@@ -90,7 +94,7 @@
 		z-index: 5;
 		background: none;
 		border: none;
-		color: rgba(255, 255, 255, 0.8);
+		color: var(--text-secondary);
 		cursor: pointer;
 		padding: 0 2px;
 		font-size: 10px;
@@ -108,7 +112,7 @@
 		z-index: 5;
 		background: none;
 		border: none;
-		color: rgba(255, 255, 255, 0.8);
+		color: var(--text-primary);
 		cursor: pointer;
 		padding: 0 2px;
 		font-size: 11px;
@@ -122,10 +126,11 @@
 	.pill-del:focus-visible {
 		opacity: 1;
 	}
-	.pill-toggle:hover { color: #fff; }
-	.pill-del:hover { color: #fff; background: rgba(0, 0, 0, 0.3); border-radius: 3px; }
+	.pill-toggle:hover { color: var(--text-primary); }
+	.pill-del:hover { color: var(--text-primary); background: var(--bg-tertiary); border-radius: 3px; }
 
-	/* Round resize grips on the pill edges (same model as .tag-handle). */
+	/* Square, thin resize grips — a precise mark, not a round chunky tab.
+	   The 8px-wide element is the hit target; only a thin centered bar shows. */
 	.pill-grip {
 		position: absolute;
 		top: 0;
@@ -135,21 +140,20 @@
 		cursor: ew-resize;
 		z-index: 6;
 		pointer-events: auto;
-		background: var(--lane-color, #59B5FF);
-		border-radius: 4px;
-		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4), 0 1px 2px rgba(0, 0, 0, 0.4);
+		background: transparent;
+		border-radius: 0;
 		opacity: 0;
 		transition: opacity 0.12s ease;
 	}
 	.pill-grip::after {
 		content: "";
 		position: absolute;
-		top: 4px;
-		bottom: 4px;
-		left: 3px;
+		top: 3px;
+		bottom: 3px;
+		left: 50%;
+		transform: translateX(-50%);
 		width: 2px;
-		border-radius: 1px;
-		background: rgba(255, 255, 255, 0.9);
+		background: var(--lane-color, #59B5FF);
 	}
 	.pill:hover .pill-grip, .pill:active .pill-grip { opacity: 0.9; }
 	.pill-grip:hover, .pill-grip:active { opacity: 1; }
@@ -160,8 +164,11 @@
 	flex-direction: column;
 	gap: 6px;
 	margin-top: 8px;
+	/* Template A (Open Canvas): the timeline canvas is ONE continuous square
+	   surface. Inner lanes float on it (flattened below); the single hairline
+	   boundary marks the region, not a rounded card. */
 	background: var(--surface-color);
-	border-radius: 8px;
+	border-radius: 0;
 	box-shadow: inset 0 0 0 1px var(--border-color);
 }
 
@@ -187,15 +194,16 @@
 	flex-shrink: 0;
 }
 .tl-title {
-	font-size: 11px;
+	/* Template A: natural-case section heading — weight carries hierarchy. */
+	font-size: 12px;
 	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
 	color: var(--text-primary);
 }
 .tl-summary {
+	/* Template A: technical metadata in monospace (zone/tag counts). */
 	margin-left: auto;
 	font-size: 10px;
+	font-family: var(--font-mono, monospace);
 	color: var(--text-secondary);
 }
 
@@ -209,27 +217,11 @@
 	position: relative;
 	width: 100%;
 	height: 28px;
-	background: var(--bg-tertiary);
-	border-radius: 5px;
-	box-shadow: inset 0 0 0 1px var(--border-color);
-}
-
-/* Lane label, floats left over the track so the pill's frame coordinate
-   origin is untouched (same rule as tag lane labels). */
-.segment-lane-label {
-	position: absolute;
-	left: 6px;
-	top: 50%;
-	transform: translateY(-50%);
-	z-index: 3;
-	padding: 1px 6px;
-	font-size: 9px;
-	font-weight: 700;
-	color: var(--text-secondary);
-	background: var(--bg-secondary);
-	border-radius: 6px;
-	box-shadow: 0 0 0 1px var(--border-color);
-	pointer-events: none;
+	/* Template A: lane floats on the timeline canvas — no own card.
+	   (Coordinate-safe: background only, no padding/border.) */
+	background: transparent;
+	border-radius: 0;
+	box-shadow: none;
 }
 
 /* The zone pill (accent). Left/width come from frameToPx. The delete
@@ -239,11 +231,13 @@
 	position: absolute;
 	top: 3px;
 	height: 22px;
-	background: var(--accent-color);
-	opacity: 0.9;
-	border: 1px solid rgba(255, 255, 255, 0.25);
-	border-radius: 11px;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+	/* Template A: a calm translucent accent wash, not a solid box — precise
+	   colored edge + left spine mark it as one defined element on the canvas.
+	   No heavy fill, no drop shadow, no chunky slab border. */
+	background: color-mix(in srgb, var(--accent-color) 30%, transparent);
+	border: 1px solid color-mix(in srgb, var(--accent-color) 60%, transparent);
+	box-shadow: inset 2px 0 0 var(--accent-color);
+	border-radius: 2px;
 	cursor: grab;
 	display: flex;
 	align-items: center;
@@ -252,24 +246,19 @@
 	overflow: hidden;
 	z-index: 2;
 }
-.segment-body:hover { opacity: 1; }
+.segment-body:hover { background: color-mix(in srgb, var(--accent-color) 40%, transparent); }
 .segment-body:active { cursor: grabbing; }
 
-/* Zone badge (Z1, Z2…) inside the pill, so a shared lane stays unambiguous. */
-.seg-zone-badge {
-	font-size: 9px;
-	font-weight: 700;
-	color: #fff;
-	margin-right: 4px;
-	letter-spacing: 0.3px;
-	flex: 0 0 auto;
-}
-
-/* Frame-range label inside the pill — clipped, never overflows the pipe. */
+/* Frame-range readout — right-aligned inside the zone pill (the Z-n remark
+   was removed: with a visible lane + ruler the zone index adds no signal).
+   Themed text on the calm wash, mono for a technical value. */
 .seg-label {
+	margin-left: auto;
+	padding-left: 8px;
 	font-size: 10px;
 	font-weight: 600;
-	color: #fff;
+	font-family: var(--font-mono, monospace);
+	color: var(--text-primary);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -313,7 +302,8 @@
 	border-radius: 6px;
 }
 
-/* Round resize grips, revealed on lane hover (E2E expects ±5px centers).
+/* Precise resize grips, revealed on lane hover (E2E expects ±5px centers).
+   10px element stays the hit target; only a thin centered bar shows.
    Positioned in the shared lane's coordinate space, not inside the pill. */
 .segment-handle {
 	position: absolute;
@@ -323,9 +313,8 @@
 	transform: translateX(-50%);
 	cursor: ew-resize;
 	z-index: 4;
-	background: var(--accent-color);
-	border-radius: 6px;
-	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 1px 3px rgba(0, 0, 0, 0.4);
+	background: transparent;
+	border-radius: 0;
 	opacity: 0;
 	transition: opacity 0.12s ease;
 }
@@ -334,10 +323,11 @@
 	position: absolute;
 	top: 8px;
 	bottom: 8px;
-	left: 4px;
+	left: 50%;
+	transform: translateX(-50%);
 	width: 2px;
-	border-radius: 1px;
-	background: rgba(255, 255, 255, 0.9);
+	background: var(--accent-color);
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
 }
 .segment-lane:hover .segment-handle { opacity: 0.9; }
 .segment-handle:hover,
@@ -357,9 +347,10 @@
 	.tag-lane-track {
 	position: absolute;
 	inset: 0;
-	background: var(--bg-tertiary);
-	border-radius: 5px;
-	box-shadow: inset 0 0 0 1px var(--border-color);
+	/* Template A: tag lane floats on the shared canvas — no own card. */
+	background: transparent;
+	border-radius: 0;
+	box-shadow: none;
 }
 
 	/* Type badge: colored dot + name, floats over the track left edge.
@@ -381,9 +372,19 @@
 		border-radius: 8px;
 		box-shadow: 0 0 0 1px var(--border-color);
 		white-space: nowrap;
-		ext-overflow: ellipsis;
+		overflow: hidden;
 		pointer-events: none;
 		max-width: 110px;
+		transition: max-width 0.18s ease, opacity 0.18s ease;
+	}
+	/* FOLDED: a pill starts under the label, so it collapses to just its
+	   color swatch (text stays in the DOM for accessibility + the
+	   lane-persistence tests, but is visually clipped). pointer-events stays
+	   none so the folded chip never blocks the pill/grip beneath it. */
+	.tag-lane-label.folded {
+		max-width: 20px; /* the dot + a little padding */
+		padding-right: 5px;
+		overflow: hidden;
 	}
 	.tag-lane-label::before {
 		content: "";
@@ -400,10 +401,13 @@
 		position: absolute;
 		top: 4px;
 		height: 16px;
-		background: var(--tag-color, var(--accent-color));
-		border: 1px solid rgba(0, 0, 0, 0.4);
-		border-radius: 8px;
-		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+		/* Template A: calm translucent wash of the tag color (not a solid
+		   box) with a precise colored edge + left spine — reads as one
+		   defined element, no slab border, no drop shadow. */
+		background: color-mix(in srgb, var(--tag-color, var(--accent-color)) 30%, transparent);
+		border: 1px solid color-mix(in srgb, var(--tag-color, var(--accent-color)) 60%, transparent);
+		box-shadow: inset 2px 0 0 var(--tag-color, var(--accent-color));
+		border-radius: 2px;
 		cursor: grab;
 		z-index: 2;
 		/* NO overflow:hidden: the edge grips sit half-outside the pill and
@@ -412,26 +416,17 @@
 		display: flex;
 		align-items: center;
 	}
-	.tag-body:hover { filter: brightness(1.12); }
+	.tag-body:hover { background: color-mix(in srgb, var(--tag-color, var(--accent-color)) 40%, transparent); }
 	.tag-body:active { cursor: grabbing; }
 
-	/* Zone origin badge — which zone a pill belongs to, visible on the
-	   shared type lane. Sits before the prompt text. */
-	.tag-pill-zone {
-		font-size: 8px;
-		font-weight: 700;
-		color: rgba(255, 255, 255, 0.85);
-		flex: 0 0 auto;
-		margin: 0 4px 0 0;
-		letter-spacing: 0.3px;
-	}
-
 	/* Prompt text on the pill (ref parity: tags show their prompt inline).
-	   Shows the prompt when set, otherwise the tag type name as fallback. */
+	   Shows the prompt when set, otherwise the tag type name as fallback.
+	   (The old Z-n origin badge was removed — the lane label + ruler already
+	   say which zone; the pill tooltip still carries the zone number.) */
 	.tag-pill-prompt {
 		font-size: 9px;
 		font-weight: 600;
-		color: #fff;
+		color: var(--text-primary);
 		white-space: nowrap;
 		text-overflow: ellipsis;
 		overflow: hidden;
@@ -445,7 +440,7 @@
 	.tag-pill-label {
 		font-size: 9px;
 		font-weight: 600;
-		color: #fff;
+		color: var(--text-primary);
 		white-space: nowrap;
 		text-overflow: ellipsis;
 		overflow: hidden;
@@ -526,32 +521,33 @@
 	align-items: center;
 	gap: 4px;
 	padding: 0 8px;
-	border-top: 1px dashed var(--border-color);
 	margin-top: 4px;
 }
-/* "+ Zone" sits below the zone rows, separated from them. */
+/* "+ Zone" sits BELOW the lane, with breathing room — the row is its own
+   quiet space (whitespace, not a heavy separator). */
 .segment-chrome.segment-chrome-append {
-	border-top: 1px solid var(--border-color);
+	border-top: none;
+	margin-top: 12px;
 }
 
-/* "+ Zone" button — theme-palette ghost button: muted border/text that
-   lifts to accent on hover, aligned with the 8px rhythm of the lane above. */
+/* "+ Zone" — a soft ghost button: a whisper of translucent surface under a
+   hairline, rounded; the accent wash appears only on hover. */
 .btn-add-zone {
-	height: 20px;
-	padding: 0 10px;
+	height: 22px;
+	padding: 0 12px;
 	font-size: 11px;
-	font-weight: 600;
+	font-weight: 500;
 	font-family: inherit;
 	color: var(--text-secondary);
-	background: var(--bg-tertiary);
+	background: color-mix(in srgb, var(--text-primary) 4%, transparent);
 	border: 1px solid var(--border-color);
-	border-radius: 6px;
+	border-radius: 8px;
 	cursor: pointer;
 	transition: all 0.15s ease;
 }
 .btn-add-zone:hover {
 	color: var(--text-primary);
-	border-color: var(--accent-color);
+	border-color: color-mix(in srgb, var(--accent-color) 50%, transparent);
 	background: var(--accent-bg);
 }
 .btn-add-zone:focus-visible {
@@ -563,30 +559,34 @@
 /* ── Add-track [+], buttons, empty state ─────────────────────────────── */
 .timeline-actions {
 	display: grid;
-	grid-auto-rows: 32px;
+	grid-auto-rows: 30px;
 	row-gap: 6px;
 	align-items: start;
+	/* breathing room: the action column sits clear of the ruler row */
+	margin-top: 10px;
 }
+/* The "+ Track" ghost square — a soft translucent disc: whisper of a
+   surface, hairline border, generous radius; accent wash on hover. */
 .timeline-actions .btn-add-track {
-	width: 32px;
-	height: 32px;
+	width: 30px;
+	height: 30px;
 	padding: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 16px;
-	font-weight: 600;
+	font-size: 15px;
+	font-weight: 500;
 	line-height: 1;
 	color: var(--text-secondary);
-	background: var(--bg-tertiary);
+	background: color-mix(in srgb, var(--text-primary) 5%, transparent);
 	border: 1px solid var(--border-color);
-	border-radius: 6px;
+	border-radius: 10px;
 	cursor: pointer;
 	transition: all 0.15s ease;
 }
 .timeline-actions .btn-add-track:hover {
 	color: var(--text-primary);
-	border-color: var(--accent-color);
+	border-color: color-mix(in srgb, var(--accent-color) 50%, transparent);
 	background: var(--accent-bg);
 }
 .timeline-actions .btn-add-track:focus-visible {
@@ -618,8 +618,20 @@
 	color: var(--danger-color);
 }
 
+/* ── Guided empty state (zero zones) ─────────────────────────────────── */
+/* Replaces the old bare dashed box. The whole area is one CTA (.seg-empty
+   — E2E contract kept): a GHOST PREVIEW of what the timeline will look
+   like once the first zone exists (a dashed "future" zone pill + a dashed
+   "future" tag pill), plus plain-language copy. No competing "+ Zone"
+   chrome button, no dead lane band above it. */
 .seg-empty {
-	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 18px 24px;
+	margin: 2px 8px 8px;
 	text-align: center;
 	color: var(--text-secondary);
 	font-size: 12px;
@@ -630,7 +642,91 @@
 }
 .seg-empty:hover {
 	border-color: var(--accent-color);
+	background: var(--accent-bg, transparent);
+}
+.seg-empty:focus-visible {
+	outline: none;
+	border-color: var(--accent-color);
+	box-shadow: 0 0 0 2px var(--accent-glow);
+}
+/* Ghost preview: the shapes that WILL appear, drawn dashed and muted so
+   they read as "not real yet" — but recognizably the same pills. */
+.zone-empty-preview {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 6px;
+	width: 60%;
+	max-width: 380px;
+	min-width: 220px;
+	pointer-events: none;
+}
+/* Ghost zone pill — mirrors .segment-body (accent fill → dashed accent
+   outline, no fill). */
+.zone-empty-zone {
+	position: relative;
+	width: 100%;
+	height: 24px;
+	display: flex;
+	align-items: center;
+	padding: 0 8px;
+	gap: 6px;
+	border: 1.5px dashed var(--accent-color);
+	border-radius: 12px;
+	opacity: 0.55;
+	box-sizing: border-box;
+}
+.zone-empty-badge {
+	font-size: 9px;
+	font-weight: 700;
 	color: var(--accent-color);
+	letter-spacing: 0.3px;
+}
+.zone-empty-range {
+	font-size: 10px;
+	font-weight: 600;
+	font-family: var(--font-mono, 'JetBrains Mono', monospace);
+	color: var(--text-secondary);
+}
+/* Ghost tag pill — mirrors .tag-body, offset under the zone like the real
+   tag lane sits under the zone lane. Muted neutral, dashed. */
+.zone-empty-tag {
+	position: relative;
+	margin: 0 8px;
+	height: 18px;
+	width: 70%;
+	display: inline-flex;
+	align-items: center;
+	padding: 0 8px;
+	border: 1px dashed var(--border-color);
+	border-radius: 9px;
+	box-sizing: border-box;
+	opacity: 0.7;
+}
+.zone-empty-tag em {
+	font-style: normal;
+	color: var(--text-muted, var(--text-secondary));
+}
+/* Copy: strong CTA line + one-line explanation. */
+.zone-empty-copy {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 3px;
+	max-width: 520px;
+}
+.zone-empty-copy strong {
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--text-primary);
+}
+.seg-empty:hover .zone-empty-copy strong {
+	color: var(--accent-color);
+}
+.zone-empty-hint {
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--text-secondary);
 }
 .full-width {
 	width: 100%;

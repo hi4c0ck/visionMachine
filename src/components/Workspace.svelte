@@ -757,6 +757,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	const pillPct = $derived(
 		activeTask && anyTaskActive ? Math.round((activeTask.progress ?? 0) * 100) : null,
 	);
+	// Terminal-but-not-minimized fallback: a task ended (not active) with a
+	// non-`done` status but `pillTerminal` was never set (the group/pill
+	// markers only flip when minimized) would otherwise fall into the
+	// success catch-all and read as "Generation finished" on a FAILED run.
+	// This is true for any terminal, non-active task that did NOT finish `done`.
+	const pillIsError = $derived(
+		pillTerminal === 'error' ||
+		(activeTask !== null && !anyTaskActive && pillTerminal === null && activeTask.status !== 'done'),
+	);
 	// Live engine-state line for the minimized pill (e.g. "queue full —
 	// retry in 120 s"): the newest lastEvent, preferring IN-FLIGHT stages
 	// (generating / rate-limited) over finished ones. The preference matters
@@ -2711,16 +2720,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			{#if (activeTask || groupActive) && !showProgressModal && (progressMinimized || pillTerminal !== null || anyTaskActive)}
 				<button
 					class="gen-pill"
-					class:gen-pill-done={pillTerminal === 'done'}
-					class:gen-pill-error={pillTerminal === 'error'}
+					class:gen-pill-done={pillTerminal === 'done' && !pillIsError}
+					class:gen-pill-error={pillIsError}
 					onclick={restoreProgressModal}
 					title="Generation task — click to open the progress modal"
 				>
 					<span class="gen-pill-dot" aria-hidden="true"></span>
-					{#if pillTerminal === 'done'}
-						<span class="gen-pill-text">Generation complete</span>
-					{:else if pillTerminal === 'error'}
+					{#if pillIsError}
 						<span class="gen-pill-text">Generation failed</span>
+					{:else if pillTerminal === 'done'}
+						<span class="gen-pill-text">Generation complete</span>
 					{:else if activeTask && anyTaskActive}
 						<!-- Compact, status-driven: the pill shows the live
 					     request status (newest in-flight stage event —
@@ -2919,8 +2928,8 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		min-height: 0; /* needed so the ProjectsPanel child can shrink/scroll
 		                 instead of pushing the ProfilePanel out of the viewport */
 		background: var(--bg-secondary, #14141f);
-		border-right: 1px solid var(--panel-left-border, rgba(255, 215, 0, 0.35));
-		box-shadow: var(--shadow-panel-left, inset 0 0 40px rgba(255, 215, 0, 0.03));
+		border-right: 1px solid var(--panel-left-border, var(--border, #2a2a3a));
+		box-shadow: var(--shadow-panel-left, none);
 	}
 
 	.composer-area {
@@ -2928,9 +2937,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		position: relative;
 		overflow-y: auto;
 		overflow-x: hidden;
-		background: var(--panel-center-bg, rgba(255, 70, 70, 0.05));
-		border-left: 1px solid var(--panel-center-border, rgba(255, 70, 70, 0.3));
-		border-right: 1px solid var(--panel-right-border, rgba(255, 120, 190, 0.35));
+		background: var(--panel-center-bg, transparent);
+		border-left: 1px solid var(--panel-center-border, var(--border, #2a2a3a));
+		border-right: 1px solid var(--panel-right-border, var(--border, #2a2a3a));
 	}
 
 	.composer-empty {

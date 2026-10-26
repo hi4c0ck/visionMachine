@@ -128,7 +128,7 @@
 				<!-- Trim warning: shrinking the pipe re-trims zones/tags into
 				     the new frame space — show exactly what would be affected. -->
 				{#if trimmed}
-					<div class="pl-warning">
+					<div class="gen-warning-box">
 						<p>
 							Shrinking from {pipe.lengthFrames}f to {frames}f
 							{#if trimPreview.trimmedZones > 0 || trimPreview.trimmedTags > 0}
@@ -139,10 +139,10 @@
 							{/if}
 						</p>
 						{#if trimPreview.lostZoneLabels && trimPreview.lostZoneLabels.length > 0}
-							<p class="pl-warning-detail">Zones removed: {trimPreview.lostZoneLabels.join(', ')}</p>
+							<p class="gen-warning-detail">Zones removed: {trimPreview.lostZoneLabels.join(', ')}</p>
 						{/if}
 						{#if trimPreview.lostTagLabels && trimPreview.lostTagLabels.length > 0}
-							<p class="pl-warning-detail">Tags removed: {trimPreview.lostTagLabels.join(', ')}</p>
+							<p class="gen-warning-detail">Tags removed: {trimPreview.lostTagLabels.join(', ')}</p>
 						{/if}
 					</div>
 				{/if}
@@ -194,23 +194,6 @@
 		cursor: not-allowed;
 	}
 
-	.pl-warning {
-		padding: 10px 12px;
-		background: rgba(255, 176, 32, 0.1);
-		border: 1px solid rgba(255, 176, 32, 0.4);
-		border-radius: 6px;
-		color: var(--text-secondary);
-		font-size: 12px;
-		line-height: 1.45;
-	}
-
-	.pl-warning p {
-		margin: 0;
-	}
-
-	.pl-warning-detail {
-		margin-top: 6px;
-		font-size: 11px;
-		color: var(--text-muted, var(--text-secondary));
-	}
+	/* .gen-warning-box and .gen-warning-detail are in the shared
+	   composer-modal.css — no local rules needed. */
 </style>

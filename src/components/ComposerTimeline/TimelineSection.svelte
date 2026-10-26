@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PipeRow, Segment, TagElement, GlobalElement, SoundElement } from '$types';
 	import { TAG_SPECIFICATIONS, type TagType } from '$types';
+	import { APP_CONSTANTS } from '$constants';
 	import FrameRuler from '../FrameRuler.svelte';
 	import ChromeIcon from '../ChromeIcon.svelte';
 	import '../composer-timeline.css';
@@ -170,11 +171,16 @@
 
 	// + Zone affordance visibility: hide the button when no free gap fits the
 	// creation floor (≈1s at session fps, 8-grid) — a dead modal is worse than
-	// no button. The first zone is reachable through the empty placeholder.
+	// no button. With ZERO zones the guided empty state IS the only add-zone
+	// affordance (single CTA), so the chrome button stays hidden too —
+	// getFreeGaps() reports the whole track as one gap, which used to leak
+	// a redundant second button next to the empty state.
 	const hasFreeSpace = $derived.by(() => {
 		const tl = getTimeline(pipe);
+		const segments = tl?.segments ?? [];
+		if (segments.length === 0) return false;
 		const fpsVal = fps ?? 0;
-		return getFreeGaps(tl?.segments ?? [], pipe?.lengthFrames ?? 0, minZoneSpan(fpsVal)).length > 0;
+		return getFreeGaps(segments, pipe?.lengthFrames ?? 0, minZoneSpan(fpsVal)).length > 0;
 	});
 
 	// ── Tag lanes (design: one horizontal line per tag TYPE) ───────────────
@@ -291,6 +297,32 @@
 		if (!tl) return 0;
 		return (tl.segments ?? []).reduce((n: number, s: Segment) => n + s.tags.length, 0);
 	});
+
+	// ── Legend fold: a lane label floats over the track. When the FIRST pill
+	//    on a lane starts under the label (its left edge crosses the label
+	//    width), the text would collide with content — so the label folds to
+	//    just its color swatch (a width clamp, not display:none: the text
+	//    stays in the DOM so the lane-persistence tests keep reading it, and
+	//    it re-expands on hover). Widths are measured live via use:measureLabel.
+	const LABEL_CLEARANCE = 12; // px of slack beyond the label's own width
+	let legendWidths = $state<Record<string, number>>({});
+	/** Svelte action: measure a floating legend chip on mount.
+	     Used as `use:measureLabel={id}` → called as measureLabel(node, id). */
+	function measureLabel(node: HTMLElement, id: string) {
+		legendWidths[id] = node.getBoundingClientRect().width + LABEL_CLEARANCE;
+	}
+	/** Is a lane's first pill under the floating legend (startPx < chip width)? */
+	function laneStartsUnderLegend(startPx: number, id: string): boolean {
+		return (legendWidths[id] ?? 0) > 0 && startPx < (legendWidths[id] ?? 0);
+	}
+	// Does a tag lane's first pill start under that lane's floating legend?
+	function tagLaneFolded(lane: { type: string; entries: Array<{ tag: any }> }): boolean {
+		if (!rulerGeometry || lane.entries.length === 0) return false;
+		return laneStartsUnderLegend(
+			frameToPx(lane.entries[0].tag.frameStart, rulerGeometry),
+			lane.type
+		);
+	}
 
 	// Get preview state for a segment during drag
 	function getPreviewSegment(seg: Segment) {
@@ -681,8 +713,11 @@
 						     tag lanes below). Body drags move a zone; the round grips
 						     resize it. Clicking a pill opens the tag menu scoped to
 						     THAT zone; its × button (pill hover) deletes it. -->
+						<!-- With zero zones the empty lane band + faded tag lanes are
+						     dead space: the guided empty state below previews the shape
+						     instead. (Lanes reappear the moment the first zone exists.) -->
+						{#if tl.segments.length > 0}
 						<div class="segment-lane">
-							<span class="segment-lane-label">Zones</span>
 							{#if rulerGeometry}
 								{#each tl.segments as seg, segIdx (seg.id)}
 									{@const sPrev = getPreviewSegment(seg)}
@@ -699,7 +734,8 @@
 										title="Click to add a tag to Zone {segIdx + 1}"
 										onclick={(e) => { e.stopPropagation(); onZonePillClick(e, seg.id); }}
 										onkeydown={(e) => e.key === 'Enter' && onOpenTagMenu(seg.id, e as unknown as MouseEvent)}>
-										<span class="seg-zone-badge">Z{segIdx + 1}</span>
+										<!-- Range readout, right-aligned: the Z-n remark is
+										     redundant once the lane + ruler are visible. -->
 										<span class="seg-label">{sStart}–{sEnd}</span>
 										<button
 											class="btn-icon-sm btn-del-sm seg-del"
@@ -734,6 +770,7 @@
 								{/each}
 							{/if}
 						</div>
+						{/if}
 
 						<!-- ═══ TAG LANES: one line per tag TYPE across all zones ═══
 							 Each tag type gets its own horizontal lane; every pill of
@@ -744,7 +781,7 @@
 						{#each getTagLanes(pipe) as lane (lane.type)}
 							<div class="tag-lane" class:empty={lane.entries.length === 0} style="--lane-color: {lane.color};">
 								<div class="tag-lane-track">
-									<span class="tag-lane-label" style="--lane-color: {lane.color};">{lane.name}</span>
+									<span class="tag-lane-label" use:measureLabel={lane.type} class:folded={tagLaneFolded(lane)} style="--lane-color: {lane.color};">{lane.name}</span>
 									{#if rulerGeometry}
 										{#each lane.entries as entry (entry.tag.id)}
 											{@const tag = entry.tag}
@@ -761,7 +798,6 @@
 												onpointerdown={(e) => handleElementPointerDown(e, 'tag', tag.id, seg.id, 'body', tag.frameStart, tag.frameEnd)}
 												onpointermove={handlePointerMove}
 												onpointerup={handlePointerUp}>
-												<span class="tag-pill-zone">Z{zoneIndex}</span>
 												<span class="tag-pill-prompt">{tag.prompt ?? tag.spec?.name}</span>
 												<button
 													class="btn-del-tag"
@@ -814,12 +850,27 @@
 						</div>
 						{/if}
 
-						<!-- No zones yet (no timeline, or empty timeline) — one placeholder,
-							 zone add auto-creates the timeline when needed. -->
+						<!-- No zones yet (no timeline, or empty timeline).
+						     GUIDED EMPTY STATE: instead of a bare dashed box, show the
+						     shape that WILL appear (a ghost zone pill + a ghost tag pill)
+						     and one line of plain-language explanation. The whole area
+						     is the single CTA — the + Zone chrome row is hidden while it's
+						     up so there's never two "add" affordances competing.
+						     E2E contract preserved: .seg-empty.full-width, "Add first zone". -->
 						{#if (tl.segments.length ?? 0) === 0}
-							<div class="seg-empty full-width" onclick={onAddSegment} role="button" tabindex="0"
+							<div class="seg-empty full-width zone-empty" onclick={onAddSegment} role="button" tabindex="0"
 								onkeydown={(e) => e.key === 'Enter' && onAddSegment()}>
-								<span>+ Add first zone</span>
+								<span class="zone-empty-preview" aria-hidden="true">
+									<span class="zone-empty-zone">
+										<span class="zone-empty-badge">Z1</span>
+										<span class="zone-empty-range">0–{totalFrames - 1}</span>
+									</span>
+									<span class="zone-empty-tag">{APP_CONSTANTS.strings.zonesEmptyGhostTag}</span>
+								</span>
+								<span class="zone-empty-copy">
+									<strong>+ {APP_CONSTANTS.strings.zonesEmptyCta}</strong>
+									<span class="zone-empty-hint">{APP_CONSTANTS.strings.zonesEmptyHint}</span>
+								</span>
 							</div>
 						{/if}
 					{/if}

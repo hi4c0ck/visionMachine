@@ -6,6 +6,7 @@
 	import ErrorHandler from './components/ErrorHandler.svelte';
 	import WelcomeAccounts from './components/WelcomeAccounts.svelte';
 	import WelcomeDeleteModal from './components/WelcomeDeleteModal.svelte';
+	import WindowControls from './components/WindowControls.svelte';
 	import DesignLab from './design-lab/DesignLab.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
@@ -244,19 +245,24 @@
 					</div>
 				</div>
 
-				<div class="stripe-logo">
+				<!-- The stripe is the welcome screen's own window chrome
+				     (decorations are off globally): the logo medallion + controls
+				     band are drag targets so the window moves at any width,
+				     while the interactive select stays clickable. -->
+				<div class="stripe-logo" data-tauri-drag-region>
 					<div class="film-frame film-frame-logo" role="img" aria-label="VisionMachine">
 						<img src="/icons/vm-mark-128.png" alt="VisionMachine" class="film-mark" />
 					</div>
 				</div>
 
-				<div class="stripe-controls">
+				<div class="stripe-controls" data-tauri-drag-region>
 					<span class="stripe-version">v{APP_CONSTANTS.strings.version}</span>
 					<select class="theme-select" value={selectedTheme} onchange={(e) => applyTheme(e.currentTarget.value)}>
 						{#each APP_CONSTANTS.themes as theme}
 							<option value={theme.id}>{theme.name}</option>
 						{/each}
 					</select>
+					<WindowControls />
 				</div>
 			</header>
 
@@ -358,6 +364,12 @@
 		background: #101014;
 		border-top: 1px solid var(--border);
 		border-bottom: 1px solid var(--border);
+		/* Single-row chrome: the logo medallion (left) and the controls
+		   cluster (right, margin-left:auto) share ONE 92px line. The band
+		   used to be block-level, so the two stacked vertically and
+		   overflow:hidden clipped the controls row entirely off-screen
+		   (the welcome page looked like it had no window buttons). */
+		display: flex;
 	}
 
 	.stripe-clip {

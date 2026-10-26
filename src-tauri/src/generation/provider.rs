@@ -208,8 +208,19 @@ pub trait HttpClient: Send + Sync {
         api_key: &str,
         timeout: Duration,
     ) -> Result<(u16, serde_json::Value), String>;
-    /// Download `url` (a public provider artifact, no auth) into `dest`.
-    async fn download(&self, url: &str, dest: &std::path::Path) -> Result<(), String>;
+    /// Download `url` into `dest`. Plain GET first (provider artifact URLs are
+    /// usually public or pre-signed); on 401/403 the transport retries with the
+    /// `api_key` Bearer — some providers (Agnes video S3 output bucket) gate
+    /// the finished-clip URL behind the same key the create/poll calls use,
+    /// and a plain GET there is a 403 AccessDenied. Plain-first (never
+    /// Bearer-first): a pre-signed URL with a conflicting Authorization
+    /// header is itself rejected by S3, so the bearer must be the fallback.
+    async fn download(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        api_key: &str,
+    ) -> Result<(), String>;
 }
 
 impl ProviderEngine {
@@ -469,7 +480,7 @@ impl ProviderEngine {
         match remote_url {
             Some(u) => {
                 self.http
-                    .download(&u, &req.dest)
+                    .download(&u, &req.dest, slot.api_key.trim())
                     .await
                     .map_err(|e| {
                         log::error!("[Piece] download failed {u}: {e}");
@@ -908,7 +919,10 @@ impl ProviderEngine {
             Some(url) => {
                 let dest_str = dest.to_string_lossy().into_owned();
                 let secrets_refs: Vec<&str> = secrets.iter().map(|s| s.as_str()).collect();
-                match self.http.download(&url, &dest).await {
+                // No `slot` in this helper: the provider key arrives via `secrets`
+                // (element 0 is the slot's api_key, built by the caller).
+                let key = secrets.first().map(|s| s.as_str()).unwrap_or_default();
+                match self.http.download(&url, &dest, key).await {
                     Ok(()) => {
                         self.log_entry(
                             input,
@@ -1425,7 +1439,7 @@ impl ProviderEngine {
                     pipe_media_dirs(root, pipe_dir, &input.task_id)
                         .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                match self.http.download(&video_url, &dest).await {
+                match self.http.download(&video_url, &dest, slot.api_key.trim()).await {
                     Ok(()) => {
                         self.log_entry(
                             input,
@@ -1552,12 +1566,21 @@ impl HttpClient for ReqwestClient {
         Ok((status, body))
     }
 
-    async fn download(&self, url: &str, dest: &std::path::Path) -> Result<(), String> {
+    async fn download(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        api_key: &str,
+    ) -> Result<(), String> {
         let client = self.client.clone();
         let url_owned = url.to_string();
+        // Plain GET first (public / pre-signed artifact), then a Bearer-
+        // authorized GET on 401/403 — the Agnes video output bucket gates
+        // the finished clip behind the provider API key.
         fetch_artifact_to(dest, url, move || {
             let client = client.clone();
             let url = url_owned.clone();
+            let key = api_key.trim().to_string();
             async move {
                 let resp = client
                     .get(&url)
@@ -1565,6 +1588,19 @@ impl HttpClient for ReqwestClient {
                     .await
                     .map_err(|e| format!("transport: {e}"))?;
                 let status = resp.status().as_u16();
+                if matches!(status, 401 | 403) && !key.is_empty() {
+                    let resp = client
+                        .get(&url)
+                        .bearer_auth(&key)
+                        .send()
+                        .await
+                        .map_err(|e| format!("transport: {e}"))?;
+                    let authed_status = resp.status().as_u16();
+                    log::info!(
+                        "[Artifact] plain GET {url} -> {status}, Bearer retry -> {authed_status}"
+                    );
+                    return Ok((authed_status, response_body_stream(resp)));
+                }
                 Ok((status, response_body_stream(resp)))
             }
         })
@@ -1887,7 +1923,12 @@ mod tests {
                 None => Ok((200, json!({ "status": "running" }))),
             }
         }
-        async fn download(&self, url: &str, dest: &std::path::Path) -> Result<(), String> {
+        async fn download(
+            &self,
+            url: &str,
+            dest: &std::path::Path,
+            _api_key: &str,
+        ) -> Result<(), String> {
             self.downloads
                 .lock()
                 .unwrap()

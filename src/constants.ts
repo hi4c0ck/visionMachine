@@ -1,4 +1,4 @@
-const APP_VERSION = '0.7.9';
+const APP_VERSION = '0.7.10';
 
 // Footer / attribution copy. The repo lives at hi4c0ck/visionMachine and
 // the copyright holder is @HorizonesMachines (see NOTICE.md / LICENSE); the
@@ -36,6 +36,11 @@ const APP_CONSTANTS = {
     length: 'Length',
     frames: 'frames',
     addSegment: 'Add Segment',
+    // Timeline guided empty state (zero zones): single CTA + one-line
+    // explanation + the ghost example tag it previews.
+    zonesEmptyCta: 'Add first zone',
+    zonesEmptyHint: 'A zone is a time span of this shot; instructions — camera, lighting, effect — live inside it.',
+    zonesEmptyGhostTag: 'Camera · Pan left',
     qLabel: 'Q',
     cLabel: 'C',
     

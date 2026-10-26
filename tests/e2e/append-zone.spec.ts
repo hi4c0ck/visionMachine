@@ -204,10 +204,12 @@ test.describe('Appending zones', () => {
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });
 
-		// The pill carries its zone badge (Z1) so the shared type lane stays
-		// unambiguous.
+		// The pill is now identified by its prompt (type name when no custom
+		// prompt). The visible Z-n remark was removed — no .tag-pill-zone
+		// badge on the pill (the zone number remains in the pill tooltip).
 		const pill = page.locator('.tag-body').first();
-		expect(await pill.locator('.tag-pill-zone').innerText()).toBe('Z1');
+		expect(await pill.locator('.tag-pill-prompt').innerText()).toBe('Scene');
+		expect(await pill.locator('.tag-pill-zone').count()).toBe(0);
 	});
 
 	test('timeline collapses to a summary header and re-expands', async ({ page }) => {
@@ -304,9 +306,11 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		await page.locator('.dropdown-menu .tag-item', { hasText: 'Scene' }).click();
 		await page.waitForSelector('.tag-body', { timeout: 5000 });
 		expect(await page.locator('.tag-body').count()).toBe(1);
-		// The pill carries its zone badge (Z1) so the shared lane stays
-		// unambiguous.
-		expect(await page.locator('.tag-pill-zone').first().innerText()).toBe('Z1');
+		// The pill carries its prompt; the zone number (no longer a visible
+		// Z-n badge) now lives in the pill's tooltip.
+		expect(await page.locator('.tag-body .tag-pill-prompt').first().innerText()).toBe('Scene');
+		// and no visible Z-n badge remains on the pill.
+		expect(await page.locator('.tag-body .tag-pill-zone').count()).toBe(0);
 	});
 
 	test('per-zone + Tag menu shows declared types greyed and "New segment" item', async ({ page }) => {
@@ -430,16 +434,18 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 	test('global range exposes grips that resize via the store', async ({ page }) => {
 		// Create the global lane, then drag its right grip in to ~30% of the
 		// pipe. The committed range width must shrink (updateGlobalRange fired).
+		// Pill-model DOM: the global range is .global-lane .pill (label "Global");
+		// its resize grips are .pill-grip.pill-grip-left/right at left:0/100%.
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Global' }).click();
-		await page.waitForSelector('.global-range', { timeout: 5000 });
+		const range = page.locator('.global-lane .pill', { hasText: 'Global' }).first();
+		await page.waitForSelector('.global-lane .pill', { timeout: 5000 });
 
 		// The global bar spans the whole pipe on creation; grips sit at its edges.
-		const range = page.locator('.global-range').first();
 		const rangeBox = (await range.boundingBox())!;
-		const gripR = (await page.locator('.global-handle-right').first().boundingBox())!;
-		expect(Math.abs(gripR.x + 5 - (rangeBox.x + rangeBox.width))).toBeLessThan(3);
+		const gripR = (await page.locator('.global-lane .pill .pill-grip.pill-grip-right').first().boundingBox())!;
+		expect(Math.abs(gripR.x + 4 - (rangeBox.x + rangeBox.width))).toBeLessThan(3);
 
 		// Drag the right grip far left → range end recomputes, width shrinks.
 		await page.mouse.move(gripR.x + gripR.width / 2, gripR.y + gripR.height / 2);
@@ -456,14 +462,14 @@ test('tag delete button is hidden until the pill is hovered', async ({ page }) =
 		const plus = page.locator('.btn-add-track').first();
 		await plus.click();
 		await page.locator('.dropdown-menu .dropdown-item', { hasText: 'Global' }).click();
-		await page.waitForSelector('.global-range', { timeout: 5000 });
+		const range = page.locator('.global-lane .pill', { hasText: 'Global' }).first();
+		await page.waitForSelector('.global-lane .pill', { timeout: 5000 });
 
-		const range = page.locator('.global-range').first();
 		// The global bar is created full-pipe (0..N-1), so a body-drag right
 		// would be clamped in place (start pinned at 0). Shrink it first via
 		// the right grip so there is room to move.
 		const fullBox = (await range.boundingBox())!;
-		const gripR = (await page.locator('.global-handle-right').first().boundingBox())!;
+		const gripR = (await page.locator('.global-lane .pill .pill-grip.pill-grip-right').first().boundingBox())!;
 		await page.mouse.move(gripR.x + gripR.width / 2, gripR.y + gripR.height / 2);
 		await page.mouse.down();
 		await page.mouse.move(fullBox.x + fullBox.width * 0.5, gripR.y + gripR.height / 2, { steps: 12 });

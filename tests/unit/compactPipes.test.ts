@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupStaleUiState, isStaleGroup, pipeTaskId, togglePipeExpanded, groupComposeUiState } from '../../src/lib/compactPipes';
+import { groupStaleUiState, isStaleGroup, pipeTaskId, togglePipeExpanded, groupComposeUiState, stageStatusWord, stageStateClass } from '../../src/lib/compactPipes';
 
 describe('compact pipe row state', () => {
   it('toggles expansion without mutating the previous state', () => {
@@ -62,6 +62,33 @@ describe('compact pipe row state', () => {
     });
     it('shows nothing when compose has not been requested yet', () => {
       expect(groupComposeUiState(false, null, null, null).visible).toBe(false);
+    });
+  });
+
+  describe('stage status → friendly word + card-state class', () => {
+    it('maps terminal image states (done/ready) to Ready + done card', () => {
+      expect(stageStatusWord('done')).toBe('Ready');
+      expect(stageStatusWord('ready')).toBe('Ready');
+      expect(stageStateClass('done')).toBe('done');
+      expect(stageStateClass('ready')).toBe('done');
+    });
+    it('maps in-flight states', () => {
+      expect(stageStatusWord('pending')).toBe('Queued');
+      expect(stageStateClass('pending')).toBeNull();
+      expect(stageStatusWord('generating')).toBe('In progress');
+      expect(stageStateClass('generating')).toBe('active');
+      expect(stageStatusWord('rate-limited')).toBe('Rate limited');
+      expect(stageStateClass('rate-limited')).toBe('ratelimited');
+    });
+    it('maps failures', () => {
+      expect(stageStatusWord('error')).toBe('Failed');
+      expect(stageStateClass('error')).toBe('error');
+      expect(stageStatusWord('cancelled')).toBe('Cancelled');
+      expect(stageStateClass('cancelled')).toBe('cancelled');
+    });
+    it('passes unknown raw statuses through unchanged (no card state)', () => {
+      expect(stageStatusWord('weird')).toBe('weird');
+      expect(stageStateClass('weird')).toBeNull();
     });
   });
 });
