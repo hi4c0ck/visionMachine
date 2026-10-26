@@ -114,12 +114,15 @@ badge, contributing, CoC, CODEOWNERS/dependabot/issue+PR templates) from the
 
 Two distinct fixes (do both):
 
-- [ ] **Point the default branch at `production`**
-      (Settings → Branches → Default branch → `production`). This is the
-      actual unblocker: it makes GitHub see the license, `CONTRIBUTING.md`,
-      `CODE_OF_CONDUCT.md`, and the `CODEOWNERS`/`dependabot`/issue+PR
-      templates already on `production`. `main` can stay as a stale reference
-      or be deleted once the switch is confirmed.
+- [x] **Default branch: keep `main` (decision 2026-10-26 — do not switch
+      to `production`)**. `main` stays the repo default branch. Trade-off
+      accepted: GitHub's community page reads the profile (license badge,
+      `CONTRIBUTING`/`CODE_OF_CONDUCT`, issue+PR templates, `CODEOWNERS`/
+      dependabot config) from the *default branch* only, so it will keep
+      showing "no license / missing files" — the license itself lives in the
+      repo (`LICENSE` = verbatim GPL-3.0 + `NOTICE.md`) and on every GitHub
+      Release. Re-open this item only if the community-page badge ever
+      becomes a requirement.
 - [x] **Make `LICENSE` the verbatim canonical GPL-3.0 text** (shipped
       v0.7.10): the file is now a byte-exact copy of the GNU distributed
       `gpl-3.0.txt` (verified against two independent mirrors), no custom
@@ -127,10 +130,7 @@ Two distinct fixes (do both):
       ATTRIBUTION ADDENDUM` live in `NOTICE.md` (the standards-compliant home
       for copyright + extra conditions; the §4/§14 legal effect is
       unchanged), and `NOTICE.md`'s stale "addendum is in LICENSE" reference
-      was fixed. The "others" the community page still lists as absent:
-      a `FUNDING.yml` (optional), repo **topics**, and `CONTRIBUTING`/
-      `CODE_OF_CONDUCT` *on the default branch* — all gated on the
-      default-branch switch below.
+      was fixed.
 
 ---
 
