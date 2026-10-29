@@ -512,3 +512,86 @@ Adopt that structure, not invent it prematurely.
 repo-restructure:** add the pure modules + the learned-critic feature +
 the dev-deps + the golden corpus; defer the multi-crate split. That is the
 honest, repo-true completion of "find solutions of our cases."
+
+---
+
+# COMPLETENESS PROOF — requirements traceability (grind goal, "fully done?")
+
+Goal restatement: *find worldwide solutions of OUR cases.* This matrix maps
+**every condition you stated in this thread** to (case → found solution →
+copyable mechanism → repo home → status). It is the completeness proof: a
+requirement row is only green when it has a *named worldwide source*, a
+*concrete mechanism*, and a *repo home*. Sources are cited by wave; full
+evidence in the ledger (84 entries).
+
+## A. Your stated requirements → coverage
+
+| # | Your exact words (paraphrased) | Case | Worldwide solution (wave/source) | Copyable mechanism | Repo home | Status |
+|---|---|---|---|---|---|---|
+| R1 | "separate module for video harness with deep logical structure" | C5 | ViMax/ComfyUI/dsh-desktop deep, decoupled module (waves 1/5/6) | isolated pure module; per-step bounded envelope; I/O at the edge only | ideo_flow/ as a pure module (later a low-core crate) | **Solved** |
+| R2 | "translate text into structural detailed pipes content through few mutations, expanding entry into additional layers" | C1 | novel-to-storyboard 3-call; MAVIN script→storyboard; ComfyTV shot list (waves 1/3) | expand→structure→lower chain; layer adds 
+arrative_arc/keyframe/sset_ids | 
+ovel.rs→plan.rs→egen.rs | **Solved** |
+| R3 | "build harness to maintain user desire & be coherent with real output as close as the user imagined at entry" | C0+C8 | 2606.09376 coverage-aware faithfulness; TICK/DeCE/BiFact; goal-drift re-anchoring (2505.02709 / 2609.32520 / SIP) (waves 4/9) | fidelity = precision⊗recall vs intent-as-complete-oracle; per-step re-anchor to IntentSnapshot + drift diagnostic | critic.rs + drift.rs | **Solved** |
+| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9 | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10) | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics | 
+ovel.rs | **Solved** (prompt itself open by design — see R12) |
+| R5 | "novel generates into structured text with video-engine language configuration" | C1-A | video-notation-schema; Seedance Prompt JSON v3; BSD intent-layer; SKEL (wave 9) | a **versioned, typed video-DSL** (JSON-Schema) + intent/content split; *compile to platform prose* at render | plan.rs (schema) + low-plan compile | **Solved** |
+| R6 | "we can generate from that structured pipes, sections and tags" | C1 | MAVIN/STAGE structural storyboard (start-end frame pairs); storyboard2video deterministic render (waves 3/10) | PlanSection/FlowElement = tag + start-end frame + prompt + asset_ids; deterministically compilable | plan.rs/egen.rs | **Solved** |
+| R7 | "each step has numerous parameters for a better transition" | C2-B | on-style-without-drift style-contract; 7-layer knobs; VideoReward per-dim weights (waves 9/7) | **frozen, versioned 7-layer param bundle** + embedding consistency check; per-dim critic weights | config.rs rozen_style_contract + CriticParams.dimensions | **Solved** |
+| R8 | "use a learning system … local built-in model, trained manually by signals, continuously on the user's machine" | C4+C6 | ReelBrain temp/durable; Kuaishou implicit signals; DPO/KTO; ASLS L2-anchor; KTO/federated-edge; llama.cpp GGUF-LoRA + Rust cera (waves 4/5/7) | **lineage-pair** SignalRecord → (separate) trainer retrains **one additive LoRA head** (hold base) | signals.rs + model.rs manifest; runtime deferred (feature-gated) | **Solved** (capture+contract in-repo; trainer/weights deferred by design — see R13) |
+| R9 | "first mission: NOT touch pipes current structure (only crucial insights); harness lives in session space; final step regENerate pipes, not fallback" | C3 | Three Session-State Planes; SPACE; DSH-V3 seq-remap; Luma/Boords/Genvid per-unit; Epicenter/Kohaku never-mutate-N; **dsh-desktop Tauri event-log+projection** (waves 1/2/5/6) | **source-of-truth inversion**: structured.vN = SoT, pipes = derived; per-unit destructive regen + pproved/egen_state; event-sourced replay | decomposed session layer files + RegenerationContract (per-unit) | **Solved** |
+| R10 | "session as domain; all harness data should have its structures by demand" | C3 | dsh-desktop session-projection/command-log; Kohaku .vN files; BD WorkflowVersionCache (wave 6) | versioned, addressable layer files + manifest; materialize *one* layer on demand | session/flow/{intent,novel,structured,fidelity}.vN.json + manifest.json | **Solved** |
+| R11 | "keep all inside structured to be viable to generation into elements" | C1/C3 | storyboard2video "computed not guessed"; SKEL validation; Seedance storage→compile (waves 7/9) | the structured layer is the ONLY SoT; lowering reads *only* it; FlowElement is generation-ready + provenance-tracked | egen.rs::lower_to_elements(plan) | **Solved** |
+| R12 | "you not code, you prepare infrastructure … with careful text outputs tests and versioning covering" | C7 | promptfoo/Ragas/DeepEval; frozen goldens; N-sample aggregate; INCONCLUSIVE-blocks; prompt-registry versioning; **insta/proptest/bolero** (Rust) (wave 8 + 11) | 4-layer eval harness (golden + deterministic + judge + CI gate) as additive dev-deps; prompt version joins the version triple; INCONCLUSIVE-blocks | low-eval (dev-deps: insta/proptest/bolero + golden/) | **Solved** |
+| R13 | "measure per unit/element descending based on overall score (overall = final result of the transition, but controllable)" | C2 | DeCE/FIRM-Video checklist; **Memory-Guided B-Roll two-scale loop**; RubricArmor anti-hack; Ragas claim+NLI floor; HuDA off-the-shelf floor (waves 2/7) | **two-scale ScoreTree**: per-unit leaves + aggregate-aware root; overall = F2(coverage,support)⊗weighted-mean(dims)⊕aggregate; deterministic HuDA/Ragas floor | critic.rs ScoreNode{checks[]} + root ggregate_failures[] | **Solved** |
+
+## B. The full "cases" index (C0..C9 + sub-cases), each with a worldwide solution
+| Case | Solution(s) found (waves) | Status |
+|---|---|---|
+| C0 core faithfulness goal | 2606.09376 + TICK/DeCE/BiFact + Ragas NLI floor | Solved |
+| C1 spine | ViMax / novel-to-storyboard / MAVIN / ComfyTV / STAGE | Solved |
+| C1-A video-DSL layer | video-notation / Seedance v3 / BSD / SKEL | Solved |
+| C2 per-element fidelity | FIRM-Video + DeCE + B-Roll two-scale + RubricArmor | Solved |
+| C2-B transition params | frozen style-contract + 7-layer knobs + per-dim weights | Solved |
+| C3 session + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / dsh-desktop / Epicenter·Kohaku | Solved |
+| C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou / DITTO / CHIEF | Solved (capture; trainer deferred) |
+| C5 isolation / bounded context | context-rot / Three Planes / AgentPatterns / DDD ACL / ComfyUI cached nodes | Solved |
+| C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package | Solved (manifest; runtime deferred) |
+| C7 careful tests + versioning | promptfoo / Ragas / DeepEval / frozen goldens / insta·proptest·bolero | Solved |
+| C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + continuity_in/out/avoid | Solved |
+| C9 novel-scale spine | CineCrew / EvoState·OneStory·Memento·SlotMemory·REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |
+
+## C. Honest status — what is SOLVED vs deliberately NOT in this repo
+**Solved (a worldwide solution + mechanism + repo home, fully specified):** R1–R13 and C0–C9. This is the grind goal: *every* case you named now has a found solution.
+
+**Deferred BY DESIGN (out of this repo, behind a seam — you set these, I'm not claiming them as gaps):**
+- **R13/R8 learned critic weights + runtime** — the *repo owns the contract + deterministic floor + additive-head manifest*; the trained weights, the ONNX/GGUF cdylib, and the trainer are a **separate ision-machine-critic project**, loaded via a libloading seam behind a learned-critic feature (mirrors this repo's undled-ffmpeg "tiny by default").
+- **R8 the signal→head TRAINER** — a separate tool (Rust 	ools/ binary or on-device 	ermux-class) that consumes low_signals.jsonl; not in-repo.
+
+**Open BY DESIGN (you explicitly kept it open):**
+- **R4 the LLM expand prompt** — *"I have it in mind, keep it open."* The harness defines the LayeredExpander contract + the Novel shape the prompt must produce; the prompt text is yours to supply later. It is a **versioned registry artifact** (C7), not a gap.
+
+## D. Final "fully done" verdict
+- **Every one of your 13 stated requirements (R1–R13) maps to a named, cited
+  worldwide solution + a copyable mechanism + a concrete repo home.**
+- **All 12 case-areas (C0..C9, C1-A, C2-B) are covered at three depths**
+  (analogous project → mechanism → Rust idiom) across 11 waves / 84 evidence
+  entries, at BOTH the shot scale and the novel scale.
+- **The only items "not in the repo" are the ones you deliberately scoped out**
+  (trained weights, the trainer) and the one you deliberately kept open (the
+  LLM prompt). None are unresolved gaps; each has a named seam + a home.
+- **The exploration is complete.** Waves 1–11 + the repo correction + this
+  traceability matrix exhaust the search space: a 12th wave would re-cover the
+  same ten source families. The remaining work is **building the blueprint**
+  (the case → Rust idiom table above), not further exploration.
+
+**Recommended build order (implementation, when you say go):**
+1. critic.rs two-scale FIRM-Video ScoreTree + DefaultCritic (Ragas/TICK)
+   + drift.rs per-step re-anchor (C0/C2/C8) — the thing everything validates against.
+2. plan.rs versioned video-DSL + intent/content split + subjects[]/udio[]
+   (C1-A/C9) — the SoT.
+3. session layer files + per-unit RegenerationContract (C3).
+4. context_envelope + typed ACL views (C5).
+5. signals.rs lineage-pair + model.rs manifest + learned-critic feature
+   (C4/C6, mirroring undled-ffmpeg).
+6. low-eval golden harness + prompt-registry versioning (C7).
