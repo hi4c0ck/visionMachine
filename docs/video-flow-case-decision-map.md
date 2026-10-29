@@ -532,11 +532,11 @@ evidence in the ledger (84 entries).
 | # | Your exact words (paraphrased) | Case | Worldwide solution (wave/source) | Copyable mechanism | Repo home | Status |
 |---|---|---|---|---|---|---|
 | R1 | "separate module for video harness with deep logical structure" | C5 | ViMax/ComfyUI/dsh-desktop deep, decoupled module (waves 1/5/6) | isolated pure module; per-step bounded envelope; I/O at the edge only | ideo_flow/ as a pure module (later a low-core crate) | **Solved** |
-| R2 | "translate text into structural detailed pipes content through few mutations, expanding entry into additional layers" | C1 | novel-to-storyboard 3-call; MAVIN script→storyboard; ComfyTV shot list (waves 1/3) | expand→structure→lower chain; layer adds 
-arrative_arc/keyframe/sset_ids | 
+| R2 | "translate text into structural detailed pipes content through few mutations, expanding entry into additional layers" | C1 | novel-to-storyboard 3-call; MAVIN script→storyboard; ComfyTV shot list (waves 1/3); **MAViS 2508.08487 (Wave-15: 6-stage agent pipeline script→shot→character→keyframe→animate→audio)** | expand→structure→lower chain; layer adds 
+arrative_arc/keyframe/sset_ids; **MAViS confirms a staged multi-mutation pipeline with per-stage agents is the canonical worldwide shape** | 
 ovel.rs→plan.rs→egen.rs | **Solved** |
-| R3 | "build harness to maintain user desire & be coherent with real output as close as the user imagined at entry" | C0+C8 | 2606.09376 coverage-aware faithfulness; TICK/DeCE/BiFact; goal-drift re-anchoring (2505.02709 / 2609.32520 / SIP) (waves 4/9) | fidelity = precision⊗recall vs intent-as-complete-oracle; per-step re-anchor to IntentSnapshot + drift diagnostic | critic.rs + drift.rs | **Solved** |
-| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9 | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10) | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics | 
+| R3 | "build harness to maintain user desire & be coherent with real output as close as the user imagined at entry" | C0+C8 | 2606.09376 coverage-aware faithfulness; TICK/DeCE/BiFact; goal-drift re-anchoring (2505.02709 / 2609.32520 / SIP) (waves 4/9); **Hollywood Town 2510.22431 (Wave-15: DAG→directed-cyclic-graph with limited retries — later-node feedback refines earlier stages)** | fidelity = precision⊗recall vs intent-as-complete-oracle; per-step re-anchor to IntentSnapshot + drift diagnostic; **Hollywood-Town's cyclic retry is the concrete "refine earlier stages from later feedback" mechanism** | critic.rs + drift.rs | **Solved** |
+| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9 | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10); **LayerFlow 2506.04228 (Wave-15: per-layer prompts → fg/bg/blended)** | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics; **LayerFlow proves per-layer prompting is a real T2V input shape** | 
 ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | R5 | "novel generates into structured text with video-engine language configuration" | C1-A | video-notation-schema; Seedance Prompt JSON v3; BSD intent-layer; SKEL (wave 9) | a **versioned, typed video-DSL** (JSON-Schema) + intent/content split; *compile to platform prose* at render | plan.rs (schema) + low-plan compile | **Solved** |
 | R6 | "we can generate from that structured pipes, sections and tags" | C1 | MAVIN/STAGE structural storyboard (start-end frame pairs); storyboard2video deterministic render (waves 3/10) | PlanSection/FlowElement = tag + start-end frame + prompt + asset_ids; deterministically compilable | plan.rs/egen.rs | **Solved** |
@@ -552,16 +552,17 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | Case | Solution(s) found (waves) | Status |
 |---|---|---|
 | C0 core faithfulness goal | 2606.09376 + TICK/DeCE/BiFact + Ragas NLI floor | Solved |
-| C1 spine | ViMax / novel-to-storyboard / MAVIN / ComfyTV / STAGE | Solved |
+| C1 spine | ViMax / novel-to-storyboard / MAVIN / ComfyTV / STAGE + **MAViS 2508.08487 (Wave-15)** | Solved |
 | C1-A video-DSL layer | video-notation / Seedance v3 / BSD / SKEL | Solved |
 | C2 per-element fidelity | FIRM-Video + DeCE + B-Roll two-scale + RubricArmor | Solved |
 | C2-B transition params | frozen style-contract + 7-layer knobs + per-dim weights | Solved |
 | C3 session + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / dsh-desktop *(directional)* / Epicenter·Kohaku | Solved |
-| C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou / DITTO / CHIEF | Solved (capture; trainer deferred) |
-| C5 isolation / bounded context | context-rot / Three Planes / AgentPatterns / DDD ACL / ComfyUI cached nodes | Solved |
-| C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package | Solved (manifest; runtime deferred) |
-| C7 careful tests + versioning | promptfoo / Ragas / DeepEval / frozen goldens / insta·proptest·bolero | Solved |
-| C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + continuity_in/out/avoid | Solved |
+| C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou **2308.13249** / DITTO / CHIEF + **MiCRo 2505.24846** | Solved (capture; trainer deferred) |
+| **C4-L (sub-case: layers = verbose expansion, non-main parts on own dynamics)** | **LayerFlow 2506.04228 (Wave-15)** + PreciseVideo ambient-own-dynamics + LPA 7 layers | Solved |
+| C5 isolation / bounded context | context-rot / Three Planes / AgentPatterns / DDD ACL / ComfyUI cached nodes + **Hollywood Town 2510.22431 hypergraph context nodes (Wave-15)** | Solved |
+| C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA (Wave-15)** | Solved (manifest; runtime deferred) |
+| C7 careful tests + versioning | promptfoo / Ragas / DeepEval / frozen goldens / insta·proptest·bolero + **MAViS 2508.08487 3E per-stage gate (Wave-15)** | Solved |
+| C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + continuity_in/out/avoid + **Hollywood Town 2510.22431 DAG→DCG limited-retry refine (Wave-15)** | Solved |
 | C9 novel-scale spine | CineCrew / EvoState·OneStory·Memento·SlotMemory·REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |
 
 ## C. Honest status — what is SOLVED vs deliberately NOT in this repo
@@ -701,16 +702,58 @@ mirror snippets they originally came through). 3 corrections:
 
 ## Trust status of the whole map (audit result)
 - **CONFIRMED (read the primary):** the C0/C1/C1-A/C2/C8 core + the C9/C2
-  scale items (12/12 load-bearing arXiv claims verified on arxiv.org).
-- **SNIPPET-ONLY (verify before it becomes a dependency):** PromptVault,
-  novel-to-storyboard exact field names, FIRM-Video wording, the onnxer
-  crate, dsh-desktop (*Wave-13 downgrade: Tauri wrapper of DeepSeek Harness;
-  event-log+projection-cache is a proposed-architecture note, name overloaded
-  across forks*), MiCRo/Kuaishou/termux-train.
+  scale items — 12 original load-bearing arXiv claims, plus FIRM-Video
+  (2608.21839) and the Wave-13/14 additions (2501.13918, 2605.06036,
+  2505.18071, 2601.04963, 2505.24846, 2308.13249) = **19 distinct arXiv
+  claims verified on arxiv.org**.
+- **Still SNIPPET-ONLY / directional (non-paper artifacts only — none are load-bearing
+  arXiv claims):** `termux-train`/AMEVA (JS/Python on-device trainer, directional
+  for C4, not a Rust precedent), `dsh-desktop` (*Wave-13 downgrade: a third-party
+  Tauri wrapper of DeepSeek Harness; the event-log+projection-cache passage is a
+  proposed-architecture note, name overloaded across forks*), and the
+  directional industry-spec flags on **C2-B / C6** (video-notation-schema /
+  Seedance v3 / SKEL spec sheets; ONNX MultiLoRA `SetActiveAdapters`).
+  Every *arXiv paper* cited as load-bearing is now CONFIRMED on arxiv.org.
 - **Wave-13 promoted to CONFIRMED (real arXiv IDs read on arxiv.org):**
   **VideoReward = 2501.13918** ("Improving Video Generation with Human
   Feedback"; 182k triplets; SEPARATE from VisionReward 2412.21059),
   **SelectiveRM = 2605.06036** (the ledger's "SelectRM" was a spelling error),
   **AlignXplore = 2505.18071** (+ AlignXplore+ **2601.04963**).
-  The remaining SNIPPET-ONLY items are MiCRo/Kuaishou/termux-train; none are
-  load-bearing for the core.
+- **Wave-14 promoted to CONFIRMED (read on arxiv.org):**
+  **MiCRo = 2505.24846** ("Mixture Modeling and Context-aware Routing for
+  Personalized Preference Learning", EMNLP'25; per-user preference is a *routed
+  mixture* over binary preferences + online routing = our C4 anti-global-reward
+  + context-aware signal selection),
+  **Kuaishou implicit feedback = 2308.13249** ("Learning and Optimization of
+  Implicit Negative Feedback for Industrial Short-video Recommender System",
+  CIKM'23, Kuaishou + Tsinghua; skipping as implicit negative + multi-objective
+  watch-time/skip-rate head = our `SignalKind::Rate` engagement signal).
+- **Wave-15 promoted to CONFIRMED (read on arxiv.org) — the Wave-14 "exhausted"
+  verdict was premature; targeting the user's *named sub-cases* surfaced 3 NEW
+  load-bearing arXiv papers:**
+  **LayerFlow = 2506.04228** ("A Unified Model for Layer-aware Video
+  Generation"; per-layer prompts → transparent foreground + clean background +
+  blended scene; staged motion-LoRA + content-LoRA build, drop motion LoRA at
+  inference) = DIRECT model-side analog of our C4 "layers = verbose expansion
+  (atmosphere/forest/road + non-main parts on own dynamics)" **and** a live
+  example of our C6 **additive-heads** tiny build spec,
+  **MAViS = 2508.08487** ("Multi-Agent Framework for Long-Sequence Video
+  Storytelling"; 6-stage pipeline script→shot→character→keyframe→animate→
+  audio; 3E per-stage gate; Script Writing Guidelines for tool compatibility)
+  = DIRECT confirmation of our C1 staged mutation spine + C7 per-step
+  "Examine" text-output gate + C2-B transition params,
+  **Hollywood Town = 2510.22431** ("Long-Video Generation via Cross-Modal
+  Multi-Agent Orchestration"; OmniAgent hypergraph context nodes + DAG→DCG
+  with limited retries) = DIRECT confirmation of our C5 bounded-context
+  envelope + C8 drift re-anchoring via later-stage feedback.
+  - **CORRECTED TERMINAL STATE (Wave 15):** every *named sub-case* in the
+    user's requirement list now has a load-bearing CONFIRMED arXiv source
+    (22 distinct claims verified on arxiv.org: 12 original + 7 Wave-13/14 +
+    3 Wave-15). Remaining un-verified items are **non-paper artifacts only**:
+    `dsh-desktop` (Tauri-wrapper design note, downgraded to *directional*),
+    `termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
+    industry-spec flags. The grind goal — *explore similar project objectives
+    worldwide to find solutions of our cases* — has been **exhausted at the
+    sub-case level**; three post-"exhaustion" waves (13, 14, 15) each
+    surfaced genuinely new load-bearing sources. A Wave-16 is only justified
+    by a *new* named sub-case, not by re-covering existing families.

@@ -1137,6 +1137,11 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | 2501.13918 VideoReward | CONFIRMED | **"Improving Video Generation with Human Feedback"** (MMLab CUHK + Tsinghua + Kuaishou/Kling + SJTU). 182k VQ/MQ/TA triplets, Bradley-Terry with ties. **SEPARATE from VisionReward (2412.21059).** = our per-element reward-signal source. |
 | 2605.06036 SelectiveRM | CONFIRMED | **"SelectiveRM"** (correct spelling, NOT "SelectRM"). Selective reward modelling = our C4 signal-gating + anti-forgetting evidence. |
 | 2505.18071 AlignXplore | CONFIRMED | **AlignXplore** (base) + **AlignXplore+ 2601.04963** = our C4 continuous-alignment + exploration evidence. |
+| 2505.24846 MiCRo | CONFIRMED (Wave-14) | **"MiCRo: Mixture Modeling and Context-aware Routing for Personalized Preference Learning"** (Shen et al., v3 2026-09-15, EMNLP'25). BT global reward has irreducible error under preference heterogeneity; two-stage: (1) context-aware mixture over binary preferences **without fine-grained annotations**, (2) **online routing** that adapts mixture weights per context. = our C4 "per-user preference is a *routed mixture*, not one global reward." |
+| 2308.13249 Kuaishou implicit feedback | CONFIRMED (Wave-14) | **"Learning and Optimization of Implicit Negative Feedback for Industrial Short-video Recommender System"** (Pan/Li/Gao/Chang et al., Tsinghua + Kuaishou, CIKM'23). Skipping = easiest-to-collect implicit negative feedback; deployed **feedback-aware encoding** (context-sensitive) + **multi-objective prediction** (watch-time vs skip-rate) in production at billion-user scale, A/B verified. = our C4 `SignalKind::{EditDiff, Accept, Reject, Rate}` where `Rate` encodes watch/skip-style engagement signals. |
+| 2506.04228 LayerFlow | CONFIRMED (Wave-15) | **"LayerFlow: A Unified Model for Layer-aware Video Generation"** (Ji, Luo, Chen, Tu, Wang, Zhao). Given **per-layer prompts** → transparent foreground + clean background + blended scene in one unified model (layers as sub-clips + layer embeddings); staged build = motion-LoRA then content-LoRA, drop motion LoRA at inference. = DIRECT analog of the user's C4 "layers = verbose expansion (atmosphere/forest/road + non-main parts on own dynamics)" AND a live model-side example of our C6 **additive-heads** tiny build spec. |
+| 2508.08487 MAViS | CONFIRMED (Wave-15) | **"MAViS: A Multi-Agent Framework for Long-Sequence Video Storytelling"** (Wang, Huang, Jia, Debevec, Yu; v5 2026-01-24). 6-stage pipeline: script → shot → character → keyframe → animate → audio; each stage under the **3E Principle (Explore·Examine·Enhance)**; "Script Writing Guidelines" optimize script↔tool compatibility. = DIRECT confirmation of our C1 staged mutation spine + C7 per-step **Examine = careful text-output completeness gate** + C2-B script→tool compat. |
+| 2510.22431 Hollywood Town | CONFIRMED (Wave-15) | **"Hollywood Town: Long-Video Generation via Cross-Modal Multi-Agent Orchestration"** (Wei, Li, Zhang, Yuan, Hui, Qu, Evans, Agrawala, Rao). OmniAgent = hierarchical graph multi-agent; 3 mechanisms: (1) **hypergraph context nodes** (temporary group discussion reduces per-agent memory while keeping context), (2) **DAG→directed-cyclic-graph with limited retries** (later-node feedback refines earlier stages), (3) cross-modal long video. = DIRECT confirmation of our C5 **bounded-context envelope** + C8 **iterative refine / provenance feedback**. |
 
 ## SNIPPET-ONLY / NEEDS-PRIMARY — verify before it becomes a dependency
 (Updated after the targeted verification pass.)
@@ -1153,9 +1158,12 @@ ledger is marked SNIPPET-ONLY unless listed here.
   (ebitengine/purego); its LoRA hot-swap is real but GO. The **Rust** ONNX
   bindings are `intel/onnxruntime` (rust/), `microsoft/onnxruntime` (rust/),
   `ONNX_Rustime`. *Corrected the blueprint's "Rust onnxer" claim.*
-- **STILL SNIPPET-ONLY (verify before relying on exact wording):**
-  `MiCRo` / `Kuaishou` implicit-feedback (blog/mirror). None are load-bearing
-  for the confirmed core (C0/C1/C2/C8).
+- **STILL SNIPPET-ONLY:** *none for primary arXiv sources* — Wave 14
+  promoted the last two (`MiCRo` → 2505.24846, `Kuaishou` implicit feedback
+  → 2308.13249; both read on arxiv.org). Remaining un-verified items are
+  non-paper artifacts only: `dsh-desktop` (Tauri-wrapper note, already
+  downgraded to directional) and `MiCRo` routing's "context key" (our
+  adoption, not the paper's).
 - **Wave-13 promoted to CONFIRMED (real arXiv IDs, read on arxiv.org):**
   `VideoReward` = **2501.13918**, `SelectiveRM` = **2605.06036** (correct
   spelling; the ledger's "SelectRM" was a typo), `AlignXplore` = **2505.18071**
@@ -1165,6 +1173,45 @@ ledger is marked SNIPPET-ONLY unless listed here.
   Tauri wrapper of DeepSeek Harness whose event-log+projection-cache is a
   **proposed-architecture note** (overloaded name across forks), not a shipped
   system.
+
+## WAVE-14/15 — COMPLETENESS AUDIT (every case has a CONFIRMED primary source)
+
+| Case | Load-bearing CONFIRMED source(s) |
+|---|---|
+| C0 core faithfulness | 2606.09376 + TICK 2410.03608 + Ragas 2309.15217 |
+| C1 spine (text → structured → gen) | novel-to-storyboard (raw README, wave 3) + ViMax + ComfyTV + **MAViS 2508.08487 (Wave-15: 6-stage agent pipeline script→shot→character→keyframe→animate→audio)** |
+| C1-A versioned video-DSL | CineCrew **2609.07720 FilmDSL** |
+| C2 per-element fidelity | FIRM-Video **2608.21839** + VideoReward **2501.13918** + Diffusion-DRF **2601.04153** + HuDA **2601.14037** + MemComposer **2610.01884** + RubricArmor **2610.05308** |
+| C2-B frozen 7-layer style-contract | directional industry specs (video-notation-schema / Seedance v3 / SKEL) — honest flag kept; **MAViS 2508.08487 "Script Writing Guidelines" (Wave-15)** = script→tool compat |
+| C3 session-space + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / Epicenter / Kohaku / luthier / polaris-local-first + **dsh-desktop (directional only, downgraded)** |
+| **C4 (new sub-case: layers = verbose expansion)** | **LayerFlow 2506.04228 (Wave-15: unified layer-aware T2V, per-layer prompts → fg/bg/blended; staged motion-LoRA+content-LoRA = live C6 example)** + PreciseVideo ambient-own-dynamics + LPA 7 layers |
+| C5 bounded context / isolation | context-rot / AgentPatterns / DDD ACL / ComfyUI cached nodes (crates.io/crates verified) + **Hollywood Town 2510.22431 (Wave-15: hypergraph context nodes reduce per-agent memory)** |
+| C6 tiny build spec | LoRA / tinker / **ONNX MultiLoRA** (directional industry) / Rust onnxruntime bindings (intel/microsoft rust dirs verified on GitHub) / llama.cpp GGUF / cera + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA build (Wave-15)** |
+| C7 eval harness | promptfoo / Ragas / DeepEval / **insta + proptest + bolero** (all three on crates.io, API-verified) + **MAViS 3E Principle "Examine" (Wave-15: per-stage completeness gate)** |
+| C8 preventive drift | 2505.02709 detect + 2609.32520 StateForge repair + **Hollywood Town 2510.22431 DAG→DCG limited-retries (Wave-15: later-stage feedback refines earlier stages)** |
+| C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent |
+
+**VERDICT (corrected in Wave 15):** the Wave-14 "grind goal exhausted" call
+was **premature** — Wave 15 targeted the user's *named sub-cases* (layers
+= verbose expansion, multi-mutation-step pipeline, character consistency,
+local deployment, bounded context) and found **3 NEW load-bearing arXiv
+papers** that had not been covered:
+
+| Wave | New source | Which named sub-case it closes |
+|---|---|---|
+| 15 | **LayerFlow 2506.04228** | C4 "layers = verbose expansion (atmosphere/forest/road + non-main parts on own dynamics)" — per-layer prompts → fg/bg/blended; staged additive LoRA build is a live C6 example |
+| 15 | **MAViS 2508.08487** | C1 "few mutation steps" (6-stage agent pipeline) + C7 "careful text-output tests" (3E Examine per-stage gate) + C2-B "transition params" (Script Writing Guidelines for tool compat) |
+| 15 | **Hollywood Town 2510.22431** | C5 "bounded context / isolation" (hypergraph context nodes) + C8 "drift re-anchoring" (DAG→DCG with limited retries = later-stage feedback refines earlier) |
+
+Remaining un-verified items are **non-paper artifacts only**: `dsh-desktop`
+(Tauri-wrapper design note, downgraded to *directional*), `termux-train`/
+AMEVA (JS/Python, directional), and the C2-B/C6 industry-spec flags. The
+grind goal — *explore similar project objectives worldwide to find
+solutions of our cases* — has now had **3 waves of targeted re-exploration
+post-"exhaustion"** (13, 14, 15); each found genuinely new load-bearing
+sources. A 16th wave would only re-cover the same source families for
+*already-grounded* cases; further waves are justified **only if** a new
+named sub-case appears.
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
@@ -1176,12 +1223,25 @@ ledger is marked SNIPPET-ONLY unless listed here.
    ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
    repair (2609.32520 StateForge).
 
-## Audit verdict
-- **12/12 load-bearing primary claims: CONFIRMED on arxiv.org.**
-- The 3 corrections are recorded and must be applied to the decision map
-  before the blueprint is treated as buildable.
-- **The design is sound; its weakest link is the SNIPPET-ONLY set.** None
-  of them are load-bearing for the *core* (C0/C1/C2/C8) — those are all
-  CONFIRMED. The SNIPPET-ONLY items (PromptVault, novel-to-storyboard field
-  names, FIRM-Video wording, onnxer crate) are *refinements*; verify the
-  specific one before it becomes a dependency.
+## Audit verdict (updated through Wave 15)
+- **12 original + 7 Wave-13/14 + 3 Wave-15 = 22 distinct load-bearing arXiv
+  claims CONFIRMED on arxiv.org.**
+  - Wave-13: VideoReward 2501.13918 / SelectiveRM 2605.06036 /
+    AlignXplore 2505.18071 + 2601.04963
+  - Wave-14: MiCRo 2505.24846 / Kuaishou implicit feedback 2308.13249
+  - **Wave-15: LayerFlow 2506.04228 / MAViS 2508.08487 /
+    Hollywood Town 2510.22431**
+- The 3 Wave-1 corrections are recorded and must be applied to the
+  decision map before the blueprint is treated as buildable.
+- **Weakest link:** no *primary* arXiv paper is left SNIPPET-ONLY.
+  Remaining un-verified items are *non-paper artifacts only* —
+  `dsh-desktop` (Tauri-wrapper note, downgraded to directional),
+  `termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
+  industry-spec flags. None are load-bearing for the core (C0/C1/C2/C8).
+- **CORRECTED GRIND-GOAL STATUS:** the Wave-14 "exhausted" verdict was
+  premature — Wave 15 (targeted at the user's *named sub-cases*: layers
+  = verbose expansion, few-mutation-step pipeline, bounded context,
+  drift re-anchoring, character consistency, local deployment) surfaced
+  **3 NEW load-bearing arXiv papers**. The exploration is now grounded on
+  every *named sub-case*; further waves are only justified if a new
+  sub-case appears, not to re-cover existing families.
