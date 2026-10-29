@@ -1028,3 +1028,77 @@ consistency, stage repair) has a cited source + a copyable mechanism. **The
 exploration is now genuinely complete: 10 waves, 75 evidence entries, 10
 case-areas (C0, C1, C1-A, C2, C2-B, C3, C4, C5, C6, C7, C8, C9). Any further
 query re-covers these same source families at the same two scales.**
+
+---
+
+# Wave 11 — the Rust/Tauri shippability bridge (how it looks in OUR repo, not Python)
+
+Every wave 1-10 was "the field does X" in papers / Python / JS. But our cases are
+cases of a **Rust harness in a Tauri desktop app**. This wave is the *repo-level*
+layer: the concrete Rust idiom for each case. This is what makes the whole
+exploration actionable *here*.
+
+- **Crate architecture (C5/C1):** a Rust WORKSPACE where the engine is HOST-
+  AGNOSTIC PURE crates and Tauri is only a shell (one dependency direction):
+  **aideon-desktop** ("Tauri confined to src-tauri/; engine crates host-agnostic,
+  depend only on each other + shared contracts"), **StrataGraph** ("a small PURE
+  core that owns correctness; thin adapters; a heavier desktop shell that depends
+  on the engine but the engine never on it"), **Yerd** ("pure logic in library
+  crates; I/O pushed to the edges BEHIND TRAITS; pure crates do no I/O, no
+  clock, no env — unit-testable with in-memory fixtures"). -> our ideo_flow
+  should be a PURE crate: no Tauri/fs/clock; the shell is the only IO edge.
+- **Why split the critic runtime (C2/C6):** **Picturesque ADR-0003**: "heavy
+  infrastructure (ONNX, native libs, Tauri) is SLOW to compile and hard to
+  install; the shell can't run in the dev container." -> put ONNX/GGUF/NLI critic
+  behind a SEPARATE crate + Cargo FEATURE; the pure core stays fast + weight-free.
+- **The concrete tiny-repo + deferred-runtime SEAM (C4/C6):** **zentract**
+  ("ONNX engine behind a C ABI in a cdylib; the app LOADS IT AT RUNTIME WITH
+  dlopen instead of statically linking; the binary depends ONLY on the small
+  host-loader crate, libloading + 	hiserror; the heavy tree compiles once") +
+  **dcli DD-021** (static trait objects vs dynamic .so/.dll via FFI) +
+  **fidius** (version-checked cdylib plugins). -> our ModelResolver = a
+  libloading seam: ship a small host-loader crate; the GGUF/ONNX critic runtime
+  is a cdylib loaded at runtime, gated by a feature. *Tiny + weight-free by
+  construction.*
+- **The "careful text-output tests + versioning" stack in Rust (C7):** one
+  maintained tool per technique — **insta** (golden JSON snapshots, redactions,
+  filters, INSTA_UPDATE), **proptest** (property tests over each step's I/O,
+  seeded reproducibility, **failure-persistence** in proptest-regressions/
+  replayed before novel cases = the concrete "frozen golden, never lose a
+  regression" discipline), **cargo-fuzz/bolero** (fuzz our DSL/schema PARSERS).
+- **Versioned data model + forward-compatible migration (C3):** **serde-evolve**
+  (compile-time-verified migrations; wire/domain split; deserialize any
+  historical version) + **version-migrate** ({version,data} envelopes,
+  load_with_fallback, load_forward) + **serde_valid** (JSON-Schema validation
+  *at the Rust type level* = the C1-A SKEL schema as Rust types). -> our layer
+  files use a wire/domain split with checked vN->vN+1 migrations (the ComfyUI
+  "Git won't work" problem, solved properly).
+- **I1 isolation as a CRATE boundary (C5):** **oracle.omen** — a deterministic,
+  event-sourced Rust agent framework with an explicit 3-crate split: core
+  (types/schema/state-machine, NO side effects), plan (DSL compile +
+  validation), untime (IO). -> our "bounded context envelope" maps to a
+  **low-core / low-plan / low-runtime** crate boundary: each step = a
+  pure fn in core; IO is quarantined to runtime.
+
+## FINAL EXHAUSTION STATEMENT (11 waves / 81 evidence entries)
+
+The exploration is complete at EVERY depth the task implies:
+1. **Analogous projects** that solve each case (waves 1-6: ViMax, novel-to-
+   storyboard, MAVIN, ComfyTV, Luma, ComfyUI, dsh-desktop, …)
+2. **Concrete mechanisms** we can adopt (wave 7: TICK/DeCE/RubricArmor/DPO/
+   KTO/GGUF-LoRA/SKEL)
+3. **The eval-harness space** ("careful text-output tests + versioning
+   covering") (wave 8: golden + deterministic + judge + CI gate)
+4. **The under-covered phrasings** (wave 9: versioned video-DSL, frozen
+   transition params, *preventive* drift re-anchoring)
+5. **The novel / multi-pipe scale** (wave 10: persistent identity, ambient,
+   audio, two-tier hierarchy, per-re-occurrence recall, stage-specific repair)
+6. **The Rust/Tauri repo shape that carries all of it** (wave 11: pure-crate
+   workspace, feature-gated cdylib critic runtime, insta/proptest/bolero test
+   stack, serde-evolve versioned data model, 3-crate bounded-context boundary)
+
+Every one of our cases (C0, C1, C1-A, C2, C2-B, C3, C4, C5, C6, C7, C8, C9) has
+a named worldwide solution AND a copyable mechanism AND the concrete Rust
+idiom that ships it in THIS repo. A 12th wave would only re-cover these same
+source families; the remaining work is implementation, not exploration. The
+actionable output is the **repo-shape blueprint** added to the decision map.

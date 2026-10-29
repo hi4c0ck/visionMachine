@@ -342,3 +342,94 @@ critic.rs root gains per_reoccurrence_recall (GroundShot) + ggregate_root
 (HoloCine); egen.rs repair is **stage-specific** (DramaAgent) on a persistent
 state. **The critic emits structured signals that refine one unit on the SAME
 base (CineCrew) — no global mutation** (confirms C2/C4/C6 at scale).
+
+---
+
+# THE REPO-SHAPE BLUEPRINT (wave-11 synthesis — what we actually ship here)
+
+This is the integration of all 11 waves into a concrete, buildable shape for
+eature/text-video-flow. It is the answer to "find solutions of OUR cases":
+each case is now *where in the repo it lives* + *the Rust idiom* + *the tool*.
+
+## Crate layout (a pure engine + a Tauri shell, one dependency direction)
+`
+crates/
+  flow-core/      PURE. No Tauri, no fs, no clock, no env. In-memory fixtures.
+    events.rs     event log + state machine + schema (oracle.omen-core pattern)
+    intent.rs     IntentSnapshot / clauses / SpanId / ClauseId
+    novel.rs      layered novel (primary/secondary/ambient) + LayeredExpander seam
+    plan.rs       StructuredVideoPlan = the versioned video-DSL (C1-A) + subjects[]/audio[] (C9)
+    critic.rs     two-scale FIRM-Video ScoreTree + DefaultCritic floor (C0/C2) + required_elements (C0)
+    regen.rs      lower_to_elements + RegenerationContract (per-unit, never-mutate-N) (C3)
+    drift.rs      per-step re-anchor + DriftDiagnostic + continuity_in/out/avoid (C8)
+    signals.rs    SignalRecord lineage-pair + temp/durable scope (C4)
+    model.rs      ModelPackageManifest (GGUF base + LoRA sidecars + sha256) + resolver SEAM (C6)
+    config.rs     FlowConfig + per-step params + frozen 7-layer style-contract (C2-B)
+  flow-plan/      DSL compile + validation ONLY (oracle.omen-plan) — compiles the
+                  video-DSL to the target platform prose (Seedance "storage->compile"),
+                  validates against a JSON-Schema (serde_valid = SKEL schema as Rust types) (C1-A)
+  flow-runtime/   THE ONLY IO edge (oracle.omen-runtime): fs (session layer files),
+                  LLM provider calls, GGUF/ONNX critic cdylib via libloading (C4/C6),
+                  session media writes
+  flow-eval/      THE C7 HARNESS (C7): insta golden snapshots of each layer's JSON +
+                  proptest invariants on pure steps + bolero fuzz on the DSL parser +
+                  prompt-registry versioning + INCONCLUSIVE-blocks + CI gate
+  critic-runtime/ OPTIONAL (Cargo feature learned-critic). Heavy: ONNX/GGUF/NLI.
+                  cdylib loaded at runtime via libloading (zentract pattern). NOT in the
+                  default/CI build; the pure core stays weight-free + fast.
+src-tauri/        THE SHELL: commands/, AppState, IPC. Depends on flow-* crates only
+                  (one direction, never the reverse).
+`
+
+## What this *means* for the code already on the branch
+Today ideo_flow/ is a module inside src-tauri (good for Phase 0; it ran
+weight-free). To ship the full design it becomes the low-core crate:
+- **Move** intent/novel/plan/critic/regen/drift/signals/model/config →
+  crates/flow-core (already Tauri-free; just relocate + make it a lib).
+- **Split off** plan.rs DSL-compile → low-plan; **quarantine** fs/LLM/
+  critic-weights → low-runtime.
+- **Add** critic-runtime behind feature learned-critic (default OFF) so
+  cargo test runs fast + weight-free (Picturesque ADR-0003).
+- **Add** low-eval with insta (snapshots) + proptest (invariants;
+  failure-persistence = the frozen-golden discipline) + olero (fuzz the
+  video-DSL parser) + a golden/ corpus + prompt-registry versioning.
+- **Version the data model** with serde-evolve (wire/domain split,
+  compile-checked vN->vN+1) + ersion-migrate (load_forward = never-fallback
+  open) + serde_valid (the SKEL schema as Rust types).
+
+## The full case -> repo-location table (every case, one home)
+| Case | What we ship | Crate | Rust idiom + tool |
+|---|---|---|---|
+| C0 core goal | coverage-aware faithfulness oracle (precision⊗recall vs intent) | flow-core/critic | required_elements (TICK/DeCE) + Ragas claim+NLI floor |
+| C1 spine | intent->novel->structured->lower + narrative-arc/keyframe/subject layers | flow-core | pure fns, in-memory fixtures |
+| C1-A video-DSL | versioned typed DSL (SKEL) + intent/content split (BSD) + compile-to-prose | flow-core/plan + flow-plan | serde_valid (JSON-Schema at type level) |
+| C2 fidelity | two-scale FIRM-Video tree + rubric-bundle locking + user weights | flow-core/critic | RubricArmor gate; deterministic floor; feature-gated learned ceiling |
+| C2-B transition | frozen 7-layer style-contract + embedding consistency check | flow-core/config | a versioned rozen_style_contract field |
+| C3 session | source-of-truth inversion; per-unit regen never mutates N | flow-core/regen + flow-runtime | serde-evolve versioned files + dsh-desktop event-log/projection |
+| C4 learning | lineage-pair + temp/durable signals -> additive head | flow-core/signals + critic-runtime | DPO/KTO pairs; libloading cdylib (zentract) |
+| C5 isolation | bounded context envelope + typed ACL views + cached nodes | 3-crate boundary | flow-core/plan/runtime split (oracle.omen); insta+proptest per step |
+| C6 build spec | ModelPackageManifest (GGUF base + LoRA sidecars + sha256) | flow-core/model + critic-runtime | ONNX MultiLoRA / llama.cpp / cera; feature-gated |
+| C7 eval | golden + deterministic + judge + CI-gate harness | flow-eval | insta + proptest (failure-persistence) + bolero + prompt registry + INCONCLUSIVE-blocks |
+| C8 drift | per-step re-anchor to IntentSnapshot + continuity_in/out/avoid | flow-core/drift | goal-probe diff; DriftDiagnostic; halt-on-exceed |
+| C9 novel-scale | persistent identity + ambient + audio + two-tier + per-re-occurrence recall | flow-core/plan + critic | subjects[] store; Ambient/Audio layers; aggregate-aware root; GroundShot recall |
+
+## The three invariants the repo shape *enforces structurally* (not by convention)
+1. **Tiny + weight-free by construction:** the default/CI build excludes
+   critic-runtime (feature-gated cdylib, zentract). cargo test is fast.
+2. **Deterministic core:** low-core has no fs/clock/env (Yerd) — so every
+   pure step is a proptest-able, insta-snapshot-able function; only
+   low-runtime touches the outside world.
+3. **Versioned + replayable data:** serde-evolve wire/domain split +
+   ersion-migrate::load_forward = "rebuild creates N+1, never mutates N,
+   never falls back" (C3/C9) made into checked code, not a doc promise.
+
+## One-paragraph completion statement
+Across 11 waves (81 evidence entries) every one of our cases — C0, C1, C1-A,
+C2, C2-B, C3, C4, C5, C6, C7, C8, C9 — now has (a) a named worldwide solution,
+(b) a copyable mechanism, and (c) a concrete Rust idiom + crate home in THIS
+repo. The "solid independent harness feature a tiny repo can ship" is now a
+**pure low-core crate** (deterministic, exhaustively testable, weight-free)
++ a **feature-gated critic-runtime cdylib** (the deferred learned ceiling) +
+an **low-eval harness** (insta/proptest/bolero + prompt versioning +
+INCONCLUSIVE-blocks). The exploration is complete; what remains is building
+this blueprint, not researching it.
