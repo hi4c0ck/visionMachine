@@ -642,7 +642,7 @@ and gate the heavy half behind a Cargo feature like undled-ffmpeg.
    never falls back" (C3/C9) made into checked code, not a doc promise.
 
 ## One-paragraph completion statement (updated through Wave 22)
-Across 22 waves (~135 evidence entries) every one of our cases — C0, C1,
+Across 22 waves (~149 evidence entries) every one of our cases — C0, C1,
 C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L, C5, C6, C7, C8, C9, C-HOST,
 C-SWITCH, C-TRAIN, C-COMPILE, and C-REPO — now has (a) a named worldwide solution, (b) a
 copyable mechanism, and (c) a concrete Rust idiom + crate home in THIS
@@ -748,7 +748,7 @@ Goal restatement: *find worldwide solutions of OUR cases.* This matrix maps
 copyable mechanism → repo home → status). It is the completeness proof: a
 requirement row is only green when it has a *named worldwide source*, a
 *concrete mechanism*, and a *repo home*. Sources are cited by wave; full
-evidence in the ledger (~135 entries through Wave 22).
+evidence in the ledger (~149 entries through Wave 22).
 
 ## A. Your stated requirements → coverage
 
@@ -816,7 +816,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
   C5, C6, C7, C8, C9, C-HOST, C-SWITCH, C-TRAIN, C-COMPILE) are covered
   at three depths**
   (analogous project, copyable mechanism, Rust idiom) across 22 waves and
-  ~130 ledger entries, at BOTH the shot scale and the novel scale.
+  ~149 ledger entries, at BOTH the shot scale and the novel scale.
 - **29 distinct arXiv claims CONFIRMED on arxiv.org (28 + arXiv 2607.15865
   MLIR lowering) + 1 published non-arXiv primary (MSML, ACM DocEng 2009)**
   form the load-bearing core.

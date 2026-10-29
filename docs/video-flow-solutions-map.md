@@ -1085,7 +1085,7 @@ exploration actionable *here*.
   **low-core / low-plan / low-runtime** crate boundary: each step = a
   pure fn in core; IO is quarantined to runtime.
 
-## FINAL EXHAUSTION STATEMENT (22 waves / ~135 evidence entries)
+## FINAL EXHAUSTION STATEMENT (22 waves / 149 evidence entries)
 
 The exploration is complete at EVERY depth the task implies:
 1. **Analogous projects** that solve each case (waves 1-6: ViMax, novel-to-
