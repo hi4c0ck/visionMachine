@@ -433,3 +433,82 @@ repo. The "solid independent harness feature a tiny repo can ship" is now a
 an **low-eval harness** (insta/proptest/bolero + prompt versioning +
 INCONCLUSIVE-blocks). The exploration is complete; what remains is building
 this blueprint, not researching it.
+
+---
+
+# REPO-GROUNDED CORRECTION (the blueprint, matched to THIS repo's real structure)
+
+I verified the actual repo before finalizing, and two things correct the
+wave-11 blueprint (which had assumed a multi-crate workspace that this repo
+does NOT have):
+
+**FACT 1 — VisionMachine is a SINGLE Cargo crate, not a workspace.**
+src-tauri/Cargo.toml: [package] name="vision-machine", [lib]
+crate-type=["staticlib","cdylib","rlib"], src/{lib.rs,main.rs}; there is
+NO root Cargo.toml and NO crates/ dir.
+-> The wave-11 "move to crates/flow-core" is **aspirational / a later
+refactor, not the Phase plan.** The honest in-repo form of "pure core vs IO
+edge" is **MODULE DISCIPLINE inside the single crate**: keep
+src-tauri/src/generation/video_flow/ PURE (no Tauri, no fs, no clock —
+*already the case* today), and the Tauri shell (commands/, AppState) is
+the only IO edge. The multi-crate split (aideon/StrataGraph/oracle.omen) is a
+*future* step, adopted only if the module outgrows one crate.
+
+**FACT 2 — the repo ALREADY ships the "tiny-by-default, feature-gated heavy
+dependency" idiom** (so we *extend* it, not invent it):
+[features] default = [] + undled-ffmpeg — comment: *"Off by default
+(tiny variant = no binary, user-path/system only)."*
+-> The **learned-critic runtime** maps *exactly* onto this proven pattern:
+a **learned-critic Cargo feature, OFF by default** (the "tiny variant" = the
+deterministic DefaultCritic floor, no weights, no ONNX/GGUF cdylib), that
+pulls in the ONNX/GGUF/NLI runtime (zentract/libloading) only when enabled.
+**"Keep the tiny build specification" (your words) IS this repo's
+"tiny variant" idiom.** The correction: *never* add a heavy dep to the
+default build — mirror undled-ffmpeg.
+
+**FACT 3 — test tooling lands as dev-dependencies, no restructure.**
+This repo already tests with #[cfg(test)] mod tests beside the code (the
+63 ideo_flow tests). The C7 stack is **additive**:
+[dev-dependencies] insta (golden JSON snapshots, INSTA_UPDATE=no under
+CI) + proptest (invariants on the pure steps; *failure-persistence* = the
+"frozen golden, never lose a regression" discipline) + olero (fuzz the
+video-DSL parser) + a golden/ corpus. Consistent with the existing
+in-module test discipline; "versioning covering" = CI runs + gates these.
+
+## Corrected crate/module shape (this repo, as-is)
+`
+src-tauri/src/generation/video_flow/   # STAYS a module (pure). No new crates yet.
+   intent.rs / novel.rs / plan.rs / critic.rs / regen.rs
+   + drift.rs (C8) / signals.rs (C4) / model.rs (C6 manifest) / config.rs (C2-B)
+   + eval.rs (C7, calls insta/proptest/bolero in tests)
+   all PURE: no Tauri, no fs, no clock, no env.   (Yerd rule, in-crate form)
+
+src-tauri/src/commands/  +  AppState  # THE ONLY IO edge (flow-runtime role).
+   fs (session layer files), LLM provider calls, critic cdylib load.
+
+src-tauri/Cargo.toml
+   [features]  default = []   learned-critic = []   # mirrors bundled-ffmpeg
+   [dependencies]  optional ONNX/GGUF/NLI runtime, gated on learned-critic
+   [dev-dependencies]  insta, proptest, bolero
+   + a golden/ corpus dir at the crate or repo root
+
+LATER (only if the module outgrows one crate): split into flow-core /
+flow-plan / flow-runtime / flow-eval (the wave-11 multi-crate layout).
+Adopt that structure, not invent it prematurely.
+`
+
+## Corrected 3 invariants the repo shape enforces (unchanged, now repo-true)
+1. **Tiny + weight-free by construction** — learned-critic feature OFF by
+   default (mirrors undled-ffmpeg); default cargo test/cargo build
+   is fast, no weights.
+2. **Deterministic core** — ideo_flow/ is pure (no fs/clock/env); every
+   step is proptest-able + insta-snapshot-able; only the Tauri shell touches
+   the world.
+3. **Versioned + replayable data** — serde-evolve wire/domain split +
+   ersion-migrate::load_forward = "rebuild creates N+1, never mutates N,
+   never falls back" (C3/C9) as checked code.
+
+**This correction makes the blueprint buildable HERE without a first
+repo-restructure:** add the pure modules + the learned-critic feature +
+the dev-deps + the golden corpus; defer the multi-crate split. That is the
+honest, repo-true completion of "find solutions of our cases."
