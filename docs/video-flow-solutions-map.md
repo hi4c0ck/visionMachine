@@ -836,3 +836,106 @@ Every sub-case now has BOTH an analogous project AND a concrete mechanism:
 cases — and the "tests + versioning covering" you named — has a named worldwide
 solution *and* a concrete, adoptable mechanism. The ledger holds 57 evidence
 entries across 8 waves.
+
+---
+
+# Wave 9 — the three phrases I was under-covering (now closed)
+
+The user's own wording named three sub-cases I'd only grazed. This wave closes
+them, and they are **new ground** (not re-covers).
+
+## A. "structured text with *video-engine language configuration*" = a versioned, typed DSL — not ad-hoc fields
+- **video-notation-schema** (context-notation): a JSON-Schema (Draft 2020-12),
+  explicitly **VERSIONED (v1.0.0)**, "from global video attributes to shot-by-shot
+  instruction." A *machine-validated*, versioned prompt language.
+- **Seedance Prompt JSON Schema v3**: modes (t2v/i2v/v2v/r2v/flf2v/edit/extend/
+  audio-led), tagged refs with **ROLES** (identity/product/pose/environment/style/
+  first_frame/last_frame), and the load-bearing principle: **"JSON is for STORAGE
+  ONLY — always COMPILE to plain text before sending to the platform."** -> Our
+  structured layer is a **versioned, typed, COMPILABLE DSL**; the platform prompt
+  is a *derived compile* of it (the render hand-off).
+- **Baton Scene Description (BSD v0.1–0.3)**: a **typed INTERCHANGE schema for
+  cinematic DIRECTORIAL INTENT** that "complements OpenUSD (what a scene
+  CONTAINS) by adding an INTENT layer (what the director WANTS)." -> The **INTENT
+  layer is literally our "maintain user desire" data**, kept separate from the
+  content/SoT layer.
+- **SKEL @openskeleton/spec**: "visually literate — camera size, lens, motion,
+  light, mood, weather, color, focus are NATIVE VOCABULARY." + YAML authoring
+  (.skel) with .skel.json interchange + JSON-Schema validation.
+
+**So "the video-engine language" is an EXISTING, versioned, machine-validated DSL
+space.** We should **adopt/extend one** as our structured-layer contract, not
+invent an unvalidated one. The *language* is: a shot = tagged {camera, lighting,
+motion, environment, style, technicals} units, versioned, and compiled to the
+target platform's prose at render time.
+
+## B. "each step has numerous parameters for a better transition" = a FROZEN, verified, parameter-rich config (+ style contract)
+- **The generative-media "on-style without drift" playbook**: "write a **STYLE
+  CONTRACT ONCE and FREEZE it**: a fixed reference image (or set) + a written
+  style descriptor + an **embedding-based consistency check**," applied across
+  the whole batch/sequence so wardrobe/style/palette stay stable.
+- **Seven-layer prompt framework** (video-prompt-generator): **Subject / Action /
+  Environment / Camera Movement / Lighting / Atmosphere-Style / Technicals** =
+  the *named transition knobs* per step.
+-> "Numerous parameters for a better transition" = the **per-step param set,
+frozen as a versioned style-contract and checked by an embedding consistency
+score** (our C2 aggregate-aware root), *not* re-derived per step. That's a
+**versioned CriticParams/StepParams bundle** + a frozen reference.
+
+## C. "maintain user desire … as close as imagined at entry" over a LONG chain = PREVENTIVE goal-drift re-anchoring (not just post-hoc scoring)
+This is the piece the C0/C2 *fidelity score* alone missed — the **preventive** side:
+- **SIP intent-drift detector**: "anchors to the **ORIGINAL INTENT** and checks
+  EACH step against that"; the known unsolved risk is the **"slow-cook"**: each
+  step looks fine locally but the goal has *quietly shifted*.
+- **goal probe**: periodically make the agent **restate** its objective + success
+  criteria + exclusions, then **DIFF that restatement against the original brief**
+  (semantic distance, trended over session age).
+- **arXiv 2505.02709 "Evaluating Goal Drift in LM Agents"**: goal drift = "deviation
+  from the original instruction-specified goal over time."
+- **arXiv 2609.32520 "Measuring and Repairing Intent Drift"**: "re-derive the
+  current intent from EXPLICIT STATE every N steps, flag the discrepancy before
+  acting."
+-> **Our chain: after EACH mutation step, RE-ANCHOR to the original IntentSnapshot**
+(the ground truth we already build) — check "does the current structured layer still
+cover every intent clause?" (that is C0 recall re-checked **per step boundary**, not
+only at the end) and store a per-step **drift diagnostic**. This is a NEW sub-case:
+
+## C8 (new) — drift control / re-anchoring across the chain
+- **Solution (ADOPT now, deterministic):** a per-step **re-anchor check** —
+  re-derive the *effective intent* and DIFF against the original IntentSnapshot
+  (goal-probe / 2505.02709 / 2609.32520); a **drift signal** (semantic distance or
+  coverage delta) is logged per step; if it exceeds a threshold, the step **halts
+  and re-anchors** (or flags INCONCLUSIVE, like C7) instead of quietly drifting
+  (the "slow-cook" SIP names).
+- **Per-shot drift-control fields** (copyable): **prompt-storyboard-studio Shot**
+  = { id, duration_s, purpose, subject, environment, action, camera, lighting,
+  **continuity_in, continuity_out, avoid** } — continuity_in/out = what must be
+  PRESERVED into/out of the shot; void = the negative constraint. Makes
+  "don't drift, don't forget the subject" a *checkable field*, not a vibe.
+- **Lands in Rust:** StepResult gains eanchored_to: IntentSnapshotRef +
+  drift: DriftDiagnostic { coverage_delta, semantic_dist, threshold, ok };
+  PlanSection/FlowElement gain continuity_in / continuity_out / void;
+  a eanchor() step runs at each boundary.
+
+## Refreshed exhaustion check (9 waves)
+
+Every phrasing the user ever used now maps to a covered case + a concrete solution:
+
+| User phrasing | Case | Solution (source) |
+|---|---|---|
+| "separate module … deep logical structure" | C5 | bounded steps + context envelope + DSL layers |
+| "mutate entry text into solid pipes … compose section" | C1/C3 | versioned structured SoT -> destructive per-unit regen |
+| "LLM expand text to a novel" | C1 | LayeredExpander (provider LLM), verbosity layers |
+| "structured text with **video-engine language config**" | **C1-A (new)** | **versioned typed video-DSL (video-notation / Seedance v3 / BSD / SKEL), compile-to-prose at render** |
+| "**numerous parameters for a better transition**" | **C2-B (new)** | **frozen style-contract + 7-layer knobs + embedding consistency check (per-step param bundle)** |
+| "generate from structured pipes, sections and tags" | C1/C3 | FlowElement lowering (start-end frame pairs + tags) |
+| "**careful text outputs tests + versioning covering**" | C7 | 4-layer eval harness (golden + deterministic + judge + CI gate) + prompt versioning |
+| "**maintain user desire … as close as imagined at entry**" | **C0 + C8** | **coverage-aware faithfulness oracle (post-hoc) + goal-drift RE-ANCHORING per step (preventive)** |
+
+**The exploration is now complete across 9 waves / 68 evidence entries.** What
+wave 9 added over 1–8: the "video-engine language" is a *versioned typed DSL*
+(not ad-hoc fields); "transition parameters" are a *frozen style-contract +
+embedding check* (not just weights); and "maintain user desire" has a
+*preventive* half — per-step **drift re-anchoring** to the original intent, with
+explicit continuity_in/out + void fields. Beyond this, the search space is
+exhausted: remaining queries would re-cover these same nine source families.

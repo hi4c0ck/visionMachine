@@ -248,3 +248,70 @@ the `SignalRecord` lineage-pair + `ModelPackageManifest` + `ModelResolver`
 seam, and the `FlowEval` golden harness.
 **Deferred behind a seam (the separate critic project):** the trained critic
 weights + the GGUF/LoRA inference runtime + the trainer.
+
+---
+
+# Wave 9 additions (the three under-covered phrases)
+
+## C1-A — "the video-engine language configuration" = a VERSIONED, typed DSL (ADOPT field shape)
+**We adopt:** the structured layer is a **versioned, typed video-DSL** — not ad-hoc
+prose fields. The existing, machine-validated DSL space to pick/extend from:
+- **video-notation-schema** (JSON-Schema, explicitly versioned v1.0.0)
+- **Seedance Prompt JSON v3** (modes + tagged ref ROLES; **"JSON = storage only,
+  COMPILE to platform prose before sending"** = our render hand-off boundary)
+- **Baton Scene Description (BSD)** (a typed *directorial-INTENT* schema that
+  complements OpenUSD's *content* layer — the **intent layer = our "user desire"**;
+  the **content layer = our "viable structured" SoT**)
+- **SKEL @openskeleton/spec** (flat relational YAML + JSON-Schema + TS types;
+  camera/lens/motion/light/mood as *native vocabulary*)
+
+**Lands in Rust:** plan.rs StructuredVideoPlan = **that versioned DSL** (one
+schema, versioned); a compile_to_platform_prose(dsl, model) step is the **derived
+render** (the Seedance storage→compile boundary); the **intent layer** (BSD) is
+kept separate from the content layer (OpenUSD) = our "maintain user desire" split.
+
+## C2-B — "numerous parameters for a better transition" = FROZEN style-contract + 7-layer knobs (ADOPT now)
+**We adopt:** the per-step "transition parameters" are a **versioned, FROZEN
+param bundle** (the seven layers: Subject / Action / Environment / Camera /
+Lighting / Atmosphere-Style / Technicals), **frozen as a STYLE CONTRACT**
+(reference image + written style descriptor) and **checked by an embedding
+consistency score** (the C2 aggregate-aware root). Not re-derived per step.
+**Lands in Rust:** CriticParams/StepParams bundle gains the 7-layer knobs +
+a rozen_style_contract (ref + descriptor + embed-check threshold); the
+style-contract is a **versioned** field on the FlowDocument (part of the
+version triple's "what produced this").
+
+## C8 — PREVENTIVE drift control / re-anchoring to the original intent (ADOPT now, deterministic)
+**We adopt:** the *preventive* half of "maintain user desire" — **after EACH
+mutation step, re-anchor to the original IntentSnapshot** and DIFF
+(goal-probe / arXiv 2505.02709 / 2609.32520): re-derive the *effective* intent,
+check "does the structured layer still cover every intent clause?" (C0 recall
+**re-checked per step boundary**, not just at the end), and log a **drift
+diagnostic**. If it exceeds a threshold → **halt & re-anchor** (or flag
+INCONCLUSIVE, C7), *never* let the goal quietly shift (the "slow-cook" SIP).
+Per-shot **continuity_in / continuity_out / void** fields (prompt-
+storyboard-studio Shot) make "don't drift, don't forget the subject" a
+*checkable* property.
+**Lands in Rust:** StepResult.reanchored_to + drift: { coverage_delta,
+semantic_dist, threshold, ok }; PlanSection/FlowElement gain
+continuity_in/out + void; a eanchor() step at each boundary.
+
+## C-table with C8 (final)
+| Case | One solution we adopt | Concrete mechanism | Rust home |
+|---|---|---|---|
+| C0 core goal | coverage-aware faithfulness oracle (precision⊗recall vs intent-as-oracle) | TICK/DeCE/BiFact checklist + Ragas claim+NLI floor | critic.rs |
+| C1 spine | keep spine; add narrative-arc/keyframe + subject-asset layers | novel-to-storyboard fields + SKEL/STAGE | plan.rs |
+| **C1-A (new)** | **the structured layer = a VERSIONED typed video-DSL, compile-to-prose at render; INTENT layer (BSD) separate from CONTENT layer** | **video-notation-schema / Seedance v3 / BSD / SKEL** | plan.rs schema + compile_to_platform_prose |
+| **C2-B (new)** | **transition params = a FROZEN 7-layer style-contract, embedding-checked, versioned** | **on-style-without-drift playbook + 7-layer framework** | CriticParams/StepParams + rozen_style_contract |
+| C2 fidelity | two-scale FIRM-Video tree, rubric-locked, user-weighted; floor now, ceiling deferred | RubricArmor gate + Ragas NLI | ScoreNode/CriticParams |
+| C3 session | source-of-truth inversion; per-unit regen never mutates N | dsh-desktop Tauri event-log + projection | decomposed layer files |
+| C4 learning | lineage-pair + temp/durable signals → additive-head on-device | tianpan + ReelBrain + DITTO → DPO/KTO | SignalRecord |
+| C5 isolation | versioned context envelope + typed ACL views + cached nodes | novel-to-storyboard + AgentPatterns + DDD | ContextEnvelope |
+| **C8 (new)** | **PREVENTIVE drift control: re-anchor to original intent PER STEP + continuity_in/out/avoid** | **goal probe / 2505.02709 / 2609.32520 + prompt-storyboard-studio Shot** | StepResult.drift + eanchor() step |
+| C6 build spec | ModelPackageManifest (GGUF base + LoRA sidecars + sha256) | llama.cpp + cera | learn.rs |
+| C7 eval | 4-layer golden + deterministic + judge + CI-gate harness | promptfoo/Ragas/DeepEval + INCONCLUSIVE-blocks | FlowEval + golden/ |
+
+The **shippable spine** now adds C8: *…and every step re-anchors to the
+original intent so the "user desire" can't quietly drift (C8), the structured
+layer is a versioned video-DSL with an intent/content split (C1-A), the
+transition params are a frozen style-contract (C2-B)…*
