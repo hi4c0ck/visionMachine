@@ -75,6 +75,17 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// an in-flight run must stay visible while the user is on another tab
 	// of the same session). Session switch resets it with the tab.
 	let directorRunning = $state(false);
+	// Design §1 "badge ownership": the non-Pipes tab's own quiet badge (Extract
+	// "n sections" / Scoreboard "stale"), pushed up from DirectorPanel so the
+	// .preview-meta row shows it in place of pipe-count.
+	let tabMeta = $state({ extractSections: 0, stale: false });
+	// Reset the tab badge when the active tab or session changes (session-keyed
+	// state, design §1 guard 2 — never carry a hidden tab's badge).
+	$effect(() => {
+		void composerTab;
+		void selectedSessionId;
+		tabMeta = { extractSections: 0, stale: false };
+	});
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 
@@ -2573,6 +2584,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			<span class="frame-indicator">Frame: <strong>{selectedFrame ?? 0}</strong> / {totalFrames}</span>
 			{#if composerTab === 'pipes'}
 				<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
+			{:else if composerTab === 'extract'}
+				<span class="pipe-count tab-badge">
+					{tabMeta.extractSections} section{(tabMeta.extractSections !== 1 ? 's' : '')}
+				</span>
+			{:else if composerTab === 'scoreboard'}
+				<span class="pipe-count tab-badge {tabMeta.stale ? 'tab-badge-stale' : ''}">
+					{tabMeta.stale ? 'stale' : 'in sync'}
+				</span>
+			{:else}
+				<!-- Director badge is the run dot on the tab itself (gap B). -->
 			{/if}
 			<span class="meta-spacer" aria-hidden="true"></span>
 			<!-- Director's-harness tabs (design doc §1): right-aligned so the
@@ -2664,6 +2685,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						onLogSignal={(kind, targetSpan, note) =>
 							logSignal(selectedSession.id, kind, targetSpan, note)}
 						onRunningChange={(b) => (directorRunning = b)}
+						onMetaChange={(meta) => (tabMeta = meta)}
 					/>
 				{/if}
 			{:else}
@@ -3021,6 +3043,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		font-size: 10px;
 		color: var(--text-muted, #6b6b80);
 		margin-left: auto;
+	}
+
+	/* Design §1 "badge ownership": a non-Pipes tab's own quiet badge reuses
+	   the pipe-count slot (mono, 10px, --text-muted; stale = warning). */
+	.tab-badge {
+		font-family: var(--font-mono);
+	}
+	.tab-badge-stale {
+		color: var(--warning-color);
 	}
 
 	.workspace-body {

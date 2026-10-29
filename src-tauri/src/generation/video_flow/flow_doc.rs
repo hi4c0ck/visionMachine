@@ -17,6 +17,7 @@
 //! elements → the same pipes, bit-for-bit, whenever the versions match.
 
 use crate::generation::video_flow::critic::ScoreTree;
+use crate::generation::video_flow::engine::seed::EngineRun;
 use crate::generation::video_flow::intent::IntentSnapshot;
 use crate::generation::video_flow::learn::ModelHandle;
 use crate::generation::video_flow::novel::Novel;
@@ -47,6 +48,11 @@ pub struct FlowDocument {
     /// Phase 0; a trained build in later phases).
     #[serde(default)]
     pub critic_model: Option<ModelHandle>,
+    /// The S0→S5 engine run (absorbed from `harness/`). `None` for docs
+    /// produced before the engine landed, or when the run was entry-less.
+    /// `#[serde(default)]` keeps old `flow.v{N}.json` files loading verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<EngineRun>,
 }
 
 impl FlowDocument {
@@ -165,6 +171,7 @@ mod tests {
             lowered,
             regen,
             critic_model: Some(critic_model),
+            engine: None,
         }
     }
 

@@ -125,13 +125,28 @@ impl VideoFlow {
         Self { config }
     }
 
+    /// Run the **full** pipeline with no explicit engine entry: the engine
+    /// seed is derived from `raw` alone (default genre/ratio/scale).
+    pub fn run_full(&self, raw: &str) -> FlowResult<FlowDocument> {
+        self.run_full_with_entry(raw, None)
+    }
+
     /// Run the **full** pipeline: intent → expand → structure → critic →
     /// lower → regen → `FlowDocument`.
     ///
     /// This is the *primary* entry point the UI will call. It produces the
     /// complete session-space artifact (your #5) and the destructive
     /// regeneration contract (your #6).
-    pub fn run_full(&self, raw: &str) -> FlowResult<FlowDocument> {
+    ///
+    /// `entry` is the optional S0 engine entry (Director G0 controls). When
+    /// present it drives the engine seed (genre/ratio/scale + G0 look axes);
+    /// when absent the seed is derived from `raw` alone so the S0→S5 flow is
+    /// always saturated.
+    pub fn run_full_with_entry(
+        &self,
+        raw: &str,
+        entry: Option<&crate::generation::video_flow::engine::seed::EngineEntry>,
+    ) -> FlowResult<FlowDocument> {
         let intent = IntentSnapshot::new(raw);
 
         // Step 1: expand (layered narrative).
@@ -182,6 +197,11 @@ impl VideoFlow {
             self.config.learn.model_root.as_deref(),
         );
 
+        // Engine S0→S5 saturation: always produced (LLM-free, deterministic),
+        // so every persisted doc carries the full flow state. Entry drives the
+        // seed; without one, derive a default seed from the raw text.
+        let engine = Some(build_engine_run(raw, &intent, entry));
+
         Ok(FlowDocument {
             flow_version: self.config.flow_version,
             intent,
@@ -191,6 +211,7 @@ impl VideoFlow {
             lowered,
             regen,
             critic_model: Some(critic_model),
+            engine,
         })
     }
 
@@ -254,6 +275,44 @@ impl Default for VideoFlow {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Build the S0→S5 engine run for a flow document. When the UI supplies an
+/// `EngineEntry` (Director G0 controls) it drives the seed directly;
+/// otherwise a default seed is derived from the entry text + intent so the
+/// flow is still saturated (genre/ratio/scale = defaults).
+fn build_engine_run(
+    raw: &str,
+    intent: &IntentSnapshot,
+    entry: Option<&crate::generation::video_flow::engine::seed::EngineEntry>,
+) -> crate::generation::video_flow::engine::seed::EngineRun {
+    use crate::generation::video_flow::engine::seed::EngineEntry;
+    use crate::generation::video_flow::engine::types::{Genre, SeedScale};
+
+    let entry = match entry {
+        Some(e) => e.clone(),
+        None => {
+            let title = intent
+                .clauses
+                .first()
+                .map(|c| c.text.clone())
+                .unwrap_or_else(|| "Untitled".into());
+            EngineEntry {
+                title,
+                idea: raw.to_string(),
+                input_text: Some(raw.to_string()),
+                genre: Genre {
+                    name: "Cinematic".into(),
+                    style: "cinematic natural light".into(),
+                },
+                ratio: "16:9".into(),
+                scale: SeedScale { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
+                time_of_day: "midday".into(),
+                weather: "clear".into(),
+            }
+        }
+    };
+    entry.build_run()
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

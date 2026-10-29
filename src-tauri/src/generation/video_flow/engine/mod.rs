@@ -15,6 +15,8 @@
 //!                          diff / fold / normalize) — the fidelity learning space
 //!   - `derive`           : deterministic base+delta prompt composition (S4)
 //!   - `gates`            : the G0–G4 confirmation + backtrack gate model
+//!   - `seed`             : the LLM-free S0→S4 builder + S5 verify + gate
+//!                          states — the product path the UI drives today
 //!
 //! These types are `snake_case`-keyed to match the harness wire schema exactly
 //! (so golden fixtures + JSON round-trip verbatim). They are independent of
@@ -24,6 +26,7 @@
 pub mod axes;
 pub mod derive;
 pub mod gates;
+pub mod seed;
 pub mod tag_vocabulary;
 pub mod types;
 

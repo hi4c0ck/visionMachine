@@ -3,6 +3,8 @@
 // #[serde(rename_all = "camelCase")] on the Rust side exactly.
 // Source of truth: src-tauri/src/generation/video_flow/
 
+import type { EngineRun } from './engine';
+
 export type VideoTag =
 	| 'scene'
 	| 'camera'
@@ -129,6 +131,9 @@ export interface FlowDocument {
 	};
 	regen: RegenerationContract;
 	criticModel: ModelHandle | null;
+	/** S0→S5 engine run (absorbed from `harness/`). `null` for docs produced
+	 before the engine landed, or when the run was entry-less. */
+	engine: EngineRun | null;
 }
 
 /** One row of the Scoreboard run list (director_list_flows). */
@@ -138,6 +143,8 @@ export interface FlowSummary {
 	criticModelVersion: number;
 	sectionCount: number;
 	entryText: string;
+	/** S5 verify state for this run (false when no engine was produced). */
+	verified: boolean;
 }
 
 /** Response shape of director_run_flow. */

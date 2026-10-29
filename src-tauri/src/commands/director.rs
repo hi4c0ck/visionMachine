@@ -104,6 +104,19 @@ async fn project_dir(
         .unwrap_or_else(|| ".".into())
 }
 
+/// Parse an optional engine S0 entry from JSON. `None`/empty → `None`.
+/// A malformed entry is a named error (the UI's G0 form is well-formed, so
+/// this is a wire guard, not a silent fallback).
+fn parse_entry(entry: &Option<String>) -> Result<Option<crate::generation::video_flow::engine::seed::EngineEntry>, String> {
+    match entry {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => serde_json::from_str(s)
+            .map(Some)
+            .map_err(|e| format!("engine entry: {e}")),
+    }
+}
+
 /// The newest flow version on disk (0 when no flow has been saved yet).
 fn next_flow_version(flow: &PathBuf) -> u32 {
     let mut best: u32 = 0;
@@ -126,10 +139,15 @@ fn next_flow_version(flow: &PathBuf) -> u32 {
 /// Run the full deterministic flow on `text` and persist the document as
 /// `flow.v{N}.json` (coexisting versions, never overwrite). Returns the
 /// saved document + its version.
+///
+/// `entry` is the optional S0 engine entry (Director G0 controls: genre,
+/// ratio, scale, time_of_day, weather). When supplied it drives the engine
+/// seed; when absent a default seed is derived from `text`.
 #[tauri::command]
 pub async fn director_run_flow(
     session_id: String,
     text: String,
+    entry: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     // Path resolution only needs the DB; keep the lock window small (the
@@ -140,9 +158,10 @@ pub async fn director_run_flow(
         flow_dir(db, &session_id).await?
     };
 
+    let entry = parse_entry(&entry)?;
     let flow = VideoFlow::new();
     let doc = flow
-        .run_full(&text)
+        .run_full_with_entry(&text, entry.as_ref())
         .map_err(|e| e.to_string())?;
 
     let version = next_flow_version(&dir).saturating_add(1);
@@ -164,6 +183,8 @@ pub struct FlowSummary {
     pub critic_model_version: u32,
     pub section_count: usize,
     pub entry_text: String,
+    /// S5 verify state for this run (false when no engine was produced).
+    pub verified: bool,
 }
 
 /// Every persisted `flow.v{N}.json` under the session, newest first.
@@ -191,6 +212,7 @@ pub async fn director_list_flows(
             critic_model_version: doc.regen.version.critic_model_version,
             section_count: doc.structured.primary().sections.len(),
             entry_text: doc.intent.entry_text.clone(),
+            verified: doc.engine.as_ref().map(|e| e.verify.verified).unwrap_or(false),
         });
     }
     out.sort_by(|a, b| b.flow_version.cmp(&a.flow_version));

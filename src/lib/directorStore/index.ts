@@ -12,6 +12,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { FlowDocument, FlowSummary, RunFlowResult } from './types';
+import type { EngineEntryInput } from './engine';
 
 export type DirectorTab = 'pipes' | 'director' | 'extract' | 'scoreboard';
 
@@ -35,7 +36,8 @@ export function getRunState(sessionId: string): RunState {
 
 export async function runFlow(
 	sessionId: string,
-	text: string
+	text: string,
+	entry?: EngineEntryInput | null,
 ): Promise<FlowDocument> {
 	const rs = getRunState(sessionId);
 	rs.running = true;
@@ -44,6 +46,7 @@ export async function runFlow(
 		const out = await invoke<RunFlowResult>('director_run_flow', {
 			session_id: sessionId,
 			text,
+			entry: entry ? JSON.stringify(entry) : null,
 		});
 		return out.document;
 	} catch (e) {
