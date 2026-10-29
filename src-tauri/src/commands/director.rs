@@ -1,0 +1,263 @@
+// Director's-harness backend commands (tabbed composer — Director / Extract /
+// Scoreboard tabs).
+//
+// Scope guard (design doc §8 / user directive): this module wires the
+// READ + RUN + SIGNAL surfaces only. The destructive regenerate-pipes action
+// is deliberately NOT implemented here — it belongs to the materialize
+// adapter (steps/materialize.rs, I9 composer boundary) and is shipped in a
+// later phase. The UI renders that control disabled with a "not wired yet"
+// note instead of calling a command that always errors.
+//
+// All flow artifacts live under the session media root (the same resolution
+// precedence as generation.rs): <root>/<session-name>/flow/
+//   flow.v{N}.json        — versioned FlowDocument (coexist, never overwrite)
+//   flow_signals.jsonl    — append-only SignalRecord log (I7)
+
+use crate::AppState;
+use crate::generation::video_flow::{
+    append_signal_jsonl, FlowDocument, SignalKind, SignalRecord, VideoFlow,
+};
+use serde::Serialize;
+use std::path::PathBuf;
+use tauri::State;
+
+/// Resolve `<session media root>/<safe-session-name>/flow`, creating it.
+/// Precedence mirrors `resolve_media_root` in generation.rs exactly
+/// (session dir → project dir → user catalog default), so flow artifacts
+/// sit next to the session's other media.
+async fn flow_dir(
+    db: &crate::storage::db::Database,
+    session_id: &str,
+) -> Result<PathBuf, String> {
+    use sqlx::Row;
+
+    // 1. session's own directory (0009).
+    let session_dir: Option<String> = sqlx::query("SELECT directory_path FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+        .flatten();
+
+    // Also fetch the session name (for the session folder layer).
+    let session_name: String = match sqlx::query("SELECT name FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(r) => r
+            .try_get::<String, _>(0)
+            .ok()
+            .unwrap_or_else(|| "session".into()),
+        None => return Err("session not found".to_string()),
+    };
+
+    let root: String = if let Some(dir) = session_dir {
+        let trimmed = dir.trim().to_string();
+        if !trimmed.is_empty() {
+            trimmed
+        } else {
+            project_dir(db, session_id).await
+        }
+    } else {
+        project_dir(db, session_id).await
+    };
+
+    // Sanitize the session-name layer the same way the rest of the media
+    // tree does (generation.rs::sanitize_dir_name semantics).
+    let safe_name = crate::commands::generation::safe_session_name(&session_name);
+    let dir = PathBuf::from(root).join(safe_name).join("flow");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// Project-level fallback for the flow dir (generation.rs step 2).
+async fn project_dir(
+    db: &crate::storage::db::Database,
+    session_id: &str,
+) -> String {
+    use sqlx::Row;
+    let row: Option<String> = sqlx::query(
+        "SELECT p.directory_path FROM sessions s \
+               JOIN projects p ON p.id = s.project_id WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+    .flatten();
+    if let Some(dir) = row {
+        let trimmed = dir.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Step 3 (generation.rs): user catalog default. The flow dir needs a
+    // concrete path even for never-generated sessions, so fall back to the
+    // app-data media tree the frontend already uses for that case.
+    dirs::home_dir()
+        .map(|home| home.join("VisionMachine").join("default").join("Projects").to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".into())
+}
+
+/// The newest flow version on disk (0 when no flow has been saved yet).
+fn next_flow_version(flow: &PathBuf) -> u32 {
+    let mut best: u32 = 0;
+    if let Ok(entries) = std::fs::read_dir(flow) {
+        for entry in entries.flatten() {
+            if let Some(stem) = entry.file_name().to_str() {
+                if let Some(v) = stem.strip_prefix("flow.v").and_then(|s| s.strip_suffix(".json")) {
+                    if let Ok(v) = v.parse::<u32>() {
+                        best = best.max(v);
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+// ── Commands ────────────────────────────────────────────────────────────────
+
+/// Run the full deterministic flow on `text` and persist the document as
+/// `flow.v{N}.json` (coexisting versions, never overwrite). Returns the
+/// saved document + its version.
+#[tauri::command]
+pub async fn director_run_flow(
+    session_id: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    // Path resolution only needs the DB; keep the lock window small (the
+    // flow run below will make LLM network calls in later phases and must
+    // not hold the DB lock across them).
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+
+    let flow = VideoFlow::new();
+    let doc = flow
+        .run_full(&text)
+        .map_err(|e| e.to_string())?;
+
+    let version = next_flow_version(&dir).saturating_add(1);
+    let path = dir.join(FlowDocument::default_filename(version));
+    doc.save(&path).map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "document": serde_json::to_value(&doc).map_err(|e| e.to_string())?,
+        "flowVersion": version,
+    }))
+}
+
+/// One summary row for the Scoreboard run list.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowSummary {
+    pub flow_version: u32,
+    pub overall: f64,
+    pub critic_model_version: u32,
+    pub section_count: usize,
+    pub entry_text: String,
+}
+
+/// Every persisted `flow.v{N}.json` under the session, newest first.
+#[tauri::command]
+pub async fn director_list_flows(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<FlowSummary>, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+
+    let mut out: Vec<FlowSummary> = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some((_, v_str)) = name.strip_prefix("flow.v").zip(name.strip_suffix(".json")) else {
+            continue;
+        };
+        let Ok(version) = v_str.parse::<u32>() else { continue };
+        let Ok(doc) = FlowDocument::load(&entry.path()) else { continue };
+        out.push(FlowSummary {
+            flow_version: version,
+            overall: doc.scoretree.overall(),
+            critic_model_version: doc.regen.version.critic_model_version,
+            section_count: doc.structured.primary().sections.len(),
+            entry_text: doc.intent.entry_text.clone(),
+        });
+    }
+    out.sort_by(|a, b| b.flow_version.cmp(&a.flow_version));
+    Ok(out)
+}
+
+/// Load one persisted flow document (Extract / Scoreboard drill-in).
+#[tauri::command]
+pub async fn director_load_flow(
+    session_id: String,
+    flow_version: u32,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let path = dir.join(FlowDocument::default_filename(flow_version));
+    let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(&doc).map_err(|e| e.to_string())?)
+}
+
+/// Append one preference signal (I7, append-only). `kind` must be one of
+/// the four `SignalKind` wire names: edit_diff, accept, reject, rate.
+#[tauri::command]
+pub async fn director_log_signal(
+    session_id: String,
+    kind: String,
+    target_span: String,
+    note: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let kind = match kind.as_str() {
+        "edit_diff" => SignalKind::EditDiff,
+        "accept" => SignalKind::Accept,
+        "reject" => SignalKind::Reject,
+        "rate" => SignalKind::Rate,
+        other => {
+            return Err(format!(
+                "unknown signal kind '{other}' (expected edit_diff|accept|reject|rate)"
+            ))
+        }
+    };
+
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+
+    // Newest doc version the signal attaches to (0 when none exists yet —
+    // signals may legitimately precede the first saved run).
+    let flow_version = next_flow_version(&dir);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let record = SignalRecord {
+        record_id: uuid::Uuid::new_v4().to_string(),
+        kind,
+        flow_version,
+        target_span: target_span.clone(),
+        note,
+        ts,
+    };
+
+    let path = dir.join("flow_signals.jsonl");
+    append_signal_jsonl(&path, &record).map_err(|e| e.to_string())?;
+    Ok(record.record_id)
+}

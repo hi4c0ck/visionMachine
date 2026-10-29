@@ -3,6 +3,8 @@
 	import Frame from './Frame.svelte';
 	import ProjectsPanel from './ProjectsPanel.svelte';
 	import ComposerPanel from './ComposerPanel.svelte';
+import DirectorPanel from './Director/DirectorPanel.svelte';
+import { logSignal, type DirectorTab } from '$lib/directorStore';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
 	import ChromeIcon from './ChromeIcon.svelte';
@@ -65,6 +67,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	let selectedProjectId = $state<string | null>(null);
 	let selectedSessionId = $state<string | null>(null);
 	let activeTool = $state<string | null>(null);
+	// Director's-harness tabs (design doc §1): one $state owns both the
+	// right-aligned tab group in .preview-meta and the composer body slot.
+	// Per-session state lives in the director store (runStates map).
+	let composerTab = $state<DirectorTab>('pipes');
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 
@@ -2556,7 +2562,29 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	<div class="preview-area">
 		<div class="preview-meta">
 			<span class="frame-indicator">Frame: <strong>{selectedFrame ?? 0}</strong> / {totalFrames}</span>
-			<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
+			{#if composerTab === 'pipes'}
+				<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
+			{/if}
+			<span class="meta-spacer" aria-hidden="true"></span>
+			<!-- Director's-harness tabs (design doc §1): right-aligned so the
+			     active underline points down at the composer body. -->
+			<div class="harness-tabs" role="tablist" aria-label="Composer">
+				{#each [
+					{ id: 'pipes', label: 'Pipes' },
+					{ id: 'director', label: 'Director' },
+					{ id: 'extract', label: 'Extract' },
+					{ id: 'scoreboard', label: 'Scoreboard' },
+				] as tab}
+					<button
+						class="harness-tab {composerTab === tab.id ? 'is-active' : ''}"
+						role="tab"
+						aria-selected={composerTab === tab.id}
+						onclick={() => (composerTab = tab.id as DirectorTab)}
+					>
+						{tab.label}
+					</button>
+				{/each}
+			</div>
 		</div>
 	</div>
 	{/if}
@@ -2595,23 +2623,35 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		<div class="composer-area">
 		<!-- SAFE: Check session exists AND has project -->
 			{#if selectedSession && selectedProject}
-				<ComposerPanel
-					session={selectedSession}
-					{totalFrames}
-					{selectedFrame}
-					bind:activePipeIdx
-					bind:focus
-					onframechange={(f) => selectedFrame = f}
-					localFrameForPipe={localFrameForPipe}
-					pipeStartForPipe={pipeStartForPipe}
-					brokenRefs={brokenRefs}
-					workingRefs={workingRefs}
-					onRefSaved={recheckRef}
-					videoModel={videoModelSpec}
-					onmediamodechange={(pipeId, mode) => {
-						if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
-					}}
-				/>
+				{#if composerTab === 'pipes'}
+					<ComposerPanel
+						session={selectedSession}
+						{totalFrames}
+						{selectedFrame}
+						bind:activePipeIdx
+						bind:focus
+						onframechange={(f) => selectedFrame = f}
+						localFrameForPipe={localFrameForPipe}
+						pipeStartForPipe={pipeStartForPipe}
+						brokenRefs={brokenRefs}
+						workingRefs={workingRefs}
+						onRefSaved={recheckRef}
+						videoModel={videoModelSpec}
+						onmediamodechange={(pipeId, mode) => {
+							if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
+						}}
+					/>
+				{:else}
+					<DirectorPanel
+						key={selectedSession.id}
+						activeTab={composerTab}
+						sessionId={selectedSession.id}
+						sessionName={selectedSession.name}
+						pipeCount={pipes.length}
+						onLogSignal={(kind, targetSpan, note) =>
+							logSignal(selectedSession.id, kind, targetSpan, note)}
+					/>
+				{/if}
 			{:else}
 				<div class="composer-empty">
 					<div class="empty-icon"><ChromeIcon id="proj-reel" size={40} /></div>
@@ -2823,6 +2863,46 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		align-items: center;
 		padding: 0 12px;
 		gap: 16px;
+	}
+
+	/* ── Director's-harness tabs (design doc §1) ──
+	   Right-aligned in the 24px strip; the spacer pushes them to the far
+	   right so the active underline sits above the composer body. */
+	.meta-spacer {
+		flex: 1;
+	}
+
+	.harness-tabs {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		height: 24px;
+	}
+
+	.harness-tab {
+		font: inherit;
+		font-size: 12px;
+		font-weight: 400;
+		color: var(--text-secondary);
+		background: none;
+		border: none;
+		border-bottom: 1px solid transparent;
+		padding: 0 8px;
+		height: 100%;
+		cursor: pointer;
+		transition: color var(--transition-sin, 0.3s),
+			border-color var(--transition-sin, 0.3s),
+			font-weight var(--transition-sin, 0.3s);
+	}
+
+	.harness-tab:hover {
+		color: var(--text-primary);
+	}
+
+	.harness-tab.is-active {
+		color: var(--text-primary);
+		font-weight: 600;
+		border-bottom: 1px solid var(--accent-color);
 	}
 
 	/* ── D10 generation pill (minimized progress modal) ── */
