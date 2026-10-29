@@ -649,3 +649,36 @@ project (1-6) + mechanism (7-8) + under-covered phrasings (9) + novel scale
 (10) + Rust repo shape (11) + local/offline/Rust versioning (12) + the
 repo-true correction. The search space is exhausted; what remains is
 building the blueprint, not exploring.
+
+---
+
+# CORRECTIONS (from the source-verification audit — apply before building)
+
+The 12 load-bearing primary sources were re-read on arxiv.org (not the
+mirror snippets they originally came through). 3 corrections:
+
+1. **C1-A → name the structured layer a "FilmDSL-style video-DSL."**
+   CineCrew (2609.07720, CONFIRMED) explicitly names **FilmDSL** — a film
+   domain-specific language for shot/camera/asset/continuity/persona, shared
+   across planning/generation/critique/repair. Adopt that term for plan.rs.
+
+2. **C0 → state the precondition.** 2606.09376 (CONFIRMED) gets its
+   *complete oracle* from deterministic domains (F1 telemetry, NOAA weather),
+   **not** from user intent. "User-intent-as-oracle" is OUR application; its
+   RECALL is only as complete as the **required-element set we derive**
+   (the TICK/DeCE step). If the checklist is incomplete, recall silently
+   undercounts. Make the checklist-derivation step explicit + tested.
+
+3. **C8 + the "73%" split.** 2505.02709 is the DETECT side; 2609.32520
+   **StateForge** is the REPAIR side (maintain active requirements,
+   0.367→0.467). And two DIFFERENT 73% figures exist: **HuDA** 73% win-rate
+   vs Wan2.1 (a reward result) ≠ **Seedance PAS** "73% fewer manual edits"
+   (a product metric). Keep them labeled; don't conflate.
+
+## Trust status of the whole map (audit result)
+- **CONFIRMED (read the primary):** the C0/C1/C1-A/C2/C8 core + the C9/C2
+  scale items (12/12 load-bearing arXiv claims verified on arxiv.org).
+- **SNIPPET-ONLY (verify before it becomes a dependency):** PromptVault,
+  novel-to-storyboard exact field names, FIRM-Video wording, the onnxer
+  crate, dsh-desktop, AlignXplore/MiCRo/Kuaishou/termux-train. None are
+  load-bearing for the core; each is a refinement to check before adopting.

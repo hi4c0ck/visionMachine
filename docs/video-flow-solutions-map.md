@@ -1102,3 +1102,70 @@ a named worldwide solution AND a copyable mechanism AND the concrete Rust
 idiom that ships it in THIS repo. A 12th wave would only re-cover these same
 source families; the remaining work is implementation, not exploration. The
 actionable output is the **repo-shape blueprint** added to the decision map.
+
+---
+
+# SOURCE VERIFICATION APPENDIX (turn the "high-confidence-from-snippet" flag into a real audit)
+
+Method: the 12 load-bearing PRIMARY sources were read directly on
+**arxiv.org** (abstract pages), NOT from the mirror/Chinese deep-dive
+snippets most of them originally came through. Below: CONFIRMED
+(read the primary) / SNIPPET-ONLY (never read primary, do not treat as
+fact) / + the 3 CORRECTIONS verification surfaced. Everything else in the
+ledger is marked SNIPPET-ONLY unless listed here.
+
+## CONFIRMED — read on arxiv.org (load-bearing)
+| Source | Verdict | Note / correction |
+|---|---|---|
+| 2609.07720 CineCrew | CONFIRMED | **Correction: it names a "FilmDSL"** (a film-oriented DSL for shot/camera/asset/continuity/persona, shared across planning/generation/critique/repair) — adopt that name for our C1-A structured layer. |
+| 2606.09376 Precision≠Faithfulness | CONFIRMED | **Correction: the complete-oracle is F1-telemetry + NOAA-weather (deterministic domains), NOT "the user's intent."** "User-intent-as-oracle" is OUR application; its recall is only as good as the required-element completeness we derive (TICK/DeCE step). |
+| 2505.02709 Goal Drift | CONFIRMED | **Correction: it is the MEASURE/detect side.** The REPAIR side is 2609.32520 **StateForge** ("maintain active requirements" 0.367→0.467). C8 = detect (2505) + re-anchor (2609). |
+| 2609.32520 Intent Drift / StateForge | CONFIRMED | StateForge = explicit active-requirements maintenance = our drift.rs reanchor(). |
+| 2610.01884 MemComposer (B-Roll) | CONFIRMED | entity-centric memory + iterative generate+critique for sequence-level consistency (92.8% visual-alignment win) = our two-scale C2 + persistent-identity C9. |
+| 2601.04153 Diffusion-DRF | CONFIRMED | frozen off-the-shelf VLM critic + multi-dim VQA decomposition (beats Flow-GRPO 4.74%) = our frozen critic floor. |
+| 2601.14037 HuDA | CONFIRMED | off-the-shelf detector+temporal-alignment reward, no training, beats fine-tuned (73% win-rate vs Wan2.1). **Do NOT conflate this 73% with Seedance PAS "73% fewer edits."** |
+| 2610.05308 RubricArmor | CONFIRMED | adversarial "can a bad response still satisfy every rubric item?" gate = our concrete RubricArmor floor-trust check. |
+| 2605.14517 Dim-Level Intent Fidelity | CONFIRMED | holistic scores hide per-dim intent deficits (58.6% of EN outputs) = our "score per-dimension" evidence. |
+| 2410.03608 TICK | CONFIRMED | LLM-generated YES/NO checklists, 46.4→52.2% agreement; STICK +7.8% = our required-element derivation. |
+| 2407.16655 MovieDreamer | CONFIRMED | AR global-narrative + diffusion ID-preserving shot rendering = our two-tier hierarchy. |
+| 2309.15217 Ragas | CONFIRMED | reference-free faithfulness = decompose into claims + verify each vs context, no ground truth = our deterministic floor algorithm. |
+
+## SNIPPET-ONLY — NOT verified against a primary; treat as directional, not fact
+These drive design intuitions but I only saw them via a blog/mirror/Chinese
+deep-dive (blocked or non-authoritative host). Before building on any of
+them, read the primary:
+- **PromptVault** (wave 12, the "Rust local git-for-prompts") — blog reposts
+  only (wpnews / juejin / feinterview); **no verifiable repo/README read.**
+  *Do not cite as a Rust precedent until its actual repo is confirmed.*
+- **novel-to-storyboard** (Chengsiyu-web) — GitHub README was
+  challenge-blocked; content came from the search snippet. *Re-read via raw
+  host / README before relying on its exact field names.*
+- **FIRM-Video**, **VideoReward**, **SelectRM** — came via chatpaper/baai/
+  sohu mirrors, not the primary. *Directionally consistent, but the exact
+  "weighted atomic requirements" wording is unverified against the paper.*
+- **dsh-desktop / dsh-session-kit** (the Tauri event-log+projection harness) —
+  from a project README snippet; *strong but unverified against source.*
+- **onnxer / ONNX MultiLoRA / model_package** — from docs/search snippets;
+  *the libloading/cdylib idea is sound, but the specific crate is unverified.*
+- **AlignXplore / MiCRo / Kuaishou implicit-feedback / termux-train** —
+  blog/mirror sources; *directional, not primary-verified.*
+
+## The 3 corrections this audit forces into the design (apply before building)
+1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
+   (CineCrew's term), not just "a schema." (adoption, not just analogy)
+2. **C0:** state the **precondition explicitly** — our recall is only as
+   complete as the required-element set we *derive* from the intent
+   (TICK/DeCE); the paper's completeness came from the *domain*, not the user.
+3. **C8 / 73%:** split the two "73%" figures (HuDA win-rate vs Wan2.1
+   ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
+   repair (2609.32520 StateForge).
+
+## Audit verdict
+- **12/12 load-bearing primary claims: CONFIRMED on arxiv.org.**
+- The 3 corrections are recorded and must be applied to the decision map
+  before the blueprint is treated as buildable.
+- **The design is sound; its weakest link is the SNIPPET-ONLY set.** None
+  of them are load-bearing for the *core* (C0/C1/C2/C8) — those are all
+  CONFIRMED. The SNIPPET-ONLY items (PromptVault, novel-to-storyboard field
+  names, FIRM-Video wording, onnxer crate) are *refinements*; verify the
+  specific one before it becomes a dependency.
