@@ -290,6 +290,13 @@ prose fields. The existing, machine-validated DSL space to pick/extend from:
   the **content layer = our "viable structured" SoT**)
 - **SKEL @openskeleton/spec** (flat relational YAML + JSON-Schema + TS types;
   camera/lens/motion/light/mood as *native vocabulary*)
+- **MSML — Movie Script Markup Language (ACM DocEng 2009, DOI
+  10.1145/1600193.1600231; Wave-18)** = the *published, peer-reviewed*
+  precedent that a STRUCTURED, MARKUP-BASED film description language is a
+  first-class artifact (a document specification for screenplay narrative
+  structure). This is why our structured layer is a **versioned typed DSL**
+  rather than ad-hoc prose — there is a 2009 academic primary for the
+  markup-language shape, not just the 2026 generative systems above.
 
 **Lands in Rust:** plan.rs StructuredVideoPlan = **that versioned DSL** (one
 schema, versioned); a compile_to_platform_prose(dsl, model) step is the **derived
@@ -302,6 +309,13 @@ param bundle** (the seven layers: Subject / Action / Environment / Camera /
 Lighting / Atmosphere-Style / Technicals), **frozen as a STYLE CONTRACT**
 (reference image + written style descriptor) and **checked by an embedding
 consistency score** (the C2 aggregate-aware root). Not re-derived per step.
+**Academic grounding (Wave-18):** the "on-style-without-drift" idea is no
+longer a commercial playbook flag — **EvoState 2606.16184** makes continuity
+*state-anchored*: an entity-centric evolving visual state that separates
+persistent identity anchors from evolved states, so style/subject persist
+across shots; **PermaVid 2606.16449** keeps consistency *across edits* by
+disentangling appearance from geometry in context memory. Our frozen
+style-contract is the harness-side analog of that state anchoring.
 **Lands in Rust:** CriticParams/StepParams bundle gains the 7-layer knobs +
 a rozen_style_contract (ref + descriptor + embed-check threshold); the
 style-contract is a **versioned** field on the FlowDocument (part of the
@@ -328,12 +342,12 @@ continuity_in/out + void; a eanchor() step at each boundary.
 | C0 core goal | coverage-aware faithfulness oracle (precision⊗recall vs intent-as-oracle) | TICK/DeCE/BiFact checklist + Ragas claim+NLI floor | critic.rs |
 | C1 spine | keep spine; add narrative-arc/keyframe + subject-asset layers | novel-to-storyboard fields + SKEL/STAGE | plan.rs |
 | **C1-A (new)** | **the structured layer = a VERSIONED typed video-DSL, compile-to-prose at render; INTENT layer (BSD) separate from CONTENT layer** | **video-notation-schema / Seedance v3 / BSD / SKEL** | plan.rs schema + compile_to_platform_prose |
-| **C2-B (new)** | **transition params = a FROZEN 7-layer style-contract, embedding-checked, versioned** | **on-style-without-drift playbook + 7-layer framework** | CriticParams/StepParams + rozen_style_contract |
+| **C2-B (new)** | **transition params = a FROZEN 7-layer style-contract, embedding-checked, versioned** | **on-style-without-drift (Wave-18 academic grounding: EvoState 2606.16184 state-anchored continuity + PermaVid 2606.16449 disentangled context memory) + 7-layer framework** | CriticParams/StepParams + rozen_style_contract |
 | C2 fidelity | two-scale FIRM-Video tree, rubric-locked, user-weighted; floor now, ceiling deferred | RubricArmor gate + Ragas NLI | ScoreNode/CriticParams |
-| C3 session | source-of-truth inversion; per-unit regen never mutates N | dsh-desktop Tauri event-log + projection (*directional desktop precedent; Wave-13: a Tauri wrapper of DeepSeek Harness, event-log is a proposed-architecture note*) | decomposed layer files |
+| C3 session | source-of-truth inversion; per-unit regen never mutates N | dsh-desktop Tauri event-log + projection (*directional desktop precedent; Wave-13: a Tauri wrapper of DeepSeek Harness, event-log is a proposed-architecture note*) + **PermaVid 2606.16449 (Wave-18: consistent generation ACROSS EDITS via disentangled context memory)** | decomposed layer files |
 | C4 learning | lineage-pair + temp/durable signals → additive-head on-device | tianpan + ReelBrain + DITTO → DPO/KTO | SignalRecord |
 | C5 isolation | versioned context envelope + typed ACL views + cached nodes | novel-to-storyboard + AgentPatterns + DDD | ContextEnvelope |
-| **C8 (new)** | **PREVENTIVE drift control: re-anchor to original intent PER STEP + continuity_in/out/avoid** | **goal probe / 2505.02709 / 2609.32520 + prompt-storyboard-studio Shot** | StepResult.drift + eanchor() step |
+| **C8 (new)** | **PREVENTIVE drift control: re-anchor to original intent PER STEP + continuity_in/out/avoid** | **goal probe / 2505.02709 / 2609.32520 + EvoState 2606.16184 (Wave-18: re-anchor to REALIZED output via state-observation-update-propagation) + prompt-storyboard-studio Shot** | StepResult.drift + eanchor() step |
 | C6 build spec | ModelPackageManifest (GGUF base + LoRA sidecars + sha256) | llama.cpp + cera | learn.rs |
 | C7 eval | 4-layer golden + deterministic + judge + CI-gate harness | promptfoo/Ragas/DeepEval + INCONCLUSIVE-blocks | FlowEval + golden/ |
 
@@ -563,7 +577,7 @@ ovel.rs→plan.rs→egen.rs | **Solved** |
 ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | R5 | "novel generates into structured text with video-engine language configuration" | C1-A | video-notation-schema; Seedance Prompt JSON v3; BSD intent-layer; SKEL (wave 9) | a **versioned, typed video-DSL** (JSON-Schema) + intent/content split; *compile to platform prose* at render | plan.rs (schema) + low-plan compile | **Solved** |
 | R6 | "we can generate from that structured pipes, sections and tags" | C1 | MAVIN/STAGE structural storyboard (start-end frame pairs); storyboard2video deterministic render (waves 3/10) | PlanSection/FlowElement = tag + start-end frame + prompt + asset_ids; deterministically compilable | plan.rs/egen.rs | **Solved** |
-| R7 | "each step has numerous parameters for a better transition" | C2-B | on-style-without-drift style-contract; 7-layer knobs; VideoReward per-dim weights (waves 9/7) | **frozen, versioned 7-layer param bundle** + embedding consistency check; per-dim critic weights | config.rs rozen_style_contract + CriticParams.dimensions | **Solved** |
+| R7 | "each step has numerous parameters for a better transition" | C2-B | on-style-without-drift (EvoState 2606.16184 state-anchored + PermaVid 2606.16449 disentangled context, Wave-18); 7-layer knobs; VideoReward 2501.13918 per-dim weights (waves 9/7/18) | **frozen, versioned 7-layer param bundle** + embedding consistency check; per-dim critic weights | config.rs rozen_style_contract + CriticParams.dimensions | **Solved** |
 | R8 | "use a learning system … local built-in model, trained manually by signals, continuously on the user's machine" | C4+C6 | ReelBrain temp/durable; Kuaishou implicit signals; DPO/KTO; ASLS L2-anchor; KTO/federated-edge; llama.cpp GGUF-LoRA + Rust cera (waves 4/5/7) | **lineage-pair** SignalRecord → (separate) trainer retrains **one additive LoRA head** (hold base) | signals.rs + model.rs manifest; runtime deferred (feature-gated) | **Solved** (capture+contract in-repo; trainer/weights deferred by design — see R13) |
 | R9 | "first mission: NOT touch pipes current structure (only crucial insights); harness lives in session space; final step regENerate pipes, not fallback" | C3 | Three Session-State Planes; SPACE; DSH-V3 seq-remap; Luma/Boords/Genvid per-unit; Epicenter/Kohaku never-mutate-N; **dsh-desktop Tauri event-log+projection** (waves 1/2/5/6) | **source-of-truth inversion**: structured.vN = SoT, pipes = derived; per-unit destructive regen + pproved/egen_state; event-sourced replay | decomposed session layer files + RegenerationContract (per-unit) | **Solved** |
 | R10 | "session as domain; all harness data should have its structures by demand" | C3 | dsh-desktop session-projection/command-log (*Wave-13: directional Tauri-wrapper precedent; event-log+projection is a proposed-architecture note, not shipped*); Kohaku .vN files; BD WorkflowVersionCache (wave 6) | versioned, addressable layer files + manifest; materialize *one* layer on demand | session/flow/{intent,novel,structured,fidelity}.vN.json + manifest.json | **Solved** |
