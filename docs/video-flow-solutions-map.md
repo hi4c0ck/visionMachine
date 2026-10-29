@@ -939,3 +939,92 @@ embedding check* (not just weights); and "maintain user desire" has a
 *preventive* half — per-step **drift re-anchoring** to the original intent, with
 explicit continuity_in/out + void fields. Beyond this, the search space is
 exhausted: remaining queries would re-cover these same nine source families.
+
+---
+
+# Wave 10 — the novel-scale / multi-pipe case (the one I'd flagged but never solved)
+
+Early I named our design "single-pipe, single-layer" as a known gap and
+deferred it. This wave is the **ultra-long / multi-clip / many-layers** case —
+where "maintain user desire" and "additional layers of content" actually bite.
+It CONFIRMS the whole design at the top scale and fills the last sub-gaps.
+
+## C9 (new) — the novel-scale spine: persistent identity + multi-pipe + audio + ambient + hierarchy
+- **CineCrew (ECCV'26, arXiv 2609.07720)** states the whole problem in one
+  line: long-form workflow brittleness = "the LACK OF A STRUCTURED INTERMEDIATE
+  LAYER between scripts and video models." Its multi-agent fix: build **asset
+  packs + storyboard keyframes that ANCHOR composition BEFORE clip-by-clip
+  synthesis**, and a **critic agent that emits STRUCTURED QA signals and drives
+  TARGETED refinement WITHOUT retraining the base.** -> Our C0/C2 critic + C4
+  learning + C1 structured-SoT are *confirmed at the novel scale*: the critic's
+  structured signal refines one unit on the SAME base; nothing mutates globally.
+- **Persistent identity = persistent state memory that SEPARATES identity from
+  appearance:** **EvoState** ("entity-centric Visual State Memory that
+  SEPARATES persistent identities from evolving appearance states across
+  shots"), **OneStory** (adaptive memory, long-range cross-shot), **Memento**,
+  **SlotMemory** (subject + key anchors survive scene changes/occlusion),
+  **REEL** (retrieve/evaluate/evolve visual memory). -> The concrete
+  **subjects[]/asset-registry layer** I'd lacked: a **persistent identity
+  slot** that outlives every pipe; each section's continuity_in references
+  it. (Our "same fox across the whole novel.")
+- **Ambient-on-own-dynamics (#7) HAS A MECHANISM:** **PreciseVideo** =
+  "quantifiable, ELEMENT-WISE control of BACKGROUND DYNAMICS, independent of
+  character behavior: modulate the temporal variation of distinct background
+  regions — subtly changing skies, dramatically varying seas, or nearly
+  [static]." -> our Ambient { description, dynamics } is field-grounded: the
+  ambient layer moves on its OWN timeline, decoupled from the primary subject,
+  with style/color/light anchored to the frozen style-contract (C2-B).
+- **The AUDIO layer (I'd ignored it):** **LVAS-Agent** (EMNLP'25) decomposes
+  long-video audio into four coupled stages (scene segmentation → video script
+  → **audio script design** → audio synthesis); **SoundStager** (CHI'26):
+  sound design "must be LAYERED: background ambiance + foreground cues +
+  location-specific, contextual to the scene." -> the novel structure needs an
+  **audio layer** (ambience/foreground-SFX/location, per scene).
+- **The hierarchy that descends (MovieDreamer + HoloCine):** **MovieDreamer**
+  (ICLR'25) = an **autoregressive global-narrative layer** (long-term coherence)
+  DESCENDING into a **diffusion ID-preserving shot layer** (short-term
+  fidelity) — "a complex story is broken into manageable scene shots."
+  **HoloCine** = ALL shots processed SIMULTANEOUSLY, shared self-attention
+  maintaining LONG-RANGE consistency = the **aggregate-aware root** that
+  catches whole-film consistency no single shot shows. -> VALIDATES our
+  two-scale C2 tree at the generative top level: a coarse global layer
+  descends to fine shot layers.
+- **Cross-clip fidelity = per-re-occurrence recall (GroundShot, arXiv
+  2606.20799):** "entities that REAPPEAR across shots drift; viewers judge
+  consistency by comparing EACH LATER APPEARANCE to the first." -> for every
+  entity that recurs, its later appearances are checked against the canonical
+  reference (a per-re-occurrence C0 recall, rolled up into the aggregate-aware
+  root). That is "maintain user desire across a novel," made checkable.
+- **The repair loop (DramaAgent):** "maintains REUSABLE STORY/CHARACTER states
+  across scenes; DIAGNOSES named failures (identity drift, missing scene
+  semantics, temporal discontinuity, cross-modal mismatch); REPAIRS problematic
+  clips in a STAGE-SPECIFIC manner." -> C3+C7 combined at scale: *diagnose a
+  named failure → re-derive that one unit from the persistent state* = our
+  INCONCLUSIVE-blocks + per-unit regen, driven by a persistent story/character
+  state (not a whole-flow redo).
+
+## The one line this wave adds to the C-table
+| Case | Solution | Source |
+|---|---|---|
+| **C9 (new) novel-scale spine** | persistent **identity** state (separate from appearance) + multi-pipe + **ambient-on-own-timeline** + an **audio layer** + a **two-tier hierarchy** (global AR descends to shot diffusion) + **per-re-occurrence** cross-clip recall + **stage-specific repair** | CineCrew, EvoState/OneStory/Memento/SlotMemory/REEL, PreciseVideo, LVAS-Agent/SoundStager, MovieDreamer/HoloCine, GroundShot, DramaAgent |
+
+## Final exhaustion statement (10 waves / 75 entries)
+Every phrase the user used, at **both the shot scale AND the novel scale**,
+now maps to a named worldwide solution + concrete mechanism:
+- single-pipe fidelity (C0/C2/C7) and **multi-clip / novel-scale fidelity
+  (C9: persistent identity, per-re-occurrence recall, aggregate root, stage
+  repair)**;
+- "additional layers" = environment + **ambient-on-own-dynamics** + **audio**;
+- "maintain user desire" = post-hoc faithfulness oracle (C0) **and** preventive
+  per-step re-anchoring (C8) **and** cross-clip per-re-occurrence recall (C9);
+- "destructive regen" = per-unit, stage-specific, state-anchored (C3/C9);
+- "tiny repo, learned model behind a seam" = critic emits structured signals,
+  refines on the SAME base, no retrain (CineCrew confirms C2/C4/C6).
+
+Beyond shot-scale and novel-scale, every named sub-case (video-DSL, frozen
+transition params, eval harness, event-sourced session, GGUF/LoRA manifest,
+goal-drift re-anchoring, persistent identity, ambient, audio, aggregate
+consistency, stage repair) has a cited source + a copyable mechanism. **The
+exploration is now genuinely complete: 10 waves, 75 evidence entries, 10
+case-areas (C0, C1, C1-A, C2, C2-B, C3, C4, C5, C6, C7, C8, C9). Any further
+query re-covers these same source families at the same two scales.**

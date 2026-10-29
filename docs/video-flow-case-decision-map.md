@@ -315,3 +315,30 @@ The **shippable spine** now adds C8: *…and every step re-anchors to the
 original intent so the "user desire" can't quietly drift (C8), the structured
 layer is a versioned video-DSL with an intent/content split (C1-A), the
 transition params are a frozen style-contract (C2-B)…*
+
+## C9 — the novel-scale spine (persistent identity + multi-pipe + ambient + audio + hierarchy)
+**We adopt:** at the multi-clip / "novel" scale, the structured layer gains the
+five layers that only matter there, each with a named mechanism:
+- **Persistent IDENTITY state, separated from evolving appearance** (EvoState /
+  OneStory / Memento / SlotMemory / REEL): a subjects[] store where a
+  persistent-identity slot outlives every pipe; each section's continuity_in
+  references it ("the same fox across the whole novel").
+- **Ambient-on-own-timeline** (#7): Ambient { description, dynamics } moves
+  on its OWN timeline, decoupled from the primary subject (PreciseVideo
+  element-wise background dynamics), style-anchored to the frozen style-contract.
+- **Audio layer**: per-scene ambience / foreground-SFX / location (LVAS-Agent 4
+  stages; SoundStager layered+contextual sound design).
+- **Two-tier hierarchy**: a coarse global narrative layer DESCENDS into shot
+  layers (MovieDreamer AR-global + diffusion-shot); an aggregate-aware root
+  catches whole-film consistency (HoloCine shared self-attention).
+- **Per-re-occurrence cross-clip recall**: every reappearing entity is checked
+  against its canonical reference (GroundShot); a named-failure → **stage-
+  specific repair** from the persistent state (DramaAgent), never a whole-flow
+  redo.
+**Lands in Rust:** plan.rs gains subjects: Vec<SubjectPlan> (persistent id),
+udio: Vec<AudioLayer>, top-level 
+arrative: GlobalNarrative (two-tier);
+critic.rs root gains per_reoccurrence_recall (GroundShot) + ggregate_root
+(HoloCine); egen.rs repair is **stage-specific** (DramaAgent) on a persistent
+state. **The critic emits structured signals that refine one unit on the SAME
+base (CineCrew) — no global mutation** (confirms C2/C4/C6 at scale).
