@@ -675,6 +675,27 @@ mirror snippets they originally came through). 3 corrections:
    vs Wan2.1 (a reward result) ≠ **Seedance PAS** "73% fewer manual edits"
    (a product metric). Keep them labeled; don't conflate.
 
+## Verification pass 2 — targeted checks on the SNIPPET-ONLY items (corrections)
+- **FIRM-Video CONFIRMED + real ID:** arXiv **2608.21839** (SJTU + Tencent Youtu +
+  Tongji): "a unified CHECKLIST-DRIVEN data-construction framework (checklist
+  construction + evidence verification + score aggregation); FIRM-Video-90K = 88,044
+  dimension-specific instances." Cite **2608.21839**, not the chatpaper/baai mirror.
+- **Factual fix — `onnxer` is PURE GO, not Rust** (error propagated through waves
+  7/11/12): `benedoc-inc/onnxer` is a Pure-Go ONNX Runtime binding (via
+  `ebitengine/purego`); its "hot-swap LoRA adapters per run" claim is real but GO.
+  -> **The Rust learned-critic runtime should use `intel/onnxruntime` (rust/ dir) /
+  `microsoft/onnxruntime` (rust/ dir: onnxruntime + onnxruntime-sys) /
+  `ONNX_Rustime` + ONNX MultiLoRA `SetActiveAdapters` — NOT `onnxer`.**
+- **Name-collision fix — "PromptVault" ≠ one tool.** The Rust local-first prompt git
+  I meant is **`lib.rs/crates/promptvault`** (bin+lib, version/diff/branch/rollback,
+  MIT). It is distinct from ppyyr/SystemPromptVault, w512/Prompt-Vault,
+  cylgdzz111/PromptVault (Tauri+React), and KrishBnsl/PromptVault (Python MCP).
+  Cite **the lib.rs `promptvault` crate** only.
+- **termux-train / AMEVA = REAL but JS/Python + less authoritative** (not Rust):
+  directional only for C4's on-device LoRA trainer; not a Rust precedent.
+- **Over-correction fix — `novel-to-storyboard` is CONFIRMED** (I read its raw
+  README in wave 3, not a snippet): move it from SNIPPET-ONLY to CONFIRMED.
+
 ## Trust status of the whole map (audit result)
 - **CONFIRMED (read the primary):** the C0/C1/C1-A/C2/C8 core + the C9/C2
   scale items (12/12 load-bearing arXiv claims verified on arxiv.org).

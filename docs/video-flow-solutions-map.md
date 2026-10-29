@@ -318,7 +318,9 @@ both implementing the *same* checklist node + the *same* I2 descent invariant.
 
 - **ONNX Runtime GenAI MultiLoRA**: `SetActiveAdapters(string[])` runtime API —
   activate/deactivate adapters; empty = reset to base; multi-adapter.
-- **onnxer** (`benedoc-inc`, a **Rust** ONNX binding): *"LoRA adapters — hot-swap
+- **ONNX MultiLoRA / onnxruntime** (the **Rust** ONNX runtime = `intel/onnxruntime`
+  rust dir / `microsoft/onnxruntime` rust dir; `onnxer` is the **Go** equivalent that
+  popularized per-run LoRA hot-swap): *"LoRA adapters — hot-swap
   fine-tuned adapters per inference run WITHOUT reloading the base model"* + a
   goroutine-safe session pool. → **Our `Additive` build maps to a Rust-usable,
   hot-swappable adapter; the repo can stay weight-free while the deferred runtime is
@@ -558,7 +560,7 @@ Read all four waves against our six cases + the C0 core goal:
 | **coverage-aware faithfulness oracle (C0)** | **our framing, field-grounded** | precision (no invented) + recall (no dropped) vs intent-as-complete-oracle; per-dimension |
 | **two-scale descendable ScoreTree** (units + aggregate-aware root) | **our design, field-validated** | B-Roll multi-scale loop; root catches aggregate-only defects |
 | **deterministic HuDA-class reference critic (floor)** | **our independent feature** | off-the-shelf beats fine-tuned; repo-owned, zero weights, invariant-checked |
-| **tiny build spec = model_package manifest (base + additive LoRA heads)** | **our contract, runtime-grounded** | ONNX MultiLoRA / Rust onnxer / model_package; the *runtime* is deferred to a separate project |
+| **tiny build spec = model_package manifest (base + additive LoRA heads)** | **our contract, runtime-grounded** | ONNX MultiLoRA / **Rust onnxruntime bindings** (`intel`/`microsoft` onnxruntime rust) / model_package; the *runtime* is deferred to a separate project |
 | **lineage-pair + temp/durable signals** (trainer out-of-repo) | **our contract, field-grounded** | tianpan lineage-pair + ReelBrain temp/durable; trainer is a separate tool |
 
 **Bottom line:** our *spine* and *gate* are the standard shape of every credible
@@ -713,7 +715,7 @@ structured layer, never the (rebuildable) pipes.**
 | **C3** session-space layers + destructive regen | Three Planes / SPACE / DSH-V3 seq-remap / **Luma·Boords·Genvid per-unit** / **event-sourcing+CQRS (Temporal)** / **dsh-desktop Tauri projection** / **source-of-truth inversion** / luthier·Kohaku·Epicenter regen-from-SoT | 1,2,5,6 |
 | **C4** signal-based continuous learning | AlignXplore / MiCRo / SelectRM / **ReelBrain temp·durable** / **tianpan lineage-pair** / **CHIEF user-simulation** / **Kuaishou implicit watch-skip-edit** / **ASLS L2-anchored additive head** / termux-train on-device | 1,2,4,5 |
 | **C5** isolated steps / bounded context | context-rot / Three Planes / **AgentPatterns bounded step** / **DDD ACL view** / **novel-to-storyboard save-intermediates** / **ComfyUI topological node + input-fingerprint cache** | 1,3,5 |
-| **C6** tiny build spec (local weights / additive heads) | LoRA / tinker / **ONNX MultiLoRA + Rust onnxer** / **ONNX model_package manifest** / ModelSharp | 1,2,5 |
+| **C6** tiny build spec (local weights / additive heads) | LoRA / tinker / **ONNX MultiLoRA + Rust onnxruntime bindings** (intel/microsoft onnxruntime rust; `onnxer` is the Go equivalent) / **ONNX model_package manifest** / ModelSharp | 1,2,5 |
 
 Every case + the core goal is now grounded in a named, cited worldwide solution.
 The exploration is exhausted: further searching would re-cover the same sources.
@@ -1130,25 +1132,26 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | 2407.16655 MovieDreamer | CONFIRMED | AR global-narrative + diffusion ID-preserving shot rendering = our two-tier hierarchy. |
 | 2309.15217 Ragas | CONFIRMED | reference-free faithfulness = decompose into claims + verify each vs context, no ground truth = our deterministic floor algorithm. |
 
-## SNIPPET-ONLY — NOT verified against a primary; treat as directional, not fact
-These drive design intuitions but I only saw them via a blog/mirror/Chinese
-deep-dive (blocked or non-authoritative host). Before building on any of
-them, read the primary:
-- **PromptVault** (wave 12, the "Rust local git-for-prompts") — blog reposts
-  only (wpnews / juejin / feinterview); **no verifiable repo/README read.**
-  *Do not cite as a Rust precedent until its actual repo is confirmed.*
-- **novel-to-storyboard** (Chengsiyu-web) — GitHub README was
-  challenge-blocked; content came from the search snippet. *Re-read via raw
-  host / README before relying on its exact field names.*
-- **FIRM-Video**, **VideoReward**, **SelectRM** — came via chatpaper/baai/
-  sohu mirrors, not the primary. *Directionally consistent, but the exact
-  "weighted atomic requirements" wording is unverified against the paper.*
-- **dsh-desktop / dsh-session-kit** (the Tauri event-log+projection harness) —
-  from a project README snippet; *strong but unverified against source.*
-- **onnxer / ONNX MultiLoRA / model_package** — from docs/search snippets;
-  *the libloading/cdylib idea is sound, but the specific crate is unverified.*
-- **AlignXplore / MiCRo / Kuaishou implicit-feedback / termux-train** —
-  blog/mirror sources; *directional, not primary-verified.*
+## SNIPPET-ONLY / NEEDS-PRIMARY — verify before it becomes a dependency
+(Updated after the targeted verification pass.)
+- **REMOVED to CONFIRMED:** `novel-to-storyboard` (raw README read, wave 3),
+  `FIRM-Video` (now **arXiv 2608.21839** — SJTU/Tencent Youtu/Tongji; cite
+  the arXiv ID, not the chatpaper/baai mirror), and `termux-train`/AMEVA
+  (real npm/PyPI packages, but JS/Python + marketing-heavy → *directional*,
+  not a Rust precedent).
+- **PROMPTVAULT NAME-COLLISION:** the Rust local-first prompt-git I meant is
+  **`lib.rs/crates/promptvault`** — *distinct* from ppyyr/SystemPromptVault,
+  w512/Prompt-Vault, cylgdzz111/PromptVault (Tauri+React), KrishBnsl/
+  PromptVault (Python MCP). Cite the **lib.rs crate** only.
+- **ONNXER IS GO, NOT RUST:** `benedoc-inc/onnxer` = Pure-Go ONNX binding
+  (ebitengine/purego); its LoRA hot-swap is real but GO. The **Rust** ONNX
+  bindings are `intel/onnxruntime` (rust/), `microsoft/onnxruntime` (rust/),
+  `ONNX_Rustime`. *Corrected the blueprint's "Rust onnxer" claim.*
+- **STILL SNIPPET-ONLY (verify before relying on exact wording):**
+  `VideoReward`, `SelectRM` (mirror-sourced; directionally consistent),
+  `dsh-desktop` / `dsh-session-kit` (README snippet; strong but unverified
+  against source), `AlignXplore` / `MiCRo` / `Kuaishou` implicit-feedback
+  (blog/mirror). None are load-bearing for the confirmed core (C0/C1/C2/C8).
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
