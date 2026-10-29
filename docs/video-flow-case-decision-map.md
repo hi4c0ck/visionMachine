@@ -1,7 +1,7 @@
 # Video-Flow Harness — Case → Solution Decision Map (TERMINAL deliverable)
 
 > The grind goal was: *explore similar project objectives worldwide to find
-> solutions of our cases.* Eight research waves produced the evidence. This
+> solutions of our cases.* Nineteen research waves produced the evidence. This
 > document is the **integration** — for each of our cases, **the one solution we
 > adopt**, the **concrete mechanism** (copyable, not just "some project does
 > this"), the **source**, and the **Rust type it lands in** on
@@ -383,6 +383,57 @@ critic.rs root gains per_reoccurrence_recall (GroundShot) + ggregate_root
 state. **The critic emits structured signals that refine one unit on the SAME
 base (CineCrew) — no global mutation** (confirms C2/C4/C6 at scale).
 
+## C-HOST — hosting an out-of-scope sub-system behind a versioned contract in a small desktop app (Wave-19)
+**You asked (p.2/p.3):** *"I'd like to have a solid independent harness
+feature for it [the local-learning critic] but it seems out of scope for
+this tiny repo. Give me ideas with an introduction."* That is a **distinct
+worldwide objective** — how do small desktop apps ship a heavy,
+out-of-scope sub-system without bloating the core? Four named precedents,
+each a concrete mechanism we can copy:
+
+1. **Out-of-tree plugin, host never recompiles (OpenCADStudio, a Rust
+   desktop app):** a plugin is *its own repo + crate*; authors target the
+   **semver-versioned `ocs_plugin_api` crate** (the stable contract), never
+   host internals; *one package, one entry point* (manifest + UI +
+   commands ship together, no edits to the host). → Our learned-critic is
+   **its own crate** exposing a versioned critic-api; `video_flow` compiles
+   against the api, not the impl. The `bundled-ffmpeg` feature is the in-repo
+   precedent for "off by default."
+2. **Heavy nodes in ISOLATED PERSISTENT SUBPROCESS WORKERS (ComfyUI /
+   comfy-forge):** *one permanent worker per environment*, **spawned lazily
+   on first use, resident until shutdown, RESTARTED on crash**; ADR-0011
+   "isolation before sandboxing" = dependency isolation now, sandboxing
+   explicitly deferred. Snyk Labs shows why (a loaded node runs with the
+   user's full rights). → The critic runtime is a **lazy-spawned,
+   crash-restarted worker process**, dependency-isolated; sandboxing
+   deferred (matches "feature-gated, not shipped by default").
+3. **Bundled SIDECAR BINARY behind a feature flag (Tauri v2):** a sidecar is
+   an external executable bundled into the app; Rust spawns it as a child,
+   talks over stdio; it must match the target platform (per-target-triple
+   binaries); `cfg(desktop)` gates it so mobile falls back. → Ship the
+   critic / heavy add-on as an **out-of-the-core sidecar binary**, gated
+   behind a desktop feature, spawned on demand.
+4. **Heavy weights live BESIDE the code-signed bundle (the shipping norm):**
+   "the first decision is whether the weights live inside the signed bundle or
+   beside it — the answer is almost always *beside*" (Multigrid); Rapid-MLX
+   ships vision/image/video base + audio as **opt-in extras**; OmniVoice
+   Studio = small Tauri installer, weights/consent/first-run all inside the
+   UI. → Our "tiny build spec" ships a **SMALL core**; the heavy add-on +
+   weights are **downloaded / on-demand**, keeping the installer tiny.
+
+**Lands in Rust (the seam we already half-have):** the `ModelResolver` in
+`learn.rs` + the `learned-critic` feature (mirror of `bundled-ffmpeg`) is
+this contract. The concrete shape: `critic_api` crate (semver) + a
+`CriticBackend` trait with two impls — `StubCritic` (in-repo, default, the
+deterministic floor) and `SubprocessCritic` / `SidecarCritic` (out-of-tree,
+feature-gated, lazy-spawned + crash-restarted, crash-restart, dependency
+isolated; weights beside the bundle). The repo stays weight-free + tiny;
+the heavy half is an optional add-on behind a versioned contract.
+
+**Status: Solved** — the "ideas with introduction" you asked for are now
+4 named worldwide precedents, each mapped to a Rust idiom this repo
+already mirrors.
+
 ---
 
 # THE REPO-SHAPE BLUEPRINT (wave-11 synthesis — what we actually ship here)
@@ -562,7 +613,7 @@ Goal restatement: *find worldwide solutions of OUR cases.* This matrix maps
 copyable mechanism → repo home → status). It is the completeness proof: a
 requirement row is only green when it has a *named worldwide source*, a
 *concrete mechanism*, and a *repo home*. Sources are cited by wave; full
-evidence in the ledger (84 entries).
+evidence in the ledger (~120 entries through Wave 19).
 
 ## A. Your stated requirements → coverage
 
@@ -603,6 +654,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | C7 careful tests + versioning | promptfoo / Ragas / DeepEval / frozen goldens / insta·proptest·bolero + **MAViS 2508.08487 3E per-stage gate (Wave-15)** | Solved |
 | C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + **EvoState 2606.16184 (Wave-18: re-anchor to realized output via state-observation-update-propagation)** + continuity_in/out/avoid + **Hollywood Town 2510.22431 DAG→DCG limited-retry refine (Wave-15)** | Solved |
 | C9 novel-scale spine | CineCrew / EvoState 2606.16184 (Wave-18 CONFIRMED, was name-only) · OneStory · Memento 2606.14667 · PermaVid 2606.16449 (Wave-18) · REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |
+| **C-HOST (Wave-19: hosting an out-of-scope sub-system behind a versioned contract in a small desktop app)** | **OpenCADStudio out-of-tree Rust plugin (own crate + semver api + host-never-recompiles) + ComfyUI/comfy-forge persistent isolated subprocess worker (lazy spawn + crash-restart + dependency isolation, sandbox deferred) + Tauri bundled sidecar behind cfg(desktop) + the "weights-beside-bundle / opt-in-extras / small-installer" shipping norm** | Solved (deferred-by-design seam; worldwide precedents found) |
 
 ## C. Honest status — what is SOLVED vs deliberately NOT in this repo
 **Solved (a worldwide solution + mechanism + repo home, fully specified):** R1–R13 and C0–C9. This is the grind goal: *every* case you named now has a found solution.
@@ -614,19 +666,30 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 **Open BY DESIGN (you explicitly kept it open):**
 - **R4 the LLM expand prompt** — *"I have it in mind, keep it open."* The harness defines the LayeredExpander contract + the Novel shape the prompt must produce; the prompt text is yours to supply later. It is a **versioned registry artifact** (C7), not a gap.
 
-## D. Final "fully done" verdict
-- **Every one of your 13 stated requirements (R1–R13) maps to a named, cited
+## D. Final "fully done" verdict (updated through Wave 19)
+- **Every one of your 13 stated requirements (R1-R13) maps to a named, cited
   worldwide solution + a copyable mechanism + a concrete repo home.**
-- **All 12 case-areas (C0..C9, C1-A, C2-B) are covered at three depths**
-  (analogous project → mechanism → Rust idiom) across 11 waves / 84 evidence
-  entries, at BOTH the shot scale and the novel scale.
+  This now includes the **out-of-scope "independent harness feature"
+  sub-conditions (p.2/p.3)**, grounded on the **C-HOST** worldwide
+  precedents (OpenCADStudio out-of-tree plugin / ComfyUI isolated
+  subprocess worker / Tauri bundled sidecar / weights-beside-bundle).
+- **All case-areas (C0, C1, C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L,
+  C5, C6, C7, C8, C9, C-HOST) are covered at three depths**
+  (analogous project, copyable mechanism, Rust idiom) across 19 waves and
+  ~120 ledger entries, at BOTH the shot scale and the novel scale.
+- **28 distinct arXiv claims CONFIRMED on arxiv.org + 1 published
+  non-arXiv primary (MSML, ACM DocEng 2009)** form the load-bearing core.
 - **The only items "not in the repo" are the ones you deliberately scoped out**
-  (trained weights, the trainer) and the one you deliberately kept open (the
-  LLM prompt). None are unresolved gaps; each has a named seam + a home.
-- **The exploration is complete.** Waves 1–11 + the repo correction + this
-  traceability matrix exhaust the search space: a 12th wave would re-cover the
-  same ten source families. The remaining work is **building the blueprint**
-  (the case → Rust idiom table above), not further exploration.
+  (trained weights + the trainer = **C-HOST**: an out-of-tree add-on behind
+  a versioned contract, not an in-repo gap) and the one you deliberately
+  kept open (the LLM prompt). None are unresolved gaps; each has a named
+  seam + home + worldwide precedent.
+- **The exploration is COMPLETE at three levels:** the user-named
+  sub-cases (Waves 1-17), the deliberately-flagged directional sub-cases
+  (Wave 18), and the out-of-scope hosting question (Wave 19). Every
+  sub-case now has a primary or a named worldwide precedent. A Wave-20
+  would re-cover existing families; the remaining work is **building the
+  blueprint** (the case-to-Rust-idiom table above), not exploration.
 
 **Recommended build order (implementation, when you say go):**
 1. critic.rs two-scale FIRM-Video ScoreTree + DefaultCritic (Ragas/TICK)
@@ -638,6 +701,11 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 5. signals.rs lineage-pair + model.rs manifest + learned-critic feature
    (C4/C6, mirroring undled-ffmpeg).
 6. low-eval golden harness + prompt-registry versioning (C7).
+7. C-HOST critic_api crate + SubprocessCritic/SidecarCritic backends
+   (out-of-tree, lazy-spawn + crash-restart + dependency isolation;
+   weights beside the bundle) — the "independent harness feature" you
+   asked for (p.2/p.3), behind a versioned contract mirroring the
+   in-repo bundled-ffmpeg precedent.
 
 ---
 
