@@ -657,18 +657,21 @@ The last gap: is this actually *buildable in a tiny local Tauri repo*? Yes — a
 there are named desktop precedents, including a Tauri "harness" that already does
 our model.
 
-## Direct Tauri precedent: dsh-desktop "harness" = our session-space model
-dsh-desktop (tsdaer, a Tauri-shell *harness*) implements **exactly** our
-session-as-domain design:
+## Directional desktop precedent: dsh-desktop (a Tauri wrapper) ≈ our session-space model
+dsh-desktop (tsdaer et al., multiple forks; a third-party Tauri *wrapper* around
+**DeepSeek Harness**) contains a README passage describing our session-as-domain
+design:
 > "State is always computed, **never logged**. The log holds **events only**;
 > the unit's state lives in a per-session **watermark cache** {state,
 > observedSeq} and a persisted **PROJECTION cache** on the domain-KV seam:
 > rows of (sessionId, key, ver, seq, val)."
 
-That is the CQRS/event-sourcing pattern from wave 5 **shipped inside a Tauri
-app** — the concrete, repo-shippable shape of our session flow layers +
-destructive regen. It proves the pattern is not cloud-only (Temporal); it runs in
-a local desktop shell.
+**Wave-13 correction:** this is a **proposed-architecture NOTE in a fork's
+README**, not a shipped harness. The name "dsh-desktop" is overloaded across
+forks; the event-log+projection-cache passage is a *design note*, not running
+code. It remains a **directional desktop precedent** — it shows the CQRS/
+event-sourcing pattern is expressible in a local desktop shell (not cloud-only),
+but it does **not** prove the pattern is already *shipped* there.
 
 ## "Source-of-truth inversion" names our structured-SoT / derived-pipes split
 PointSav: *"exactly one layer is declared canonical; every other layer is either
@@ -700,7 +703,7 @@ structured layer, never the (rebuildable) pipes.**
 
 | Case | Wave-6 refinement |
 |---|---|
-| C3 | the session model is **shippable in Tauri** (dsh-desktop event-log + projection cache); **source-of-truth inversion** makes structured.vN canonical, pipes a derived view |
+| C3 | the session model is **shippable in Tauri** (dsh-desktop event-log + projection cache, *directional desktop precedent*); **source-of-truth inversion** makes structured.vN canonical, pipes a derived view |
 | C3 | "destructive regen" = **version N+1 created, N never mutated** (Epicenter/Kohaku) + a **destructive-confirm** UX gate (luthier); back up the source, not the derived pipes (polaris) |
 | C5 | the harness = a **non-destructive document editor** over the structured layer (Figma/Blender norm); derived pipes re-derive from it |
 | C4 | the on-device trainer's *hosting* pattern is a desktop domain-KV / projection cache (dsh-desktop), not a server |
@@ -712,7 +715,7 @@ structured layer, never the (rebuildable) pipes.**
 | **C0 core goal** (faithfulness-to-intent) | coverage-aware faithfulness oracle (precision+recall vs intent-as-complete-oracle); per-dimension; faithfulness≠factuality; intent-hallucination = omission | 4 |
 | **C1** text→structured→generation layers | ViMax two-stage; JSON blueprints; ComfyTV shot list; LPA 7 layers; MAVIN/STAGE structural storyboard; novel-to-storyboard 3-call + asset_ids | 1,3 |
 | **C2** learned per-element fidelity, descending | DeCE / FIRM-Video checklist / VideoReward weights / Diffusion-DRF frozen-VLM / HuDA deterministic floor; **two-scale tree** (B-Roll per-unit + aggregate-aware root) | 2,4 |
-| **C3** session-space layers + destructive regen | Three Planes / SPACE / DSH-V3 seq-remap / **Luma·Boords·Genvid per-unit** / **event-sourcing+CQRS (Temporal)** / **dsh-desktop Tauri projection** / **source-of-truth inversion** / luthier·Kohaku·Epicenter regen-from-SoT | 1,2,5,6 |
+| **C3** session-space layers + destructive regen | Three Planes / SPACE / DSH-V3 seq-remap / **Luma·Boords·Genvid per-unit** / **event-sourcing+CQRS (Temporal)** / **dsh-desktop Tauri projection (directional desktop precedent — a Tauri wrapper of DeepSeek Harness; event-log+projection is a proposed-architecture note, not a shipped harness)** / **source-of-truth inversion** / luthier·Kohaku·Epicenter regen-from-SoT | 1,2,5,6 |
 | **C4** signal-based continuous learning | AlignXplore / MiCRo / SelectRM / **ReelBrain temp·durable** / **tianpan lineage-pair** / **CHIEF user-simulation** / **Kuaishou implicit watch-skip-edit** / **ASLS L2-anchored additive head** / termux-train on-device | 1,2,4,5 |
 | **C5** isolated steps / bounded context | context-rot / Three Planes / **AgentPatterns bounded step** / **DDD ACL view** / **novel-to-storyboard save-intermediates** / **ComfyUI topological node + input-fingerprint cache** | 1,3,5 |
 | **C6** tiny build spec (local weights / additive heads) | LoRA / tinker / **ONNX MultiLoRA + Rust onnxruntime bindings** (intel/microsoft onnxruntime rust; `onnxer` is the Go equivalent) / **ONNX model_package manifest** / ModelSharp | 1,2,5 |
@@ -1131,6 +1134,9 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | 2410.03608 TICK | CONFIRMED | LLM-generated YES/NO checklists, 46.4→52.2% agreement; STICK +7.8% = our required-element derivation. |
 | 2407.16655 MovieDreamer | CONFIRMED | AR global-narrative + diffusion ID-preserving shot rendering = our two-tier hierarchy. |
 | 2309.15217 Ragas | CONFIRMED | reference-free faithfulness = decompose into claims + verify each vs context, no ground truth = our deterministic floor algorithm. |
+| 2501.13918 VideoReward | CONFIRMED | **"Improving Video Generation with Human Feedback"** (MMLab CUHK + Tsinghua + Kuaishou/Kling + SJTU). 182k VQ/MQ/TA triplets, Bradley-Terry with ties. **SEPARATE from VisionReward (2412.21059).** = our per-element reward-signal source. |
+| 2605.06036 SelectiveRM | CONFIRMED | **"SelectiveRM"** (correct spelling, NOT "SelectRM"). Selective reward modelling = our C4 signal-gating + anti-forgetting evidence. |
+| 2505.18071 AlignXplore | CONFIRMED | **AlignXplore** (base) + **AlignXplore+ 2601.04963** = our C4 continuous-alignment + exploration evidence. |
 
 ## SNIPPET-ONLY / NEEDS-PRIMARY — verify before it becomes a dependency
 (Updated after the targeted verification pass.)
@@ -1148,10 +1154,17 @@ ledger is marked SNIPPET-ONLY unless listed here.
   bindings are `intel/onnxruntime` (rust/), `microsoft/onnxruntime` (rust/),
   `ONNX_Rustime`. *Corrected the blueprint's "Rust onnxer" claim.*
 - **STILL SNIPPET-ONLY (verify before relying on exact wording):**
-  `VideoReward`, `SelectRM` (mirror-sourced; directionally consistent),
-  `dsh-desktop` / `dsh-session-kit` (README snippet; strong but unverified
-  against source), `AlignXplore` / `MiCRo` / `Kuaishou` implicit-feedback
-  (blog/mirror). None are load-bearing for the confirmed core (C0/C1/C2/C8).
+  `MiCRo` / `Kuaishou` implicit-feedback (blog/mirror). None are load-bearing
+  for the confirmed core (C0/C1/C2/C8).
+- **Wave-13 promoted to CONFIRMED (real arXiv IDs, read on arxiv.org):**
+  `VideoReward` = **2501.13918**, `SelectiveRM` = **2605.06036** (correct
+  spelling; the ledger's "SelectRM" was a typo), `AlignXplore` = **2505.18071**
+  (+ AlignXplore+ **2601.04963**).
+- **Wave-13 downgraded:** `dsh-desktop` / `dsh-session-kit` demoted from
+  "shipped Tauri proof" to a **directional desktop precedent** — a third-party
+  Tauri wrapper of DeepSeek Harness whose event-log+projection-cache is a
+  **proposed-architecture note** (overloaded name across forks), not a shipped
+  system.
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**

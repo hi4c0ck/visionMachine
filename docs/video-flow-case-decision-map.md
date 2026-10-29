@@ -102,10 +102,13 @@ demand**; working buffers are **session-ephemeral**. Regeneration is
 preserved.
 
 **Concrete mechanism:**
-- **dsh-desktop** (a Tauri *harness*) already does this: an **event log holds
-  events only; state is a per-session watermark + a persisted projection cache
-  `(sessionId, key, ver, seq, val)`** — event-sourcing/CQRS **shipped in a
-  local desktop shell** (proves it's not cloud-only).
+- **dsh-desktop** (a Tauri *wrapper* of DeepSeek Harness; **Wave-13: directional
+  desktop precedent — its event-log + projection-cache passage is a
+  proposed-architecture note, not a shipped system**) describes our model: an
+  **event log holds events only; state is a per-session watermark + a persisted
+  projection cache `(sessionId, key, ver, seq, val)`** — event-sourcing/CQRS
+  **expressible in a local desktop shell** (proves it's not cloud-only; the
+  pattern itself is *ours to ship*).
 - **Epicenter/Kohaku/luthier**: "rebuild creates version N+1, **never mutates
   N**"; a **destructive-confirm** gate; `.vN` files + **non-destructive
   migration**; "opening never falls back."
@@ -304,7 +307,7 @@ continuity_in/out + void; a eanchor() step at each boundary.
 | **C1-A (new)** | **the structured layer = a VERSIONED typed video-DSL, compile-to-prose at render; INTENT layer (BSD) separate from CONTENT layer** | **video-notation-schema / Seedance v3 / BSD / SKEL** | plan.rs schema + compile_to_platform_prose |
 | **C2-B (new)** | **transition params = a FROZEN 7-layer style-contract, embedding-checked, versioned** | **on-style-without-drift playbook + 7-layer framework** | CriticParams/StepParams + rozen_style_contract |
 | C2 fidelity | two-scale FIRM-Video tree, rubric-locked, user-weighted; floor now, ceiling deferred | RubricArmor gate + Ragas NLI | ScoreNode/CriticParams |
-| C3 session | source-of-truth inversion; per-unit regen never mutates N | dsh-desktop Tauri event-log + projection | decomposed layer files |
+| C3 session | source-of-truth inversion; per-unit regen never mutates N | dsh-desktop Tauri event-log + projection (*directional desktop precedent; Wave-13: a Tauri wrapper of DeepSeek Harness, event-log is a proposed-architecture note*) | decomposed layer files |
 | C4 learning | lineage-pair + temp/durable signals → additive-head on-device | tianpan + ReelBrain + DITTO → DPO/KTO | SignalRecord |
 | C5 isolation | versioned context envelope + typed ACL views + cached nodes | novel-to-storyboard + AgentPatterns + DDD | ContextEnvelope |
 | **C8 (new)** | **PREVENTIVE drift control: re-anchor to original intent PER STEP + continuity_in/out/avoid** | **goal probe / 2505.02709 / 2609.32520 + prompt-storyboard-studio Shot** | StepResult.drift + eanchor() step |
@@ -405,7 +408,7 @@ weight-free). To ship the full design it becomes the low-core crate:
 | C1-A video-DSL | versioned typed DSL (SKEL) + intent/content split (BSD) + compile-to-prose | flow-core/plan + flow-plan | serde_valid (JSON-Schema at type level) |
 | C2 fidelity | two-scale FIRM-Video tree + rubric-bundle locking + user weights | flow-core/critic | RubricArmor gate; deterministic floor; feature-gated learned ceiling |
 | C2-B transition | frozen 7-layer style-contract + embedding consistency check | flow-core/config | a versioned rozen_style_contract field |
-| C3 session | source-of-truth inversion; per-unit regen never mutates N | flow-core/regen + flow-runtime | serde-evolve versioned files + dsh-desktop event-log/projection |
+| C3 session | source-of-truth inversion; per-unit regen never mutates N | flow-core/regen + flow-runtime | serde-evolve versioned files + dsh-desktop event-log/projection (*directional precedent only*) |
 | C4 learning | lineage-pair + temp/durable signals -> additive head | flow-core/signals + critic-runtime | DPO/KTO pairs; libloading cdylib (zentract) |
 | C5 isolation | bounded context envelope + typed ACL views + cached nodes | 3-crate boundary | flow-core/plan/runtime split (oracle.omen); insta+proptest per step |
 | C6 build spec | ModelPackageManifest (GGUF base + LoRA sidecars + sha256) | flow-core/model + critic-runtime | ONNX MultiLoRA / llama.cpp / cera; feature-gated |
@@ -540,7 +543,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | R7 | "each step has numerous parameters for a better transition" | C2-B | on-style-without-drift style-contract; 7-layer knobs; VideoReward per-dim weights (waves 9/7) | **frozen, versioned 7-layer param bundle** + embedding consistency check; per-dim critic weights | config.rs rozen_style_contract + CriticParams.dimensions | **Solved** |
 | R8 | "use a learning system … local built-in model, trained manually by signals, continuously on the user's machine" | C4+C6 | ReelBrain temp/durable; Kuaishou implicit signals; DPO/KTO; ASLS L2-anchor; KTO/federated-edge; llama.cpp GGUF-LoRA + Rust cera (waves 4/5/7) | **lineage-pair** SignalRecord → (separate) trainer retrains **one additive LoRA head** (hold base) | signals.rs + model.rs manifest; runtime deferred (feature-gated) | **Solved** (capture+contract in-repo; trainer/weights deferred by design — see R13) |
 | R9 | "first mission: NOT touch pipes current structure (only crucial insights); harness lives in session space; final step regENerate pipes, not fallback" | C3 | Three Session-State Planes; SPACE; DSH-V3 seq-remap; Luma/Boords/Genvid per-unit; Epicenter/Kohaku never-mutate-N; **dsh-desktop Tauri event-log+projection** (waves 1/2/5/6) | **source-of-truth inversion**: structured.vN = SoT, pipes = derived; per-unit destructive regen + pproved/egen_state; event-sourced replay | decomposed session layer files + RegenerationContract (per-unit) | **Solved** |
-| R10 | "session as domain; all harness data should have its structures by demand" | C3 | dsh-desktop session-projection/command-log; Kohaku .vN files; BD WorkflowVersionCache (wave 6) | versioned, addressable layer files + manifest; materialize *one* layer on demand | session/flow/{intent,novel,structured,fidelity}.vN.json + manifest.json | **Solved** |
+| R10 | "session as domain; all harness data should have its structures by demand" | C3 | dsh-desktop session-projection/command-log (*Wave-13: directional Tauri-wrapper precedent; event-log+projection is a proposed-architecture note, not shipped*); Kohaku .vN files; BD WorkflowVersionCache (wave 6) | versioned, addressable layer files + manifest; materialize *one* layer on demand | session/flow/{intent,novel,structured,fidelity}.vN.json + manifest.json | **Solved** |
 | R11 | "keep all inside structured to be viable to generation into elements" | C1/C3 | storyboard2video "computed not guessed"; SKEL validation; Seedance storage→compile (waves 7/9) | the structured layer is the ONLY SoT; lowering reads *only* it; FlowElement is generation-ready + provenance-tracked | egen.rs::lower_to_elements(plan) | **Solved** |
 | R12 | "you not code, you prepare infrastructure … with careful text outputs tests and versioning covering" | C7 | promptfoo/Ragas/DeepEval; frozen goldens; N-sample aggregate; INCONCLUSIVE-blocks; prompt-registry versioning; **insta/proptest/bolero** (Rust) (wave 8 + 11) | 4-layer eval harness (golden + deterministic + judge + CI gate) as additive dev-deps; prompt version joins the version triple; INCONCLUSIVE-blocks | low-eval (dev-deps: insta/proptest/bolero + golden/) | **Solved** |
 | R13 | "measure per unit/element descending based on overall score (overall = final result of the transition, but controllable)" | C2 | DeCE/FIRM-Video checklist; **Memory-Guided B-Roll two-scale loop**; RubricArmor anti-hack; Ragas claim+NLI floor; HuDA off-the-shelf floor (waves 2/7) | **two-scale ScoreTree**: per-unit leaves + aggregate-aware root; overall = F2(coverage,support)⊗weighted-mean(dims)⊕aggregate; deterministic HuDA/Ragas floor | critic.rs ScoreNode{checks[]} + root ggregate_failures[] | **Solved** |
@@ -553,7 +556,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | C1-A video-DSL layer | video-notation / Seedance v3 / BSD / SKEL | Solved |
 | C2 per-element fidelity | FIRM-Video + DeCE + B-Roll two-scale + RubricArmor | Solved |
 | C2-B transition params | frozen style-contract + 7-layer knobs + per-dim weights | Solved |
-| C3 session + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / dsh-desktop / Epicenter·Kohaku | Solved |
+| C3 session + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / dsh-desktop *(directional)* / Epicenter·Kohaku | Solved |
 | C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou / DITTO / CHIEF | Solved (capture; trainer deferred) |
 | C5 isolation / bounded context | context-rot / Three Planes / AgentPatterns / DDD ACL / ComfyUI cached nodes | Solved |
 | C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package | Solved (manifest; runtime deferred) |
@@ -701,5 +704,13 @@ mirror snippets they originally came through). 3 corrections:
   scale items (12/12 load-bearing arXiv claims verified on arxiv.org).
 - **SNIPPET-ONLY (verify before it becomes a dependency):** PromptVault,
   novel-to-storyboard exact field names, FIRM-Video wording, the onnxer
-  crate, dsh-desktop, AlignXplore/MiCRo/Kuaishou/termux-train. None are
-  load-bearing for the core; each is a refinement to check before adopting.
+  crate, dsh-desktop (*Wave-13 downgrade: Tauri wrapper of DeepSeek Harness;
+  event-log+projection-cache is a proposed-architecture note, name overloaded
+  across forks*), MiCRo/Kuaishou/termux-train.
+- **Wave-13 promoted to CONFIRMED (real arXiv IDs read on arxiv.org):**
+  **VideoReward = 2501.13918** ("Improving Video Generation with Human
+  Feedback"; 182k triplets; SEPARATE from VisionReward 2412.21059),
+  **SelectiveRM = 2605.06036** (the ledger's "SelectRM" was a spelling error),
+  **AlignXplore = 2505.18071** (+ AlignXplore+ **2601.04963**).
+  The remaining SNIPPET-ONLY items are MiCRo/Kuaishou/termux-train; none are
+  load-bearing for the core.
