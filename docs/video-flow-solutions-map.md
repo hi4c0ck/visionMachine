@@ -569,3 +569,80 @@ with a **deterministic floor** + an **additive-head build spec** + a **lineage
 signal log**, all as *contracts* the repo owns, with the *weights/trainer* deferred
 to a separate project. That is precisely "a solid, *independent* harness feature
 that a tiny repo can ship, with the heavy ML sitting behind a seam."
+
+---
+
+# Wave 5 — the harness-architecture backbone (the non-video side that is load-bearing)
+
+The first four waves covered the *video/ML* side. This wave closes the
+**harness-architecture** side — the thing that makes it a *solid, independent*
+harness rather than just "a pipeline of prompts."
+
+## C3 + C5 — "session as domain, versioned, replayable" has a named mechanism
+
+- **Temporal / durable execution + event sourcing**: the **event history is the
+  source of truth** (not the code); **deterministic replay** re-runs from the
+  start but does **NOT re-invoke external calls** (their results are journaled);
+  "same events in → same commands out"; **exactly-once** side effects; a
+  **Replay test** checks the current code still lines up with older event
+  histories. → This is *exactly* our "the version triple makes a destructive
+  regeneration replayable + auditable" requirement: **the flow event log is the
+  SoT; the version triple pins determinism; regen re-derives from the log
+  without re-running side effects.**
+- **Event Sourcing + CQRS**: keep the **full immutable history** (an audit log,
+  replayable), separate **write (Command)** from **read (Query/SoT)**. → Our
+  layer files + low_signals.jsonl are a CQRS *write model*; "regenerate pipes"
+  is a **Command that replays from the structured layer (the SoT)** — it never
+  mutates the layers in place. That's the clean reading of our "regenerate, not
+  fallback."
+
+## C5 + C3 — ComfyUI is an *in-box* harness precedent (each step a node)
+
+- **ComfyUI's node-graph executor** (comfy_execution/graph.py, PR #2666
+  "Execution Model Inversion"): execution is a **topological sort** (not a
+  recursive call), so the graph can be *modified during a run*; node outputs are
+  **cached by an input-signature fingerprint**, so re-submitting the graph re-runs
+  **only the invalidated ("dirty") nodes**; "Force Rerun" invalidates everything
+  downstream of a trigger. → **Directly our C5 (each step = an isolated node) +
+  C3 per-unit regen (re-run only the failed node; keep the approved ones cached).**
+  A "dirty node" is precisely a "low ScoreTree leaf ⇒ regenerate that unit."
+- **Content-aware versioning**: a ComfyUI workflow has **two JSON shapes** — the
+  *editor* graph (positions/widgets, human editing) and the .api.json
+  (the execution payload); and **Git "won't work"** for versioning it (a node move
+  churns the JSON; a seed change looks trivially small). BD WorkflowVersionCache
+  *hashes* the JSON and snapshots on change. → Precedent for our "session layer
+  files + manifest": **keep the machine IR separate from the human view, and
+  version by content/semantics, not raw diff.**
+
+## C4 — "trained continuously on the user's machine" is a real, concrete field
+
+- **ASLS on-device personalization**: loss from user **feedback as pseudo-labels**,
+  with an **L2 stability term that anchors the personalized params to the base
+  model** — that *is* our **additive head** (train the head, *hold the base* =
+  anti-forgetting), and it runs on-device.
+- **KTO-based federated/personal-KG** + **Energy-Efficient Federated Continual on
+  Edge**: *lightweight on-device fine-tune from real interactions*; train only
+  *part* of the model; data-free parameter selection to retain old knowledge.
+- **Kuaishou "Implicit Negative Feedback"** (arXiv 2308.13249, deployed): an
+  industrial short-video recommender that **categorizes raw watch-time / skip into
+  signals** and learns from *implicit negatives* (+0.16% play-duration). → A
+  **concrete shape for our SignalRecord (implicit watch/skip/edit)** that feeds
+  the on-device trainer.
+
+## What this wave changes in our design (add to the C-table)
+
+| Case | Wave-5 refinement |
+|---|---|
+| C3+C5 | the flow is **event-sourced + deterministic-replay**: the **event log is the SoT**, the version triple pins determinism, regen is a **Command that replays from the structured SoT** (CQRS), not a mutation |
+| C5 | **each step = a topological node, cached by input-fingerprint** (ComfyUI): a "dirty"/failed node re-runs *only that* unit; approved nodes stay cached = per-unit regen as *invalidation* |
+| C3 | **content-aware versioning**: machine IR (.api.json) vs human view (editor), snapshot on hash-change — not raw Git diff |
+| C4 | the on-device trainer is *grounded*: **ASLS L2-anchored additive head** (train the head, hold the base) + **implicit watch/skip/edit signals** (Kuaishou) + **KTO/federated-continual** for the "on the user's machine" path |
+
+**Net for the backbone:** an "independent harness" is, concretely, a
+**versioned, event-sourced, topological node-graph** (ComfyUI-style) whose
+**structured layer is the deterministic SoT** (CQRS) and whose **per-unit
+regeneration is a cache invalidation** of a failed node — with a **content-hashed
+manifest** instead of raw Git diffs. That's the scaffolding the *video/ML*
+findings (C0–C2, C4, C6) plug into. It is all *deterministic and repo-owned*;
+only the critic's leaves and the additive-head weights cross the seam into the
+deferred ML project.
