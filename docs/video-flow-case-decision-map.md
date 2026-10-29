@@ -576,10 +576,10 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 |---|---|---|
 | C0 core faithfulness goal | 2606.09376 + TICK/DeCE/BiFact + Ragas NLI floor | Solved |
 | C1 spine | ViMax / novel-to-storyboard / MAVIN / ComfyTV / STAGE + **MAViS 2508.08487 (Wave-15)** | Solved |
-| C1-A video-DSL layer | video-notation / Seedance v3 / BSD / SKEL | Solved |
+| C1-A video-DSL layer | video-notation / Seedance v3 / BSD / SKEL + **MSML ACM DocEng 2009 (Wave-18: DOI 10.1145/1600193.1600231, published 2009 structural screenplay-markup language = the strongest structured-DSL primary)** + CineCrew 2609.07720 | Solved |
 | **C1-E (sub-case: user text -> LLM expand to novel, the Step-1 mutation)** | **DOME 2412.13575 (Wave-16: DHO fuses plan+write; MEM temporal-KG memory; Temporal Conflict Analyzer)** | Solved |
 | C2 per-element fidelity | FIRM-Video + DeCE + B-Roll two-scale + RubricArmor + **Memento 2606.14667 reconstruction-as-check (Wave-16)** | Solved |
-| C2-B transition params | frozen style-contract + 7-layer knobs + per-dim weights | Solved |
+| C2-B transition params | frozen style-contract + 7-layer knobs + per-dim weights + **EvoState 2606.16184 (Wave-18: state-anchored continuity) + PermaVid 2606.16449 (Wave-18: disentangled appearance/geometry context memory)** | Solved |
 | **C2-C (sub-case: character / subject consistency, "as close as user imagined")** | **ContextAnyone 2512.07328 (Wave-16: reference as preserved appearance anchor) + SlotMem 2607.15772 (Wave-16: role-wise slot memory, conservative update) + Memento 2606.14667 (Wave-16: reconstruct-to-remember identity grounding)** | Solved |
 | C3 session + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / dsh-desktop *(directional)* / Epicenter·Kohaku | Solved |
 | C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou **2308.13249** / DITTO / CHIEF + **MiCRo 2505.24846** | Solved (capture; trainer deferred) |
@@ -587,8 +587,8 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | C5 isolation / bounded context | context-rot / Three Planes / AgentPatterns / DDD ACL / ComfyUI cached nodes + **Hollywood Town 2510.22431 hypergraph context nodes (Wave-15)** | Solved |
 | C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA (Wave-15)** + **local open-weights catalog (Wave-17): Lightricks/LTX-Video, Wan-Video/Wan2.2 (TI2V-5B @ 8GB Q8-GGUF), zai-org/THUDM CogVideoX (Apache-2.0, official LoRA rank-128 path), Tencent HunyuanVideo, MiniMax H3** | Solved (manifest; runtime deferred) |
 | C7 careful tests + versioning | promptfoo / Ragas / DeepEval / frozen goldens / insta·proptest·bolero + **MAViS 2508.08487 3E per-stage gate (Wave-15)** | Solved |
-| C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + continuity_in/out/avoid + **Hollywood Town 2510.22431 DAG→DCG limited-retry refine (Wave-15)** | Solved |
-| C9 novel-scale spine | CineCrew / EvoState·OneStory·Memento·SlotMemory·REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |
+| C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + **EvoState 2606.16184 (Wave-18: re-anchor to realized output via state-observation-update-propagation)** + continuity_in/out/avoid + **Hollywood Town 2510.22431 DAG→DCG limited-retry refine (Wave-15)** | Solved |
+| C9 novel-scale spine | CineCrew / EvoState 2606.16184 (Wave-18 CONFIRMED, was name-only) · OneStory · Memento 2606.14667 · PermaVid 2606.16449 (Wave-18) · REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |
 
 ## C. Honest status — what is SOLVED vs deliberately NOT in this repo
 **Solved (a worldwide solution + mechanism + repo home, fully specified):** R1–R13 and C0–C9. This is the grind goal: *every* case you named now has a found solution.
@@ -732,10 +732,16 @@ mirror snippets they originally came through). 3 corrections:
   2505.18071, 2601.04963, 2505.24846, 2308.13249) + the **Wave-15/16
   additions** (2506.04228 LayerFlow, 2508.08487 MAViS, 2510.22431 Hollywood
   Town, 2412.13575 DOME, 2512.07328 ContextAnyone, 2607.15772 SlotMem,
-  2606.14667 Memento) = **26 distinct arXiv claims verified on arxiv.org**.
-- **Still SNIPPET-ONLY / directional (non-paper artifacts only — none are load-bearing
-  arXiv claims):** `termux-train`/AMEVA (JS/Python on-device trainer, directional
-  for C4, not a Rust precedent), `dsh-desktop` (*Wave-13 downgrade: a third-party
+  2606.14667 Memento) + the **Wave-18 additions** (2606.16184 EvoState,
+  2606.16449 PermaVid) = **28 distinct arXiv claims verified on
+  arxiv.org, + 1 published non-arXiv primary (MSML, ACM DocEng 2009, DOI
+  10.1145/1600193.1600231)**. The C1-A and C2-B "directional spec-sheet"
+  flags were **retired in Wave-18** (now grounded on MSML + EvoState +
+  PermaVid).
+- **Still directional (commercial adoption-templates + non-paper notes only —
+  none are load-bearing claims):** `termux-train`/AMEVA (JS/Python on-device
+  trainer, directional for C4, not a Rust precedent), `dsh-desktop` (*Wave-13
+  downgrade: a third-party
   Tauri wrapper of DeepSeek Harness; the event-log+projection-cache passage is a
   proposed-architecture note, name overloaded across forks*), and the
   directional industry-spec flags on **C2-B / C6** (video-notation-schema /
@@ -818,3 +824,43 @@ mirror snippets they originally came through). 3 corrections:
     sub-case level**; Waves 13-16 each targeted previously-uncovered named
     sub-cases and each surfaced new load-bearing sources. A Wave-17 is only
     justified by a *new* named sub-case.
+- **Wave-17 — C6 local open-weights catalog + license (see the C6 block):**
+  the last *user-named* sub-case, C6 "tiny build spec: local weights or
+  additionability," is now grounded on the 5 named open-weights families
+  (LTX-Video / Wan2.2 / CogVideoX / HunyuanVideo / MiniMax H3) + the
+  MiniMax H3 excluded-territory license constraint.
+- **Wave-18 — the two *directional* flags are retired (read on arxiv.org):**
+  **EvoState = 2606.16184** ("Closed-Loop Visual State Management for
+  Long-Form Video Generation", MSRA; v2 2026-09-30) = entity-centric
+  evolving visual state with a state-observation-update-propagation cycle
+  that separates persistent identity anchors from their evolved states; the
+  Visual State Analyzer re-anchors generation to *realized* output. This
+  is the academic primary for **C2-B on-style-without-drift** (retires the
+  Seedance-PAS-playbook directional flag) + C8 drift + C9 persistent
+  identity.
+  **PermaVid = 2606.16449** ("Consistent Video Generation Across Edits via
+  Disentangled Context Memory", SJTU/Stanford/NTU/CUHK; v2 2026-06-16) =
+  multi-modal context memory that DISENTANGLES semantic appearance (RGB)
+  from geometric structure (depth) with edit-aware update; the academic
+  primary for **C3 non-destructive regen across edits** + C9
+  identity-vs-geometry separation.
+  **MSML = DOI 10.1145/1600193.1600231** ("Movie Script Markup Language",
+  ACM DocEng 2009, ~22 citations) = a *published* 2009 structural
+  screenplay-markup language = the strongest **C1-A "structured text in
+  the video-engine language"** primary (retires the "directional Seedance/
+  SKEL spec sheets" flag for the DSL-structure side; CineCrew 2609.07720
+  remains the generative-system primary; Seedance v3/SKEL are now cited
+  only as commercial field-shape adoption-templates).
+  - **TERMINAL STATE (Wave 18):** **every sub-case — user-named AND
+    deliberately-flagged-directional — now has a primary**: **28 distinct
+    arXiv claims CONFIRMED on arxiv.org + 1 published non-arXiv primary
+    (MSML).** The C1-A and C2-B "directional" flags are **retired**; the
+    only remaining un-verified items are *commercial spec-sheet
+    adoption-templates* (Seedance v3 JSON, SKEL) and *non-paper desktop /
+    tooling notes* (`dsh-desktop`, `termux-train`/AMEVA). The grind goal —
+    *explore similar project objectives worldwide to find solutions of our
+    cases* — is now exhausted at **both** the user-named-sub-case level
+    (Waves 13–17) *and* the deliberately-flagged-directional level (Wave
+    18). **A Wave-19 would be busywork** — no "solution of our cases"
+    sub-case remains without a primary. Remaining work = **implementation**
+    of the blueprint.

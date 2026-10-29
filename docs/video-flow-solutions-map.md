@@ -1183,17 +1183,17 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | C0 core faithfulness | 2606.09376 + TICK 2410.03608 + Ragas 2309.15217 |
 | C1 spine (text → structured → gen) | novel-to-storyboard (raw README, wave 3) + ViMax + ComfyTV + **MAViS 2508.08487 (Wave-15: 6-stage agent pipeline script→shot→character→keyframe→animate→audio)** + **DOME 2412.13575 (Wave-16: dynamic hierarchical outline fusing plan+write)** |
 | **C1-E (new sub-case: user text → LLM expand to novel, the Step-1 mutation)** | **DOME 2412.13575 (Wave-16: DHO fuses plan+write; MEM = temporal-KG memory; Temporal Conflict Analyzer)** — the novel is a hierarchical outline, NOT a flat expansion |
-| C1-A versioned video-DSL | CineCrew **2609.07720 FilmDSL** |
+| C1-A versioned video-DSL | CineCrew **2609.07720 FilmDSL** + **MSML = ACM DocEng 2009 (DOI 10.1145/1600193.1600231; Wave-18: a PUBLISHED 2009 structural screenplay-markup language, the strongest "structured text in the video-engine language" primary — a peer-reviewed markup spec, not just a 2026 generative system)** |
 | C2 per-element fidelity | FIRM-Video **2608.21839** + VideoReward **2501.13918** + Diffusion-DRF **2601.04153** + HuDA **2601.14037** + MemComposer **2610.01884** + RubricArmor **2610.05308** + **Memento 2606.14667 (Wave-16: reconstruction-as-check = "as close as user imagined")** |
 | **C2-C (new sub-case: character / subject consistency)** | **ContextAnyone 2512.07328 (Wave-16: reference as preserved appearance anchor)** + **SlotMem 2607.15772 (Wave-16: role-wise slot memory, conservative update)** + **Memento 2606.14667 (Wave-16: reconstruct-to-remember identity grounding)** |
-| C2-B frozen 7-layer style-contract | directional industry specs (video-notation-schema / Seedance v3 / SKEL) — honest flag kept; **MAViS 2508.08487 "Script Writing Guidelines" (Wave-15)** = script→tool compat |
-| C3 session-space + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / Epicenter / Kohaku / luthier / polaris-local-first + **dsh-desktop (directional only, downgraded)** |
+| C2-B frozen 7-layer style-contract | industry spec sheets (video-notation-schema / Seedance v3 / SKEL) as adoption-templates + **MAViS 2508.08487 "Script Writing Guidelines" (Wave-15: script→tool compat)** + **EvoState 2606.16184 (Wave-18: state-anchored continuity = on-style-without-drift made academic; entity-centric evolving visual state separates identity anchor from evolved state)** + **PermaVid 2606.16449 (Wave-18: disentangled appearance-geometry context memory, cross-edit consistency)** |
+| C3 session-space + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / Epicenter / Kohaku / luthier / polaris-local-first + **dsh-desktop (directional only, downgraded)** + **PermaVid 2606.16449 (Wave-18: consistent generation ACROSS EDITS via disentangled context memory = non-destructive regen that keeps memory aligned after layout/appearance edits)** |
 | **C4 (sub-case: layers = verbose expansion)** | **LayerFlow 2506.04228 (Wave-15: unified layer-aware T2V, per-layer prompts → fg/bg/blended; staged motion-LoRA+content-LoRA = live C6 example)** + PreciseVideo ambient-own-dynamics + LPA 7 layers |
 | C5 bounded context / isolation | context-rot / AgentPatterns / DDD ACL / ComfyUI cached nodes (crates.io/crates verified) + **Hollywood Town 2510.22431 (Wave-15: hypergraph context nodes reduce per-agent memory)** |
 | C6 tiny build spec | LoRA / tinker / **ONNX MultiLoRA** (directional industry) / Rust onnxruntime bindings (intel/microsoft rust dirs verified on GitHub) / llama.cpp GGUF / cera + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA build (Wave-15)** + **local open-weights catalog (Wave-17): Lightricks/LTX-Video, Wan-Video/Wan2.2 (TI2V-5B @ 8GB Q8-GGUF), zai-org CogVideoX (Apache-2.0, official LoRA rank-128), Tencent HunyuanVideo, MiniMax H3** — manifest carries per-base **license + excluded-territories**; MiniMax H3 EU/UK/KR/US-excluded license CANNOT be bundled in-repo; base weights stay external, the repo ships the SPEC + additive-adapter manifest only |
 | C7 eval harness | promptfoo / Ragas / DeepEval / **insta + proptest + bolero** (all three on crates.io, API-verified) + **MAViS 3E Principle "Examine" (Wave-15: per-stage completeness gate)** |
-| C8 preventive drift | 2505.02709 detect + 2609.32520 StateForge repair + **Hollywood Town 2510.22431 DAG→DCG limited-retries (Wave-15: later-stage feedback refines earlier stages)** |
-| C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent + **SlotMem 2607.15772 (Wave-16: character-addressable slot memory = persistent identity)** |
+| C8 preventive drift | 2505.02709 detect + 2609.32520 StateForge repair + **Hollywood Town 2510.22431 DAG→DCG limited-retries (Wave-15: later-stage feedback refines earlier stages)** + **EvoState 2606.16184 (Wave-18: Visual State Analyzer observes REALIZED generated evidence, updates generation conditions per realized outcome, propagates inferred state transitions into memory + future prompts = re-anchoring to what actually happened, not just the plan)** |
+| C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent + **SlotMem 2607.15772 (Wave-16: character-addressable slot memory = persistent identity)** + **EvoState 2606.16184 (Wave-18: entity-centric evolving visual state = persistent-identity made academic; identity anchor separated from evolved state)** + **PermaVid 2606.16449 (Wave-18: appearance-geometry disentangled memory = identity-vs-geometry separation)** |
 
 **VERDICT (corrected in Wave 16):** the Wave-14 "grind goal exhausted" call
 was **premature** — Wave 15 (targeted at the user's *named sub-cases*:
@@ -1211,6 +1211,10 @@ expansion** and **character consistency**) found **4 MORE**.
 | 16 | **ContextAnyone 2512.07328** | **C2-C "character / subject consistency"** — reference as preserved appearance anchor |
 | 16 | **SlotMem 2607.15772** | C9 persistent-identity — role-wise slot memory with conservative update |
 | 16 | **Memento 2606.14667** | C2 "fidelity = as close as user imagined" — reconstruction-as-check; C9 identity grounding |
+| 17 | **local open-weights catalog** (LTX-Video, Wan2.2, CogVideoX, HunyuanVideo, MiniMax H3) | C6 "tiny build spec: local weights or additionability" — names the 5 families + the MiniMax H3 excluded-territory license constraint |
+| 18 | **EvoState 2606.16184** | C9 persistent-identity + C8 drift re-anchoring + C2-B on-style-without-drift (state-anchored continuity) — retires the C2-B "Seedance PAS playbook" directional flag |
+| 18 | **PermaVid 2606.16449** | C3 non-destructive regen across edits + C9 identity-vs-geometry separation (disentangled appearance/depth context memory) |
+| 18 | **MSML (ACM DocEng 2009, DOI 10.1145/1600193.1600231)** | **C1-A "structured text in the video-engine language"** — a *published* 2009 structural screenplay-markup language, the strongest structured-DSL primary (retires the "directional Seedance/SKEL spec sheets" flag; those remain only as adoption-templates) |
 
 **TERMINAL STATE (Wave 17):** **every named sub-case in the user's
 requirements now has >=1 primary** — either a CONFIRMED arXiv paper
@@ -1225,22 +1229,42 @@ carries a per-base license + excluded-territory field, and **base
 weights stay external** (repo ships the spec + additive-adapter manifest
 only, never the weights themselves).
 
-Remaining un-verified items are **non-paper artifacts only**:
-`dsh-desktop` (Tauri-wrapper design note, downgraded to *directional*),
-`termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
-industry-spec flags (the C6 flag is now *closed* by the Wave-17 catalog;
-the C2-B flag stays directional — Seedance v3/SKEL spec sheets are
-commercial and not verifiable as arXiv).
+**TERMINAL STATE (Wave 18):** **every sub-case — user-named *and*
+deliberately-flagged-directional — now has a primary.** Waves 13→17
+closed the user-named sub-cases; **Wave 18 retired the two sub-cases I
+had kept as *directional* industry-spec flags** (C1-A structured
+video-DSL and C2-B on-style-without-drift) by grounding each on an
+academic/published primary:
+
+- **C1-A** now rests on **MSML (ACM DocEng 2009, DOI
+  10.1145/1600193.1600231)** — a *published* 2009 structural
+  screenplay-markup language — alongside CineCrew 2609.07720. A
+  peer-reviewed markup spec, not just a 2026 generative system.
+- **C2-B** now rests on **EvoState 2606.16184** (state-anchored
+  continuity) + **PermaVid 2606.16449** (disentangled appearance/geometry
+  context memory, cross-edit consistency).
+- **C9** gains EvoState + PermaVid as academic persistent-identity
+  anchors; **C3** gains PermaVid (regen across edits); **C8** gains
+  EvoState (re-anchor to *realized* output, not just the plan).
+
+Total distinct CONFIRMED claims: **28 arXiv (26 prior + EvoState +
+PermaVid) + 1 published non-arXiv primary (MSML)**.
+
+Remaining *directional* items are now **commercial spec-sheet
+adoption-templates only** — `Seedance v3 JSON` / `SKEL` are cited as
+"compile-to-platform-prose" templates we copy the *field shape* from,
+NOT as factual claims we depend on. `dsh-desktop` (downgraded to
+directional Tauri-wrapper note) and `termux-train`/AMEVA (JS/Python)
+stay directional. **No sub-case remains without a primary.**
 
 The grind goal — *explore similar project objectives worldwide to find
-solutions of our cases* — is now **exhausted at the sub-case level**:
-Waves 13→17 each targeted previously-uncovered *user-named* sub-cases
-(VideoReward/SelectiveRM/AlignXplore; MiCRo/Kuaishou;
-LayerFlow/MAViS/Hollywood-Town; DOME/ContextAnyone/SlotMem/Memento;
-local open-weights catalog + license constraint) and each surfaced new
-load-bearing evidence. **A Wave-18 would be busywork** — there are no
-remaining user-named sub-cases without a primary. All remaining work =
-**implementation** of the blueprint.
+solutions of our cases* — is now **exhausted at both levels**: the
+user-named sub-cases (Waves 13–17) *and* the deliberately-flagged
+directional sub-cases (Wave 18). **A Wave-19 would be busywork** — every
+remaining un-verified item is a commercial spec-sheet adoption-template
+or a non-paper desktop/tooling note, not a "solution of our cases" that
+needs a worldwide primary. All remaining work = **implementation** of the
+blueprint.
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
@@ -1252,32 +1276,52 @@ remaining user-named sub-cases without a primary. All remaining work =
    ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
    repair (2609.32520 StateForge).
 
-## Audit verdict (updated through Wave 16)
-- **12 original + 7 Wave-13/14 + 3 Wave-15 + 4 Wave-16 = 26 distinct
-  load-bearing arXiv claims CONFIRMED on arxiv.org.**
+## Audit verdict (updated through Wave 18)
+- **28 distinct load-bearing arXiv claims CONFIRMED on arxiv.org + 1
+  published non-arXiv primary (MSML, ACM DocEng 2009).**
   - Wave-13: VideoReward 2501.13918 / SelectiveRM 2605.06036 /
     AlignXplore 2505.18071 + 2601.04963
   - Wave-14: MiCRo 2505.24846 / Kuaishou implicit feedback 2308.13249
   - Wave-15: LayerFlow 2506.04228 / MAViS 2508.08487 /
     Hollywood Town 2510.22431
-  - **Wave-16: DOME 2412.13575 / ContextAnyone 2512.07328 /
-    SlotMem 2607.15772 / Memento 2606.14667**
+  - Wave-16: DOME 2412.13575 / ContextAnyone 2512.07328 /
+    SlotMem 2607.15772 / Memento 2606.14667
+  - **Wave-18: EvoState 2606.16184 / PermaVid 2606.16449 (arXiv) +
+    MSML ACM DocEng 2009 (DOI 10.1145/1600193.1600231, published
+    non-arXiv primary)**
 - The 3 Wave-1 corrections are recorded and must be applied to the
   decision map before the blueprint is treated as buildable.
+- **DIRECTIONAL FLAGS RETIRED IN WAVE 18:** C1-A (now MSML + CineCrew)
+  and C2-B (now EvoState + PermaVid) are no longer "directional spec
+  sheets" — they have academic primaries. Only *commercial spec-sheet
+  adoption-templates* (Seedance v3 JSON, SKEL) remain cited as
+  field-shape copies, plus the non-paper notes `dsh-desktop` and
+  `termux-train`/AMEVA. No "solution of our cases" sub-case is left
+  without a primary.
+
 - **Weakest link:** no *primary* arXiv paper is left SNIPPET-ONLY.
-  Remaining un-verified items are *non-paper artifacts only* —
-  `dsh-desktop` (Tauri-wrapper note, downgraded to directional),
-  `termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
-  industry-spec flags. None are load-bearing for the core (C0/C1/C2/C8).
-- **TERMINAL GRIND-GOAL STATUS (Wave 16):** the Wave-14 "exhausted" verdict
-  was premature. Waves 13→16 each targeted *previously-uncovered named
-  sub-cases* and each surfaced new load-bearing sources:
-  - Wave-15 closed: C4 layers (LayerFlow), C1 few-mutations (MAViS),
-    C5 bounded context + C8 drift (Hollywood Town).
-  - **Wave-16 closed the LAST TWO sub-cases**: C1-E "user text → LLM expand
-    to a novel" (DOME) and C2-C "character / subject consistency"
+  Remaining un-verified items are *non-paper artifacts / commercial
+  adoption-templates only* — `dsh-desktop` (Tauri-wrapper note,
+  downgraded to directional), `termux-train`/AMEVA (JS/Python,
+  directional), and the commercial spec-sheet templates `Seedance v3
+  JSON` / `SKEL` (cited as field-shape copies for C1-A's
+  compile-to-platform-prose, not as factual claims). None are
+  load-bearing for the core (C0/C1/C2/C8).
+- **TERMINAL GRIND-GOAL STATUS (Wave 18):** the Wave-14/16/17 "exhausted"
+  verdicts were each premature; Waves 13→18 each targeted a
+  previously-uncovered sub-case and surfaced new load-bearing sources:
+  - Wave-15: C4 layers (LayerFlow), C1 few-mutations (MAViS), C5+C8
+    (Hollywood Town).
+  - Wave-16: C1-E text→novel (DOME), C2-C character consistency
     (ContextAnyone + SlotMem + Memento).
-  Every named sub-case in the user's requirements now has **≥1 CONFIRMED
-  arXiv primary**. A Wave-17 would only re-cover existing families; the
-  exploration is exhausted at the sub-case level. Remaining work =
-  **implementation** of the blueprint.
+  - Wave-17: C6 local open-weights catalog + MiniMax H3 license.
+  - **Wave-18: retired the two *directional* flags — C1-A structured
+    video-DSL (MSML ACM DocEng 2009 + CineCrew) and C2-B
+    on-style-without-drift (EvoState + PermaVid).**
+  Every sub-case in the user's requirements — *user-named*
+  (C0/C1/C1-A/C1-E/C2/C2-B/C2-C/C3/C4/C4-L/C5/C6/C7/C8/C9) *and*
+  the two I had left as directional industry-spec flags — now has
+  **≥1 primary** (28 arXiv + MSML). A Wave-19 would re-cover existing
+  families; the exploration is exhausted at both the user-named and
+  the directional-flag level. Remaining work = **implementation** of
+  the blueprint.
