@@ -13,6 +13,7 @@ mod provider;
 mod registry;
 mod shaper;
 mod specs;
+pub mod video_flow;
 mod types;
 
 pub use compose::{
@@ -36,6 +37,33 @@ pub use shaper::{
 };
 pub use specs::{ModelSpecLimits, ModelSpecMedia, ModelSpecWire};
 pub use types::*;
+pub use video_flow::{
+    // orchestrator + config
+    FlowConfig, VideoFlow, VFlow,
+    // error / result
+    FlowError, FlowResult,
+    // intent + provenance
+    IntentSnapshot, SpanId, Clause, ClauseId, AssetRef, decompose_clauses,
+    // layered narrative
+    Novel, Layer, Ambient, LayerKind, LayeredExpander, PassthroughLayeredExpander,
+    // structured plan
+    StructuredVideoPlan, PlanPipe, PlanSection, VideoTag,
+    // critic (descendable score tree)
+    ScoreTree, ScoreNode, NodeKind, Critic, CriticInput, CriticSectionView, DefaultCritic,
+    // learned-model tiny build spec + resolver
+    ModelBuildSpec, ModelBase, AdditiveHead, ModelRole, ModelResolver, ModelHandle,
+    StubModelResolver,
+    // preference signals
+    SignalRecord, SignalKind, SignalLog, signal_line, append_signal_jsonl,
+    // regeneration contract + lowering
+    FlowElement, Lowered, ElementTrace, RegenerationContract, VersionTriple, lower_to_elements,
+    // session-space artifact
+    FlowDocument,
+    // Phase-0 backward-compat deterministic steps (off-mission, kept for callers)
+    expand_raw_text, materialize_pipes, structure_plan, validate_novel, validate_plan,
+    MarkerStructurer, PassthroughExpander, TextExpander, TextStructurer,
+    ExpandResult, StructureResult,
+};
 
 use crate::storage::db::Database;
 
