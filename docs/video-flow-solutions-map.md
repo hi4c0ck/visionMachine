@@ -1085,7 +1085,7 @@ exploration actionable *here*.
   **low-core / low-plan / low-runtime** crate boundary: each step = a
   pure fn in core; IO is quarantined to runtime.
 
-## FINAL EXHAUSTION STATEMENT (11 waves / 81 evidence entries)
+## FINAL EXHAUSTION STATEMENT (19 waves / ~120 evidence entries)
 
 The exploration is complete at EVERY depth the task implies:
 1. **Analogous projects** that solve each case (waves 1-6: ViMax, novel-to-
@@ -1247,25 +1247,37 @@ academic/published primary:
 - **C9** gains EvoState + PermaVid as academic persistent-identity
   anchors; **C3** gains PermaVid (regen across edits); **C8** gains
   EvoState (re-anchor to *realized* output, not just the plan).
+- **C-HOST (Wave 19):** the user's p.2/p.3 "a solid independent harness
+  feature out of scope for this tiny repo — give me ideas with an
+  introduction" now has 4 named worldwide desktop precedents:
+  OpenCADStudio out-of-tree Rust plugin (own crate + semver api +
+  host-never-recompiles), ComfyUI/comfy-forge persistent isolated
+  subprocess worker (lazy spawn + crash-restart + dependency isolation,
+  sandbox deferred), Tauri bundled sidecar behind cfg(desktop), and the
+  "weights-beside-bundle / opt-in-extras / small-installer" shipping
+  norm. This is the "introduction + ideas" you asked for.
 
 Total distinct CONFIRMED claims: **28 arXiv (26 prior + EvoState +
-PermaVid) + 1 published non-arXiv primary (MSML)**.
+PermaVid) + 1 published non-arXiv primary (MSML) + 4 C-HOST
+desktop-app precedents**.
 
 Remaining *directional* items are now **commercial spec-sheet
 adoption-templates only** — `Seedance v3 JSON` / `SKEL` are cited as
 "compile-to-platform-prose" templates we copy the *field shape* from,
 NOT as factual claims we depend on. `dsh-desktop` (downgraded to
 directional Tauri-wrapper note) and `termux-train`/AMEVA (JS/Python)
-stay directional. **No sub-case remains without a primary.**
+stay directional. **No sub-case remains without a primary or a named
+worldwide precedent.**
 
 The grind goal — *explore similar project objectives worldwide to find
-solutions of our cases* — is now **exhausted at both levels**: the
-user-named sub-cases (Waves 13–17) *and* the deliberately-flagged
-directional sub-cases (Wave 18). **A Wave-19 would be busywork** — every
-remaining un-verified item is a commercial spec-sheet adoption-template
-or a non-paper desktop/tooling note, not a "solution of our cases" that
-needs a worldwide primary. All remaining work = **implementation** of the
-blueprint.
+solutions of our cases* — is now **exhausted at three levels**: the
+user-named sub-cases (Waves 13–17), the deliberately-flagged directional
+sub-cases (Wave 18), and the out-of-scope hosting question (Wave 19,
+C-HOST). **A Wave-20 would be busywork** — every remaining un-verified
+item is a commercial spec-sheet adoption-template or a non-paper
+desktop/tooling note, not a "solution of our cases" that needs a
+worldwide primary. All remaining work = **implementation** of the
+blueprint (7-step build order, decision-map Section D).
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**

@@ -438,7 +438,7 @@ already mirrors.
 
 # THE REPO-SHAPE BLUEPRINT (wave-11 synthesis — what we actually ship here)
 
-This is the integration of all 11 waves into a concrete, buildable shape for
+This is the integration of all 19 waves into a concrete, buildable shape for
 eature/text-video-flow. It is the answer to "find solutions of OUR cases":
 each case is now *where in the repo it lives* + *the Rust idiom* + *the tool*.
 
@@ -514,16 +514,19 @@ weight-free). To ship the full design it becomes the low-core crate:
    ersion-migrate::load_forward = "rebuild creates N+1, never mutates N,
    never falls back" (C3/C9) made into checked code, not a doc promise.
 
-## One-paragraph completion statement
-Across 11 waves (81 evidence entries) every one of our cases — C0, C1, C1-A,
-C2, C2-B, C3, C4, C5, C6, C7, C8, C9 — now has (a) a named worldwide solution,
-(b) a copyable mechanism, and (c) a concrete Rust idiom + crate home in THIS
-repo. The "solid independent harness feature a tiny repo can ship" is now a
-**pure low-core crate** (deterministic, exhaustively testable, weight-free)
-+ a **feature-gated critic-runtime cdylib** (the deferred learned ceiling) +
-an **low-eval harness** (insta/proptest/bolero + prompt versioning +
-INCONCLUSIVE-blocks). The exploration is complete; what remains is building
-this blueprint, not researching it.
+## One-paragraph completion statement (updated through Wave 19)
+Across 19 waves (~120 evidence entries) every one of our cases — C0, C1,
+C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L, C5, C6, C7, C8, C9, and C-HOST —
+now has (a) a named worldwide solution, (b) a copyable mechanism, and (c) a
+concrete Rust idiom + crate home in THIS repo. The "solid independent
+harness feature a tiny repo can ship" (p.2/p.3) is now a **pure flow-core
+crate** (deterministic, exhaustively testable, weight-free) + an
+**out-of-tree critic add-on behind a versioned contract** (C-HOST:
+SubprocessCritic/SidecarCritic, lazy-spawn + crash-restart, dependency
+isolated, weights beside the bundle — mirroring the in-repo bundled-ffmpeg
+precedent) + a **flow-eval harness** (insta/proptest/bolero + prompt
+versioning + INCONCLUSIVE-blocks). The exploration is complete; what remains
+is building this blueprint, not researching it.
 
 ---
 
@@ -933,16 +936,23 @@ mirror snippets they originally came through). 3 corrections:
   SKEL spec sheets" flag for the DSL-structure side; CineCrew 2609.07720
   remains the generative-system primary; Seedance v3/SKEL are now cited
   only as commercial field-shape adoption-templates).
-  - **TERMINAL STATE (Wave 18):** **every sub-case — user-named AND
-    deliberately-flagged-directional — now has a primary**: **28 distinct
-    arXiv claims CONFIRMED on arxiv.org + 1 published non-arXiv primary
-    (MSML).** The C1-A and C2-B "directional" flags are **retired**; the
-    only remaining un-verified items are *commercial spec-sheet
-    adoption-templates* (Seedance v3 JSON, SKEL) and *non-paper desktop /
-    tooling notes* (`dsh-desktop`, `termux-train`/AMEVA). The grind goal —
-    *explore similar project objectives worldwide to find solutions of our
-    cases* — is now exhausted at **both** the user-named-sub-case level
-    (Waves 13–17) *and* the deliberately-flagged-directional level (Wave
-    18). **A Wave-19 would be busywork** — no "solution of our cases"
-    sub-case remains without a primary. Remaining work = **implementation**
-    of the blueprint.
+  - **TERMINAL STATE (Wave 19):** **every condition — user-named
+    (C0..C9 + sub-cases), deliberately-flagged-directional (C1-A, C2-B),
+    and the out-of-scope hosting ask (C-HOST, p.2/p.3) — now has a
+    primary or a named worldwide precedent**: **28 distinct arXiv claims
+    CONFIRMED on arxiv.org + 1 published non-arXiv primary (MSML) + 4
+    C-HOST desktop-app precedents.** The C1-A and C2-B "directional"
+    flags are **retired** (grounded on MSML + EvoState + PermaVid); C-HOST
+    (the "independent harness feature out of scope for this tiny repo")
+    is grounded on OpenCADStudio out-of-tree plugin + ComfyUI isolated
+    subprocess worker + Tauri bundled sidecar + the
+    weights-beside-bundle shipping norm. The only remaining un-verified
+    items are *commercial spec-sheet adoption-templates* (Seedance v3
+    JSON, SKEL) and *non-paper desktop / tooling notes* (`dsh-desktop`,
+    `termux-train`/AMEVA). The grind goal — *explore similar project
+    objectives worldwide to find solutions of our cases* — is now
+    exhausted at **three** levels: user-named-sub-case (Waves 13–17),
+    deliberately-flagged-directional (Wave 18), and out-of-scope-hosting
+    (Wave 19). **A Wave-20 would be busywork** — no "solution of our
+    cases" remains without a primary. Remaining work = **implementation**
+    of the blueprint (7-step build order, Section D).
