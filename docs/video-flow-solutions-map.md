@@ -646,3 +646,82 @@ manifest** instead of raw Git diffs. That's the scaffolding the *video/ML*
 findings (C0–C2, C4, C6) plug into. It is all *deterministic and repo-owned*;
 only the critic's leaves and the additive-head weights cross the seam into the
 deferred ML project.
+
+---
+
+# Wave 6 — the shippable-in-repo desktop session-space precedents
+
+The last gap: is this actually *buildable in a tiny local Tauri repo*? Yes — and
+there are named desktop precedents, including a Tauri "harness" that already does
+our model.
+
+## Direct Tauri precedent: dsh-desktop "harness" = our session-space model
+dsh-desktop (tsdaer, a Tauri-shell *harness*) implements **exactly** our
+session-as-domain design:
+> "State is always computed, **never logged**. The log holds **events only**;
+> the unit's state lives in a per-session **watermark cache** {state,
+> observedSeq} and a persisted **PROJECTION cache** on the domain-KV seam:
+> rows of (sessionId, key, ver, seq, val)."
+
+That is the CQRS/event-sourcing pattern from wave 5 **shipped inside a Tauri
+app** — the concrete, repo-shippable shape of our session flow layers +
+destructive regen. It proves the pattern is not cloud-only (Temporal); it runs in
+a local desktop shell.
+
+## "Source-of-truth inversion" names our structured-SoT / derived-pipes split
+PointSav: *"exactly one layer is declared canonical; every other layer is either
+a **derived view** (rebuilt on demand) or a **session-ephemeral buffer** (discarded
+when the session ends)."* → maps **1:1**: our structured.vN = the canonical
+layer; the rendered **pipes = a derived view** rebuilt on demand; working buffers
+= ephemeral. polaris-local-first adds the integrity rule: *"derived data must
+never block source backup; only source data is user truth."* → **we back up the
+structured layer, never the (rebuildable) pipes.**
+
+## Concrete "destructive regenerate-from-SoT" desktop patterns
+- **luthier** commit: "session regenerate **carve-out with a destructive confirm**
+  dialog" — our I5 "destructive, no fallback," but UX-confirmed.
+- **KohakuTerrarium v1.2**: "sessions are replayable, branchable, migratable —
+  an **event-log-first** model with **format versioning**: .kohakutr.vN + a
+  *non-destructive* v1→v2 migration." = our versioned layer files + a migration
+  path (the "on early start versioning" payoff).
+- **Epicenter ADR**: "opening is non-destructive and **never falls back**; a
+  monotonically increasing integer names the current artifact (.v.db);
+  **rebuilds create a NEW artifact — the old one is not mutated**." = our
+  "regenerate creates version N+1, never mutates N."
+- **Creative-app norm** (Figma/Blender/Photoshop): edit a *versioned document*;
+  the render is **regenerated from the document**, never hand-edited ("non-
+  destructive"). → The harness is a **non-destructive document editor** for the
+  structured layer; the pipes are its derived render. That's the long-standing
+  human pattern behind "mutate the text, regenerate the pipes."
+
+## What this wave adds to the C-table
+
+| Case | Wave-6 refinement |
+|---|---|
+| C3 | the session model is **shippable in Tauri** (dsh-desktop event-log + projection cache); **source-of-truth inversion** makes structured.vN canonical, pipes a derived view |
+| C3 | "destructive regen" = **version N+1 created, N never mutated** (Epicenter/Kohaku) + a **destructive-confirm** UX gate (luthier); back up the source, not the derived pipes (polaris) |
+| C5 | the harness = a **non-destructive document editor** over the structured layer (Figma/Blender norm); derived pipes re-derive from it |
+| C4 | the on-device trainer's *hosting* pattern is a desktop domain-KV / projection cache (dsh-desktop), not a server |
+
+## Exhaustion check — every case now has a worldwide solution
+
+| Case | Solution(s) found | Waves |
+|---|---|---|
+| **C0 core goal** (faithfulness-to-intent) | coverage-aware faithfulness oracle (precision+recall vs intent-as-complete-oracle); per-dimension; faithfulness≠factuality; intent-hallucination = omission | 4 |
+| **C1** text→structured→generation layers | ViMax two-stage; JSON blueprints; ComfyTV shot list; LPA 7 layers; MAVIN/STAGE structural storyboard; novel-to-storyboard 3-call + asset_ids | 1,3 |
+| **C2** learned per-element fidelity, descending | DeCE / FIRM-Video checklist / VideoReward weights / Diffusion-DRF frozen-VLM / HuDA deterministic floor; **two-scale tree** (B-Roll per-unit + aggregate-aware root) | 2,4 |
+| **C3** session-space layers + destructive regen | Three Planes / SPACE / DSH-V3 seq-remap / **Luma·Boords·Genvid per-unit** / **event-sourcing+CQRS (Temporal)** / **dsh-desktop Tauri projection** / **source-of-truth inversion** / luthier·Kohaku·Epicenter regen-from-SoT | 1,2,5,6 |
+| **C4** signal-based continuous learning | AlignXplore / MiCRo / SelectRM / **ReelBrain temp·durable** / **tianpan lineage-pair** / **CHIEF user-simulation** / **Kuaishou implicit watch-skip-edit** / **ASLS L2-anchored additive head** / termux-train on-device | 1,2,4,5 |
+| **C5** isolated steps / bounded context | context-rot / Three Planes / **AgentPatterns bounded step** / **DDD ACL view** / **novel-to-storyboard save-intermediates** / **ComfyUI topological node + input-fingerprint cache** | 1,3,5 |
+| **C6** tiny build spec (local weights / additive heads) | LoRA / tinker / **ONNX MultiLoRA + Rust onnxer** / **ONNX model_package manifest** / ModelSharp | 1,2,5 |
+
+Every case + the core goal is now grounded in a named, cited worldwide solution.
+The exploration is exhausted: further searching would re-cover the same sources.
+The shippable spine is: a **versioned, event-sourced, source-of-truth-inverted,
+topological session** (C3/C5) whose **structured layer is the canonical SoT**,
+pipes are a **non-destructive derived render** (C3), fidelity is a **coverage-
+aware, two-scale, HuDA-floored critic** (C0/C2), learning is a **lineage-pair
+signal → additive-head on-device trainer** behind a **model_package manifest**
+(C4/C6), and each step is a **bounded, cached node** (C5) — all repo-owned and
+deterministic, with only the critic leaves + head weights crossing into the
+deferred ML project.
