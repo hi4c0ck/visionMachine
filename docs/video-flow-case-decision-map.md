@@ -536,7 +536,7 @@ evidence in the ledger (84 entries).
 arrative_arc/keyframe/sset_ids; **MAViS confirms a staged multi-mutation pipeline with per-stage agents is the canonical worldwide shape** | 
 ovel.rs→plan.rs→egen.rs | **Solved** |
 | R3 | "build harness to maintain user desire & be coherent with real output as close as the user imagined at entry" | C0+C8 | 2606.09376 coverage-aware faithfulness; TICK/DeCE/BiFact; goal-drift re-anchoring (2505.02709 / 2609.32520 / SIP) (waves 4/9); **Hollywood Town 2510.22431 (Wave-15: DAG→directed-cyclic-graph with limited retries — later-node feedback refines earlier stages)** | fidelity = precision⊗recall vs intent-as-complete-oracle; per-step re-anchor to IntentSnapshot + drift diagnostic; **Hollywood-Town's cyclic retry is the concrete "refine earlier stages from later feedback" mechanism** | critic.rs + drift.rs | **Solved** |
-| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9 | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10); **LayerFlow 2506.04228 (Wave-15: per-layer prompts → fg/bg/blended)** | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics; **LayerFlow proves per-layer prompting is a real T2V input shape** | 
+| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9 | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10); **LayerFlow 2506.04228 (Wave-15: per-layer prompts → fg/bg/blended)**; **DOME 2412.13575 (Wave-16: dynamic hierarchical outline fusing plan+write, temporal-KG memory, conflict analyzer)** | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics; **LayerFlow proves per-layer prompting is a real T2V input shape**; **DOME is the direct arXiv primary for the Step-1 "user text to novel" mutation: the novel is a hierarchical outline that co-plans + co-writes, not a flat expansion** | 
 ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | R5 | "novel generates into structured text with video-engine language configuration" | C1-A | video-notation-schema; Seedance Prompt JSON v3; BSD intent-layer; SKEL (wave 9) | a **versioned, typed video-DSL** (JSON-Schema) + intent/content split; *compile to platform prose* at render | plan.rs (schema) + low-plan compile | **Solved** |
 | R6 | "we can generate from that structured pipes, sections and tags" | C1 | MAVIN/STAGE structural storyboard (start-end frame pairs); storyboard2video deterministic render (waves 3/10) | PlanSection/FlowElement = tag + start-end frame + prompt + asset_ids; deterministically compilable | plan.rs/egen.rs | **Solved** |
@@ -554,8 +554,10 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | C0 core faithfulness goal | 2606.09376 + TICK/DeCE/BiFact + Ragas NLI floor | Solved |
 | C1 spine | ViMax / novel-to-storyboard / MAVIN / ComfyTV / STAGE + **MAViS 2508.08487 (Wave-15)** | Solved |
 | C1-A video-DSL layer | video-notation / Seedance v3 / BSD / SKEL | Solved |
-| C2 per-element fidelity | FIRM-Video + DeCE + B-Roll two-scale + RubricArmor | Solved |
+| **C1-E (sub-case: user text -> LLM expand to novel, the Step-1 mutation)** | **DOME 2412.13575 (Wave-16: DHO fuses plan+write; MEM temporal-KG memory; Temporal Conflict Analyzer)** | Solved |
+| C2 per-element fidelity | FIRM-Video + DeCE + B-Roll two-scale + RubricArmor + **Memento 2606.14667 reconstruction-as-check (Wave-16)** | Solved |
 | C2-B transition params | frozen style-contract + 7-layer knobs + per-dim weights | Solved |
+| **C2-C (sub-case: character / subject consistency, "as close as user imagined")** | **ContextAnyone 2512.07328 (Wave-16: reference as preserved appearance anchor) + SlotMem 2607.15772 (Wave-16: role-wise slot memory, conservative update) + Memento 2606.14667 (Wave-16: reconstruct-to-remember identity grounding)** | Solved |
 | C3 session + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / dsh-desktop *(directional)* / Epicenter·Kohaku | Solved |
 | C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou **2308.13249** / DITTO / CHIEF + **MiCRo 2505.24846** | Solved (capture; trainer deferred) |
 | **C4-L (sub-case: layers = verbose expansion, non-main parts on own dynamics)** | **LayerFlow 2506.04228 (Wave-15)** + PreciseVideo ambient-own-dynamics + LPA 7 layers | Solved |
@@ -704,8 +706,10 @@ mirror snippets they originally came through). 3 corrections:
 - **CONFIRMED (read the primary):** the C0/C1/C1-A/C2/C8 core + the C9/C2
   scale items — 12 original load-bearing arXiv claims, plus FIRM-Video
   (2608.21839) and the Wave-13/14 additions (2501.13918, 2605.06036,
-  2505.18071, 2601.04963, 2505.24846, 2308.13249) = **19 distinct arXiv
-  claims verified on arxiv.org**.
+  2505.18071, 2601.04963, 2505.24846, 2308.13249) + the **Wave-15/16
+  additions** (2506.04228 LayerFlow, 2508.08487 MAViS, 2510.22431 Hollywood
+  Town, 2412.13575 DOME, 2512.07328 ContextAnyone, 2607.15772 SlotMem,
+  2606.14667 Memento) = **26 distinct arXiv claims verified on arxiv.org**.
 - **Still SNIPPET-ONLY / directional (non-paper artifacts only — none are load-bearing
   arXiv claims):** `termux-train`/AMEVA (JS/Python on-device trainer, directional
   for C4, not a Rust precedent), `dsh-desktop` (*Wave-13 downgrade: a third-party
@@ -757,3 +761,37 @@ mirror snippets they originally came through). 3 corrections:
     sub-case level**; three post-"exhaustion" waves (13, 14, 15) each
     surfaced genuinely new load-bearing sources. A Wave-16 is only justified
     by a *new* named sub-case, not by re-covering existing families.
+- **Wave-16 promoted to CONFIRMED (read on arxiv.org) — the LAST TWO named
+  sub-cases that still lacked an arXiv primary are now closed:**
+  **DOME = 2412.13575** ("Generating Long-form Story Using Dynamic
+  Hierarchical Outlining with Memory-Enhancement", NAACL'25) = the direct
+  arXiv primary for the **Step-1 "user text -> LLM expand to a novel"
+  mutation**: the novel is a *hierarchical outline that co-plans + co-writes*
+  (DHO), backed by a temporal-KG memory (MEM) that cuts context conflicts and
+  a Temporal Conflict Analyzer that auto-evaluates consistency. This replaces
+  the earlier "keep it open" prompt-text + generic ViMax grounding.
+  **ContextAnyone = 2512.07328** ("Context-Aware Diffusion for
+  Character-Consistent Text-to-Video Generation") = the reference image is an
+  *explicitly preserved appearance anchor*, not just a conditioning signal
+  (asymmetric flow + Gap-RoPE) = arXiv primary for **character / subject
+  consistency** (previously commercial/SNIPPET-only).
+  **SlotMem = 2607.15772** ("Character-Addressable Internal Memory for
+  Narrative Long Video Generation") = character-semantic probe + role-wise
+  slot memory with *conservative update* = the harness-side analog of our
+  `subjects[]` persistent-identity store (C9).
+  **Memento = 2606.14667** ("Reconstruct to Remember for Consistent Long
+  Video Generation") = subject preservation as *explicit identity grounding*:
+  a faithful memory bank **must be able to reconstruct the subject from
+  memory alone** = the DIRECT mechanism for our "as close as user imagined
+  at entry" goal (**reconstruction-as-check**, C2 + C9).
+  - **TERMINAL STATE (Wave 16):** **every named sub-case** in the user's
+    requirements now has >=1 CONFIRMED arXiv primary — **26 distinct arXiv
+    claims verified on arxiv.org** (12 original + 7 Wave-13/14 + 3 Wave-15 +
+    4 Wave-16). Remaining un-verified items are **non-paper artifacts only**:
+    `dsh-desktop` (Tauri-wrapper note, downgraded to *directional*),
+    `termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
+    industry-spec flags. The grind goal — *explore similar project objectives
+    worldwide to find solutions of our cases* — is now **exhausted at the
+    sub-case level**; Waves 13-16 each targeted previously-uncovered named
+    sub-cases and each surfaced new load-bearing sources. A Wave-17 is only
+    justified by a *new* named sub-case.

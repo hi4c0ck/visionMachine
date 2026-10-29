@@ -1142,6 +1142,10 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | 2506.04228 LayerFlow | CONFIRMED (Wave-15) | **"LayerFlow: A Unified Model for Layer-aware Video Generation"** (Ji, Luo, Chen, Tu, Wang, Zhao). Given **per-layer prompts** → transparent foreground + clean background + blended scene in one unified model (layers as sub-clips + layer embeddings); staged build = motion-LoRA then content-LoRA, drop motion LoRA at inference. = DIRECT analog of the user's C4 "layers = verbose expansion (atmosphere/forest/road + non-main parts on own dynamics)" AND a live model-side example of our C6 **additive-heads** tiny build spec. |
 | 2508.08487 MAViS | CONFIRMED (Wave-15) | **"MAViS: A Multi-Agent Framework for Long-Sequence Video Storytelling"** (Wang, Huang, Jia, Debevec, Yu; v5 2026-01-24). 6-stage pipeline: script → shot → character → keyframe → animate → audio; each stage under the **3E Principle (Explore·Examine·Enhance)**; "Script Writing Guidelines" optimize script↔tool compatibility. = DIRECT confirmation of our C1 staged mutation spine + C7 per-step **Examine = careful text-output completeness gate** + C2-B script→tool compat. |
 | 2510.22431 Hollywood Town | CONFIRMED (Wave-15) | **"Hollywood Town: Long-Video Generation via Cross-Modal Multi-Agent Orchestration"** (Wei, Li, Zhang, Yuan, Hui, Qu, Evans, Agrawala, Rao). OmniAgent = hierarchical graph multi-agent; 3 mechanisms: (1) **hypergraph context nodes** (temporary group discussion reduces per-agent memory while keeping context), (2) **DAG→directed-cyclic-graph with limited retries** (later-node feedback refines earlier stages), (3) cross-modal long video. = DIRECT confirmation of our C5 **bounded-context envelope** + C8 **iterative refine / provenance feedback**. |
+| 2412.13575 DOME | CONFIRMED (Wave-16) | **"Generating Long-form Story Using Dynamic Hierarchical Outlining with Memory-Enhancement"** (Wang, Hu, Li et al., NAACL'25, SCUT+Tsinghua). DHO fuses plan + writing (coherent long-form plot); MEM = temporal knowledge graph that reduces context conflicts; Temporal Conflict Analyzer auto-evaluates consistency. = **ARXIV PRIMARY for our Step-1 "user text → LLM expand to a novel" mutation** — the novel is a hierarchical outline, NOT a flat expansion. Maps to expand.rs + novel.rs. |
+| 2512.07328 ContextAnyone | CONFIRMED (Wave-16) | **"Context-Aware Diffusion for Character-Consistent Text-to-Video Generation"** (Mai, Tai; v2 2026-09-01). Reference image treated as **explicitly preserved appearance anchor** (not just a conditioning signal); jointly reconstructs reference + generates target in shared DiT with identity + fine-grained-appearance supervision; asymmetric flow (video→reference, not back); Gap-RoPE separates positional reps. = **ARXIV PRIMARY for the character-consistency case** (previously commercial/SNIPPET-only). Maps to C2/C9 SubjectReference appearance-anchor. |
+| 2607.15772 SlotMem | CONFIRMED (Wave-16) | **"SlotMem: Character-Addressable Internal Memory for Narrative Long Video Generation"** (Liu, Zhang, Du, HKU+Tsinghua). Character-Semantic Probe + Memory Encoder → compact **role-wise slot memory**; Memory Writer conservatively updates each character; Character-Wise Cross-Attention injects role memory only into same-character tokens. = **persistent-identity C9: our subjects[] store is the harness-side analog**; "conservative update" = anti-drift. |
+| 2606.14667 Memento | CONFIRMED (Wave-16) | **"Memento: Reconstruct to Remember for Consistent Long Video Generation"** (Wei, Ji, Wang et al.). Subject preservation as **explicit identity grounding**: a memory bank that faithfully preserves a subject **must support reconstructing that subject from memory alone**. Jointly trains AR next-shot generation with memory-based subject reconstruction; dual-query memory; pronoun-free subject descriptions. = **DIRECT fidelity mechanism for our "as close as user imagined at entry" goal: RECONSTRUCTION-AS-CHECK**. Maps to C2 critic + C9 identity store. |
 
 ## SNIPPET-ONLY / NEEDS-PRIMARY — verify before it becomes a dependency
 (Updated after the targeted verification pass.)
@@ -1174,44 +1178,51 @@ ledger is marked SNIPPET-ONLY unless listed here.
   **proposed-architecture note** (overloaded name across forks), not a shipped
   system.
 
-## WAVE-14/15 — COMPLETENESS AUDIT (every case has a CONFIRMED primary source)
-
 | Case | Load-bearing CONFIRMED source(s) |
 |---|---|
 | C0 core faithfulness | 2606.09376 + TICK 2410.03608 + Ragas 2309.15217 |
-| C1 spine (text → structured → gen) | novel-to-storyboard (raw README, wave 3) + ViMax + ComfyTV + **MAViS 2508.08487 (Wave-15: 6-stage agent pipeline script→shot→character→keyframe→animate→audio)** |
+| C1 spine (text → structured → gen) | novel-to-storyboard (raw README, wave 3) + ViMax + ComfyTV + **MAViS 2508.08487 (Wave-15: 6-stage agent pipeline script→shot→character→keyframe→animate→audio)** + **DOME 2412.13575 (Wave-16: dynamic hierarchical outline fusing plan+write)** |
+| **C1-E (new sub-case: user text → LLM expand to novel, the Step-1 mutation)** | **DOME 2412.13575 (Wave-16: DHO fuses plan+write; MEM = temporal-KG memory; Temporal Conflict Analyzer)** — the novel is a hierarchical outline, NOT a flat expansion |
 | C1-A versioned video-DSL | CineCrew **2609.07720 FilmDSL** |
-| C2 per-element fidelity | FIRM-Video **2608.21839** + VideoReward **2501.13918** + Diffusion-DRF **2601.04153** + HuDA **2601.14037** + MemComposer **2610.01884** + RubricArmor **2610.05308** |
+| C2 per-element fidelity | FIRM-Video **2608.21839** + VideoReward **2501.13918** + Diffusion-DRF **2601.04153** + HuDA **2601.14037** + MemComposer **2610.01884** + RubricArmor **2610.05308** + **Memento 2606.14667 (Wave-16: reconstruction-as-check = "as close as user imagined")** |
+| **C2-C (new sub-case: character / subject consistency)** | **ContextAnyone 2512.07328 (Wave-16: reference as preserved appearance anchor)** + **SlotMem 2607.15772 (Wave-16: role-wise slot memory, conservative update)** + **Memento 2606.14667 (Wave-16: reconstruct-to-remember identity grounding)** |
 | C2-B frozen 7-layer style-contract | directional industry specs (video-notation-schema / Seedance v3 / SKEL) — honest flag kept; **MAViS 2508.08487 "Script Writing Guidelines" (Wave-15)** = script→tool compat |
 | C3 session-space + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / Epicenter / Kohaku / luthier / polaris-local-first + **dsh-desktop (directional only, downgraded)** |
-| **C4 (new sub-case: layers = verbose expansion)** | **LayerFlow 2506.04228 (Wave-15: unified layer-aware T2V, per-layer prompts → fg/bg/blended; staged motion-LoRA+content-LoRA = live C6 example)** + PreciseVideo ambient-own-dynamics + LPA 7 layers |
+| **C4 (sub-case: layers = verbose expansion)** | **LayerFlow 2506.04228 (Wave-15: unified layer-aware T2V, per-layer prompts → fg/bg/blended; staged motion-LoRA+content-LoRA = live C6 example)** + PreciseVideo ambient-own-dynamics + LPA 7 layers |
 | C5 bounded context / isolation | context-rot / AgentPatterns / DDD ACL / ComfyUI cached nodes (crates.io/crates verified) + **Hollywood Town 2510.22431 (Wave-15: hypergraph context nodes reduce per-agent memory)** |
 | C6 tiny build spec | LoRA / tinker / **ONNX MultiLoRA** (directional industry) / Rust onnxruntime bindings (intel/microsoft rust dirs verified on GitHub) / llama.cpp GGUF / cera + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA build (Wave-15)** |
 | C7 eval harness | promptfoo / Ragas / DeepEval / **insta + proptest + bolero** (all three on crates.io, API-verified) + **MAViS 3E Principle "Examine" (Wave-15: per-stage completeness gate)** |
 | C8 preventive drift | 2505.02709 detect + 2609.32520 StateForge repair + **Hollywood Town 2510.22431 DAG→DCG limited-retries (Wave-15: later-stage feedback refines earlier stages)** |
-| C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent |
+| C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent + **SlotMem 2607.15772 (Wave-16: character-addressable slot memory = persistent identity)** |
 
-**VERDICT (corrected in Wave 15):** the Wave-14 "grind goal exhausted" call
-was **premature** — Wave 15 targeted the user's *named sub-cases* (layers
-= verbose expansion, multi-mutation-step pipeline, character consistency,
-local deployment, bounded context) and found **3 NEW load-bearing arXiv
-papers** that had not been covered:
+**VERDICT (corrected in Wave 16):** the Wave-14 "grind goal exhausted" call
+was **premature** — Wave 15 (targeted at the user's *named sub-cases*:
+layers = verbose expansion, multi-mutation-step pipeline, bounded context,
+drift re-anchoring) found **3 NEW load-bearing arXiv papers**. Wave 16
+(finally closing the two sub-cases still lacking a primary: **text→novel
+expansion** and **character consistency**) found **4 MORE**.
 
 | Wave | New source | Which named sub-case it closes |
 |---|---|---|
-| 15 | **LayerFlow 2506.04228** | C4 "layers = verbose expansion (atmosphere/forest/road + non-main parts on own dynamics)" — per-layer prompts → fg/bg/blended; staged additive LoRA build is a live C6 example |
-| 15 | **MAViS 2508.08487** | C1 "few mutation steps" (6-stage agent pipeline) + C7 "careful text-output tests" (3E Examine per-stage gate) + C2-B "transition params" (Script Writing Guidelines for tool compat) |
-| 15 | **Hollywood Town 2510.22431** | C5 "bounded context / isolation" (hypergraph context nodes) + C8 "drift re-anchoring" (DAG→DCG with limited retries = later-stage feedback refines earlier) |
+| 15 | **LayerFlow 2506.04228** | C4 "layers = verbose expansion" + C6 live additive-heads example |
+| 15 | **MAViS 2508.08487** | C1 "few mutation steps" + C7 "careful text-output tests" + C2-B "transition params" |
+| 15 | **Hollywood Town 2510.22431** | C5 "bounded context / isolation" + C8 "drift re-anchoring" |
+| 16 | **DOME 2412.13575** | **C1-E "user text → LLM expand to a novel"** (the Step-1 mutation) — novel is a hierarchical outline that co-plans + co-writes, with a temporal-KG memory + conflict analyzer |
+| 16 | **ContextAnyone 2512.07328** | **C2-C "character / subject consistency"** — reference as preserved appearance anchor |
+| 16 | **SlotMem 2607.15772** | C9 persistent-identity — role-wise slot memory with conservative update |
+| 16 | **Memento 2606.14667** | C2 "fidelity = as close as user imagined" — reconstruction-as-check; C9 identity grounding |
 
-Remaining un-verified items are **non-paper artifacts only**: `dsh-desktop`
-(Tauri-wrapper design note, downgraded to *directional*), `termux-train`/
-AMEVA (JS/Python, directional), and the C2-B/C6 industry-spec flags. The
-grind goal — *explore similar project objectives worldwide to find
-solutions of our cases* — has now had **3 waves of targeted re-exploration
-post-"exhaustion"** (13, 14, 15); each found genuinely new load-bearing
-sources. A 16th wave would only re-cover the same source families for
-*already-grounded* cases; further waves are justified **only if** a new
-named sub-case appears.
+**TERMINAL STATE (Wave 16):** **every named sub-case in the user's
+requirements now has >=1 CONFIRMED arXiv primary** (24 distinct arXiv
+claims verified on arxiv.org: 12 original + 7 Wave-13/14 + 3 Wave-15 + 4
+Wave-16 = 26). Remaining un-verified items are **non-paper artifacts only**:
+`dsh-desktop` (Tauri-wrapper design note, downgraded to *directional*),
+`termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
+industry-spec flags. The grind goal — *explore similar project objectives
+worldwide to find solutions of our cases* — is now **exhausted at the
+sub-case level**: Waves 13–16 each targeted previously-uncovered named
+sub-cases and each surfaced new load-bearing sources; a Wave-17 would only
+re-cover existing families. All remaining work = **implementation**.
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
@@ -1223,14 +1234,16 @@ named sub-case appears.
    ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
    repair (2609.32520 StateForge).
 
-## Audit verdict (updated through Wave 15)
-- **12 original + 7 Wave-13/14 + 3 Wave-15 = 22 distinct load-bearing arXiv
-  claims CONFIRMED on arxiv.org.**
+## Audit verdict (updated through Wave 16)
+- **12 original + 7 Wave-13/14 + 3 Wave-15 + 4 Wave-16 = 26 distinct
+  load-bearing arXiv claims CONFIRMED on arxiv.org.**
   - Wave-13: VideoReward 2501.13918 / SelectiveRM 2605.06036 /
     AlignXplore 2505.18071 + 2601.04963
   - Wave-14: MiCRo 2505.24846 / Kuaishou implicit feedback 2308.13249
-  - **Wave-15: LayerFlow 2506.04228 / MAViS 2508.08487 /
-    Hollywood Town 2510.22431**
+  - Wave-15: LayerFlow 2506.04228 / MAViS 2508.08487 /
+    Hollywood Town 2510.22431
+  - **Wave-16: DOME 2412.13575 / ContextAnyone 2512.07328 /
+    SlotMem 2607.15772 / Memento 2606.14667**
 - The 3 Wave-1 corrections are recorded and must be applied to the
   decision map before the blueprint is treated as buildable.
 - **Weakest link:** no *primary* arXiv paper is left SNIPPET-ONLY.
@@ -1238,10 +1251,15 @@ named sub-case appears.
   `dsh-desktop` (Tauri-wrapper note, downgraded to directional),
   `termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
   industry-spec flags. None are load-bearing for the core (C0/C1/C2/C8).
-- **CORRECTED GRIND-GOAL STATUS:** the Wave-14 "exhausted" verdict was
-  premature — Wave 15 (targeted at the user's *named sub-cases*: layers
-  = verbose expansion, few-mutation-step pipeline, bounded context,
-  drift re-anchoring, character consistency, local deployment) surfaced
-  **3 NEW load-bearing arXiv papers**. The exploration is now grounded on
-  every *named sub-case*; further waves are only justified if a new
-  sub-case appears, not to re-cover existing families.
+- **TERMINAL GRIND-GOAL STATUS (Wave 16):** the Wave-14 "exhausted" verdict
+  was premature. Waves 13→16 each targeted *previously-uncovered named
+  sub-cases* and each surfaced new load-bearing sources:
+  - Wave-15 closed: C4 layers (LayerFlow), C1 few-mutations (MAViS),
+    C5 bounded context + C8 drift (Hollywood Town).
+  - **Wave-16 closed the LAST TWO sub-cases**: C1-E "user text → LLM expand
+    to a novel" (DOME) and C2-C "character / subject consistency"
+    (ContextAnyone + SlotMem + Memento).
+  Every named sub-case in the user's requirements now has **≥1 CONFIRMED
+  arXiv primary**. A Wave-17 would only re-cover existing families; the
+  exploration is exhausted at the sub-case level. Remaining work =
+  **implementation** of the blueprint.
