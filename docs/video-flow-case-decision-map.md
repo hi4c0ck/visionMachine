@@ -555,6 +555,17 @@ This is the integration of all 21 waves into a concrete, buildable shape for
 each case is now *where in the repo it lives* + *the Rust idiom* + *the tool*.
 
 ## Crate layout (a pure engine + a Tauri shell, one dependency direction)
+
+**NOW vs LATER (C-REPO):** the tree below is the **LATER / aspirational**
+multi-crate shape — the *future* refactor that only happens **if the
+`video_flow` module outgrows one crate**. The **NOW** shape (what Phase 1
+actually ships, matching this repo's verified single-crate structure, FACT 1)
+is **module discipline inside the one `vision-machine` crate**: keep
+`src-tauri/src/generation/video_flow/` PURE (no Tauri, no fs, no clock —
+*already true today*), and the Tauri shell (`commands/`, `AppState`) is the
+only IO edge. The crate names below are the *later* split targets; the
+`video_flow::…` module paths are the NOW homes.
+
 `
 crates/
   flow-core/      PURE. No Tauri, no fs, no clock, no env. In-memory fixtures.
@@ -586,7 +597,11 @@ src-tauri/        THE SHELL: commands/, AppState, IPC. Depends on flow-* crates 
 
 ## What this *means* for the code already on the branch
 Today ideo_flow/ is a module inside src-tauri (good for Phase 0; it ran
-weight-free). To ship the full design it becomes the low-core crate:
+weight-free). **NOW (C-REPO) = module discipline inside the single crate:**
+keep ideo_flow/ PURE (no Tauri, no fs, no clock — already true), add the
+new modules (drift/, compile/, step_router/, critic_api seam) IN-CRATE,
+and gate the heavy half behind a Cargo feature like undled-ffmpeg.
+**LATER = the crate split, only if the module outgrows one crate:**
 - **Move** intent/novel/plan/critic/regen/drift/signals/model/config →
   crates/flow-core (already Tauri-free; just relocate + make it a lib).
 - **Split off** plan.rs DSL-compile → low-plan; **quarantine** fs/LLM/
@@ -601,20 +616,20 @@ weight-free). To ship the full design it becomes the low-core crate:
   open) + serde_valid (the SKEL schema as Rust types).
 
 ## The full case -> repo-location table (every case, one home)
-| Case | What we ship | Crate | Rust idiom + tool |
+| Case | What we ship | Rust home (NOW = in-crate module · LATER = split crate) | Rust idiom + tool |
 |---|---|---|---|
-| C0 core goal | coverage-aware faithfulness oracle (precision⊗recall vs intent) | flow-core/critic | required_elements (TICK/DeCE) + Ragas claim+NLI floor |
-| C1 spine | intent->novel->structured->lower + narrative-arc/keyframe/subject layers | flow-core | pure fns, in-memory fixtures |
-| C1-A video-DSL | versioned typed DSL (SKEL) + intent/content split (BSD) + compile-to-prose | flow-core/plan + flow-plan | serde_valid (JSON-Schema at type level) |
-| C2 fidelity | two-scale FIRM-Video tree + rubric-bundle locking + user weights | flow-core/critic | RubricArmor gate; deterministic floor; feature-gated learned ceiling |
-| C2-B transition | frozen 7-layer style-contract + embedding consistency check | flow-core/config | a versioned rozen_style_contract field |
-| C3 session | source-of-truth inversion; per-unit regen never mutates N | flow-core/regen + flow-runtime | serde-evolve versioned files + dsh-desktop event-log/projection (*directional precedent only*) |
-| C4 learning | lineage-pair + temp/durable signals -> additive head | flow-core/signals + critic-runtime | DPO/KTO pairs; libloading cdylib (zentract) |
-| C5 isolation | bounded context envelope + typed ACL views + cached nodes | 3-crate boundary | flow-core/plan/runtime split (oracle.omen); insta+proptest per step |
-| C6 build spec | ModelPackageManifest (GGUF base + LoRA sidecars + sha256) | flow-core/model + critic-runtime | ONNX MultiLoRA / llama.cpp / cera; feature-gated |
-| C7 eval | golden + deterministic + judge + CI-gate harness | flow-eval | insta + proptest (failure-persistence) + bolero + prompt registry + INCONCLUSIVE-blocks |
-| C8 drift | per-step re-anchor to IntentSnapshot + continuity_in/out/avoid | flow-core/drift | goal-probe diff; DriftDiagnostic; halt-on-exceed |
-| C9 novel-scale | persistent identity + ambient + audio + two-tier + per-re-occurrence recall | flow-core/plan + critic | subjects[] store; Ambient/Audio layers; aggregate-aware root; GroundShot recall |
+| C0 core goal | coverage-aware faithfulness oracle (precision⊗recall vs intent) | video_flow::critic · → flow-core/critic | required_elements (TICK/DeCE) + Ragas claim+NLI floor |
+| C1 spine | intent->novel->structured->lower + narrative-arc/keyframe/subject layers | video_flow::{intent,novel,plan,regen} · → flow-core | pure fns, in-memory fixtures |
+| C1-A video-DSL | versioned typed DSL (SKEL) + intent/content split (BSD) + compile-to-prose | video_flow::plan + video_flow::compile · → flow-core/plan + flow-plan | serde_valid (JSON-Schema at type level) |
+| C2 fidelity | two-scale FIRM-Video tree + rubric-bundle locking + user weights | video_flow::critic · → flow-core/critic | RubricArmor gate; deterministic floor; feature-gated learned ceiling |
+| C2-B transition | frozen 7-layer style-contract + embedding consistency check | video_flow::config · → flow-core/config | a versioned rozen_style_contract field |
+| C3 session | source-of-truth inversion; per-unit regen never mutates N | video_flow::regen + session/flow layer files · → flow-core/regen + flow-runtime | serde-evolve versioned files + dsh-desktop event-log/projection (*directional precedent only*) |
+| C4 learning | lineage-pair + temp/durable signals -> additive head | video_flow::signal + model · → flow-core/signals + critic-runtime | DPO/KTO pairs; libloading cdylib (zentract) |
+| C5 isolation | bounded context envelope + typed ACL views + cached nodes | **single-crate module-tree + pub(crate) bounded context** (LATER, only if it outgrows one crate: split into flow-core/flow-plan/flow-runtime) | video_flow:: ContextEnvelope + typed ACL views (oracle.omen); insta+proptest per step |
+| C6 build spec | ModelPackageManifest (GGUF base + LoRA sidecars + sha256) | video_flow::learn · → flow-core/model + critic-runtime | ONNX MultiLoRA / llama.cpp / cera; feature-gated |
+| C7 eval | golden + deterministic + judge + CI-gate harness | dev-only `flow-eval` module + golden/ corpus · → flow-eval crate | insta + proptest (failure-persistence) + bolero + prompt registry + INCONCLUSIVE-blocks |
+| C8 drift | per-step re-anchor to IntentSnapshot + continuity_in/out/avoid | video_flow::drift + StepResult · → flow-core/drift | goal-probe diff; DriftDiagnostic; halt-on-exceed |
+| C9 novel-scale | persistent identity + ambient + audio + two-tier + per-re-occurrence recall | video_flow::plan + video_flow::critic · → flow-core/plan + critic | subjects[] store; Ambient/Audio layers; aggregate-aware root; GroundShot recall |
 
 ## The three invariants the repo shape *enforces structurally* (not by convention)
 1. **Tiny + weight-free by construction:** the default/CI build excludes
@@ -778,6 +793,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | **C-SWITCH (Wave-20: "step 1 uses the provider LLM, later steps go local" = serving/switching provider vs local models behind ONE client)** | **the OpenAI-compatible base-URL pattern (Ollama :11434/v1, LM Studio :1234, Jan — all OpenAI-shaped REST; our provider client and local client are the SAME client pointed at a different base URL per step) + the local-default / cloud-escape-valve hybrid routing norm (Jan dropdown, LM Studio Tier-1 local / Tier-2 cloud, Ollama hybrid sign-in)** | Solved (concrete toolchain for R3; directional tooling, not an arXiv claim) |
 | **C-TRAIN (Wave-20: "trained manually by signals, continuously, on the user's machine" = the on-device trainer toolchain)** | **LLaMA-Factory (DPO/KTO/ORPO + 4-bit QLoRA, export-to-Ollama/vLLM — the concrete trainer for the already-CONFIRMED RLHF theory) + Unsloth (7B QLoRA ~5-6GB consumer VRAM = "continuous local training is consumer-feasible") + Axolotl + video-LoRA trainers (CogVideoX-Factory 16-24GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer)** | Solved (concrete toolchain for R8; directional tooling; the RLHF theory is the CONFIRMED Wave-4/13 set) |
 | **C-COMPILE (Wave-21: "compile to platform prose at render" = a model-agnostic generation IR that lowers to N model-specific prompt dialects/backends)** | **the-transformation-engine (model-agnostic semantic prompt IR -> "instantly export to Sora 2, Veo 3, or Generic") + T8 multi-backend prompt compiler ("one structured brief compiles for H3, Wan 2.2, or LTX-Video") + Tarash unified SDK + VideoRouter ("swap models with a single string") + CraftPrompt/OmniPrompt per-model-dialect prompts; RUST precedent = Onmark "Screenplay-First Video Compiler in Rust" + SceneRok VidScript ("generative models as compile-time functions; deterministic compiler owns structure, stochastic models invent assets"); THEORY = arXiv 2607.15865 MLIR TopOp->TpuOp layer-by-layer lowering** | Solved (closes R5 + the `compile_to_platform_prose` design assertion; the structured.vN DSL = the framework-agnostic high-level dialect, per-model prose = the target dialects) |
+| **C-REPO (Wave-22: the solution's repo-shape must match THIS repo + the "tiny repo, separate module, not touch pipes" constraint)** | **a BOUNDED CONTEXT INSIDE ONE CRATE (not a 3-crate workspace split NOW):** Rust module tree + `pub(crate)` restricted visibility as the bounded-context boundary + a Cargo feature-gate for the heavy half (mirrors the repo's existing `bundled-ffmpeg`) + a libloading cdylib seam for the out-of-tree critic (crate-plugin-kit / plugctx "C ABI cdylib plugin-api + plugin-host" scaffold). Verified repo = single `vision-machine` crate (no root/workspace Cargo.toml, no `crates/`, `video_flow` is a module tree). The multi-crate split (flow-core/flow-plan/flow-runtime/flow-eval) is the LATER refactor, only if the module outgrows one crate. | Solved (repo-shape consistency; retires the self-contradiction where the case table said "ship flow-core" but FACT 1 said "single crate") |
 
 ## C. Honest status — what is SOLVED vs deliberately NOT in this repo
 **Solved (a worldwide solution + mechanism + repo home, fully specified):** R1–R13 and C0–C9. This is the grind goal: *every* case you named now has a found solution.
