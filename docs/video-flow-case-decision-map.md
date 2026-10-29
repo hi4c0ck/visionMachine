@@ -196,6 +196,29 @@ heads: Vec<{ name, gguf_sidecar, version, sha256 }>, flow_version }`;
 NLI/judge) is **DEFERRED** to the separate critic project; the repo stays
 weight-free.
 
+**Local model target catalog + license constraint (Wave-17):** the "local
+weights or additionability" side names the **5 open-weights video families
+our spec should accommodate** — `Lightricks/LTX-Video` (13B, distilled, up to
+60s, IC-LoRA), `Wan-Video/Wan2.2` (TI2V-5B runs on 8GB VRAM via Q8-GGUF +
+offload; S2V-14B audio-driven; ComfyUI-integrated), `zai-org`/`THUDM
+CogVideo` (Apache-2.0; official LoRA rank-128 DDP/fp16 finetune path),
+Tencent `HunyuanVideo` (open-source systematic framework), and `MiniMax H3`
+(33B FL2VA + Ref2VA on HuggingFace; 4–15s 2K with native stereo audio).
+Two consequences for the build spec:
+- **VRAM shape drives the "tiny" framing:** base weights stay **external**
+  (user-provided or first-run download); the **in-repo artifact is the
+  `ModelBuildSpec` + additive-adapter manifest only**. This matches the
+  `ModelBuildSpec { LocalWeightsOnly{file} | Additive{base, heads} }` already
+  in `learn.rs` — the spec points at a base file, it does not ship one.
+- **LICENSE CONSTRAINT — `MiniMax H3` weights are under a Community License
+  whose EXCLUDED TERRITORIES are the EU, UK, Korea, and US.** Therefore a
+  "tiny build spec" that *bundles* H3 weights in-repo would violate that
+  license in those geos. The manifest must carry a **license +
+  excluded-territories field per base model** so the resolver can
+  reject/flag an incompatible base at `resolve()` time. (Other 4 families
+  are permissive/Apache-2.0 and can be bundled; H3 cannot, given the
+  territory clause.)
+
 ---
 
 ## C7 — "careful text-output tests + versioning covering" (the eval harness)
@@ -562,7 +585,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | C4 continuous learning | ReelBrain / tianpan lineage-pair / Kuaishou **2308.13249** / DITTO / CHIEF + **MiCRo 2505.24846** | Solved (capture; trainer deferred) |
 | **C4-L (sub-case: layers = verbose expansion, non-main parts on own dynamics)** | **LayerFlow 2506.04228 (Wave-15)** + PreciseVideo ambient-own-dynamics + LPA 7 layers | Solved |
 | C5 isolation / bounded context | context-rot / Three Planes / AgentPatterns / DDD ACL / ComfyUI cached nodes + **Hollywood Town 2510.22431 hypergraph context nodes (Wave-15)** | Solved |
-| C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA (Wave-15)** | Solved (manifest; runtime deferred) |
+| C6 tiny build spec | LoRA / tinker / ONNX MultiLoRA / llama.cpp GGUF-LoRA / cera / model_package + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA (Wave-15)** + **local open-weights catalog (Wave-17): Lightricks/LTX-Video, Wan-Video/Wan2.2 (TI2V-5B @ 8GB Q8-GGUF), zai-org/THUDM CogVideoX (Apache-2.0, official LoRA rank-128 path), Tencent HunyuanVideo, MiniMax H3** | Solved (manifest; runtime deferred) |
 | C7 careful tests + versioning | promptfoo / Ragas / DeepEval / frozen goldens / insta·proptest·bolero + **MAViS 2508.08487 3E per-stage gate (Wave-15)** | Solved |
 | C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + continuity_in/out/avoid + **Hollywood Town 2510.22431 DAG→DCG limited-retry refine (Wave-15)** | Solved |
 | C9 novel-scale spine | CineCrew / EvoState·OneStory·Memento·SlotMemory·REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |

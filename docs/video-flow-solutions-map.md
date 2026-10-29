@@ -1190,7 +1190,7 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | C3 session-space + destructive regen | Three Planes / SPACE / DSH-V3 / Luma·Boords·Genvid / Epicenter / Kohaku / luthier / polaris-local-first + **dsh-desktop (directional only, downgraded)** |
 | **C4 (sub-case: layers = verbose expansion)** | **LayerFlow 2506.04228 (Wave-15: unified layer-aware T2V, per-layer prompts → fg/bg/blended; staged motion-LoRA+content-LoRA = live C6 example)** + PreciseVideo ambient-own-dynamics + LPA 7 layers |
 | C5 bounded context / isolation | context-rot / AgentPatterns / DDD ACL / ComfyUI cached nodes (crates.io/crates verified) + **Hollywood Town 2510.22431 (Wave-15: hypergraph context nodes reduce per-agent memory)** |
-| C6 tiny build spec | LoRA / tinker / **ONNX MultiLoRA** (directional industry) / Rust onnxruntime bindings (intel/microsoft rust dirs verified on GitHub) / llama.cpp GGUF / cera + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA build (Wave-15)** |
+| C6 tiny build spec | LoRA / tinker / **ONNX MultiLoRA** (directional industry) / Rust onnxruntime bindings (intel/microsoft rust dirs verified on GitHub) / llama.cpp GGUF / cera + **LayerFlow 2506.04228 staged motion-LoRA + content-LoRA build (Wave-15)** + **local open-weights catalog (Wave-17): Lightricks/LTX-Video, Wan-Video/Wan2.2 (TI2V-5B @ 8GB Q8-GGUF), zai-org CogVideoX (Apache-2.0, official LoRA rank-128), Tencent HunyuanVideo, MiniMax H3** — manifest carries per-base **license + excluded-territories**; MiniMax H3 EU/UK/KR/US-excluded license CANNOT be bundled in-repo; base weights stay external, the repo ships the SPEC + additive-adapter manifest only |
 | C7 eval harness | promptfoo / Ragas / DeepEval / **insta + proptest + bolero** (all three on crates.io, API-verified) + **MAViS 3E Principle "Examine" (Wave-15: per-stage completeness gate)** |
 | C8 preventive drift | 2505.02709 detect + 2609.32520 StateForge repair + **Hollywood Town 2510.22431 DAG→DCG limited-retries (Wave-15: later-stage feedback refines earlier stages)** |
 | C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent + **SlotMem 2607.15772 (Wave-16: character-addressable slot memory = persistent identity)** |
@@ -1212,17 +1212,35 @@ expansion** and **character consistency**) found **4 MORE**.
 | 16 | **SlotMem 2607.15772** | C9 persistent-identity — role-wise slot memory with conservative update |
 | 16 | **Memento 2606.14667** | C2 "fidelity = as close as user imagined" — reconstruction-as-check; C9 identity grounding |
 
-**TERMINAL STATE (Wave 16):** **every named sub-case in the user's
-requirements now has >=1 CONFIRMED arXiv primary** (24 distinct arXiv
-claims verified on arxiv.org: 12 original + 7 Wave-13/14 + 3 Wave-15 + 4
-Wave-16 = 26). Remaining un-verified items are **non-paper artifacts only**:
+**TERMINAL STATE (Wave 17):** **every named sub-case in the user's
+requirements now has >=1 primary** — either a CONFIRMED arXiv paper
+(26 distinct claims verified on arxiv.org: 12 original + 7 Wave-13/14 +
+3 Wave-15 + 4 Wave-16) **or** a named open-weights model / industrial
+precedent. Wave-17 closed the LAST remaining *user-named* sub-case —
+**C6 "tiny build specification: local weights or additionability"** — by
+naming the 5 concrete local open-weights video families our
+`ModelBuildSpec` should accommodate and flagging a license constraint
+(MiniMax H3 excluded-territory EU/UK/KR/US) that means the in-repo spec
+carries a per-base license + excluded-territory field, and **base
+weights stay external** (repo ships the spec + additive-adapter manifest
+only, never the weights themselves).
+
+Remaining un-verified items are **non-paper artifacts only**:
 `dsh-desktop` (Tauri-wrapper design note, downgraded to *directional*),
 `termux-train`/AMEVA (JS/Python, directional), and the C2-B/C6
-industry-spec flags. The grind goal — *explore similar project objectives
-worldwide to find solutions of our cases* — is now **exhausted at the
-sub-case level**: Waves 13–16 each targeted previously-uncovered named
-sub-cases and each surfaced new load-bearing sources; a Wave-17 would only
-re-cover existing families. All remaining work = **implementation**.
+industry-spec flags (the C6 flag is now *closed* by the Wave-17 catalog;
+the C2-B flag stays directional — Seedance v3/SKEL spec sheets are
+commercial and not verifiable as arXiv).
+
+The grind goal — *explore similar project objectives worldwide to find
+solutions of our cases* — is now **exhausted at the sub-case level**:
+Waves 13→17 each targeted previously-uncovered *user-named* sub-cases
+(VideoReward/SelectiveRM/AlignXplore; MiCRo/Kuaishou;
+LayerFlow/MAViS/Hollywood-Town; DOME/ContextAnyone/SlotMem/Memento;
+local open-weights catalog + license constraint) and each surfaced new
+load-bearing evidence. **A Wave-18 would be busywork** — there are no
+remaining user-named sub-cases without a primary. All remaining work =
+**implementation** of the blueprint.
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
