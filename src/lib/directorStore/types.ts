@@ -220,11 +220,24 @@ export function tagBars(doc: FlowDocument): Array<{
 }
 
 /**
- * The stable section target id (regen.rs `section_id` shape):
- * `p{pipeIndex}:{tag}:{start}..{end}`. The current flow emits a single
- * pipe (index 0), so pipeIndex is 0. Used as the `target_span` for signals
- * and as the stable key for Q1 culprit lookups.
+ * Q4 learning-strip sparkline (design §5.4): the ONLY chart in the tab.
+ * Pure SVG points string for a polyline of overall scores across runs
+ * (newest-last, as `list_flows` returns newest-first → reversed).
+ * Honest empty state when fewer than 2 runs.
  */
+export function sparklinePoints(
+	overalls: number[],
+	width = 120,
+	height = 24
+): string | null {
+	if (overalls.length < 2) return null;
+	const step = width / (overalls.length - 1);
+	return overalls
+		.map((v, i) => `${(i * step).toFixed(1)},${(height - 1 - (v * (height - 2))).toFixed(1)}`)
+		.join(' ');
+}
+
+/** The element-id shape regen.rs mints: p{idx}:{tag}:{start}..{end}. */
 export function sectionTargetSpan(index: number, s: PlanSection, pipeIndex = 0): string {
 	// index (section ordinal) is informational; the id itself is content-derived.
 	void index;

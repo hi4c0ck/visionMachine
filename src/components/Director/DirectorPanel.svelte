@@ -9,6 +9,7 @@
 		type FlowDocument,
 		type FlowSummary,
 	} from '$lib/directorStore/types';
+	import { sparklinePoints } from '$lib/directorStore/types';
 	import TextBlock from './TextBlock.svelte';
 
 	let {
@@ -17,6 +18,7 @@
 		sessionName,
 		pipeCount,
 		onLogSignal,
+		onRunningChange,
 	} = $props<{
 		activeTab: DirectorTab;
 		sessionId: string;
@@ -28,6 +30,9 @@
 			targetSpan: string,
 			note?: string
 		) => Promise<string>;
+		/** Run-liveness sink so the strip's Director badge (design §1 guard)
+		 stays honest while the user sits on another tab. */
+		onRunningChange?: (running: boolean) => void;
 	}>();
 
 	let direction = $state('');
@@ -94,6 +99,7 @@
 
 	async function handleRun() {
 		running = true;
+		onRunningChange?.(true);
 		runError = null;
 		try {
 			const result = await runFlow(sessionId, direction);
@@ -105,6 +111,7 @@
 			flashToast(runError);
 		} finally {
 			running = false;
+			onRunningChange?.(false);
 		}
 	}
 
@@ -133,6 +140,10 @@
 	}
 
 	const sections = $derived(doc?.structured.pipes[0]?.sections ?? []);
+	// Q4 sparkline: overall score across persisted runs (oldest → newest).
+	// Data is real (FlowSummary.overall from each saved doc), not invented;
+	// the honest empty state is "no chart" when <2 runs.
+	const sparkPoints = $derived(sparklinePoints([...flows].reverse().map((f) => f.overall)));
 </script>
 
 <div class="director-root" data-tab={activeTab}>
@@ -295,14 +306,35 @@
 
 		<section class="score-card">
 			<h3 class="block-heading">Learning strip</h3>
-			<p class="hint">
-				{flows.length} run{flows.length === 1 ? '' : 's'} recorded · critic
-				{#if doc?.criticModel?.untrained}
-					untrained (stub)
-				{:else}
-					v{(doc?.regen.version.criticModelVersion) ?? 0}
-				{/if} · signals wired
-			</p>
+			<div class="learning-row">
+				<p class="hint">
+					{flows.length} run{flows.length === 1 ? '' : 's'} recorded · critic
+					{#if doc?.criticModel?.untrained}
+						untrained (stub)
+					{:else}
+						v{(doc?.regen.version.criticModelVersion) ?? 0}
+					{/if} · signals wired
+				</p>
+				{#if sparkPoints}
+					<svg
+						class="sparkline"
+						viewBox="0 0 120 24"
+						width="120"
+						height="24"
+						role="img"
+						aria-label="Overall score across runs"
+					>
+						<!-- gridline at 0.5 (the stub-critic neutral line) -->
+						<line x1="0" y1="12.5" x2="120" y2="12.5" class="spark-grid" />
+						<polyline
+							points={sparkPoints}
+							fill="none"
+							stroke="var(--accent-color)"
+							stroke-width="1.5"
+						/>
+					</svg>
+				{/if}
+			</div>
 		</section>
 	{/if}
 </div>
@@ -612,5 +644,28 @@
 		gap: 4px;
 		border-top: 1px solid var(--border-color);
 		padding-top: 10px;
+	}
+
+	/* ── Q4 learning strip + the tab's single sparkline ── */
+	.learning-row {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+	}
+
+	.learning-row .hint {
+		flex: 1;
+	}
+
+	.sparkline {
+		flex-shrink: 0;
+		opacity: 0.9;
+	}
+
+	.spark-grid {
+		stroke: var(--text-muted);
+		stroke-width: 0.5;
+		stroke-dasharray: 2 2;
+		opacity: 0.5;
 	}
 </style>

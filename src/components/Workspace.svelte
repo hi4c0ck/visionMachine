@@ -71,6 +71,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// right-aligned tab group in .preview-meta and the composer body slot.
 	// Per-session state lives in the director store (runStates map).
 	let composerTab = $state<DirectorTab>('pipes');
+	// Director-tab running indicator for the strip badge (design §1 guard:
+	// an in-flight run must stay visible while the user is on another tab
+	// of the same session). Session switch resets it with the tab.
+	let directorRunning = $state(false);
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 
@@ -1268,6 +1272,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		if (foundProject) {
 			selectedProjectId = foundProject.id;
 			selectedSessionId = sessionId;
+			// Harness tabs: switching sessions always lands on Pipes (design
+			// §1) — a stale Extract/Scoreboard view of the previous session
+			// must not carry over.
+			composerTab = 'pipes';
+			directorRunning = false;
 
 			// Load fresh data from backend
 			const loadResult = await loadSession(sessionId);
@@ -2582,6 +2591,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						onclick={() => (composerTab = tab.id as DirectorTab)}
 					>
 						{tab.label}
+						<!-- Gap B (design §1 guard): in-flight run stays visible
+						     even when the user sits on another tab of the session. -->
+						{#if tab.id === 'director' && directorRunning}
+							<span class="tab-run-dot" aria-label="run in progress"></span>
+						{/if}
 					</button>
 				{/each}
 			</div>
@@ -2649,6 +2663,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						pipeCount={pipes.length}
 						onLogSignal={(kind, targetSpan, note) =>
 							logSignal(selectedSession.id, kind, targetSpan, note)}
+						onRunningChange={(b) => (directorRunning = b)}
 					/>
 				{/if}
 			{:else}
@@ -2902,6 +2917,23 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		color: var(--text-primary);
 		font-weight: 600;
 		border-bottom: 1px solid var(--accent-color);
+	}
+
+	/* In-flight run indicator on the Director tab (design §1 badge guard). */
+	.tab-run-dot {
+		display: inline-block;
+		width: 5px;
+		height: 5px;
+		margin-left: 5px;
+		border-radius: 50%;
+		background: var(--accent-color);
+		animation: tab-run-pulse 1.6s ease-in-out infinite;
+		vertical-align: middle;
+	}
+
+	@keyframes tab-run-pulse {
+		0%, 100% { opacity: 0.35; }
+		50% { opacity: 1; }
 	}
 
 	/* ── D10 generation pill (minimized progress modal) ── */
