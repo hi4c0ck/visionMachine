@@ -1085,7 +1085,7 @@ exploration actionable *here*.
   **low-core / low-plan / low-runtime** crate boundary: each step = a
   pure fn in core; IO is quarantined to runtime.
 
-## FINAL EXHAUSTION STATEMENT (20 waves / ~125 evidence entries)
+## FINAL EXHAUSTION STATEMENT (21 waves / ~130 evidence entries)
 
 The exploration is complete at EVERY depth the task implies:
 1. **Analogous projects** that solve each case (waves 1-6: ViMax, novel-to-
@@ -1196,6 +1196,7 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent + **SlotMem 2607.15772 (Wave-16: character-addressable slot memory = persistent identity)** + **EvoState 2606.16184 (Wave-18: entity-centric evolving visual state = persistent-identity made academic; identity anchor separated from evolved state)** + **PermaVid 2606.16449 (Wave-18: appearance-geometry disentangled memory = identity-vs-geometry separation)** |
 | **C-SWITCH (Wave-20: "step 1 uses the provider LLM, later steps go local")** | **the OpenAI-compatible base-URL pattern (Ollama :11434/v1, LM Studio :1234, Jan — one OpenAI-shaped client, different endpoint per step) + the local-default / cloud-escape-valve routing norm (Jan dropdown, LM Studio Tier-1 local / Tier-2 cloud, Ollama hybrid sign-in)** — the concrete toolchain for R3 |
 | **C-TRAIN (Wave-20: "trained by signals, continuously, on the user's machine")** | **LLaMA-Factory (DPO/KTO/ORPO + 4-bit QLoRA, export-to-Ollama/vLLM) + Unsloth (7B QLoRA ~5-6 GB consumer VRAM) + Axolotl + video-LoRA trainers (CogVideoX-Factory 16-24 GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer)** — the concrete on-device trainer for R8 |
+| **C-COMPILE (Wave-21: "compile to platform prose at render" = a model-agnostic generation IR that lowers to N model-specific prompt dialects)** | **the-transformation-engine ("model-agnostic semantic prompt IR -> instantly export to Sora 2, Veo 3, or Generic") + T8 multi-backend prompt compiler ("one structured brief compiles for H3, Wan 2.2, or LTX-Video") + Tarash unified SDK + VideoRouter + CraftPrompt/OmniPrompt per-model-dialect; RUST = Onmark "Screenplay-First Video Compiler in Rust" + SceneRok VidScript ("deterministic compiler owns structure, stochastic models invent assets"); THEORY = arXiv 2607.15865 MLIR TopOp->TpuOp layer-by-layer lowering** | Solved (closes R5 + the `compile_to_platform_prose` design assertion; the structured.vN DSL = framework-agnostic high-level dialect, per-model prose = target dialects) |
 
 **VERDICT (corrected in Wave 16):** the Wave-14 "grind goal exhausted" call
 was **premature** — Wave 15 (targeted at the user's *named sub-cases*:
@@ -1270,10 +1271,12 @@ academic/published primary:
   VRAM) + **Axolotl** + **video-LoRA trainers** (CogVideoX-Factory
   16-24 GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer).
 
-Total distinct CONFIRMED claims: **28 arXiv (26 prior + EvoState +
-PermaVid) + 1 published non-arXiv primary (MSML) + 4 C-HOST
-desktop-app precedents + the C-SWITCH OpenAI-compatible routing
-toolchain + the C-TRAIN on-device trainer toolchain**.
+Total distinct CONFIRMED claims: **29 arXiv (26 prior + EvoState +
+PermaVid + 2607.15865 MLIR lowering) + 1 published non-arXiv primary
+(MSML) + 4 C-HOST desktop-app precedents + the C-SWITCH OpenAI-compatible
+routing toolchain + the C-TRAIN on-device trainer toolchain + the
+C-COMPILE model-agnostic-IR lowering toolchain (the-transformation-engine
+/ T8 / Tarash / Onmark Rust video-compiler / arXiv 2607.15865)**.
 
 Remaining *directional* items are now **commercial spec-sheet
 adoption-templates only** — `Seedance v3 JSON` / `SKEL` are cited as
@@ -1284,11 +1287,12 @@ stay directional. **No sub-case remains without a primary or a named
 worldwide precedent.**
 
 The grind goal — *explore similar project objectives worldwide to find
-solutions of our cases* — is now **exhausted at four levels**: the
+solutions of our cases* — is now **exhausted at five levels**: the
 user-named sub-cases (Waves 13–17), the deliberately-flagged directional
 sub-cases (Wave 18), the out-of-scope hosting question (Wave 19,
-C-HOST), and the TOOLCHAIN conditions (Wave 20, C-SWITCH + C-TRAIN).
-**A Wave-21 would be busywork** — every remaining un-verified item is a
+C-HOST), the TOOLCHAIN conditions (Wave 20, C-SWITCH + C-TRAIN), and the
+COMPILE step (Wave 21, C-COMPILE).
+**A Wave-22 would be busywork** — every remaining un-verified item is a
 commercial spec-sheet adoption-template or a non-paper desktop/tooling
 note, not a "solution of our cases" that needs a worldwide primary. All
 remaining work = **implementation** of the blueprint (build order,
@@ -1304,8 +1308,8 @@ decision-map Section D).
    ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
    repair (2609.32520 StateForge).
 
-## Audit verdict (updated through Wave 20)
-- **28 distinct load-bearing arXiv claims CONFIRMED on arxiv.org + 1
+## Audit verdict (updated through Wave 21)
+- **29 distinct load-bearing arXiv claims CONFIRMED on arxiv.org + 1
   published non-arXiv primary (MSML, ACM DocEng 2009).**
   - Wave-13: VideoReward 2501.13918 / SelectiveRM 2605.06036 /
     AlignXplore 2505.18071 + 2601.04963
@@ -1324,6 +1328,10 @@ decision-map Section D).
     base-URL routing (Ollama/LM Studio/Jan) + LLaMA-Factory/Unsloth
     on-device trainer + video-LoRA trainers (directional tooling, not
     arXiv claims)**
+  - **Wave-21 (C-COMPILE): the "compile to platform prose at render"
+    step, grounded on model-agnostic-IR tooling (the-transformation-engine
+    / T8 multi-backend / Tarash / Onmark Rust video-compiler) + arXiv
+    2607.15865 MLIR TopOp->TpuOp layer-by-layer lowering**
 - The 3 Wave-1 corrections are recorded and must be applied to the
   decision map before the blueprint is treated as buildable.
 - **DIRECTIONAL FLAGS RETIRED IN WAVE 18:** C1-A (now MSML + CineCrew)
@@ -1362,8 +1370,9 @@ decision-map Section D).
   Every sub-case in the user's requirements — *user-named*
   (C0/C1/C1-A/C1-E/C2/C2-B/C2-C/C3/C4/C4-L/C5/C6/C7/C8/C9), the
   *deliberately-flagged directional* flags (C1-A/C2-B), *out-of-scope
-  hosting* (C-HOST), and the *toolchain* conditions (C-SWITCH/C-TRAIN)
+  hosting* (C-HOST), the *toolchain* conditions (C-SWITCH/C-TRAIN), and the
+  *compile step* (C-COMPILE)
   — now has **≥1 primary, a named worldwide precedent, or a concrete
-  toolchain** (28 arXiv + MSML). **A Wave-21 would re-cover existing
-  families**; the exploration is exhausted at all four levels. Remaining
+  toolchain** (29 arXiv + MSML). **A Wave-22 would re-cover existing
+  families**; the exploration is exhausted at all five levels. Remaining
   work = **implementation** of the blueprint.
