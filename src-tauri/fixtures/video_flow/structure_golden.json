@@ -1,0 +1,27 @@
+{
+  "flowVersion": 1,
+  "pipes": [
+    {
+      "index": 0,
+      "title": "A fox at dusk",
+      "globalStyle": "cinematic, warm golden hour",
+      "mediaMode": "text",
+      "sections": [
+        {
+          "tag": "camera",
+          "frameStart": 0,
+          "frameEnd": 24,
+          "prompt": "wide tracking shot across the meadow a red fox darts forward",
+          "from": []
+        },
+        {
+          "tag": "lighting",
+          "frameStart": 24,
+          "frameEnd": 48,
+          "prompt": "sunset, long shadows the river glints in the fading sun",
+          "from": []
+        }
+      ]
+    }
+  ]
+}

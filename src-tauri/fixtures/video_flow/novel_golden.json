@@ -1,0 +1,12 @@
+{
+  "stepVersion": 1,
+  "primary": {
+    "kind": "primary",
+    "text": "a red fox darts through the tall pine forest at dusk as golden light spills across the meadow and a distant river catches the fading sun in long slow reflections while the wind moves the dry grass and the whole valley settles into quiet evening",
+    "from": [
+      "clause-0"
+    ]
+  },
+  "secondary": [],
+  "ambient": []
+}

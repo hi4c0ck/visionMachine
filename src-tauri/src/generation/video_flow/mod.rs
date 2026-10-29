@@ -46,6 +46,11 @@ mod regen;
 mod signal;
 mod steps;
 
+#[cfg(test)]
+mod golden_tests;
+#[cfg(test)]
+mod scoring_tests;
+
 // ── config ─────────────────────────────────────────────────────────────
 pub use config::{
     CriticParams, ExpandParams, FlowConfig, LearnParams, MaterializeParams,
