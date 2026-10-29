@@ -1085,7 +1085,7 @@ exploration actionable *here*.
   **low-core / low-plan / low-runtime** crate boundary: each step = a
   pure fn in core; IO is quarantined to runtime.
 
-## FINAL EXHAUSTION STATEMENT (21 waves / ~130 evidence entries)
+## FINAL EXHAUSTION STATEMENT (22 waves / ~135 evidence entries)
 
 The exploration is complete at EVERY depth the task implies:
 1. **Analogous projects** that solve each case (waves 1-6: ViMax, novel-to-
@@ -1100,7 +1100,14 @@ The exploration is complete at EVERY depth the task implies:
    audio, two-tier hierarchy, per-re-occurrence recall, stage-specific repair)
 6. **The Rust/Tauri repo shape that carries all of it** (wave 11: pure-crate
    workspace, feature-gated cdylib critic runtime, insta/proptest/bolero test
-   stack, serde-evolve versioned data model, 3-crate bounded-context boundary)
+   stack, serde-evolve versioned data model, bounded-context boundary)
+   **[C-REPO Wave-22 correction:]** the "3-crate split" in the wave-11 blueprint
+   is the **LATER/aspirational** shape. The **NOW** shape (matching this repo's
+   verified single `vision-machine` crate, FACT 1) is a bounded context *inside
+   one crate*: `video_flow::…` module tree + `pub(crate)` visibility + a
+   `bundled-ffmpeg`-style feature gate for the heavy half + a libloading cdylib
+   seam for the out-of-tree critic. The flow-core/plan/runtime/eval split happens
+   only if the module outgrows one crate.
 
 Every one of our cases (C0, C1, C1-A, C2, C2-B, C3, C4, C5, C6, C7, C8, C9) has
 a named worldwide solution AND a copyable mechanism AND the concrete Rust
@@ -1197,6 +1204,7 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | **C-SWITCH (Wave-20: "step 1 uses the provider LLM, later steps go local")** | **the OpenAI-compatible base-URL pattern (Ollama :11434/v1, LM Studio :1234, Jan — one OpenAI-shaped client, different endpoint per step) + the local-default / cloud-escape-valve routing norm (Jan dropdown, LM Studio Tier-1 local / Tier-2 cloud, Ollama hybrid sign-in)** — the concrete toolchain for R3 |
 | **C-TRAIN (Wave-20: "trained by signals, continuously, on the user's machine")** | **LLaMA-Factory (DPO/KTO/ORPO + 4-bit QLoRA, export-to-Ollama/vLLM) + Unsloth (7B QLoRA ~5-6 GB consumer VRAM) + Axolotl + video-LoRA trainers (CogVideoX-Factory 16-24 GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer)** — the concrete on-device trainer for R8 |
 | **C-COMPILE (Wave-21: "compile to platform prose at render" = a model-agnostic generation IR that lowers to N model-specific prompt dialects)** | **the-transformation-engine ("model-agnostic semantic prompt IR -> instantly export to Sora 2, Veo 3, or Generic") + T8 multi-backend prompt compiler ("one structured brief compiles for H3, Wan 2.2, or LTX-Video") + Tarash unified SDK + VideoRouter + CraftPrompt/OmniPrompt per-model-dialect; RUST = Onmark "Screenplay-First Video Compiler in Rust" + SceneRok VidScript ("deterministic compiler owns structure, stochastic models invent assets"); THEORY = arXiv 2607.15865 MLIR TopOp->TpuOp layer-by-layer lowering** | Solved (closes R5 + the `compile_to_platform_prose` design assertion; the structured.vN DSL = framework-agnostic high-level dialect, per-model prose = target dialects) |
+| **C-REPO (Wave-22: the solution's repo-shape must match THIS repo + the "tiny repo, separate module, not touch pipes" constraint)** | **a BOUNDED CONTEXT INSIDE ONE CRATE (not a 3-crate split NOW):** Rust module tree + `pub(crate)` restricted visibility as the bounded-context boundary + a Cargo feature-gate for the heavy half (mirrors this repo's existing `bundled-ffmpeg`) + a libloading cdylib seam for the out-of-tree critic (crate-plugin-kit / plugctx "C ABI cdylib plugin-api + plugin-host" scaffold). Verified: VisionMachine is a SINGLE `vision-machine` crate (no root/workspace Cargo.toml, no `crates/`, `video_flow` is a module tree). The flow-core/plan/runtime/eval split is the LATER refactor, only if the module outgrows one crate. | Solved (repo-shape consistency; retires the self-contradiction where the case table said "ship flow-core" but FACT 1 said "single crate") |
 
 **VERDICT (corrected in Wave 16):** the Wave-14 "grind goal exhausted" call
 was **premature** — Wave 15 (targeted at the user's *named sub-cases*:
@@ -1287,12 +1295,14 @@ stay directional. **No sub-case remains without a primary or a named
 worldwide precedent.**
 
 The grind goal — *explore similar project objectives worldwide to find
-solutions of our cases* — is now **exhausted at five levels**: the
+solutions of our cases* — is now **exhausted at six levels**: the
 user-named sub-cases (Waves 13–17), the deliberately-flagged directional
 sub-cases (Wave 18), the out-of-scope hosting question (Wave 19,
-C-HOST), the TOOLCHAIN conditions (Wave 20, C-SWITCH + C-TRAIN), and the
-COMPILE step (Wave 21, C-COMPILE).
-**A Wave-22 would be busywork** — every remaining un-verified item is a
+C-HOST), the TOOLCHAIN conditions (Wave 20, C-SWITCH + C-TRAIN), the
+COMPILE step (Wave 21, C-COMPILE), and the REPO-SHAPE consistency case
+(Wave 22, C-REPO — the solution's repo shape now matches the verified
+single-crate repo, not a 3-crate split).
+**A Wave-23 would be busywork** — every remaining un-verified item is a
 commercial spec-sheet adoption-template or a non-paper desktop/tooling
 note, not a "solution of our cases" that needs a worldwide primary. All
 remaining work = **implementation** of the blueprint (build order,
@@ -1308,7 +1318,7 @@ decision-map Section D).
    ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
    repair (2609.32520 StateForge).
 
-## Audit verdict (updated through Wave 21)
+## Audit verdict (updated through Wave 22)
 - **29 distinct load-bearing arXiv claims CONFIRMED on arxiv.org + 1
   published non-arXiv primary (MSML, ACM DocEng 2009).**
   - Wave-13: VideoReward 2501.13918 / SelectiveRM 2605.06036 /
@@ -1370,9 +1380,11 @@ decision-map Section D).
   Every sub-case in the user's requirements — *user-named*
   (C0/C1/C1-A/C1-E/C2/C2-B/C2-C/C3/C4/C4-L/C5/C6/C7/C8/C9), the
   *deliberately-flagged directional* flags (C1-A/C2-B), *out-of-scope
-  hosting* (C-HOST), the *toolchain* conditions (C-SWITCH/C-TRAIN), and the
-  *compile step* (C-COMPILE)
+  hosting* (C-HOST), the *toolchain* conditions (C-SWITCH/C-TRAIN), the
+  *compile step* (C-COMPILE), and the *repo-shape consistency* case
+  (C-REPO — solution repo shape now matches the verified single-crate
+  repo, not a 3-crate split)
   — now has **≥1 primary, a named worldwide precedent, or a concrete
-  toolchain** (29 arXiv + MSML). **A Wave-22 would re-cover existing
-  families**; the exploration is exhausted at all five levels. Remaining
+  toolchain** (29 arXiv + MSML). **A Wave-23 would re-cover existing
+  families**; the exploration is exhausted at all six levels. Remaining
   work = **implementation** of the blueprint.

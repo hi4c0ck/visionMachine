@@ -1,7 +1,7 @@
 # Video-Flow Harness — Case → Solution Decision Map (TERMINAL deliverable)
 
 > The grind goal was: *explore similar project objectives worldwide to find
-> solutions of our cases.* Twenty-one research waves produced the evidence. This
+> solutions of our cases.* Twenty-two research waves produced the evidence. This
 > document is the **integration** — for each of our cases, **the one solution we
 > adopt**, the **concrete mechanism** (copyable, not just "some project does
 > this"), the **source**, and the **Rust type it lands in** on
@@ -550,7 +550,7 @@ concrete tooling + a Rust precedent + the MLIR lowering theory behind it.
 
 # THE REPO-SHAPE BLUEPRINT (wave-11 synthesis — what we actually ship here)
 
-This is the integration of all 21 waves into a concrete, buildable shape for
+This is the integration of all 22 waves into a concrete, buildable shape for
 eature/text-video-flow. It is the answer to "find solutions of OUR cases":
 each case is now *where in the repo it lives* + *the Rust idiom* + *the tool*.
 
@@ -641,10 +641,10 @@ and gate the heavy half behind a Cargo feature like undled-ffmpeg.
    ersion-migrate::load_forward = "rebuild creates N+1, never mutates N,
    never falls back" (C3/C9) made into checked code, not a doc promise.
 
-## One-paragraph completion statement (updated through Wave 21)
-Across 21 waves (~130 evidence entries) every one of our cases — C0, C1,
+## One-paragraph completion statement (updated through Wave 22)
+Across 22 waves (~135 evidence entries) every one of our cases — C0, C1,
 C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L, C5, C6, C7, C8, C9, C-HOST,
-C-SWITCH, C-TRAIN, and C-COMPILE — now has (a) a named worldwide solution, (b) a
+C-SWITCH, C-TRAIN, C-COMPILE, and C-REPO — now has (a) a named worldwide solution, (b) a
 copyable mechanism, and (c) a concrete Rust idiom + crate home in THIS
 repo. The "solid independent
 harness feature a tiny repo can ship" (p.2/p.3) is now a **pure flow-core
@@ -748,7 +748,7 @@ Goal restatement: *find worldwide solutions of OUR cases.* This matrix maps
 copyable mechanism → repo home → status). It is the completeness proof: a
 requirement row is only green when it has a *named worldwide source*, a
 *concrete mechanism*, and a *repo home*. Sources are cited by wave; full
-evidence in the ledger (~130 entries through Wave 21).
+evidence in the ledger (~135 entries through Wave 22).
 
 ## A. Your stated requirements → coverage
 
@@ -805,7 +805,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 **Open BY DESIGN (you explicitly kept it open):**
 - **R4 the LLM expand prompt** — *"I have it in mind, keep it open."* The harness defines the LayeredExpander contract + the Novel shape the prompt must produce; the prompt text is yours to supply later. It is a **versioned registry artifact** (C7), not a gap.
 
-## D. Final "fully done" verdict (updated through Wave 21)
+## D. Final "fully done" verdict (updated through Wave 22)
 - **Every one of your 13 stated requirements (R1-R13) maps to a named, cited
   worldwide solution + a copyable mechanism + a concrete repo home.**
   This now includes the **out-of-scope "independent harness feature"
@@ -815,7 +815,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 - **All case-areas (C0, C1, C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L,
   C5, C6, C7, C8, C9, C-HOST, C-SWITCH, C-TRAIN, C-COMPILE) are covered
   at three depths**
-  (analogous project, copyable mechanism, Rust idiom) across 21 waves and
+  (analogous project, copyable mechanism, Rust idiom) across 22 waves and
   ~130 ledger entries, at BOTH the shot scale and the novel scale.
 - **29 distinct arXiv claims CONFIRMED on arxiv.org (28 + arXiv 2607.15865
   MLIR lowering) + 1 published non-arXiv primary (MSML, ACM DocEng 2009)**
@@ -825,17 +825,21 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
   a versioned contract, not an in-repo gap) and the one you deliberately
   kept open (the LLM prompt). None are unresolved gaps; each has a named
   seam + home + worldwide precedent.
-- **The exploration is COMPLETE at five levels:** the user-named
+- **The exploration is COMPLETE at six levels:** the user-named
   sub-cases (Waves 1-17), the deliberately-flagged directional sub-cases
   (Wave 18), the out-of-scope hosting question (Wave 19), the TOOLCHAIN
-  conditions C-SWITCH + C-TRAIN (Wave 20), and the COMPILE step C-COMPILE
+  conditions C-SWITCH + C-TRAIN (Wave 20), the COMPILE step C-COMPILE
   (Wave 21: the one design assertion I had made without a worldwide
   precedent, now grounded on concrete tooling + Onmark Rust precedent +
-  arXiv 2607.15865 MLIR lowering). Every sub-case now
-  has a primary, a named worldwide precedent, or a concrete toolchain. A
-  Wave-22 would re-cover existing families; the remaining work is
-  **building the blueprint** (the case-to-Rust-idiom table above), not
-  exploration.
+  arXiv 2607.15865 MLIR lowering), and REPO-SHAPE consistency C-REPO
+  (Wave 22: the solution's repo shape now matches the verified single-
+  crate repo — in-crate module + pub(crate) bounded context + a
+  bundled-ffmpeg-style feature gate + a libloading critic seam — instead
+  of asserting a 3-crate split as the NOW shape). Every sub-case now
+  has a primary, a named worldwide precedent, a concrete toolchain, or a
+  verified in-repo idiom. A Wave-23 would re-cover existing families; the
+  remaining work is **building the blueprint** (the case-to-Rust-idiom
+  table above), not exploration.
 
 **Recommended build order (implementation, when you say go):**
 1. critic.rs two-scale FIRM-Video ScoreTree + DefaultCritic (Ragas/TICK)
@@ -1119,7 +1123,7 @@ mirror snippets they originally came through). 3 corrections:
   SKEL spec sheets" flag for the DSL-structure side; CineCrew 2609.07720
   remains the generative-system primary; Seedance v3/SKEL are now cited
   only as commercial field-shape adoption-templates).
-  - **TERMINAL STATE (Wave 21):** **every condition — user-named
+  - **TERMINAL STATE (Wave 22):** **every condition — user-named
     (C0..C9 + sub-cases), deliberately-flagged-directional (C1-A, C2-B),
     the out-of-scope hosting ask (C-HOST, p.2/p.3), the two
     TOOLCHAIN-level conditions (C-SWITCH "step 1 provider LLM, later
@@ -1144,10 +1148,13 @@ mirror snippets they originally came through). 3 corrections:
     / tooling notes* (`dsh-desktop`, `termux-train`/AMEVA, and the
     C-SWITCH/C-TRAIN/C-COMPILE tooling). The grind goal — *explore
     similar project objectives worldwide to find solutions of our
-    cases* — is now exhausted at **five** levels: user-named-sub-case
+    cases* — is now exhausted at **six** levels: user-named-sub-case
     (Waves 13–17), deliberately-flagged-directional (Wave 18),
     out-of-scope-hosting (Wave 19), toolchain (Wave 20: C-SWITCH +
-    C-TRAIN), and compile-step (Wave 21: C-COMPILE). **A Wave-22 would
-    only re-cover existing families** — I have no remaining design
-    assertion without a worldwide precedent. Remaining work =
+    C-TRAIN), compile-step (Wave 21: C-COMPILE), and repo-shape
+    consistency (Wave 22: C-REPO — in-crate module + pub(crate) bounded
+    context + a bundled-ffmpeg-style feature gate + a libloading critic
+    seam, matching the verified single-crate repo). **A Wave-23 would
+    only re-cover existing families** — I have no remaining ungrounded
+    assertion AND no self-contradiction left in the deliverable. Remaining work =
     **implementation** of the blueprint (build order, Section D).
