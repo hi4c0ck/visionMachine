@@ -15,29 +15,54 @@
 ## 1. The container: composer panel → switchable tabs
 
 The composer panel (today: pipe rows + keyframes/subjects) becomes a **tabbed
-shell**. The tab bar sits in the panel header position:
+shell**. The tab bar lives in the **existing top strip** — `.preview-meta`
+(`Workspace.svelte:2556–2562`), the 24px full-width row directly under the
+`Frame` component:
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│ [ Pipes ]  [ Director ]  [ Extract ]  [ Scoreboard ]        │
-├────────────────────────────────────────────────────────────┤
-│  session context line:  <session name> · 3 pipes · 72f     │
-├────────────────────────────────────────────────────────────┤
-│  <active tab body — continuous surface, Template A>        │
-└────────────────────────────────────────────────────────────┘
+   [ Frame — preview strip ]
+   Frame: 3 / 72 · 3 pipes          [ Pipes | Director | Extract | Scoreboard ]
+   ┌───────────────┬───────────────────────────┬───────────┐
+   │ nav column    │ composer CENTER column —  │ inspector │
+   │               │  <active tab body,        │ (ToolsPanel)
+   │               │  continuous surface>      │           │
+   └───────────────┴───────────────────────────┴───────────┘
 ```
 
+- **Placement (verified):** `.preview-meta` is a `height: 24px` flex row,
+  `padding: 0 12px; gap: 16px`; its two spans (`frame-indicator`,
+  `pipe-count`) are left-aligned, leaving the right half free. The tab group is
+  **right-aligned in the same 24px row** — not left: left-aligned tabs under
+  all three columns would read as page-level nav, while right-aligned they sit
+  directly above the center/inspector columns and the active-tab underline
+  points down at their body. Meta spans stay left.
 - **Tabs**: hairline-ruled, no pills, no card wash. Active = 1px `--accent`
   underline + weight 600; inactive = `--text-secondary` weight 400.
 - **Quiet badges** (mono, 10px, `--text-muted`): Director `●n` while a run is
   in flight; Extract `n sections` when fresh structural text has never been
   regenerated; Scoreboard `stale` when a newer flow doc exists than the one
-  being scored.
-- **Session context line** never changes between tabs — one spatial anchor.
+  being scored. **Badge ownership:** when the active tab is anything but
+  Pipes, the right side of the strip shows that tab's own badge *in place of*
+  `pipe-count` — the row never carries a number that belongs to a hidden tab
+  (a Scoreboard showing pre-regen pipe count would mislead).
 - **Pipes tab** = today's composer, byte-identical. It is the before/after
-  reference for regeneration.
+  reference for regeneration and the landing tab on every session switch.
 - **State survives tab switches** (scroll, collapsed blocks, in-flight runs).
   Tab switch = sin-tween crossfade of bodies; no re-mount.
+
+**Guards (from the placement audit):**
+1. **No new data plumbing.** The strip and the composer body's render slot both
+   live in `Workspace.svelte`; one `composerTab` `$state` owns both. No store,
+   no invoke, no prop chains.
+2. **Session-keyed run state.** Director runs, unsaved Extract content, and
+   Scoreboard staleness are per-session: state is a `Map<sessionId, …>`;
+   switching sessions never carries an in-flight run into the new session —
+   the target session shows its own (possibly idle) state, badges only where
+   the run actually is.
+3. **Strip render condition.** `.preview-meta` is gated on
+   `selectedSession && selectedProject` — same gate as the composer body; the
+   tab group inherits that condition. (layoutMode coupling is out of scope:
+   the layout system is being reworked next and must not constrain this.)
 
 Rationale (I9): the composer keeps working for the current pipe schema while
 the harness matures; nothing here touches pipe editing, generation modals, or
@@ -331,6 +356,10 @@ One line, top-right: `critic: head v3 · 41 signals · 18 golden · 5 tags cover
 ## 8. Locked decisions
 
 1. Composer panel gains a **tabbed shell**; Pipes tab is byte-identical (I9).
+   Tabs live **right-aligned in the existing `.preview-meta` top strip**
+   (24px, zero new plumbing, session-keyed state) — placement fixed after the
+   top-strip audit (right-align + per-tab badge ownership + layoutMode
+   decoupled pending its rework).
 2. One **TextBlock** component for all harness text; geometry from the
    existing modal textareas.
 3. **Lock semantics**: auto-close after generation, collapse-to-1-row,
