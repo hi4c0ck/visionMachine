@@ -595,3 +595,57 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 5. signals.rs lineage-pair + model.rs manifest + learned-critic feature
    (C4/C6, mirroring undled-ffmpeg).
 6. low-eval golden harness + prompt-registry versioning (C7).
+
+---
+
+# Wave 12 — the LOCAL-first / Rust form of "tiny build spec + versioning covering"
+
+The last still-open thread: "keep our **tiny build specification**" +
+"**versioning covering**" for a **local Tauri app** (no cloud registry), in
+**Rust**. None of waves 1-11 covered the *offline/local* variant (they used
+cloud prompt-registries: MLflow/PromptHub/DSPy). Closed now.
+
+- **"Tiny build spec" = a content-addressed, locally-stored, immutable bundle —
+  and it's RUST-idiomatic.** **PromptVault** = "a tiny git for AI prompts:
+  RUST, single static binary, LOCAL, ZERO network; branching, diffing, A/B
+  testing WITHOUT calling any model; content-addressed object model." -> Our
+  version triple generalizes to one **content-addressed release bundle**:
+  { prompt, step-versions, model-build-hash, schema-hash, golden-corpus-hash }
+  — identical bytes dedupe, integrity is free (re-hash), and you can't
+  silently overwrite version N (different bytes -> different digest).
+- **"Versioning covering" = an eval GATE on that bundle, offline.**
+  **promptlock** ("hash every prompt; FAIL CI when it changes without a
+  re-eval") + **ingot** (content-addressed, every change QUARANTINED until
+  review) + the 9 practices (immutability, version the *settings* not just
+  text, content-hash, load-by-alias, diff every change, **gate on evals**).
+  -> change the bundle without passing the low-eval gate = CI blocks;
+  rollback = point the alias at the previous bundle (no rebuild, no re-run).
+- **The "tiny build spec" + ModelPackageManifest + session layer files are
+  best held as a CONTENT-ADDRESSED LOCAL STORE** (ProjectAlpha CAS layout
+  cas/sha256/{h0h1}/{h2h4}/{hash} + a run registry; heyo "a blob's only
+  name is its sha256"; yams "content-addressed storage with dedupe + FTS +
+  vector"; GitLab ADR-008).
+- **Two-tier prompt store (the Tauri/Rust shape):** include_str!/
+  include_bytes! for a **SHIPPED, embedded, immutable default** prompt set
+  (tiny, no I/O — the "tiny variant"), + an OPTIONAL **user-managed, local,
+  content-addressed, eval-gated** store (PromptVault-style) for "managed"
+  prompts. go:embed / hot-reload-TOML registries are the JS precedent; our
+  embedded tier is the Rust equivalent.
+
+## What this adds to C6/C7 (no new case — it *narrows* the deferred items to the repo's real constraints)
+- **C6 (tiny build spec):** is now concretely a **local, content-addressed
+  ModelPackageManifest bundle** (sha256-addressed, deduped, immutable),
+  NOT a cloud artifact registry. The "tiny" is the embedded include_str!
+  default; the heavy learned runtime stays behind the learned-critic
+  feature (wave-11) — consistent.
+- **C7 (versioning covering):** the **eval-gate** is a **content-hash
+  promotion gate** (promptlock-style): the release bundle is promoted only
+  when low-eval (wave-8/11) passes; rollback is alias-based, no rebuild.
+  All of it is **offline/local** — appropriate for a Tauri desktop app.
+
+## Does this change the "fully done" verdict? No — it *closes* the last
+repo-specific thread. After wave 12, **every** case is grounded at: analogous
+project (1-6) + mechanism (7-8) + under-covered phrasings (9) + novel scale
+(10) + Rust repo shape (11) + local/offline/Rust versioning (12) + the
+repo-true correction. The search space is exhausted; what remains is
+building the blueprint, not exploring.
