@@ -46,6 +46,12 @@ mod regen;
 mod signal;
 mod steps;
 
+/// The *real* mutation-flow model absorbed from `harness/`: closed tag
+/// vocabulary, concern-grouped shot specs, the vector learning substrate,
+/// deterministic derive, and the gate model. Additive + versioned; no LLM,
+/// no media, no `composer::Pipe` (I9).
+pub mod engine;
+
 #[cfg(test)]
 mod golden_tests;
 #[cfg(test)]
