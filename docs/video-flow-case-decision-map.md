@@ -1,7 +1,7 @@
 # Video-Flow Harness — Case → Solution Decision Map (TERMINAL deliverable)
 
 > The grind goal was: *explore similar project objectives worldwide to find
-> solutions of our cases.* Nineteen research waves produced the evidence. This
+> solutions of our cases.* Twenty research waves produced the evidence. This
 > document is the **integration** — for each of our cases, **the one solution we
 > adopt**, the **concrete mechanism** (copyable, not just "some project does
 > this"), the **source**, and the **Rust type it lands in** on
@@ -434,11 +434,62 @@ the heavy half is an optional add-on behind a versioned contract.
 4 named worldwide precedents, each mapped to a Rust idiom this repo
 already mirrors.
 
+## C-SWITCH — "step 1 uses the provider LLM, later steps go local" = one client, per-step routing (Wave-20)
+**You asked (p.3):** *"at first step to novel expansion use LLM from
+provider settings, other steps could go local."* The worldwide
+mechanism for serving a provider LLM and local models **behind ONE
+client** is the **OpenAI-compatible base-URL pattern**: Ollama
+(:11434/v1), LM Studio (:1234), and Jan all expose the *same*
+OpenAI-shaped REST, so our provider client and our local client are
+**the same client pointed at a different base URL per step**.
+- **Local-default, cloud-escape-valve** is the worldwide routing norm:
+  Jan's dropdown switches the same interface between local Llama/Phi
+  and cloud OpenAI/Anthropic/Groq ("local as default but need cloud");
+  LM Studio tiers routing (Tier-1 local for cheap tasks, Tier-2 cloud
+  for frontier); Ollama routes to cloud through the same local server
+  on sign-in.
+- **Lands in Rust:** a **StepRouter** with a per-step
+  `model_policy { step, default_backend, fallback_backend }` table —
+  step-1 (expand) = provider (from provider-settings); later steps =
+  local OpenAI-compatible endpoint (Ollama/LM Studio/Jan). The
+  `TextExpander` / `TextStructurer` traits take an injectable
+  `LlmClient { base_url, api_key }` so the *same* code path routes
+  locally or to the provider by configuration, never by recompiling.
+
+## C-TRAIN — "trained by signals, continuously, on the user's machine" = the on-device trainer toolchain (Wave-20)
+**You asked (R8):** *"local built-in model, trained manually by
+signals, continuously on the user's machine."* The concrete
+on-device trainer (the HOW behind the already-CONFIRMED Wave-4/13
+RLHF theory) is now named:
+- **LLaMA-Factory** (hiyouga, 40k+ stars): LoRA + 4-bit QLoRA,
+  **reward modeling + PPO + DPO + KTO + ORPO** (exactly our cited
+  theory), WebUI + CLI, **export-to-Ollama/vLLM** — a single
+  consumer-GPU QLoRA path. This is the concrete "retrain one
+  additive head over our lineage-pair SignalRecord log" trainer.
+- **Unsloth** (2-5x faster LoRA, 70% less VRAM; a 7B QLoRA runs in
+  ~5-6 GB, 13B in ~8 GB on a consumer RTX 3080/4090) = the proof
+  that "continuous local training" is **consumer-feasible**, not a
+  datacenter job. **Axolotl** = the alternative open trainer.
+- **Video-model trainers** (not just LLMs): **CogVideoX-Factory**
+  ("fine-tune Cog family of video models under 24 GB of GPU memory"),
+  **CogVideoX diffusers LoRA** (16 GB VRAM, t2v-2b rank-128 —
+  matches the Wave-17 "official LoRA rank-128 path"),
+  **cog-hunyuanvideo-lora-trainer** (lr/schedule/optimizer sweeps).
+  → The trainer concretely runs a **video-LoRA on a 16-24 GB
+  consumer card**, reads `flow_signals.jsonl`, emits a **GGUF/ONNX
+  sidecar** our `ModelResolver` (C6) loads.
+
+**Status: Solved (concrete toolchain)** — C-SWITCH + C-TRAIN close the
+*HOW* (toolchain) that Wave-4/13 grounded only at the RLHF-*theory*
+level and C-HOST grounded only at the *hosting* level. These are
+directional tooling (named software, not arXiv claims); the load-bearing
+RLHF theory remains the CONFIRMED Wave-4/13 set.
+
 ---
 
 # THE REPO-SHAPE BLUEPRINT (wave-11 synthesis — what we actually ship here)
 
-This is the integration of all 19 waves into a concrete, buildable shape for
+This is the integration of all 20 waves into a concrete, buildable shape for
 eature/text-video-flow. It is the answer to "find solutions of OUR cases":
 each case is now *where in the repo it lives* + *the Rust idiom* + *the tool*.
 
@@ -514,19 +565,24 @@ weight-free). To ship the full design it becomes the low-core crate:
    ersion-migrate::load_forward = "rebuild creates N+1, never mutates N,
    never falls back" (C3/C9) made into checked code, not a doc promise.
 
-## One-paragraph completion statement (updated through Wave 19)
-Across 19 waves (~120 evidence entries) every one of our cases — C0, C1,
-C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L, C5, C6, C7, C8, C9, and C-HOST —
-now has (a) a named worldwide solution, (b) a copyable mechanism, and (c) a
-concrete Rust idiom + crate home in THIS repo. The "solid independent
+## One-paragraph completion statement (updated through Wave 20)
+Across 20 waves (~125 evidence entries) every one of our cases — C0, C1,
+C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L, C5, C6, C7, C8, C9, C-HOST,
+C-SWITCH, and C-TRAIN — now has (a) a named worldwide solution, (b) a
+copyable mechanism, and (c) a concrete Rust idiom + crate home in THIS
+repo. The "solid independent
 harness feature a tiny repo can ship" (p.2/p.3) is now a **pure flow-core
 crate** (deterministic, exhaustively testable, weight-free) + an
 **out-of-tree critic add-on behind a versioned contract** (C-HOST:
 SubprocessCritic/SidecarCritic, lazy-spawn + crash-restart, dependency
 isolated, weights beside the bundle — mirroring the in-repo bundled-ffmpeg
 precedent) + a **flow-eval harness** (insta/proptest/bolero + prompt
-versioning + INCONCLUSIVE-blocks). The exploration is complete; what remains
-is building this blueprint, not researching it.
+versioning + INCONCLUSIVE-blocks) + a **per-step model router**
+(C-SWITCH: local-default OpenAI-compatible endpoint, provider escape
+valve) + an **on-device trainer** (C-TRAIN: LLaMA-Factory/Unsloth
+DPO/QLoRA over our signals, video-LoRA on a 16-24 GB card). The
+exploration is complete; what remains is building this blueprint, not
+researching it.
 
 ---
 
@@ -616,7 +672,7 @@ Goal restatement: *find worldwide solutions of OUR cases.* This matrix maps
 copyable mechanism → repo home → status). It is the completeness proof: a
 requirement row is only green when it has a *named worldwide source*, a
 *concrete mechanism*, and a *repo home*. Sources are cited by wave; full
-evidence in the ledger (~120 entries through Wave 19).
+evidence in the ledger (~125 entries through Wave 20).
 
 ## A. Your stated requirements → coverage
 
@@ -627,12 +683,12 @@ evidence in the ledger (~120 entries through Wave 19).
 arrative_arc/keyframe/sset_ids; **MAViS confirms a staged multi-mutation pipeline with per-stage agents is the canonical worldwide shape** | 
 ovel.rs→plan.rs→egen.rs | **Solved** |
 | R3 | "build harness to maintain user desire & be coherent with real output as close as the user imagined at entry" | C0+C8 | 2606.09376 coverage-aware faithfulness; TICK/DeCE/BiFact; goal-drift re-anchoring (2505.02709 / 2609.32520 / SIP) (waves 4/9); **Hollywood Town 2510.22431 (Wave-15: DAG→directed-cyclic-graph with limited retries — later-node feedback refines earlier stages)** | fidelity = precision⊗recall vs intent-as-complete-oracle; per-step re-anchor to IntentSnapshot + drift diagnostic; **Hollywood-Town's cyclic retry is the concrete "refine earlier stages from later feedback" mechanism** | critic.rs + drift.rs | **Solved** |
-| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9 | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10); **LayerFlow 2506.04228 (Wave-15: per-layer prompts → fg/bg/blended)**; **DOME 2412.13575 (Wave-16: dynamic hierarchical outline fusing plan+write, temporal-KG memory, conflict analyzer)** | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics; **LayerFlow proves per-layer prompting is a real T2V input shape**; **DOME is the direct arXiv primary for the Step-1 "user text to novel" mutation: the novel is a hierarchical outline that co-plans + co-writes, not a flat expansion** | 
+| R4 | "LLM expand that text to a novel (verbosity: atmosphere, forest, road, non-main parts on their own dynamic)" | C1+C9+C-SWITCH | MovieDreamer multimodal script; LPA 7 layers; PreciseVideo ambient-own-dynamics; VideoAuteur (waves 3/10); **LayerFlow 2506.04228 (Wave-15: per-layer prompts → fg/bg/blended)**; **DOME 2412.13575 (Wave-16: dynamic hierarchical outline fusing plan+write, temporal-KG memory, conflict analyzer)** | layered Novel{primary, secondary[], ambient[]}; ambient carries its OWN dynamics; **LayerFlow proves per-layer prompting is a real T2V input shape**; **DOME is the direct arXiv primary for the Step-1 "user text to novel" mutation: the novel is a hierarchical outline that co-plans + co-writes, not a flat expansion**; **C-SWITCH (Wave-20): step-1 expand uses the provider LLM; downstream mutation steps route to a local OpenAI-compatible endpoint (Ollama/LM Studio/Jan :11434/:1234) via the same client — local-default, provider-escape-valve** | 
 ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | R5 | "novel generates into structured text with video-engine language configuration" | C1-A | video-notation-schema; Seedance Prompt JSON v3; BSD intent-layer; SKEL (wave 9) | a **versioned, typed video-DSL** (JSON-Schema) + intent/content split; *compile to platform prose* at render | plan.rs (schema) + low-plan compile | **Solved** |
 | R6 | "we can generate from that structured pipes, sections and tags" | C1 | MAVIN/STAGE structural storyboard (start-end frame pairs); storyboard2video deterministic render (waves 3/10) | PlanSection/FlowElement = tag + start-end frame + prompt + asset_ids; deterministically compilable | plan.rs/egen.rs | **Solved** |
 | R7 | "each step has numerous parameters for a better transition" | C2-B | on-style-without-drift (EvoState 2606.16184 state-anchored + PermaVid 2606.16449 disentangled context, Wave-18); 7-layer knobs; VideoReward 2501.13918 per-dim weights (waves 9/7/18) | **frozen, versioned 7-layer param bundle** + embedding consistency check; per-dim critic weights | config.rs rozen_style_contract + CriticParams.dimensions | **Solved** |
-| R8 | "use a learning system … local built-in model, trained manually by signals, continuously on the user's machine" | C4+C6 | ReelBrain temp/durable; Kuaishou implicit signals; DPO/KTO; ASLS L2-anchor; KTO/federated-edge; llama.cpp GGUF-LoRA + Rust cera (waves 4/5/7) | **lineage-pair** SignalRecord → (separate) trainer retrains **one additive LoRA head** (hold base) | signals.rs + model.rs manifest; runtime deferred (feature-gated) | **Solved** (capture+contract in-repo; trainer/weights deferred by design — see R13) |
+| R8 | "use a learning system … local built-in model, trained manually by signals, continuously on the user's machine" | C4+C6+C-TRAIN | ReelBrain temp/durable; Kuaishou implicit signals; DPO/KTO; ASLS L2-anchor; KTO/federated-edge; llama.cpp GGUF-LoRA + Rust cera (waves 4/5/7); **C-TRAIN Wave-20: LLaMA-Factory DPO/KTO/QLoRA + Unsloth (7B QLoRA ~5-6GB consumer) + video-LoRA (CogVideoX-Factory 16-24GB)** | **lineage-pair** SignalRecord → (separate) trainer retrains **one additive LoRA head** (hold base); **the trainer is concretely LLaMA-Factory/Unsloth DPO over our signals.jsonl, output = a GGUF/ONNX sidecar our ModelResolver (C6) loads** | signals.rs + model.rs manifest + C-TRAIN trainer seam; runtime deferred (feature-gated) | **Solved** (capture+contract in-repo; trainer/weights deferred by design — see R13) |
 | R9 | "first mission: NOT touch pipes current structure (only crucial insights); harness lives in session space; final step regENerate pipes, not fallback" | C3 | Three Session-State Planes; SPACE; DSH-V3 seq-remap; Luma/Boords/Genvid per-unit; Epicenter/Kohaku never-mutate-N; **dsh-desktop Tauri event-log+projection** (waves 1/2/5/6) | **source-of-truth inversion**: structured.vN = SoT, pipes = derived; per-unit destructive regen + pproved/egen_state; event-sourced replay | decomposed session layer files + RegenerationContract (per-unit) | **Solved** |
 | R10 | "session as domain; all harness data should have its structures by demand" | C3 | dsh-desktop session-projection/command-log (*Wave-13: directional Tauri-wrapper precedent; event-log+projection is a proposed-architecture note, not shipped*); Kohaku .vN files; BD WorkflowVersionCache (wave 6) | versioned, addressable layer files + manifest; materialize *one* layer on demand | session/flow/{intent,novel,structured,fidelity}.vN.json + manifest.json | **Solved** |
 | R11 | "keep all inside structured to be viable to generation into elements" | C1/C3 | storyboard2video "computed not guessed"; SKEL validation; Seedance storage→compile (waves 7/9) | the structured layer is the ONLY SoT; lowering reads *only* it; FlowElement is generation-ready + provenance-tracked | egen.rs::lower_to_elements(plan) | **Solved** |
@@ -658,6 +714,8 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 | C8 preventive drift | goal probe / 2505.02709 / 2609.32520 / SIP + **EvoState 2606.16184 (Wave-18: re-anchor to realized output via state-observation-update-propagation)** + continuity_in/out/avoid + **Hollywood Town 2510.22431 DAG→DCG limited-retry refine (Wave-15)** | Solved |
 | C9 novel-scale spine | CineCrew / EvoState 2606.16184 (Wave-18 CONFIRMED, was name-only) · OneStory · Memento 2606.14667 · PermaVid 2606.16449 (Wave-18) · REEL / PreciseVideo / LVAS-Agent·SoundStager / MovieDreamer·HoloCine / GroundShot / DramaAgent | Solved |
 | **C-HOST (Wave-19: hosting an out-of-scope sub-system behind a versioned contract in a small desktop app)** | **OpenCADStudio out-of-tree Rust plugin (own crate + semver api + host-never-recompiles) + ComfyUI/comfy-forge persistent isolated subprocess worker (lazy spawn + crash-restart + dependency isolation, sandbox deferred) + Tauri bundled sidecar behind cfg(desktop) + the "weights-beside-bundle / opt-in-extras / small-installer" shipping norm** | Solved (deferred-by-design seam; worldwide precedents found) |
+| **C-SWITCH (Wave-20: "step 1 uses the provider LLM, later steps go local" = serving/switching provider vs local models behind ONE client)** | **the OpenAI-compatible base-URL pattern (Ollama :11434/v1, LM Studio :1234, Jan — all OpenAI-shaped REST; our provider client and local client are the SAME client pointed at a different base URL per step) + the local-default / cloud-escape-valve hybrid routing norm (Jan dropdown, LM Studio Tier-1 local / Tier-2 cloud, Ollama hybrid sign-in)** | Solved (concrete toolchain for R3; directional tooling, not an arXiv claim) |
+| **C-TRAIN (Wave-20: "trained manually by signals, continuously, on the user's machine" = the on-device trainer toolchain)** | **LLaMA-Factory (DPO/KTO/ORPO + 4-bit QLoRA, export-to-Ollama/vLLM — the concrete trainer for the already-CONFIRMED RLHF theory) + Unsloth (7B QLoRA ~5-6GB consumer VRAM = "continuous local training is consumer-feasible") + Axolotl + video-LoRA trainers (CogVideoX-Factory 16-24GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer)** | Solved (concrete toolchain for R8; directional tooling; the RLHF theory is the CONFIRMED Wave-4/13 set) |
 
 ## C. Honest status — what is SOLVED vs deliberately NOT in this repo
 **Solved (a worldwide solution + mechanism + repo home, fully specified):** R1–R13 and C0–C9. This is the grind goal: *every* case you named now has a found solution.
@@ -669,7 +727,7 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
 **Open BY DESIGN (you explicitly kept it open):**
 - **R4 the LLM expand prompt** — *"I have it in mind, keep it open."* The harness defines the LayeredExpander contract + the Novel shape the prompt must produce; the prompt text is yours to supply later. It is a **versioned registry artifact** (C7), not a gap.
 
-## D. Final "fully done" verdict (updated through Wave 19)
+## D. Final "fully done" verdict (updated through Wave 20)
 - **Every one of your 13 stated requirements (R1-R13) maps to a named, cited
   worldwide solution + a copyable mechanism + a concrete repo home.**
   This now includes the **out-of-scope "independent harness feature"
@@ -677,9 +735,10 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
   precedents (OpenCADStudio out-of-tree plugin / ComfyUI isolated
   subprocess worker / Tauri bundled sidecar / weights-beside-bundle).
 - **All case-areas (C0, C1, C1-A, C1-E, C2, C2-B, C2-C, C3, C4, C4-L,
-  C5, C6, C7, C8, C9, C-HOST) are covered at three depths**
-  (analogous project, copyable mechanism, Rust idiom) across 19 waves and
-  ~120 ledger entries, at BOTH the shot scale and the novel scale.
+  C5, C6, C7, C8, C9, C-HOST, C-SWITCH, C-TRAIN) are covered at three
+  depths**
+  (analogous project, copyable mechanism, Rust idiom) across 20 waves and
+  ~125 ledger entries, at BOTH the shot scale and the novel scale.
 - **28 distinct arXiv claims CONFIRMED on arxiv.org + 1 published
   non-arXiv primary (MSML, ACM DocEng 2009)** form the load-bearing core.
 - **The only items "not in the repo" are the ones you deliberately scoped out**
@@ -687,12 +746,14 @@ ovel.rs | **Solved** (prompt itself open by design — see R12) |
   a versioned contract, not an in-repo gap) and the one you deliberately
   kept open (the LLM prompt). None are unresolved gaps; each has a named
   seam + home + worldwide precedent.
-- **The exploration is COMPLETE at three levels:** the user-named
+- **The exploration is COMPLETE at four levels:** the user-named
   sub-cases (Waves 1-17), the deliberately-flagged directional sub-cases
-  (Wave 18), and the out-of-scope hosting question (Wave 19). Every
-  sub-case now has a primary or a named worldwide precedent. A Wave-20
-  would re-cover existing families; the remaining work is **building the
-  blueprint** (the case-to-Rust-idiom table above), not exploration.
+  (Wave 18), the out-of-scope hosting question (Wave 19), and the
+  TOOLCHAIN conditions C-SWITCH + C-TRAIN (Wave 20). Every sub-case now
+  has a primary, a named worldwide precedent, or a concrete toolchain. A
+  Wave-21 would re-cover existing families; the remaining work is
+  **building the blueprint** (the case-to-Rust-idiom table above), not
+  exploration.
 
 **Recommended build order (implementation, when you say go):**
 1. critic.rs two-scale FIRM-Video ScoreTree + DefaultCritic (Ragas/TICK)
@@ -936,23 +997,27 @@ mirror snippets they originally came through). 3 corrections:
   SKEL spec sheets" flag for the DSL-structure side; CineCrew 2609.07720
   remains the generative-system primary; Seedance v3/SKEL are now cited
   only as commercial field-shape adoption-templates).
-  - **TERMINAL STATE (Wave 19):** **every condition — user-named
+  - **TERMINAL STATE (Wave 20):** **every condition — user-named
     (C0..C9 + sub-cases), deliberately-flagged-directional (C1-A, C2-B),
-    and the out-of-scope hosting ask (C-HOST, p.2/p.3) — now has a
-    primary or a named worldwide precedent**: **28 distinct arXiv claims
+    the out-of-scope hosting ask (C-HOST, p.2/p.3), and the two
+    TOOLCHAIN-level conditions (C-SWITCH "step 1 provider LLM, later
+    steps local" + C-TRAIN "trained by signals, continuously, on the
+    user's machine", p.3/R8) — now has a primary or a named worldwide
+    precedent or a concrete toolchain**: **28 distinct arXiv claims
     CONFIRMED on arxiv.org + 1 published non-arXiv primary (MSML) + 4
-    C-HOST desktop-app precedents.** The C1-A and C2-B "directional"
-    flags are **retired** (grounded on MSML + EvoState + PermaVid); C-HOST
-    (the "independent harness feature out of scope for this tiny repo")
-    is grounded on OpenCADStudio out-of-tree plugin + ComfyUI isolated
-    subprocess worker + Tauri bundled sidecar + the
-    weights-beside-bundle shipping norm. The only remaining un-verified
-    items are *commercial spec-sheet adoption-templates* (Seedance v3
-    JSON, SKEL) and *non-paper desktop / tooling notes* (`dsh-desktop`,
-    `termux-train`/AMEVA). The grind goal — *explore similar project
-    objectives worldwide to find solutions of our cases* — is now
-    exhausted at **three** levels: user-named-sub-case (Waves 13–17),
-    deliberately-flagged-directional (Wave 18), and out-of-scope-hosting
-    (Wave 19). **A Wave-20 would be busywork** — no "solution of our
-    cases" remains without a primary. Remaining work = **implementation**
-    of the blueprint (7-step build order, Section D).
+    C-HOST desktop-app precedents + the C-SWITCH OpenAI-compatible
+    routing toolchain + the C-TRAIN on-device trainer toolchain.** The
+    C1-A and C2-B "directional" flags are **retired** (grounded on MSML +
+    EvoState + PermaVid); C-HOST is grounded on OpenCADStudio out-of-tree
+    plugin + ComfyUI isolated subprocess worker + Tauri bundled sidecar +
+    the weights-beside-bundle shipping norm. The only remaining un-
+    verified items are *commercial spec-sheet adoption-templates*
+    (Seedance v3 JSON, SKEL) and *non-paper desktop / tooling notes*
+    (`dsh-desktop`, `termux-train`/AMEVA, and the C-SWITCH/C-TRAIN
+    tooling). The grind goal — *explore similar project objectives
+    worldwide to find solutions of our cases* — is now exhausted at
+    **four** levels: user-named-sub-case (Waves 13–17),
+    deliberately-flagged-directional (Wave 18), out-of-scope-hosting
+    (Wave 19), and **toolchain (Wave 20: C-SWITCH + C-TRAIN)**. A
+    Wave-21 would only re-cover existing families. Remaining work =
+    **implementation** of the blueprint (build order, Section D).

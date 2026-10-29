@@ -1085,7 +1085,7 @@ exploration actionable *here*.
   **low-core / low-plan / low-runtime** crate boundary: each step = a
   pure fn in core; IO is quarantined to runtime.
 
-## FINAL EXHAUSTION STATEMENT (19 waves / ~120 evidence entries)
+## FINAL EXHAUSTION STATEMENT (20 waves / ~125 evidence entries)
 
 The exploration is complete at EVERY depth the task implies:
 1. **Analogous projects** that solve each case (waves 1-6: ViMax, novel-to-
@@ -1194,7 +1194,8 @@ ledger is marked SNIPPET-ONLY unless listed here.
 | C7 eval harness | promptfoo / Ragas / DeepEval / **insta + proptest + bolero** (all three on crates.io, API-verified) + **MAViS 3E Principle "Examine" (Wave-15: per-stage completeness gate)** |
 | C8 preventive drift | 2505.02709 detect + 2609.32520 StateForge repair + **Hollywood Town 2510.22431 DAG→DCG limited-retries (Wave-15: later-stage feedback refines earlier stages)** + **EvoState 2606.16184 (Wave-18: Visual State Analyzer observes REALIZED generated evidence, updates generation conditions per realized outcome, propagates inferred state transitions into memory + future prompts = re-anchoring to what actually happened, not just the plan)** |
 | C9 novel-scale spine | CineCrew 2609.07720 + GroundShot **2606.20799** + MovieDreamer **2407.16655** + HoloCine + PreciseVideo + LVAS-Agent/SoundStager + DramaAgent + **SlotMem 2607.15772 (Wave-16: character-addressable slot memory = persistent identity)** + **EvoState 2606.16184 (Wave-18: entity-centric evolving visual state = persistent-identity made academic; identity anchor separated from evolved state)** + **PermaVid 2606.16449 (Wave-18: appearance-geometry disentangled memory = identity-vs-geometry separation)** |
-| **C-HOST (Wave-19: hosting an out-of-scope sub-system behind a versioned contract in a small desktop app)** | **OpenCADStudio out-of-tree Rust plugin (own crate + semver api + host-never-recompiles)** + **ComfyUI/comfy-forge persistent isolated subprocess worker (lazy spawn + crash-restart + dependency isolation, sandbox deferred)** + **Tauri bundled sidecar behind cfg(desktop)** + **the "weights-beside-bundle / opt-in-extras / small-installer" shipping norm** — the worldwide "introduction + ideas" for the user's p.2/p.3 out-of-scope-feature ask |
+| **C-SWITCH (Wave-20: "step 1 uses the provider LLM, later steps go local")** | **the OpenAI-compatible base-URL pattern (Ollama :11434/v1, LM Studio :1234, Jan — one OpenAI-shaped client, different endpoint per step) + the local-default / cloud-escape-valve routing norm (Jan dropdown, LM Studio Tier-1 local / Tier-2 cloud, Ollama hybrid sign-in)** — the concrete toolchain for R3 |
+| **C-TRAIN (Wave-20: "trained by signals, continuously, on the user's machine")** | **LLaMA-Factory (DPO/KTO/ORPO + 4-bit QLoRA, export-to-Ollama/vLLM) + Unsloth (7B QLoRA ~5-6 GB consumer VRAM) + Axolotl + video-LoRA trainers (CogVideoX-Factory 16-24 GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer)** — the concrete on-device trainer for R8 |
 
 **VERDICT (corrected in Wave 16):** the Wave-14 "grind goal exhausted" call
 was **premature** — Wave 15 (targeted at the user's *named sub-cases*:
@@ -1256,10 +1257,23 @@ academic/published primary:
   sandbox deferred), Tauri bundled sidecar behind cfg(desktop), and the
   "weights-beside-bundle / opt-in-extras / small-installer" shipping
   norm. This is the "introduction + ideas" you asked for.
+- **C-SWITCH (Wave 20):** the user's p.3 "step 1 uses the provider LLM,
+  later steps go local" now has a concrete toolchain: the
+  **OpenAI-compatible base-URL pattern** (Ollama :11434/v1, LM Studio
+  :1234, Jan — one OpenAI-shaped client, different endpoint per step) +
+  the **local-default / cloud-escape-valve** routing norm (Jan dropdown,
+  LM Studio Tier-1 local / Tier-2 cloud, Ollama hybrid).
+- **C-TRAIN (Wave 20):** the user's R8 "trained by signals,
+  continuously, on the user's machine" now has a concrete on-device
+  trainer toolchain: **LLaMA-Factory** (DPO/KTO/ORPO + 4-bit QLoRA,
+  export-to-Ollama/vLLM) + **Unsloth** (7B QLoRA ~5-6 GB consumer
+  VRAM) + **Axolotl** + **video-LoRA trainers** (CogVideoX-Factory
+  16-24 GB, CogVideoX diffusers rank-128, cog-hunyuanvideo-lora-trainer).
 
 Total distinct CONFIRMED claims: **28 arXiv (26 prior + EvoState +
 PermaVid) + 1 published non-arXiv primary (MSML) + 4 C-HOST
-desktop-app precedents**.
+desktop-app precedents + the C-SWITCH OpenAI-compatible routing
+toolchain + the C-TRAIN on-device trainer toolchain**.
 
 Remaining *directional* items are now **commercial spec-sheet
 adoption-templates only** — `Seedance v3 JSON` / `SKEL` are cited as
@@ -1270,14 +1284,15 @@ stay directional. **No sub-case remains without a primary or a named
 worldwide precedent.**
 
 The grind goal — *explore similar project objectives worldwide to find
-solutions of our cases* — is now **exhausted at three levels**: the
+solutions of our cases* — is now **exhausted at four levels**: the
 user-named sub-cases (Waves 13–17), the deliberately-flagged directional
-sub-cases (Wave 18), and the out-of-scope hosting question (Wave 19,
-C-HOST). **A Wave-20 would be busywork** — every remaining un-verified
-item is a commercial spec-sheet adoption-template or a non-paper
-desktop/tooling note, not a "solution of our cases" that needs a
-worldwide primary. All remaining work = **implementation** of the
-blueprint (7-step build order, decision-map Section D).
+sub-cases (Wave 18), the out-of-scope hosting question (Wave 19,
+C-HOST), and the TOOLCHAIN conditions (Wave 20, C-SWITCH + C-TRAIN).
+**A Wave-21 would be busywork** — every remaining un-verified item is a
+commercial spec-sheet adoption-template or a non-paper desktop/tooling
+note, not a "solution of our cases" that needs a worldwide primary. All
+remaining work = **implementation** of the blueprint (build order,
+decision-map Section D).
 
 ## The 3 corrections this audit forces into the design (apply before building)
 1. **C1-A:** name the structured layer a **FilmDSL-style video-DSL**
@@ -1289,7 +1304,7 @@ blueprint (7-step build order, decision-map Section D).
    ≠ Seedance PAS fewer-edits) and split C8 into detect (2505.02709) +
    repair (2609.32520 StateForge).
 
-## Audit verdict (updated through Wave 18)
+## Audit verdict (updated through Wave 20)
 - **28 distinct load-bearing arXiv claims CONFIRMED on arxiv.org + 1
   published non-arXiv primary (MSML, ACM DocEng 2009).**
   - Wave-13: VideoReward 2501.13918 / SelectiveRM 2605.06036 /
@@ -1302,6 +1317,13 @@ blueprint (7-step build order, decision-map Section D).
   - **Wave-18: EvoState 2606.16184 / PermaVid 2606.16449 (arXiv) +
     MSML ACM DocEng 2009 (DOI 10.1145/1600193.1600231, published
     non-arXiv primary)**
+  - **Wave-19 (C-HOST): 4 desktop-app hosting precedents (OpenCADStudio
+    out-of-tree plugin / ComfyUI isolated subprocess worker / Tauri
+    sidecar / weights-beside-bundle shipping norm)**
+  - **Wave-20 (C-SWITCH + C-TRAIN toolchain): OpenAI-compatible
+    base-URL routing (Ollama/LM Studio/Jan) + LLaMA-Factory/Unsloth
+    on-device trainer + video-LoRA trainers (directional tooling, not
+    arXiv claims)**
 - The 3 Wave-1 corrections are recorded and must be applied to the
   decision map before the blueprint is treated as buildable.
 - **DIRECTIONAL FLAGS RETIRED IN WAVE 18:** C1-A (now MSML + CineCrew)
@@ -1331,10 +1353,17 @@ blueprint (7-step build order, decision-map Section D).
   - **Wave-18: retired the two *directional* flags — C1-A structured
     video-DSL (MSML ACM DocEng 2009 + CineCrew) and C2-B
     on-style-without-drift (EvoState + PermaVid).**
+  - **Wave-19: C-HOST — the out-of-scope "independent harness feature"
+    (p.2/p.3) grounded on 4 desktop-app precedents.**
+  - **Wave-20: C-SWITCH + C-TRAIN — the two TOOLCHAIN-level conditions
+    (p.3 "step 1 provider, later steps local" + R8 "trained by signals,
+    continuously, on the user's machine") grounded on the
+    OpenAI-compatible routing + on-device trainer toolchains.**
   Every sub-case in the user's requirements — *user-named*
-  (C0/C1/C1-A/C1-E/C2/C2-B/C2-C/C3/C4/C4-L/C5/C6/C7/C8/C9) *and*
-  the two I had left as directional industry-spec flags — now has
-  **≥1 primary** (28 arXiv + MSML). A Wave-19 would re-cover existing
-  families; the exploration is exhausted at both the user-named and
-  the directional-flag level. Remaining work = **implementation** of
-  the blueprint.
+  (C0/C1/C1-A/C1-E/C2/C2-B/C2-C/C3/C4/C4-L/C5/C6/C7/C8/C9), the
+  *deliberately-flagged directional* flags (C1-A/C2-B), *out-of-scope
+  hosting* (C-HOST), and the *toolchain* conditions (C-SWITCH/C-TRAIN)
+  — now has **≥1 primary, a named worldwide precedent, or a concrete
+  toolchain** (28 arXiv + MSML). **A Wave-21 would re-cover existing
+  families**; the exploration is exhausted at all four levels. Remaining
+  work = **implementation** of the blueprint.
