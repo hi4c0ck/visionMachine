@@ -3,7 +3,7 @@
 	// (tabbed composer, grill-verified). Safe slice: Run + read + signals are
 	// live; destructive apply + golden set render honest empty states.
 	import { flashToast } from '$lib/flashToast';
-	import { runFlow, listFlows, type DirectorTab } from '$lib/directorStore';
+	import { runFlow, listFlows, loadFlow, type DirectorTab } from '$lib/directorStore';
 	import {
 		tagBars,
 		type FlowDocument,
@@ -43,6 +43,44 @@
 
 	$effect(() => {
 		if (activeTab === 'scoreboard') void refreshFlows();
+	});
+
+	let lastSession = $state(sessionId);
+	// Per-session isolation: when the session prop changes, reset in-tab state
+	// so a switched session never carries the previous session's run. (The
+	// store already keys run-state by session id; this covers the panel's
+	// own doc/direction/flows.) Declared before the seed effect so the seed
+	// sees the cleared `doc` and reloads the new session's newest run.
+	$effect(() => {
+		if (sessionId !== lastSession) {
+			lastSession = sessionId;
+			doc = null;
+			direction = '';
+			flows = [];
+			activeRun = null;
+			runError = null;
+			openTag = null;
+		}
+	});
+
+	// Seed the active document from the newest persisted run so Extract /
+	// Scoreboard reflect saved data, not just the in-tab run. Runs only when
+	// no document is live yet (a fresh run in the Director tab wins).
+	$effect(() => {
+		if (doc) return;
+		void (async () => {
+			try {
+				const listed = await listFlows(sessionId);
+				if (listed.length > 0) {
+					flows = listed;
+					const newest = listed[0];
+					doc = await loadFlow(sessionId, newest.flowVersion);
+					activeRun = newest.flowVersion;
+				}
+			} catch (e) {
+				console.warn('director load_latest', e);
+			}
+		})();
 	});
 
 	async function refreshFlows() {

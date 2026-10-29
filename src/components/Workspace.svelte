@@ -2643,7 +2643,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					/>
 				{:else}
 					<DirectorPanel
-						key={selectedSession.id}
 						activeTab={composerTab}
 						sessionId={selectedSession.id}
 						sessionName={selectedSession.name}
