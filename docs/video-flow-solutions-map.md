@@ -725,3 +725,114 @@ signal → additive-head on-device trainer** behind a **model_package manifest**
 (C4/C6), and each step is a **bounded, cached node** (C5) — all repo-owned and
 deterministic, with only the critic leaves + head weights crossing into the
 deferred ML project.
+
+---
+
+# Wave 7 — implementation-grade mechanisms (from "analogous project" to "we can adopt THIS")
+
+Waves 1-6 found *projects that do something similar*. This wave finds the
+**concrete mechanism** for each of our open sub-cases, so each answer is
+copyable, not just "someone does it."
+
+- **C0/C1 — deriving a required-elements checklist from a SHORT intent, no golden:**
+  the field auto-extracts it — **TICK** (arXiv 2410.03608) has the judge LLM
+  *decompose the instruction into a YES/NO checklist*, then score against it;
+  **DeCE's recall** extracts "criteria from the answer's Required Information"
+  (the user's own intent IS the reference); **BiFact** decomposes both sides into
+  atomic facts and scores P/R/F1; **Arize checklist-rubric**: "completeness only
+  works when *required is written down* — enumerate the elements a good answer
+  must contain." -> Our C0 oracle is concrete: **decompose the intent into
+  atomic required-elements (TICK/DeCE); structured-layer RECALL = fraction
+  covered; PRECISION = fraction of produced elements supported (no invention).**
+- **C2 — the concrete two-scale aggregation that is reproducible (not vibes):**
+  **From Rubrics to Reliable Scores** (arXiv 2601.08654) *locks* a **rubric
+  bundle** (traits, operational checklist, scoring, rubric, hash) so runtime
+  reinterpretation is frozen; **RubricArmor** (arXiv 2610.05308) is the
+  anti-reward-hacking check — *test whether a low-quality output can still pass
+  every checklist item*; if yes, the checklist is too weak. -> Our FIRM-Video
+  leaf = a **versioned rubric bundle** that must pass a RubricArmor-style
+  "can a bad plan trivially check every box?" gate before it's trusted as a floor.
+- **C4 — the concrete signal→training-pair objective:** a single user edit is a
+  **medley of SFT labels + preference pairs + RL rewards** ("Principled
+  Fine-tuning from User-Edits"); the DPO triple is (x, y_w=chosen, y_l=rejected),
+  and from our lineage-pair: x=intent/novel, y_l=model's original output,
+  y_w=user's final edit. **KTO** is the cheap variant — *single response + a
+  binary label* (no paired rejection needed). -> our SignalRecord maps
+  directly onto a KTO positive or a DPO pair.
+- **C6 — the real copyable additive-head manifest + runtime format:** the
+  on-device format is **llama.cpp GGUF LoRA adapters** (PEFT→GGUF via
+  convert_lora_to_gguf.py; hot-swap at runtime; abeten/llama-cpp-python#1817
+  "LoRA hotswapping and MULTIPLE LoRAs at a time" without reloading the base) +
+  **cera (crates.io)** = a *Rust* GGUF inference engine. -> the "tiny build
+  spec" = { GGUF base path + a list of GGUF LoRA adapter sidecars + version },
+  activation = SetActiveAdapters(names[]); the deferred runtime is genuinely
+  Rust-shippable in our process.
+- **C1 — an open-schema + deterministic-render anchor to build against:**
+  **SKEL / @openskeleton/spec** = an *open* storyboard data format (JSON Schemas
+  + TS types + tooling) to validate our structured layer against;
+  **storyboard2video** = "structured storyboard JSON → a video with
+  DETERMINISTIC rendering, no generative model — one wrong number is an
+  accident, so the picture must be *computed, not guessed*."
+
+# Wave 8 — the "careful text-output tests + versioning covering" space
+
+Your own phrasing named a case I'd only covered implicitly: **the eval/
+regression-test harness** a generative pipeline lives in. This is where the
+fidelity critic *operates and is tested*.
+
+- **The 4-layer harness (the "covering" discipline):** (1) a **frozen GOLDEN
+  dataset** (approved inputs + outputs/criteria, human-reviewed; *never* let the
+  model-under-test write its own expected output), (2) **deterministic
+  assertions** (equals/contains/regex/JSON-Schema), (3) **LLM-as-judge +
+  metrics**, (4) a **CI regression gate** that blocks the merge when a quality
+  threshold drops. Tools: **promptfoo** (multi-provider prompt regression +
+  CI), **Ragas**, **DeepEval** (pytest-native, assertions next to unit tests),
+  Braintrust/LangSmith. *"Evals as tests: score output against checked-in
+  golden datasets, detect regressions in tiers, fail the build past a critical
+  line."*
+- **The exact C0/C2 reference-critic algorithm (Ragas faithfulness):**
+  decompose → **atomic claims**; **NLI-verify** each claim against the context
+  (a DeBERTa cross-encoder = a *cheap deterministic backend*, or an LLM
+  judge); aithfulness = supported / total claims — **reference-free**
+  (the *retrieved context* is the reference; ours = the user's intent/novel).
+  That is the deterministic HuDA-class floor made *algorithmic*.
+- **The non-determinism honesty invariant (test design):** temperature-0 + seed
+  does **not** guarantee reproducibility (near-tie flips + provider variance
+  remain; "correct ≠ reproducible"). -> **Sample N runs, aggregate, assert on
+  properties/thresholds on the golden-set AVERAGE, never exact strings.**
+  Deterministic Phase-0 steps = the **locked seams**; the LLM step = the
+  **float**, covered by N-sample aggregate + property assertions.
+- **The load-bearing fail-fast rule:** "missing or inconclusive evidence is
+  **never a pass** — a case with no frozen golden, an empty baseline, or an
+  oracle that could not run is **INCONCLUSIVE and blocks promotion** exactly
+  like a failure." -> our careful text-output discipline: no golden / can't
+  run the critic / no baseline = **INCONCLUSIVE, block the regen**, never a
+  silent pass.
+- **Layer-separated regression (EvalFlow):** run the golden set enough times to
+  *separate real regressions from sampling noise*; **check the retrieval layer
+  and the generation layer SEPARATELY so a broken upstream can't hide behind a
+  fluent output** = our I1 isolation as an *eval* discipline: score each
+  mutation step's output in isolation, not just the final video.
+- **Prompt versioning completes the version triple:** "treat prompts as
+  configuration in a registry (semantic versioning, diffs, commit messages) +
+  an evaluation gate that blocks changes that degrade quality." -> OC-1 (the
+  LLM expand prompt) is not "open"; it is a **versioned, gated registry
+  artifact**, and **the version triple extends to include the prompt version**.
+
+## Refreshed exhaustion check
+
+Every sub-case now has BOTH an analogous project AND a concrete mechanism:
+
+| Sub-case | Analogous project (waves 1-6) | Concrete mechanism (waves 7-8) |
+|---|---|---|
+| C0 required-elements recall, no golden | 2606.09376 / Intent-Hallucination | **TICK/DeCE/BiFact checklist auto-extraction**; intent-as-reference |
+| C2 two-scale aggregation | B-Roll per-unit + sequence critic | **rubric-bundle locking (2601.08654) + RubricArmor anti-hack**; **Ragas claim-decomposition + NLI** floor |
+| C4 signal→training pair | ReelBrain / tianpan lineage-pair | **DPO (x, original, edited) / KTO single-label** from the edit; **DITTO few-demo bootstrap** |
+| C6 additive-head runtime | ONNX MultiLoRA / tinker | **llama.cpp GGUF LoRA sidecars + Rust cera**; manifest = base + adapter sidecars + version |
+| C1 viable structured layer | novel-to-storyboard / STAGE | **SKEL @openskeleton/spec** (open JSON-Schema) + **storyboard2video** deterministic render |
+| "careful text-output tests + versioning" | (implicit) | **4-layer eval harness (golden + deterministic + judge + CI gate)**; promptfoo/Ragas/DeepEval; frozen goldens; N-sample aggregate; **INCONCLUSIVE-blocks**; prompt-registry versioning |
+
+**The exploration is now complete at the mechanism level**: every one of our
+cases — and the "tests + versioning covering" you named — has a named worldwide
+solution *and* a concrete, adoptable mechanism. The ledger holds 57 evidence
+entries across 8 waves.
