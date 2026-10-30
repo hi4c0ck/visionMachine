@@ -381,13 +381,9 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
     } else {
         seed.title.trim().to_string()
     };
-    let lead = lead_phrase(&seed.idea);
     let world = world_of(&seed.genre.name);
     let palette = palette_of(tod, weather);
     let logline = logline_of(&seed.idea);
-    // Multi-scene runs distribute the idea's sentence fragments across the
-    // scenes (each scene owns one narrative beat). Single-scene runs keep
-    // the idea ONLY in the logline — no second echo in the scene prose.
     let frags = idea_fragments(&seed.idea);
 
     let scenes: Vec<NovelScene> = (0..seed.scale.scenes)
@@ -396,6 +392,19 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
             let shot_count = seed.scale.shots_per_scene as usize;
             let last_scene = i as u32 == seed.scale.scenes - 1;
             let last_shot = |k: usize, total: usize| k + 1 == total;
+            // A per-scene narrative focus, so shots across scenes differ. In
+            // multi-scene runs each scene owns one sentence of the idea; in a
+            // single-scene run the focus is derived from the idea's head so
+            // sibling shots don't all repeat the same full lead phrase.
+            let scene_focus = if frags.len() > 1 {
+                frags.get(i as usize).cloned().unwrap_or_else(|| seed.idea.trim().to_string())
+            } else {
+                seed.idea.trim().to_string()
+            };
+            // The subject anchor is the scene focus's first 3 words (never the
+            // full 6-word lead, so the beats stop repeating "Googl bubble with
+            // comix eyes" across every shot).
+            let subject = short_subject(&scene_focus);
             let shots: Vec<NovelShot> = (0..shot_count)
                 .map(|k| {
                     let g = i as usize * shot_count + k;
@@ -411,14 +420,14 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
                     // profile's expansion contract), so sibling prose is
                     // composed, not copied.
                     let axis = SENSORY_AXES[g % SENSORY_AXES.len()];
-                    let axis_desc = axis_phrase(axis, &lead, &world);
-                    // Prose carries ONLY new content: the subject, its stage,
-                    // and one sensory detail. No shot-size prefix (S4 already
-                    // adds the S3 composition) and no time-of-day/weather tail
-                    // (S4 base already says both) — so nothing duplicates in
-                    // the derived prompts.
-                    let prose = format!("{lead} {stage}, {axis_desc}");
-                    let beats = shot_beats(g, &cam, &lead);
+                    let axis_desc = axis_phrase(axis, &world);
+                    // Prose carries ONLY new content: a compact subject, its
+                    // stage, and one sensory detail. No shot-size prefix (S4
+                    // already adds the S3 composition) and no time-of-day/
+                    // weather tail (S4 base already says both) — so nothing
+                    // duplicates in the derived prompts.
+                    let prose = format!("{subject} {stage}, {axis_desc}");
+                    let beats = shot_beats(g, &cam, &subject);
                     NovelShot { prose, beats }
                 })
                 .collect();
@@ -477,10 +486,11 @@ fn logline_of(idea: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// A deterministic subject anchor (first 6 words) — keeps the idea's
-/// *subject* in the shots without re-quoting the whole idea.
-fn lead_phrase(idea: &str) -> String {
-    let w: Vec<&str> = idea.split_whitespace().take(6).collect();
+/// A compact subject anchor (first 3 words) — keeps the scene's *subject* in
+/// the shot prose + beats without re-quoting the whole idea, so sibling
+/// shots stop repeating a long identical lead phrase.
+fn short_subject(text: &str) -> String {
+    let w: Vec<&str> = text.split_whitespace().take(3).collect();
     if w.is_empty() {
         "the subject".into()
     } else {
@@ -531,7 +541,7 @@ fn palette_of(tod: &str, weather: &str) -> String {
 /// base/subject/concerns already carry (time-of-day, weather, palette, world,
 /// the subject itself) so nothing duplicates in the derived prompts: the
 /// S2 base owns the world/space context, S3 owns the camera mechanics.
-fn axis_phrase(axis: &str, _lead: &str, _world: &str) -> String {
+fn axis_phrase(axis: &str, _world: &str) -> String {
     match axis {
         "light" => "dappled light shifts across the frame".into(),
         "color" => "soft tonal shifts settle into the grade".into(),

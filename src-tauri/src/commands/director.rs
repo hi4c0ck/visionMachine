@@ -424,7 +424,7 @@ pub async fn director_apply_flow(
             .get_composer(&session_id)
             .await
             .map_err(|e| format!("load composer: {e}"))?;
-        let mut composer = if replace {
+        let composer = if replace {
             crate::models::ComposerConfig {
                 id: existing.id.clone(),
                 session_id: existing.session_id.clone(),

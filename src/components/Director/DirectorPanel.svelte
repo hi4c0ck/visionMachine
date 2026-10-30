@@ -5,6 +5,7 @@
 	// with the G0–G4 gate strip; Extract + Scoreboard read from the same doc.
 	// Destructive regenerate-pipes stays a sharp edge (I9): rendered disabled.
 	import { flashToast } from '$lib/flashToast';
+	import { ask } from '@tauri-apps/plugin-dialog';
 	import { runFlow, listFlows, loadFlow, applyFlow, type DirectorTab } from '$lib/directorStore';
 	import { loadSession } from '$lib/composerStore';
 	import {
@@ -169,10 +170,14 @@
 		if (!doc) return;
 		const target = activeRun ?? doc.flowVersion;
 		const verb = replace ? 'replacing all composer pipes' : 'appending to the composer';
-		const ok = confirm(
+		// Native dialog: window.confirm() is a silent no-op in the Tauri
+		// webview (always resolves false → the apply never ran), so use the
+		// @tauri-apps/plugin-dialog ask() wrapper instead.
+		const ok = await ask(
 			`Regenerate pipes (${verb}) from flow v${target}?\n\n` +
 				`This writes real composer pipes via the materialize step. No fallback — ` +
 				`replay via the RegenerationContract triple if needed.`,
+			{ title: 'Regenerate pipes', kind: 'warning', okLabel: 'Regenerate', cancelLabel: 'Cancel' },
 		);
 		if (!ok) return;
 		applyWorking = true;

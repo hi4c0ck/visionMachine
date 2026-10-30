@@ -48,6 +48,12 @@ export async function runFlow(
 			text,
 			entry: entry ? JSON.stringify(entry) : null,
 		});
+		// The backend returns the REAL persisted version. The document's own
+		// flowVersion field is the contract FLOW_VERSION (1), so it must be
+		// overwritten with the actual on-disk version — otherwise callers that
+		// thread the run's version into apply/load resolve the wrong
+		// flow.v{N}.json file.
+		out.document.flowVersion = out.flowVersion;
 		return out.document;
 	} catch (e) {
 		rs.error = String(e);
