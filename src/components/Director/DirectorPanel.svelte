@@ -309,6 +309,13 @@
 				onRun={handleRun}
 			/>
 			<div class="g0-grid">
+				<label class="field grow">
+					<span class="field-label">title</span>
+					<input
+						bind:value={entry.title}
+						placeholder="optional film title (defaults from the idea)"
+					/>
+				</label>
 				<label class="field">
 					<span class="field-label">genre</span>
 					<select bind:value={entry.genre.name}>

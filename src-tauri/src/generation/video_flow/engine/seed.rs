@@ -289,9 +289,32 @@ fn normalize_seed(seed: FilmSeed) -> FilmSeed {
 }
 
 /// S1 Node A — deterministic visual novel from the seed.
+/// S1 Node A в?" deterministic visual novel from the seed.
+///
+/// The shot prose + beats carry *fragments of the idea* (sentence split,
+/// wrapping across shots), so the S1 novel and the S4 prompts it feeds are
+/// genuine expansions of the entry, not a generic template. When the idea is
+/// empty the legacy style-only prose is kept so the V1 non-empty invariants
+/// still hold.
 fn build_novel(seed: &FilmSeed) -> VisualNovel {
     let style_hint = if seed.genre.style.is_empty() { "cinematic" } else { seed.genre.style.as_str() };
-    let film_title = if seed.title.is_empty() { "Untitled" } else { seed.title.as_str() };
+    // Title: explicit G0 title > first clause of the idea > "Untitled".
+    let film_title = if seed.title.trim().is_empty() {
+        title_from_idea(&seed.idea)
+    } else {
+        seed.title.trim().to_string()
+    };
+    // Idea fragments: sentence-ish split, deterministic, wrap-around across
+    // shots when there are more shots than fragments.
+    let frags: Vec<String> = seed
+        .idea
+        .split(['.', '!', '?', ';', '\n'])
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect();
+    let frag_at = |g: usize| -> Option<String> {
+        frags.get(g % frags.len().max(1)).cloned()
+    };
     let scenes: Vec<NovelScene> = (0..seed.scale.scenes)
         .map(|i| {
             let scene_num = i + 1;
@@ -299,21 +322,43 @@ fn build_novel(seed: &FilmSeed) -> VisualNovel {
             let shots: Vec<NovelShot> = (0..shot_count)
                 .map(|k| {
                     let shot_no = k + 1;
-                    NovelShot {
-                        prose: format!(
-                            "scene {scene_num} shot {shot_no}: {film_title} — {style_hint}; {} content, {style_hint}",
-                            if k == 0 { "establishing" } else { "developing" }
+                    let g = i as usize * shot_count + k;
+                    let beat = match k {
+                        0 => "establishes",
+                        1 => "develops",
+                        _ => "resolves",
+                    };
+                    let frag = frag_at(g);
+                    let prose = match &frag {
+                        Some(f) => format!(
+                            "scene {scene_num} shot {shot_no}: {film_title} — {style_hint}; {beat} — {f}"
                         ),
+                        None => format!(
+                            "scene {scene_num} shot {shot_no}: {film_title} — {style_hint}; {beat} content, {style_hint}"
+                        ),
+                    };
+                    let open = frag.clone().unwrap_or_else(|| style_hint.to_string());
+                    let dev = frags
+                        .get((g + 1) % frags.len().max(1))
+                        .cloned()
+                        .unwrap_or_else(|| style_hint.to_string());
+                    NovelShot {
+                        prose,
                         beats: vec![
-                            format!("scene {scene_num}.shot {shot_no} opens: {style_hint}"),
-                            format!("scene {scene_num}.shot {shot_no} develops: {style_hint}"),
+                            format!("scene {scene_num}.shot {shot_no} opens: {open}"),
+                            format!("scene {scene_num}.shot {shot_no} develops: {dev}"),
                         ],
                     }
                 })
                 .collect();
+            let scene_frag = frag_at(i as usize * shot_count);
+            let scene_prose = match scene_frag {
+                Some(f) => format!("Scene {scene_num} of {film_title} — {style_hint}: {f}"),
+                None => format!("Scene {scene_num} of {film_title} — {style_hint}."),
+            };
             NovelScene {
                 title: format!("Scene {scene_num}"),
-                prose: format!("Scene {scene_num} of {film_title} — {style_hint}."),
+                prose: scene_prose,
                 shots,
             }
         })
@@ -329,6 +374,18 @@ fn build_novel(seed: &FilmSeed) -> VisualNovel {
             weather: "clear".into(),
         },
         scenes,
+    }
+}
+
+/// A deterministic short title from the first clause of the idea — replaces
+/// "Untitled" when G0 leaves the title empty.
+fn title_from_idea(idea: &str) -> String {
+    let first = idea.split(['.', '!', '?', ';', '\n']).next().unwrap_or(idea.trim());
+    let t = first.trim().to_string();
+    if t.is_empty() {
+        "Untitled".into()
+    } else {
+        t
     }
 }
 
@@ -356,6 +413,48 @@ fn build_scene_spec(index: usize, sc: &NovelScene, novel: &VisualNovel) -> Scene
     }
 }
 
+/// Per-shot concern variety, keyed on the global shot index `g`.
+///
+/// Deterministic + tag-closed: every value is a member of the corresponding
+/// `TagVocabulary` set, so V2 tag-closure stays clean. The point is that
+/// sibling shots no longer collapse into identical S4 prompts — the first
+/// shot of a scene is the "establishing" wide, the last is the "resolving"
+/// tight close, and the in-between shots walk focal length / framing /
+/// motion so the whole sequence reads as real coverage, not one copy.
+fn shot_camera(g: usize) -> CameraConcern {
+    let sizes = ["wide", "medium", "close-up", "over-the-shoulder", "medium"];
+    let angles = ["eye", "low", "eye", "high", "eye"];
+    let framings = ["rule_of_thirds", "rule_of_thirds", "centered", "fill_frame", "negative_space"];
+    let dos = ["deep", "medium", "shallow", "shallow", "medium"];
+    // Establishing = wide/deep first, resolving = tight/shallow last.
+    let size = if g == 0 { sizes[0] } else { sizes[g % sizes.len()] };
+    let angle = if g == 0 { angles[0] } else { angles[g % angles.len()] };
+    CameraConcern {
+        size: size.to_string(),
+        angle: angle.to_string(),
+        framing: framings[g % framings.len()].to_string(),
+        dof: dos[g % dos.len()].to_string(),
+    }
+}
+
+fn shot_lens(g: usize) -> LensConcern {
+    let focals: [u32; 5] = [24, 35, 50, 85, 35];
+    LensConcern {
+        focal_mm: focals[g % focals.len()],
+        distortion: None,
+    }
+}
+
+fn shot_motion(g: usize) -> MotionConcern {
+    let moves = ["static", "pan", "track", "dolly", "static"];
+    let speeds = ["normal", "slow", "normal", "slow", "normal"];
+    MotionConcern {
+        r#move: moves[g % moves.len()].to_string(),
+        zoom: "static".into(),
+        speed: speeds[g % speeds.len()].to_string(),
+    }
+}
+
 /// S3 Node B + S2 division — concern-grouped shot specs (closed vocab defaults)
 /// and the shot timeline at transition points.
 fn build_specs_and_timeline(
@@ -376,19 +475,11 @@ fn build_specs_and_timeline(
             let shot_id = format!("tl_{:02}_shot_{:02}", si + 1, shot_num);
 
             // S3 — ShotSpec: concern-grouped, closed defaults.
+            let g = si * sc.shots.len() + ki;
             let concerns = Concerns {
-                camera: CameraConcern {
-                    size: "medium".into(),
-                    angle: "eye".into(),
-                    framing: "rule_of_thirds".into(),
-                    dof: "medium".into(),
-                },
-                lens: LensConcern { focal_mm: 35, distortion: None },
-                motion: MotionConcern {
-                    zoom: "static".into(),
-                    r#move: "static".into(),
-                    speed: "normal".into(),
-                },
+                camera: shot_camera(g),
+                lens: shot_lens(g),
+                motion: shot_motion(g),
                 lighting: scene.light.clone(),
                 grade: scene.grade.clone(),
                 effects: Vec::new(),
@@ -533,9 +624,21 @@ fn default_weather() -> String { "clear".into() }
 impl EngineEntry {
     /// Convert to a `FilmSeed`, injecting the G0 look axes into the style.
     pub fn to_seed(&self) -> FilmSeed {
+        // The idea is what the LLM/expand reads: never let it degrade to an
+        // empty seed (G0 may have run with input_text populated and idea
+        // empty). Fall back to the verbatim text, then to a named default.
+        let idea = if self.idea.trim().is_empty() {
+            self.input_text
+                .clone()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| "untitled idea".into())
+        } else {
+            self.idea.trim().to_string()
+        };
         FilmSeed {
             title: self.title.clone(),
-            idea: self.idea.clone(),
+            idea,
             input_text: self.input_text.clone(),
             genre: self.genre.clone(),
             ratio: self.ratio.clone(),
@@ -573,5 +676,93 @@ impl EngineEntry {
         // Re-verify to catch any regression.
         run.verify = verify(&run);
         run
+    }
+}
+
+// ── Tests: the S4 "identical prompts" + idea-restoration gaps are closed ──
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+    use crate::generation::video_flow::engine::types::{Genre, SeedScale};
+
+    fn entry(idea: &str) -> EngineEntry {
+        EngineEntry {
+            title: String::new(),
+            idea: idea.into(),
+            input_text: Some(idea.into()),
+            genre: Genre {
+                name: "Cinematic".into(),
+                style: "cinematic natural light".into(),
+            },
+            ratio: "16:9".into(),
+            scale: SeedScale {
+                scenes: 1,
+                shots_per_scene: 3,
+                clip_s: [8, 10],
+            },
+            time_of_day: "midday".into(),
+            weather: "clear".into(),
+        }
+    }
+
+    /// The two S4 shots of one scene must no longer be identical: the
+    /// per-shot concern table + idea-carrying prose differentiate them.
+    #[test]
+    fn sibling_shots_produce_different_prompts() {
+        let run = entry("a girl follows the river road north at dusk").build_run();
+        let mol = &run.molecules;
+        assert!(mol.len() >= 3);
+        assert_ne!(
+            mol[0].prompts.image, mol[1].prompts.image,
+            "sibling S4 image prompts must differ"
+        );
+        assert_ne!(mol[0].composition, mol[1].composition, "per-shot camera variety");
+    }
+
+    /// The idea fragments reach the S1 novel prose + beats (novel ≠ entry).
+    #[test]
+    fn idea_fragments_reach_s1_prose_and_beats() {
+        let run = entry("a girl follows the river road north at dusk").build_run();
+        let all_prose: String = run
+            .novel
+            .scenes
+            .iter()
+            .flat_map(|sc| sc.shots.iter().map(|s| s.prose.clone()))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(all_prose.contains("girl follows the river road north"),
+            "shot prose must carry idea fragments: {all_prose}");
+        assert!(!run.novel.scenes[0].shots[0].beats.is_empty());
+    }
+
+    /// Empty title falls back to the first idea clause, not "Untitled".
+    #[test]
+    fn empty_title_falls_back_to_idea_clause() {
+        let run = entry("a girl follows the river road north at dusk").build_run();
+        assert_ne!(run.novel.film.title, "Untitled");
+        assert!(run.novel.film.title.contains("girl follows the river road"));
+    }
+
+    /// An empty idea + populated input_text must never degrade the seed:
+    /// idea persists from the verbatim text (the Q2 saving gap).
+    #[test]
+    fn empty_idea_falls_back_to_input_text() {
+        let e = EngineEntry {
+            idea: String::new(),
+            input_text: Some("the lighthouse at night".into()),
+            ..entry("unused")
+        };
+        let seed = e.to_seed();
+        assert_eq!(seed.idea, "the lighthouse at night");
+    }
+
+    /// Explicit G0 title wins over the idea-derived one.
+    #[test]
+    fn explicit_title_wins() {
+        let mut e = entry("an idea about a dog");
+        e.title = "The Lighthouse".into();
+        let run = e.build_run();
+        assert_eq!(run.novel.film.title, "The Lighthouse");
     }
 }
