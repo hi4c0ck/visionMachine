@@ -119,7 +119,9 @@
 
 	// Seed the active document from the newest persisted run so Extract /
 	// Scoreboard reflect saved data, not just the in-tab run. When the loaded
-	// doc carries an engine, backfill the G0 entry controls from its seed.
+	// doc carries an engine, backfill the G0 entry controls from its seed;
+	// for a pre-engine doc, pre-fill the idea from the run's entry text so
+	// one click on "Run S0→S5" re-builds the flow.
 	$effect(() => {
 		if (doc) return;
 		void (async () => {
@@ -131,7 +133,7 @@
 					const d = await loadFlow(sessionId, newest.flowVersion);
 					doc = d;
 					activeRun = newest.flowVersion;
-					backfillEntryFromEngine(d);
+					backfillEntryFromEngine(d, newest);
 				}
 			} catch (e) {
 				console.warn('director load_latest', e);
@@ -139,9 +141,15 @@
 		})();
 	});
 
-	function backfillEntryFromEngine(d: FlowDocument) {
+	function backfillEntryFromEngine(d: FlowDocument, summary?: FlowSummary) {
 		const e = d.engine;
-		if (!e) return;
+		if (!e) {
+			// Pre-engine doc: carry its entry text into the idea field so the
+			// user can immediately re-run it through the S0→S5 engine.
+			const legacy = summary?.entryText?.trim();
+			entry = { ...entry, idea: entry.idea || legacy || '' };
+			return;
+		}
 		const s = e.seed;
 		const film = e.novel.film;
 		entry = {
@@ -284,97 +292,97 @@
 					</span>
 				{/each}
 			</div>
-		{:else}
+		{:else if doc}
 			<div class="phase0-notice">
-				<span class="muted">This run predates the engine. Re-run to see the S0→S5 flow.</span>
+				<span class="muted">This run predates the engine — rebuild it below with one click to see the S0→S5 flow.</span>
 			</div>
 		{/if}
 
-		{#if engine}
-			<!-- ── ① G0 · Entry parameters ── -->
-			<section class="stage">
-				<h3 class="block-heading">① G0 · Entry parameters <span class="muted">· S0 seed</span></h3>
-				<TextBlock
-					label="Idea"
-					bind:value={entry.idea}
-					generating={running}
-					locked={running}
-					onRun={handleRun}
-				/>
-				<div class="g0-grid">
-					<label class="field">
-						<span class="field-label">genre</span>
-						<select bind:value={entry.genre.name}>
-							{#each GENRE_PRESETS as g}
-								<option value={g.name}>{g.name}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="field grow">
-						<span class="field-label">style</span>
-						<input
-							bind:value={entry.genre.style}
-							placeholder="visual style string"
-						/>
-					</label>
-					<label class="field">
-						<span class="field-label">ratio</span>
-						<select bind:value={entry.ratio}>
-							{#each RATIOS as r}
-								<option value={r}>{r}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="field">
-						<span class="field-label">scenes</span>
+		<!-- ── ① G0 · Entry parameters — always available (the S0 entry) ── -->
+		<section class="stage">
+			<h3 class="block-heading">① G0 · Entry parameters <span class="muted">· S0 seed</span></h3>
+			<TextBlock
+				label="Idea"
+				bind:value={entry.idea}
+				generating={running}
+				locked={running}
+				onRun={handleRun}
+			/>
+			<div class="g0-grid">
+				<label class="field">
+					<span class="field-label">genre</span>
+					<select bind:value={entry.genre.name}>
+						{#each GENRE_PRESETS as g}
+							<option value={g.name}>{g.name}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="field grow">
+					<span class="field-label">style</span>
+					<input
+						bind:value={entry.genre.style}
+						placeholder="visual style string"
+					/>
+				</label>
+				<label class="field">
+					<span class="field-label">ratio</span>
+					<select bind:value={entry.ratio}>
+						{#each RATIOS as r}
+							<option value={r}>{r}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="field">
+					<span class="field-label">scenes</span>
+					<input
+						type="number"
+						min="1"
+						max="24"
+						bind:value={entry.scale.scenes}
+					/>
+				</label>
+				<label class="field">
+					<span class="field-label">shots/scene</span>
+					<input
+						type="number"
+						min="1"
+						max="5"
+						bind:value={entry.scale.shots_per_scene}
+					/>
+				</label>
+				<label class="field">
+					<span class="field-label">clip_s</span>
+					<span class="clip-range">
 						<input
 							type="number"
-							min="1"
-							max="24"
-							bind:value={entry.scale.scenes}
-						/>
-					</label>
-					<label class="field">
-						<span class="field-label">shots/scene</span>
+							min="4"
+							max="12"
+							bind:value={entry.scale.clip_s[0]}
+						/>–
 						<input
 							type="number"
-							min="1"
-							max="5"
-							bind:value={entry.scale.shots_per_scene}
+							min="4"
+							max="12"
+							bind:value={entry.scale.clip_s[1]}
 						/>
-					</label>
-					<label class="field">
-						<span class="field-label">clip_s</span>
-						<span class="clip-range">
-							<input
-								type="number"
-								min="4"
-								max="12"
-								bind:value={entry.scale.clip_s[0]}
-							/>–
-							<input
-								type="number"
-								min="4"
-								max="12"
-								bind:value={entry.scale.clip_s[1]}
-							/>
-						</span>
-					</label>
-					<label class="field">
-						<span class="field-label">time of day</span>
-						<select bind:value={entry.time_of_day}>
-							{#each VOCAB.time_of_day as t}
-								<option value={t}>{t}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="field grow">
-						<span class="field-label">weather</span>
-						<input bind:value={entry.weather} placeholder="clear, brief clouds, …" />
-					</label>
-				</div>
-			</section>
+					</span>
+				</label>
+				<label class="field">
+					<span class="field-label">time of day</span>
+					<select bind:value={entry.time_of_day}>
+						{#each VOCAB.time_of_day as t}
+							<option value={t}>{t}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="field grow">
+					<span class="field-label">weather</span>
+					<input bind:value={entry.weather} placeholder="clear, brief clouds, …" />
+				</label>
+			</div>
+		</section>
 
+		{#if engine}
 			<!-- ── ② S1 · Visual Novel (G1 review point) ── -->
 			<section class="stage">
 				<div class="stage-head">
@@ -546,26 +554,29 @@
 				{/if}
 			</section>
 
-			<!-- ── Run + destructive apply ── -->
-			<section class="stage actions">
-				<button class="btn primary" disabled={running} onclick={handleRun}>
-					{running ? 'Running…' : 'Run S0→S5'}
-				</button>
+			<!-- ── Run + destructive apply — always visible: a pre-engine doc
+			     is one click from a full S0→S5 rebuild ── -->
+		{/if}
+		<section class="stage actions">
+			<button class="btn primary" disabled={running || !entry.idea.trim()} title={!entry.idea.trim() ? 'Write the idea first' : undefined} onclick={handleRun}>
+				{running ? 'Running…' : 'Run S0→S5'}
+			</button>
+			{#if doc}
 				<button class="btn" onclick={() => void onLogSignal('accept', 'root', 'run ' + activeRun)}>
 					Accept
 				</button>
 				<button class="btn" onclick={() => void onLogSignal('reject', 'root', runError ?? 'run rejected')}>
 					Reject
 				</button>
-				<!-- Destructive apply is a sharp edge (I9 materialize adapter,
-				     later phase): rendered disabled with the fixed "no fallback"
-				     copy from design §4, not wired to a command. -->
-				<button class="btn danger" disabled>
-					Regenerate pipes
-					<span class="btn-note">not wired yet · no fallback · replay v{doc?.regen.version.flowVersion}</span>
-				</button>
-			</section>
-		{/if}
+			{/if}
+			<!-- Destructive apply is a sharp edge (I9 materialize adapter,
+			     later phase): rendered disabled with the fixed "no fallback"
+			     copy from design §4, not wired to a command. -->
+			<button class="btn danger" disabled>
+				Regenerate pipes
+				<span class="btn-note">not wired yet · no fallback · replay v{doc?.regen.version.flowVersion}</span>
+			</button>
+		</section>
 
 		{#if runError}
 			<p class="flow-error" role="alert">{runError}</p>
