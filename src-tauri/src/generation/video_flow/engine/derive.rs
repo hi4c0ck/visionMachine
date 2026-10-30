@@ -33,7 +33,7 @@ fn list<'a>(a: &'a [String]) -> Vec<&'a str> {
     a.iter().filter(|x| !x.is_empty() && x.as_str() != "none").map(|s| s.as_str()).collect()
 }
 
-fn light_text(l: &crate::generation::video_flow::engine::types::LightingConcern) -> String {
+pub fn light_text(l: &crate::generation::video_flow::engine::types::LightingConcern) -> String {
     let mut bits: Vec<String> = Vec::new();
     if !l.key.is_empty() {
         bits.push(format!("{} key light", l.key));
@@ -52,7 +52,7 @@ fn light_text(l: &crate::generation::video_flow::engine::types::LightingConcern)
     bits.join(", ")
 }
 
-fn grade_text(g: &crate::generation::video_flow::engine::types::GradeConcern) -> String {
+pub fn grade_text(g: &crate::generation::video_flow::engine::types::GradeConcern) -> String {
     let mut bits: Vec<String> = Vec::new();
     if !g.palette.is_empty() {
         bits.push(format!("{} palette", g.palette));
@@ -66,7 +66,7 @@ fn grade_text(g: &crate::generation::video_flow::engine::types::GradeConcern) ->
     bits.join(", ")
 }
 
-fn composition_text(c: &crate::generation::video_flow::engine::types::CameraConcern) -> String {
+pub fn composition_text(c: &crate::generation::video_flow::engine::types::CameraConcern) -> String {
     let mut bits: Vec<String> = Vec::new();
     if !c.size.is_empty() {
         bits.push(format!("{} shot", c.size));
@@ -83,7 +83,7 @@ fn composition_text(c: &crate::generation::video_flow::engine::types::CameraConc
     bits.join(", ")
 }
 
-fn motion_text(m: &crate::generation::video_flow::engine::types::MotionConcern) -> String {
+pub fn motion_text(m: &crate::generation::video_flow::engine::types::MotionConcern) -> String {
     let mut bits: Vec<String> = Vec::new();
     if !m.r#move.is_empty() && m.r#move != "static" {
         bits.push(m.r#move.clone());

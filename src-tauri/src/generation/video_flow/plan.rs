@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// The flow's video-engine tag vocabulary. Independent of the composer model
 /// so the flow's text contract can evolve without touching the compose schema;
 /// `to_tag_type()` is the one mapping point (used only at materialize).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoTag {
     Scene,

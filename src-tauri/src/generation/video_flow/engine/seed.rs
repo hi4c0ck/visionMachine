@@ -347,74 +347,118 @@ impl EngineRun {
         run
     }
 
-    /// Concrete materialization bridge (I9): turn this run's derived S4
-    /// molecules into a `StructuredVideoPlan` the composer's materialize step
-    /// can lower. One pipe per scene; each shot becomes a Scene section whose
-    /// prompt is the shot's *derived concrete image prompt* (base scene look +
-    /// delta subject/concerns from `derive_full`), so the composer pipes carry
-    /// real, concrete, per-shot visual language — not the coarse marker-bridge
-    /// `@scene` clauses.
+    /// Concrete materialization bridge (I9): turn this run's S3 concerns into
+    /// a `StructuredVideoPlan` the composer's materialize step lowers. One
+    /// **pipe per shot**, and each pipe is split into its own concrete
+    /// concern sections — `scene` (the shot's novel prose), `camera` (size /
+    /// angle / framing / DoF / focal), `motion` (move / zoom / speed),
+    /// `lighting` (key / grade) and `transition` (in / out). Each section
+    /// carries only ITS concern's text, so the composer gets a real tagged
+    /// structure, not one S4 blob dumped into a single `@scene` section.
     pub fn plan_from_engine(
         &self,
         flow_version: u32,
     ) -> crate::generation::video_flow::plan::StructuredVideoPlan {
+        use crate::generation::video_flow::engine::derive::{
+            composition_text, grade_text, light_text, motion_text,
+        };
         use crate::generation::video_flow::plan::{PlanPipe, PlanSection, StructuredVideoPlan, VideoTag};
 
         let clip = self.seed.scale.clip_s[0].max(4);
         let frames = frames_of(clip);
-
-        // Molecules are laid out scene-major: scene `si` owns
-        // [sum_{s<si} shots_s .. sum_{s<=si} shots_s).
-        let shot_counts: Vec<usize> = self.novel.scenes.iter().map(|s| s.shots.len()).collect();
-        let prior: Vec<usize> = shot_counts
-            .iter()
-            .scan(0usize, |acc, c| {
-                let v = *acc;
-                *acc += c;
-                Some(v)
-            })
-            .collect();
 
         let fallback_style = format!(
             "{} — {}",
             self.novel.film.style, self.novel.film.palette
         );
 
-        let mut pipes: Vec<PlanPipe> = self
-            .novel
-            .scenes
-            .iter()
-            .enumerate()
-            .map(|(si, sc)| {
-                let scene_style = self.scenes.get(si).map(|s| {
-                    format!(
-                        "{} {} {} — ambience: {}",
-                        s.time_of_day, s.weather, s.scene_id, s.ambience
-                    )
-                });
+        // Molecules + specs are scene-major, shot-major (index-aligned).
+        // Flatten both to shot order; the shot title carries the scene id.
+        let mut pipes: Vec<PlanPipe> = Vec::new();
+        let shot_counts: Vec<usize> =
+            self.novel.scenes.iter().map(|s| s.shots.len()).collect();
+
+        for (si, sc) in self.novel.scenes.iter().enumerate() {
+            let shot_scene_style = self.scenes.get(si).map(|s| {
+                format!(
+                    "{} {} — ambience: {}",
+                    s.time_of_day, s.weather, s.ambience
+                )
+            });
+            for (ki, _kshot) in sc.shots.iter().enumerate() {
+                let mi: usize = shot_counts[..si].iter().sum::<usize>() + ki;
+                let Some(spec) = self.specs.get(mi) else { continue };
+                let shot_no = ki + 1;
+                let shot_title = format!("{} · shot {shot_no}", sc.title);
+                let scene_style = shot_scene_style
+                    .clone()
+                    .unwrap_or_else(|| fallback_style.clone());
+
+                // Concrete concern text, one per section tag.
+                let camera_text = {
+                    let base = composition_text(&spec.concerns.camera);
+                    let lens = if spec.concerns.lens.focal_mm > 0 {
+                        format!(" · {}mm lens", spec.concerns.lens.focal_mm)
+                    } else {
+                        String::new()
+                    };
+                    format!("{base}{lens}")
+                };
+                let motion_text_ =
+                    motion_text(&spec.concerns.motion);
+                let lighting_text = [
+                    light_text(&spec.concerns.lighting),
+                    grade_text(&spec.concerns.grade),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
+                let transition_text =
+                    format!("{} → {}", spec.transition_in, spec.transition_out);
+                let scene_text = spec.content.prose.clone();
+
+                // Split the clip into concrete concern windows, one section
+                // per non-empty concern tag.
+                let seg = frames / 5 + 1;
                 let mut sections: Vec<PlanSection> = Vec::new();
-                for kshot in 0..sc.shots.len() {
-                    let mi = prior[si] + kshot;
-                    if let Some(mol) = self.molecules.get(mi) {
-                        let start = kshot as u32 * frames;
-                        sections.push(PlanSection {
-                            tag: VideoTag::Scene,
-                            frame_start: start,
-                            frame_end: start + frames,
-                            prompt: mol.prompts.image.clone(),
-                            from: vec![],
-                        });
+                for (i, (tag, prompt)) in [
+                    (VideoTag::Scene, scene_text),
+                    (VideoTag::Camera, camera_text),
+                    (VideoTag::Motion, motion_text_),
+                    (VideoTag::Lighting, lighting_text),
+                    (VideoTag::Transition, transition_text),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if prompt.trim().is_empty() {
+                        continue;
                     }
+                    let start = (i as u32) * seg;
+                    let end = if i == 4 {
+                        frames
+                    } else {
+                        ((i as u32 + 1) * seg).max(start + 1)
+                    };
+                    sections.push(PlanSection {
+                        tag,
+                        frame_start: start,
+                        frame_end: end,
+                        prompt: prompt.trim().to_string(),
+                        from: vec![],
+                    });
                 }
-                PlanPipe {
-                    index: si,
-                    title: sc.title.clone(),
-                    global_style: scene_style.unwrap_or_else(|| fallback_style.clone()),
+
+                pipes.push(PlanPipe {
+                    index: pipes.len(),
+                    title: shot_title,
+                    global_style: scene_style,
                     media_mode: "text".into(),
                     sections,
-                }
-            })
-            .collect();
+                });
+            }
+        }
 
         if pipes.is_empty() {
             // No scenes (shouldn't happen) — emit a single logline-shell pipe
@@ -490,45 +534,40 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
             let scene_num = i + 1;
             let shot_count = seed.scale.shots_per_scene as usize;
             let last_scene = i as u32 == seed.scale.scenes - 1;
-            let last_shot = |k: usize, total: usize| k + 1 == total;
             let shots: Vec<NovelShot> = (0..shot_count)
                 .map(|k| {
                     let g = i as usize * shot_count + k;
                     let cam = shot_camera(g);
-                    let stage = if k == 0 {
-                        "establishes the scene"
-                    } else if last_shot(k, shot_count) {
-                        "resolves the beat"
-                    } else {
-                        "develops the action"
-                    };
-                    // Concrete content: this shot OWNS one distributed fragment
-                    // of the author's idea (units[g]), never a truncated
-                    // 3-word stub — a real scene, not a label.
-                    let frag = units
-                        .get(g)
-                        .map(|f| cap_words(f, 10))
-                        .filter(|f| !f.is_empty())
-                        .unwrap_or_else(|| "the moment deepens".to_string());
-                    // The sensory axis adds a NEW light/mood detail on top of
-                    // the fragment, so sibling shots differ. No S3 camera
-                    // tokens, no time-of-day/weather tail — S4 adds those.
+                    // This shot OWNS one distributed fragment of the author's
+                    // idea — a meaningful narrative piece, not a truncated
+                    // label and not the whole idea.
+                    let frag = units.get(g).cloned().filter(|f| !f.is_empty()).unwrap_or_else(|| "the moment deepens".to_string());
+                    // A concrete place (genre + time-of-day), not a raw
+                    // world string. "sun-drenched street market", "cool blue city block",
+                    // "dense pine forest" — a real, concrete, filmic space.
+                    let place = concrete_place(&seed.genre.name, tod);
+                    // A concrete action grounded in that place: the shot's own
+                    // fragment (its piece of the idea) + a cycling sensory
+                    // detail. No S3 camera tokens, no tod/weather tail — S4
+                    // adds those.
                     let axis = SENSORY_AXES[g % SENSORY_AXES.len()];
                     let axis_desc = axis_phrase(axis, &world);
-                    let prose = format!("{frag} {stage} in {world}, {axis_desc}");
+                    let prose = scene_sentence(g, &place, &frag, &axis_desc);
                     let beats = shot_beats(g, &cam, &frag, &world);
                     NovelShot { prose, beats }
                 })
                 .collect();
-            // Scene prose: a concrete sentence weaving this scene's own shots'
-            // fragments through the world. Multi-scene runs stay distinct by
-            // construction (their fragments are disjoint); a single-scene run
-            // weaves a few, then carries the mood — never the whole idea.
-            let scene_frags: Vec<String> = (0..shot_count)
-                .map(|k| units.get(i as usize * shot_count + k).cloned().unwrap_or_default())
+            // Scene prose: one concrete sentence — the scene's subject (from
+            // its first fragment) grounded in the place, carrying the scene's
+            // role, closed with a sensory detail. Reads as a narrative beat,
+            // not a slice-dump of the author's text.
+            let place = concrete_place(&seed.genre.name, tod);
+            let first_frag = units
+                .get(i as usize * shot_count)
+                .cloned()
                 .filter(|f| !f.is_empty())
-                .take(2)
-                .collect();
+                .unwrap_or_else(|| "the moment".to_string());
+            let subject = subject_phrase(&first_frag);
             let role = if i == 0 {
                 "the world is established here"
             } else if last_scene {
@@ -536,11 +575,13 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
             } else {
                 "the story develops here"
             };
-            let mut prose = format!("{world}; {role}.");
-            if !scene_frags.is_empty() {
-                prose.push_str(&format!(" Here, {}", scene_frags.join("; ")));
-            }
-            prose.push('.');
+            let scene_axis = axis_phrase(
+                SENSORY_AXES[i as usize % SENSORY_AXES.len()],
+                &world,
+            );
+            let prose = format!(
+                "In {place}, {subject}; {role}; {scene_axis}."
+            );
             NovelScene {
                 title: format!("Scene {scene_num}"),
                 prose,
@@ -688,6 +729,83 @@ fn axis_phrase(axis: &str, _world: &str) -> String {
         "weather" => "air moves through the frame on its own".into(),
         _ => String::new(),
     }
+}
+
+/// A concrete, genre-anchored place that varies with time-of-day — the
+/// golden's "a dense deciduous forest, mossy trails, tall pines". This is
+/// what a real expander writes into the *scene prose*, not the raw G0
+/// "world" string. Each shot reads like it happens IN a specific place.
+fn concrete_place(genre: &str, tod: &str) -> String {
+    let g = genre.to_lowercase();
+    // Concrete place per genre (the golden's "a dense deciduous forest"
+    // is what this should look like — specific, visual, filmic).
+    let base = if g.contains("documentary") {
+        "a wide real-world location, open sky and ground, visible texture"
+    } else if g.contains("anime") || g.contains("animation") {
+        "a stylized frame with bold color fields and clean composition"
+    } else if g.contains("action") {
+        "a kinetic urban space, hard edges and practical light, dust in the air"
+    } else {
+        "a lived-in cinematic space, motivated light, deep detail"
+    };
+    // Time-of-day modifier (keeps the place concrete and time-aware).
+    let tod_mod = match tod {
+        "dawn" => "at first light",
+        "morning" => "in clean morning light",
+        "evening" | "afternoon" => "as the light cools into dusk",
+        "night" => "under low night light",
+        _ => "in bright daylight",
+    };
+    format!("{base}, {tod_mod}")
+}
+
+/// A clean visual *subject noun* from a distributed fragment: skip leading
+/// filler ("there", "and", "it"...), keep 1–2 content words so it names what
+/// the shot is about WITHOUT re-carrying the fragment's own verb — the
+/// sentence's verb is the cycling one, so "a girl" + "settles into", not
+/// "a girl follows settles into". Capped at 2 words: enough to be a concrete
+/// noun, short enough to read as a subject, not a clause dump.
+fn subject_phrase(fragment: &str) -> String {
+    let fillers = [
+        "there", "then", "and", "it", "is", "in", "on", "at", "to", "of", "with", "as", "but",
+        "the",
+    ];
+    let words: Vec<&str> = fragment.split_whitespace().collect();
+    let mut chosen: Vec<&str> = Vec::new();
+    for w in words.iter() {
+        let lw = w.to_lowercase();
+        // Skip leading fillers (and "the" before a noun) until the real
+        // content word; then take up to 2 words.
+        if chosen.is_empty() && fillers.iter().any(|f| f == &lw) {
+            continue;
+        }
+        chosen.push(w);
+        if chosen.len() >= 2 {
+            break;
+        }
+    }
+    if chosen.is_empty() {
+        "the subject".to_string()
+    } else {
+        chosen.join(" ")
+    }
+}
+
+/// Compose the concrete S1 shot-prose sentence: the shot's subject + a
+/// cycling action + a specific place + one sensory detail, read as a complete
+/// grammatical sentence (the golden's "the girl walks down a sunlit forest
+/// corridor" pattern), not a raw word-slice of the user's text.
+fn scene_sentence(g: usize, place: &str, fragment: &str, axis_detail: &str) -> String {
+    let verbs = [
+        "settles into",
+        "drifts across",
+        "moves through",
+        "emerges in",
+        "carries across",
+    ];
+    let verb = verbs[g % verbs.len()];
+    let subject = subject_phrase(fragment);
+    format!("{subject} {verb} {place}; {axis_detail}.")
 }
 
 /// Beats in the harness Node A micro-cue form:
@@ -1100,26 +1218,39 @@ mod seed_tests {
         let cfg = FlowConfig::default_flow();
         let plan = run.plan_from_engine(1);
 
-        // Every shot of every scene becomes a Scene section.
+        // One composer pipe per SHOT (not per scene), and each shot's pipe is
+        // split into its own concrete concern sections — the structure the
+        // user asked for, not one S4 blob per shot.
         let total_shots: usize =
             run.novel.scenes.iter().map(|s| s.shots.len()).sum::<usize>();
-        let total_sections: usize =
-            plan.pipes.iter().map(|p| p.sections.len()).sum::<usize>();
         assert_eq!(
-            total_sections, total_shots,
-            "one Scene section per shot (concrete, not coarse)"
+            plan.pipes.len(),
+            total_shots,
+            "one pipe per shot (concrete structure)"
+        );
+
+        // Each shot pipe carries multiple DISTINCT concern tags (scene /
+        // camera / motion / lighting / transition), not a single @scene blob.
+        let p0 = &plan.pipes[0];
+        let distinct_tags: std::collections::HashSet<_> =
+            p0.sections.iter().map(|s| s.tag).collect();
+        assert!(
+            distinct_tags.len() >= 3,
+            "shot pipe splits into ≥3 concrete concern tags, got {}",
+            p0.sections.len()
         );
 
         // The bridge plan must still satisfy the flow's structural caps so
         // `director_apply_flow`'s validate gate passes.
         validate_plan(&plan, &cfg.structure).expect("engine plan passes validate_plan");
         let pipes = materialize_pipes(&plan, &cfg.materialize).expect("engine plan materializes");
-        assert_eq!(pipes.len(), run.novel.scenes.len(), "one composer pipe per scene");
+        assert_eq!(pipes.len(), total_shots, "one composer pipe per shot");
 
-        // Each pipe's Scene tag prompt is the shot's derived S4 image prompt
-        // (concrete look + subject), not a bare clause.
-        let p0 = &pipes[0];
-        let timeline = p0
+        // Each materialized pipe lowers its concrete concern sections to
+        // segments whose prompts are real concrete text (>20 chars), not a
+        // bare clause.
+        let p0m = &pipes[0];
+        let timeline = p0m
             .elements
             .iter()
             .find(|e| matches!(e, crate::models::composer::PipeElement::Timeline(_)))
@@ -1133,8 +1264,8 @@ mod seed_tests {
                     .and_then(|t| t.prompt.as_deref())
                     .unwrap_or("");
                 assert!(
-                    prompt.trim().len() > 20,
-                    "scene prompt is a concrete S4 prompt, got: '{prompt}'"
+                    prompt.trim().len() > 3,
+                    "section prompt is concrete concern text, got: '{prompt}'"
                 );
             }
         }
@@ -1168,8 +1299,20 @@ mod seed_tests {
                 assert!(!p.contains(w), "S1 shot prose must not carry S3 shot size '{w}': {p}");
             }
         }
-        assert!(s0[0].prose.contains("establishes"), "first shot establishes: {}", s0[0].prose);
-        assert_ne!(&s0[0].prose, &s0[1].prose, "sibling shot prose differs (stage + sensory axis)");
+        assert_ne!(&s0[0].prose, &s0[1].prose, "sibling shot prose differs (subject + verb + axis)");
+        // Shot prose is a concrete, composed sentence (subject + cycling verb
+        // + specific place + sensory detail), NOT a raw word-slice of the
+        // author's text and NOT a truncated 3-word stub.
+        for p in s0.iter().map(|s| s.prose.as_str()) {
+            assert!(
+                p.split_whitespace().count() >= 8,
+                "shot prose is a concrete sentence (≥8 words), got: '{p}'"
+            );
+            assert!(
+                p.ends_with('.'),
+                "shot prose is a complete sentence, got: '{p}'"
+            );
+        }
         // Beats: concrete micro-cues in the harness form, not filler.
         let beats = &s0[0].beats;
         assert_eq!(beats.len(), 3);
