@@ -16,7 +16,7 @@
 use crate::AppState;
 use crate::generation::video_flow::{
     append_signal_jsonl, materialize_pipes, validate_plan, FlowDocument, SignalKind,
-    SignalRecord, StructuredVideoPlan, VideoFlow,
+    SignalRecord, StructuredVideoPlan, VideoFlow, VideoTag,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -428,13 +428,23 @@ pub async fn director_apply_flow(
 // ── Phase 3: edited-section apply (in-memory, no new flow version) ─────────
 
 /// One concrete section-prompt override from the UI.
-/// `pipe_index` / `section_index` are 0-based into the materialized plan's
-/// pipes; out-of-bounds entries are silently ignored (never panic).
+///
+/// Sections are addressed by **tag**, not by vector index: the concrete
+/// engine plan skips empty concern sections, so a shot's lighting section
+/// does NOT always sit at a fixed index. Tag is the closed vocabulary both
+/// sides share (`VideoTag::from_keyword`), so the addressing is stable no
+/// matter how sections are ordered/skipped. Out-of-bounds pipe, unknown
+/// tag, or no matching section = silently ignored (never panic).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditedSection {
+    /// 0-based index into the materialized plan's pipes.
     pub pipe_index: u32,
-    pub section_index: u32,
+    /// Concrete section tag (`scene`/`camera`/`motion`/`lighting`/
+    /// `transition`/`effect`); closed vocabulary, parsed via
+    /// `VideoTag::from_keyword`.
+    pub tag: String,
+    /// The new prompt text for every section of that tag in the pipe.
     pub prompt: String,
 }
 
@@ -449,12 +459,21 @@ pub fn build_apply_plan(doc: &FlowDocument, flow_version: u32) -> StructuredVide
 }
 
 /// Overwrite section prompts in-place from a list of `EditedSection` entries.
-/// Out-of-bounds `pipe_index` / `section_index` are ignored (never panic).
+///
+/// Each edit targets **all** sections of the given closed-vocab tag within
+/// `pipe_index` (the concrete engine plan has at most one section per tag
+/// per pipe, so this is a 1:1 replacement in practice). Unknown tags and
+/// out-of-bounds `pipe_index` are ignored — never panic. The tag is
+/// case-insensitive and trims surrounding whitespace, matching
+/// `VideoTag::from_keyword`.
 pub fn apply_section_edits(plan: &mut StructuredVideoPlan, edited: &[EditedSection]) {
     for e in edited {
+        let tag = VideoTag::from_keyword(&e.tag);
         if let Some(pipe) = plan.pipes.get_mut(e.pipe_index as usize) {
-            if let Some(section) = pipe.sections.get_mut(e.section_index as usize) {
-                section.prompt = e.prompt.clone();
+            for section in pipe.sections.iter_mut() {
+                if Some(section.tag) == tag {
+                    section.prompt = e.prompt.clone();
+                }
             }
         }
     }
@@ -505,9 +524,12 @@ async fn merge_and_save_composer(
 /// materialize into composer pipes, and merge/save to the session composer.
 /// No new flow version is persisted — the edits live only in the pipes.
 ///
-/// `edited`: optional concrete section-prompt overrides (0-based indices
-/// into the plan's pipes/sections). When empty the behaviour is identical
-/// to `director_apply_flow` (the "no overrides = plain apply" equivalence).
+/// `edited`: optional concrete section-prompt overrides, each addressing
+/// `(pipe_index, tag, prompt)` — the tag is the closed section vocabulary
+/// (`scene`/`camera`/`motion`/`lighting`/`transition`/`effect`), so the
+/// target is stable even when the concrete plan skips empty concern
+/// sections. When empty the behaviour is identical to `director_apply_flow`
+/// (the "no overrides = plain apply" equivalence).
 ///
 /// `replace`: true = the flow's pipes replace the session's composer pipes;
 /// false = append after the existing ones. Returns the resulting pipe count.
@@ -652,8 +674,8 @@ mod tests {
         assert_eq!(fallback.pipes.len(), 1, "structured fallback has 1 pipe");
     }
 
-    // (b) apply_section_edits overwrites the right section and ignores
-    //     out-of-bounds indices without panicking.
+    // (b) apply_section_edits overwrites by TAG and ignores unknown tags /
+    //     out-of-bounds pipes without panicking.
     #[test]
     fn apply_section_edits_overwrites_and_ignores_oob() {
         let doc = test_doc(false); // structured fallback: 1 pipe, 3 sections
@@ -663,32 +685,42 @@ mod tests {
         let original_prompt = pipe.sections[0].prompt.clone();
         assert_ne!(original_prompt, "MY OVERRIDE");
 
-        // Valid edit: pipe 0, section 0.
+        // Valid edit: pipe 0, the scene section's tag (the first section).
+        let scene_tag = original.pipes[0].sections[0].tag.keyword().to_string();
         apply_section_edits(
             &mut plan,
             &[EditedSection {
                 pipe_index: 0,
-                section_index: 0,
+                tag: scene_tag.clone(),
                 prompt: "MY OVERRIDE".into(),
             }],
         );
-        assert_eq!(plan.pipes[0].sections[0].prompt, "MY OVERRIDE");
-        // Other sections untouched.
-        assert_eq!(
-            plan.pipes[0].sections[1].prompt,
-            original.pipes[0].sections[1].prompt
-        );
+        let edited_scene = plan
+            .pipes[0]
+            .sections
+            .iter()
+            .find(|s| s.tag.keyword() == scene_tag.as_str())
+            .expect("scene section present");
+        assert_eq!(edited_scene.prompt, "MY OVERRIDE");
 
-        // Out-of-bounds: pipe 99 or section 99 — must not panic.
+        // Unknown tag + out-of-bounds pipe — must not panic or touch anything.
         apply_section_edits(
             &mut plan,
             &[
-                EditedSection { pipe_index: 99, section_index: 0, prompt: "x".into() },
-                EditedSection { pipe_index: 0, section_index: 99, prompt: "y".into() },
+                EditedSection { pipe_index: 0, tag: "nope".into(), prompt: "x".into() },
+                EditedSection { pipe_index: 99, tag: scene_tag.clone(), prompt: "y".into() },
             ],
         );
-        // Pipe 0 section 0 still has the override from above.
-        assert_eq!(plan.pipes[0].sections[0].prompt, "MY OVERRIDE");
+        // The scene section still holds the override; no unknown-tag section
+        // was created, no other section changed.
+        let still_edited = plan
+            .pipes[0]
+            .sections
+            .iter()
+            .find(|s| s.tag.keyword() == scene_tag.as_str())
+            .expect("scene section still present");
+        assert_eq!(still_edited.prompt, "MY OVERRIDE");
+        assert_eq!(plan.pipes.len(), original.pipes.len(), "no pipes added/removed");
     }
 
     // (c) empty `edited` vec leaves the plan byte-identical to
@@ -701,5 +733,40 @@ mod tests {
         let mut plan_edited = plan.clone();
         apply_section_edits(&mut plan_edited, &[]);
         assert_eq!(plan, plan_edited, "empty edits must leave plan unchanged");
+    }
+
+    // (d) The edited command's target: on the CONCRETE engine plan, an edit
+    //     aimed at the `camera` tag lands on the camera section even when
+    //     the plan SKIPS empty concern sections (shot 0's motion is empty,
+    //     so its vector index would have shifted). This is exactly what
+    //     `director_apply_flow_edited` runs.
+    #[test]
+    fn apply_section_edits_targets_tag_on_concrete_plan() {
+        let doc = test_doc(true);
+        let mut plan = build_apply_plan(&doc, 1);
+        assert!(plan.pipes.len() >= 2, "concrete plan = one pipe per shot");
+        let camera_tag = VideoTag::Camera.keyword().to_string();
+        apply_section_edits(
+            &mut plan,
+            &[EditedSection {
+                pipe_index: 0,
+                tag: camera_tag.clone(),
+                prompt: "CAMERA OVERRIDDEN".into(),
+            }],
+        );
+        let hit = plan.pipes[0]
+            .sections
+            .iter()
+            .find(|s| s.tag.keyword() == camera_tag.as_str())
+            .expect("camera section present in the concrete plan");
+        assert_eq!(hit.prompt, "CAMERA OVERRIDDEN");
+        // A non-camera section of pipe 0 is untouched.
+        let other = plan
+            .pipes[0]
+            .sections
+            .iter()
+            .find(|s| s.tag.keyword() != camera_tag.as_str())
+            .expect("a non-camera section exists");
+        assert_ne!(other.prompt, "CAMERA OVERRIDDEN");
     }
 }

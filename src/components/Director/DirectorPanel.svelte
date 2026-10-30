@@ -161,8 +161,7 @@
 	// `applyFlowEdited` targets the right slots.
 	type LocalSection = {
 		pipeIndex: number; // shot ordinal (0-based across all shots)
-		sectionIndex: number; // 0=scene, 1=camera, 2=motion, 3=lighting, 4=transition
-		tag: string;
+		tag: string; // the closed concern vocabulary — the addressing key
 		range: string;
 		prompt: string;
 		source: string;
@@ -231,15 +230,19 @@
 
 				const clipF = sp.clip_s * 24;
 				const rng = (a: number, b: number) => `${String(a).padStart(2, '0')}–${b}`;
-				const push = (sectionIndex: number, tag: string, prompt: string, source: string) => {
+				// `tag` is the addressing key (closed vocabulary), not a vector
+				// index — matches Rust's apply_section_edits. Empty prompts are
+				// skipped (mirrors plan_from_engine's skip-empty rule), so the
+				// set of tags per shot differs from shot to shot.
+				const push = (tag: string, prompt: string) => {
 					if (prompt.trim())
-						out.push({ pipeIndex: shotOrd, sectionIndex, tag, range: rng(0, clipF), prompt, source });
+						out.push({ pipeIndex: shotOrd, tag, range: rng(0, clipF), prompt, source: prompt });
 				};
-				push(0, 'scene', sp.content.prose, sp.content.prose);
-				push(1, 'camera', camText, camText);
-				push(2, 'motion', motT, motT);
-				push(3, 'lighting', lightGrade, lightGrade);
-				push(4, 'transition', transT, transT);
+				push('scene', sp.content.prose);
+				push('camera', camText);
+				push('motion', motT);
+				push('lighting', lightGrade);
+				push('transition', transT);
 
 				shotOrd++;
 			}
@@ -252,7 +255,7 @@
 	function editedList() {
 		return localExtract
 			.filter((s) => isEdited(s))
-			.map((s) => ({ pipeIndex: s.pipeIndex, sectionIndex: s.sectionIndex, prompt: s.prompt }));
+			.map((s) => ({ pipeIndex: s.pipeIndex, tag: s.tag, prompt: s.prompt }));
 	}
 
 	// Destructive regenerate from the EDITED sections (Phase 3).

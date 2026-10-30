@@ -123,9 +123,14 @@ export async function applyFlow(
  * One call returns the resulting pipe count. `edited` entries are
  * camelCase-mapped onto the Rust `EditedSection` struct.
  */
+// Sections are addressed by TAG (the closed concern vocabulary), not by
+// vector index: the concrete engine plan skips empty concern sections, so
+// a shot's lighting section does NOT always sit at a fixed index. Tag is
+// shared by both sides — the target is stable no matter how sections are
+// ordered/skipped. Pipe index is 0-based across the plan's pipes.
 export interface EditedSection {
 	pipeIndex: number;
-	sectionIndex: number;
+	tag: string; // scene | camera | motion | lighting | transition | effect
 	prompt: string;
 }
 

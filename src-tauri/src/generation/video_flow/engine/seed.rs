@@ -1271,6 +1271,124 @@ mod seed_tests {
         }
     }
 
+    /// Fidelity guard for the concrete structure (user directive): the
+    /// `plan_from_engine` output — the one the Extract tab's TS mirror and
+    /// `director_apply_flow_edited` both address — is pinned EXACTLY.
+    /// Any change to the per-pipe tag sequence, the concern-text format, or
+    /// the skip-empty rule in seed.rs/derive.rs breaks this test, so a
+    /// drifted TS mirror is caught at build time, not in production.
+    #[test]
+    fn engine_plan_structure_is_pinned_exactly() {
+        use crate::generation::video_flow::plan::VideoTag;
+
+        let run = entry("a girl follows the river road north at dusk").build_run();
+        let plan = run.plan_from_engine(1);
+
+        // 3 shots per scene → 3 pipes, one per shot.
+        assert_eq!(plan.pipes.len(), 3, "one pipe per shot");
+
+        // Pin the EXACT tag sequence per pipe. Shot 0's motion concern is
+        // empty ("static/normal/static" filters out) → its Motion section is
+        // SKIPPED; shots 1-2 carry motion → 5 tags. This is exactly why the
+        // edited-apply addresses sections by TAG, not vector index.
+        fn tags_of(p: &crate::generation::video_flow::plan::PlanPipe) -> Vec<VideoTag> {
+            p.sections.iter().map(|s| s.tag).collect()
+        }
+        assert_eq!(
+            tags_of(&plan.pipes[0]),
+            vec![
+                VideoTag::Scene,
+                VideoTag::Camera,
+                VideoTag::Lighting,
+                VideoTag::Transition
+            ],
+            "shot 0: motion concern empty → skipped"
+        );
+        assert_eq!(
+            tags_of(&plan.pipes[1]),
+            vec![
+                VideoTag::Scene,
+                VideoTag::Camera,
+                VideoTag::Motion,
+                VideoTag::Lighting,
+                VideoTag::Transition
+            ],
+            "shot 1: all five concrete concern sections"
+        );
+        assert_eq!(
+            tags_of(&plan.pipes[2]),
+            vec![
+                VideoTag::Scene,
+                VideoTag::Camera,
+                VideoTag::Motion,
+                VideoTag::Lighting,
+                VideoTag::Transition
+            ],
+            "shot 2: all five concrete concern sections"
+        );
+
+        // Pin the EXACT concern-text format (what the TS mirror must match).
+        fn prompt_of(
+            p: &crate::generation::video_flow::plan::PlanPipe,
+            tag: VideoTag,
+        ) -> &str {
+            p.sections
+                .iter()
+                .find(|s| s.tag == tag)
+                .map(|s| s.prompt.as_str())
+                .unwrap_or("<missing>")
+        }
+        // S1 concrete sentence (contract: >= 8 words, ends in a period).
+        let scene0 = prompt_of(&plan.pipes[0], VideoTag::Scene);
+        assert!(
+            scene0.split_whitespace().count() >= 8,
+            "scene prompt is a concrete S1 sentence, got: '{scene0}'"
+        );
+        assert!(scene0.ends_with('.'), "scene prompt is a full sentence");
+        // S3 camera (composition + focal, the exact derive.rs format).
+        assert_eq!(
+            prompt_of(&plan.pipes[0], VideoTag::Camera),
+            "wide shot, rule_of_thirds framing, deep depth of field · 24mm lens",
+            "camera concern text (S3 shot_camera(0) + shot_lens(0))"
+        );
+        assert_eq!(
+            prompt_of(&plan.pipes[1], VideoTag::Camera),
+            "medium shot, low angle, rule_of_thirds framing, medium depth of field · 35mm lens",
+            "camera concern text (S3 shot_camera(1) + shot_lens(1))"
+        );
+        // S3 motion (shot_motion(0) is static/normal → no Motion section on
+        // pipe 0; shot 1 is "pan, slow speed").
+        assert_eq!(
+            prompt_of(&plan.pipes[1], VideoTag::Motion),
+            "pan, slow speed",
+            "motion concern text (S3 shot_motion(1))"
+        );
+        // S2 lighting+grade (the scene spec's light + grade, joined by '; ').
+        assert_eq!(
+            prompt_of(&plan.pipes[0], VideoTag::Lighting),
+            "soft key light, medium contrast, 5000K, ambient; neutral palette, kodak_250d film stock",
+            "lighting concern text (S2 scene spec light + grade)"
+        );
+        // S3 transitions (first shot hard_cut, the rest crossfade).
+        assert_eq!(
+            prompt_of(&plan.pipes[0], VideoTag::Transition),
+            "hard_cut → crossfade",
+            "first shot enters with a hard cut"
+        );
+        assert_eq!(
+            prompt_of(&plan.pipes[1], VideoTag::Transition),
+            "crossfade → crossfade",
+            "later shots crossfade"
+        );
+        // The pipe carries the scene base as global style (tod · weather ·
+        // ambience), not a bare "text".
+        assert!(
+            plan.pipes[0].global_style.contains("midday clear"),
+            "global style carries the G0 look axes: {}",
+            plan.pipes[0].global_style
+        );
+    }
+
     /// Node A contract: the idea gets ONE home in the novel (the film
     /// logline). Shot prose is saturated sensory writing (camera concern +
     /// sensory axis + G0 look axes), not a copy of the idea string.
