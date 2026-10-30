@@ -15,7 +15,8 @@
 
 use crate::AppState;
 use crate::generation::video_flow::{
-    append_signal_jsonl, FlowDocument, SignalKind, SignalRecord, VideoFlow,
+    append_signal_jsonl, materialize_pipes, validate_plan, FlowDocument, SignalKind,
+    SignalRecord, VideoFlow,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -381,4 +382,75 @@ pub async fn director_log_signal(
     let path = dir.join("flow_signals.jsonl");
     append_signal_jsonl(&path, &record).map_err(|e| e.to_string())?;
     Ok(record.record_id)
+}
+
+/// Destructive apply (I9): materialize the persisted flow's structured plan
+/// into composer pipes and save it to the session's composer. This is the
+/// "Regenerate pipes" action — it replaces/appends real composer pipes, so
+/// it is only ever called from an explicit user confirm (the UI gates it
+/// behind a confirm() dialog), never from a batch run.
+///
+/// `replace`: true = the flow's pipes replace the session's composer pipes;
+/// false = append after the existing ones. Returns the resulting pipe count.
+#[tauri::command]
+pub async fn director_apply_flow(
+    session_id: String,
+    flow_version: u32,
+    replace: bool,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let path = dir.join(FlowDocument::default_filename(flow_version));
+    let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
+
+    // The doc already carries the structured plan (a StructuredVideoPlan).
+    // Materialize it into composer pipes; validate first so a hand-edited or
+    // out-of-bounds doc can't slip past.
+    let plan = &doc.structured;
+    let cfg = crate::generation::video_flow::FlowConfig::default_flow();
+    validate_plan(plan, &cfg.structure).map_err(|e| e.to_string())?;
+    let pipes = materialize_pipes(plan, &cfg.materialize).map_err(|e| e.to_string())?;
+    if pipes.is_empty() {
+        return Err("plan carries no materializable pipes".into());
+    }
+
+    // Merge into the session's composer and persist.
+    let count = {
+        let db = &state.db.lock().await;
+        let existing = db
+            .get_composer(&session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        let mut composer = if replace {
+            crate::models::ComposerConfig {
+                id: existing.id.clone(),
+                session_id: existing.session_id.clone(),
+                name: existing.name.clone(),
+                pipes: pipes.clone(),
+                fps: existing.fps,
+                resolution: existing.resolution.clone(),
+                orientation: existing.orientation.clone(),
+                crop_mode: existing.crop_mode.clone(),
+                custom_width: existing.custom_width,
+                custom_height: existing.custom_height,
+                video_ratio: existing.video_ratio.clone(),
+                total_generated_frames: existing.total_generated_frames,
+                created_at: None,
+                updated_at: None,
+            }
+        } else {
+            let mut c = existing.clone();
+            for p in &pipes {
+                c.pipes.push(p.clone());
+            }
+            c
+        };
+        db.save_composer(&composer).await.map_err(|e| format!("save composer: {e}"))?;
+        composer.pipes.len() as u32
+    };
+
+    Ok(count)
 }

@@ -89,3 +89,23 @@ export async function logSignal(
 	});
 	return out;
 }
+
+/**
+ * Destructive apply (I9): materialize a persisted flow's structured plan
+ * into composer pipes and save it. `replace` swaps the session's composer
+ * pipes for the flow's; `append` adds the flow's pipes after the existing
+ * ones. Returns the resulting pipe count. The UI gates this behind a
+ * confirm() dialog — it never runs silently.
+ */
+export async function applyFlow(
+	sessionId: string,
+	flowVersion: number,
+	replace: boolean
+): Promise<number> {
+	const out = await invoke<number>('director_apply_flow', {
+		sessionId,
+		flowVersion,
+		replace,
+	});
+	return out;
+}

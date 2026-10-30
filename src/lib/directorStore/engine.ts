@@ -341,9 +341,12 @@ export function specsByScene(run: EngineRun): Array<{ scene: SceneSpec; specs: S
 }
 
 /** The verified timeline as flat shot rows with cumulative time. */
-export function timelineRows(run: EngineRun): Array<{
+export function timelineRows(
+	run: EngineRun,
+): Array<{
 	shot_id: string;
-	novel_ref: string;
+	subject: string;
+	concern: string;
 	from_s: number;
 	to_s: number;
 	transition_out: string;
@@ -351,17 +354,19 @@ export function timelineRows(run: EngineRun): Array<{
 }> {
 	let t = 0;
 	const rows: ReturnType<typeof timelineRows> = [];
-	for (const m of run.molecules) {
+	run.molecules.forEach((m, i) => {
+		const spec = run.specs[i];
 		rows.push({
-			shot_id: m.inherit,
-			novel_ref: m.inherit,
+			shot_id: spec?.shot_id ?? m.inherit,
+			subject: m.subject,
+			concern: concernSummary(spec?.concerns ?? ({} as Concerns)),
 			from_s: t,
 			to_s: t + m.clip_s,
 			transition_out: m.transition_out,
 			frames: framesOf(m.clip_s),
 		});
 		t += m.clip_s;
-	}
+	});
 	return rows;
 }
 

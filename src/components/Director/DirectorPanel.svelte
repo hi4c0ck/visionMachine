@@ -5,7 +5,8 @@
 	// with the G0–G4 gate strip; Extract + Scoreboard read from the same doc.
 	// Destructive regenerate-pipes stays a sharp edge (I9): rendered disabled.
 	import { flashToast } from '$lib/flashToast';
-	import { runFlow, listFlows, loadFlow, type DirectorTab } from '$lib/directorStore';
+	import { runFlow, listFlows, loadFlow, applyFlow, type DirectorTab } from '$lib/directorStore';
+	import { loadSession } from '$lib/composerStore';
 	import {
 		tagBars,
 		type FlowDocument,
@@ -92,8 +93,117 @@
 	let openTag = $state<string | null>(null);
 	let openShot = $state<string | null>(null);
 
+	// Gate confirmations the user made in-tab (persisted to the signal log;
+	// the strip reflects them live). `g<gate>` = a gate the user confirmed.
+	let confirmedGates = $state<Set<string>>(new Set());
+	// Transient action feedback (confirm / accept / reject / apply) so a click
+	// is never silent. Clears on its own.
+	let feedback = $state<{ text: string; tone: string } | null>(null);
+	let applyWorking = $state(false);
+
+	function showFeedback(text: string, tone = 'tone-ok') {
+		feedback = { text, tone };
+		// Auto-clear; replace any pending timer.
+		clearTimeout((showFeedback as any)._t);
+		(showFeedback as any)._t = setTimeout(() => {
+			feedback = null;
+		}, 4000);
+	}
+
+	// Confirm/rewrite a pipeline gate: persists the decision to the signal
+	// log (I7) and reflects it live on the gate strip. "rewrite" backtracks
+	// the gate's first upstream step (Node A = re-run the LLM novel), then
+	// re-runs S0→S5 so the user sees the regeneration happen.
+	async function gateAction(gateId: string, action: 'confirm' | 'rewrite') {
+		if (action === 'confirm') {
+			confirmedGates = new Set(confirmedGates).add(gateId);
+			await onLogSignal('accept', gateId, 'gate confirmed').catch(() => {});
+			showFeedback(`${gateId} confirmed`);
+			return;
+		}
+		// rewrite → backtrack to Node A: re-run the flow (LLM novel if a
+		// provider is set, else the deterministic template), then confirm the
+		// decision in the log.
+		running = true;
+		onRunningChange?.(true);
+		runError = null;
+		try {
+			const result = await runFlow(sessionId, entry.idea || entry.input_text?.trim() || '', buildEntry());
+			doc = result;
+			activeRun = result.flowVersion;
+			backfillEntryFromEngine(result);
+			await onLogSignal('reject', gateId, `backtrack node_a`);
+			const src = result.engine?.expansion;
+			const note = result.engine?.expansion_note ?? '';
+			showFeedback(
+				`${gateId} rewritten${src === 'llm' ? ` (LLM · ${note})` : note ? ` (${note})` : ''}`,
+			);
+			await refreshFlows();
+		} catch (e) {
+			runError = String(e);
+			flashToast(runError);
+		} finally {
+			running = false;
+			onRunningChange?.(false);
+		}
+	}
+
+	// Accept / reject the whole run (annotation queue, design §5): log the
+	// signal + give visible confirmation.
+	async function annotateRun(kind: 'accept' | 'reject') {
+		if (!doc) return;
+		const target = `run-${activeRun ?? doc.flowVersion}`;
+		await onLogSignal(kind, target, kind === 'accept' ? 'run accepted' : 'run rejected').catch(
+			() => {},
+		);
+		showFeedback(
+			kind === 'accept' ? `Run v${activeRun ?? doc.flowVersion} accepted` : `Run v${activeRun ?? doc.flowVersion} rejected`,
+			kind === 'accept' ? 'tone-ok' : 'tone-warn',
+		);
+	}
+
+	// Destructive apply (I9, design §4): materialize the current flow's
+	// structured plan into composer pipes. Replaces or appends the session's
+	// pipes, then reloads the composer so the Pipes tab shows the result.
+	async function applyPipes(replace: boolean) {
+		if (!doc) return;
+		const target = activeRun ?? doc.flowVersion;
+		const verb = replace ? 'replacing all composer pipes' : 'appending to the composer';
+		const ok = confirm(
+			`Regenerate pipes (${verb}) from flow v${target}?\n\n` +
+				`This writes real composer pipes via the materialize step. No fallback — ` +
+				`replay via the RegenerationContract triple if needed.`,
+		);
+		if (!ok) return;
+		applyWorking = true;
+		showFeedback('Applying flow → composer…', 'tone-neutral');
+		try {
+			const count = await applyFlow(sessionId, target, replace);
+			await onLogSignal('edit_diff', `apply-${target}`, `materialized ${count} pipes (${replace ? 'replace' : 'append'})`).catch(
+				() => {},
+			);
+			// Refresh the session's pipes in the composer store so the Pipes
+			// tab renders the materialized pipes.
+			await loadSession(sessionId);
+			showFeedback(`Materialized ${count} pipe(s) into the composer`, 'tone-ok');
+		} catch (e) {
+			showFeedback(`Apply failed: ${String(e)}`, 'tone-danger');
+			flashToast(String(e));
+		} finally {
+			applyWorking = false;
+		}
+	}
+
 	// The saturated S0→S5 flow state (null for docs produced pre-engine).
 	const engine = $derived<EngineRun | null>(doc?.engine ?? null);
+
+	// Gate strip reflects the run's gates, overlaid with the in-tab
+	// confirmations the user just made (so "confirm" visibly flips G1/G2).
+	const gatesShown = $derived((engine?.gates ?? []).map((g) =>
+		confirmedGates.has(g.gate)
+			? { ...g, status: 'confirmed' as const }
+			: g,
+	));
 
 	const sections = $derived(doc?.structured.pipes[0]?.sections ?? []);
 
@@ -313,7 +423,7 @@
 		<!-- ── Gate strip (G0–G4) — the flow's confirmation spine ── -->
 		{#if engine}
 			<div class="gate-strip" role="list" aria-label="Pipeline gates">
-				{#each engine.gates as g (g.gate)}
+				{#each gatesShown as g (g.gate)}
 					<span class="gate {gateTone(g)}" role="listitem" title={g.confirm}>
 						<code class="gate-id">{g.gate}</code>
 						<span class="gate-glyph" aria-hidden="true">{gateGlyph(g)}</span>
@@ -431,10 +541,10 @@
 						</span>
 					</h3>
 					<div class="stage-actions">
-						<button class="mini" onclick={() => void onLogSignal('accept', 'G1', 'novel confirmed')}>
+						<button class="mini" onclick={() => void gateAction('g1_novel_review', 'confirm')}>
 							confirm
 						</button>
-						<button class="mini" onclick={() => void onLogSignal('reject', 'G1', 'backtrack node_a')}>
+						<button class="mini" disabled={running} onclick={() => void gateAction('g1_novel_review', 'rewrite')}>
 							rewrite
 						</button>
 					</div>
@@ -489,10 +599,10 @@
 				<div class="stage-head">
 					<h3 class="block-heading">④ S3 · Shot sheets <span class="muted">· {engine.specs.length} · G2</span></h3>
 					<div class="stage-actions">
-						<button class="mini" onclick={() => void onLogSignal('accept', 'G2', 'specs confirmed')}>
+						<button class="mini" onclick={() => void gateAction('g2_spec_review', 'confirm')}>
 							confirm
 						</button>
-						<button class="mini" onclick={() => void onLogSignal('reject', 'G2', 'backtrack spec|node_a')}>
+						<button class="mini" disabled={running} onclick={() => void gateAction('g2_spec_review', 'rewrite')}>
 							rewrite
 						</button>
 					</div>
@@ -545,9 +655,19 @@
 				{/each}
 			</section>
 
-			<!-- ── ⑤ S4 · Derived prompts (deterministic) ── -->
+			<!-- ── ⑤ S4 · Prompt build (deterministic: what the media models receive) ── -->
 			<section class="stage">
-				<h3 class="block-heading">⑤ S4 · Derived prompts <span class="muted">· identity-locked · {FRAME_RATE}fps</span></h3>
+				<h3 class="block-heading">
+					⑤ S4 · Prompt build
+					<span class="muted">
+						· deterministic media prompts · not generated media · {FRAME_RATE}fps
+					</span>
+				</h3>
+				<p class="hint s4-note">
+					Each shot's <b>image</b>/<b>video</b> text is what you feed a media model
+					(base scene look + the shot's composition/lens/motion + identity-lock). It is
+					derived, not generated — there are no images or clips here yet.
+				</p>
 				{#each engine.molecules as m}
 					<details class="prompt-block">
 						<summary>
@@ -573,9 +693,11 @@
 				<h3 class="block-heading">⑥ Timeline <span class="muted">· verified · {engine.verify.total_frames}f</span></h3>
 				<div class="tl-strip">
 					{#each timelineRows(engine) as r}
-						<span class="tl-cell">
-							<code>[{r.from_s}s–{r.to_s}s]</code>
-							<span class="tl-frames">{r.frames}f · {r.transition_out}</span>
+						<span class="tl-cell" title={r.subject}>
+							<code class="tl-id">{r.shot_id}</code>
+							<span class="tl-subject">{r.subject}</span>
+							<span class="tl-concern">{r.concern}</span>
+							<span class="tl-frames">[{r.from_s}s–{r.to_s}s] · {r.frames}f · {r.transition_out}</span>
 						</span>
 					{/each}
 				</div>
@@ -605,21 +727,30 @@
 				{running ? 'Running…' : 'Run S0→S5'}
 			</button>
 			{#if doc}
-				<button class="btn" onclick={() => void onLogSignal('accept', 'root', 'run ' + activeRun)}>
+				<button class="btn" onclick={() => void annotateRun('accept')}>
 					Accept
 				</button>
-				<button class="btn" onclick={() => void onLogSignal('reject', 'root', runError ?? 'run rejected')}>
+				<button class="btn" onclick={() => void annotateRun('reject')}>
 					Reject
 				</button>
 			{/if}
-			<!-- Destructive apply is a sharp edge (I9 materialize adapter,
-			     later phase): rendered disabled with the fixed "no fallback"
-			     copy from design §4, not wired to a command. -->
-			<button class="btn danger" disabled>
-				Regenerate pipes
-				<span class="btn-note">not wired yet · no fallback · replay v{doc?.regen.version.flowVersion}</span>
-			</button>
+			<!-- Destructive apply (I9, design §4): materialize the flow's
+			     structured plan into composer pipes via save_composer.
+			     replace vs append, gated by a confirm dialog. -->
+			{#if doc}
+				<button class="btn danger" disabled={applyWorking} onclick={() => void applyPipes(true)}>
+					Regenerate pipes
+					<span class="btn-note">replace · no fallback · replay v{doc.regen.version.flowVersion}</span>
+				</button>
+				<button class="btn danger" disabled={applyWorking} onclick={() => void applyPipes(false)}>
+					<span class="btn-note">append</span>
+				</button>
+			{/if}
 		</section>
+
+		{#if feedback}
+			<p class="action-feedback {feedback.tone}" role="status">{feedback.text}</p>
+		{/if}
 
 		{#if runError}
 			<p class="flow-error" role="alert">{runError}</p>
@@ -852,6 +983,37 @@
 		padding: 8px 10px;
 		font-size: 12px;
 		border-left: 2px solid var(--danger-color);
+	}
+
+	/* Transient action feedback (confirm / accept / reject / apply) so a
+		click is never silent. Quiet template-a: hairline left border, tone. */
+	.action-feedback {
+		font-size: 12px;
+		padding: 6px 10px;
+		border-left: 2px solid var(--border-color);
+		color: var(--text-secondary);
+	}
+	.action-feedback.tone-ok {
+		color: var(--text-primary);
+		border-left-color: var(--ok-color, var(--success-color, var(--accent-color)));
+	}
+	.action-feedback.tone-warn {
+		color: var(--text-primary);
+		border-left-color: var(--warning-color, #e0a34e);
+	}
+	.action-feedback.tone-danger {
+		color: var(--danger-color);
+		border-left-color: var(--danger-color);
+	}
+	.action-feedback.tone-neutral {
+		color: var(--text-muted);
+	}
+
+	/* S4 "what is this" note (the prompts are deterministic text, not media). */
+	.s4-note {
+		font-size: 11px;
+		color: var(--text-muted);
+		margin: 0;
 	}
 
 	/* ── Stages ── */
@@ -1249,6 +1411,22 @@
 		font-family: var(--font-mono);
 		font-size: 10px;
 		color: var(--text-primary);
+	}
+	.tl-subject {
+		font-size: 10px;
+		color: var(--text-primary);
+		max-width: 140px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.tl-concern {
+		font-size: 9px;
+		color: var(--text-muted);
+		max-width: 140px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.tl-frames {
 		font-family: var(--font-mono);
