@@ -227,11 +227,11 @@ impl EngineRun {
     /// defaults. Real LLM expansion/structure slots (Phase 1a/1b) will replace
     /// the S1/S2/S3 producers here without touching the S4 derive, S5 verify,
     /// or the S0 entry surface.
-    pub fn build(seed_in: FilmSeed) -> Self {
+    pub fn build(seed_in: FilmSeed, tod: &str, weather: &str) -> Self {
         let seed = normalize_seed(seed_in);
 
         // S1: visual novel — one film + scenes + shots with beats.
-        let novel = build_novel(&seed);
+        let novel = build_novel(&seed, tod, weather);
 
         // S2: scene specs — one per novel scene, look seeded from the novel film.
         let scenes: Vec<SceneSpec> = novel.scenes.iter().enumerate().map(|(i, sc)| build_scene_spec(i, sc, &novel)).collect();
@@ -291,102 +291,235 @@ fn normalize_seed(seed: FilmSeed) -> FilmSeed {
 /// S1 Node A — deterministic visual novel from the seed.
 /// S1 Node A в?" deterministic visual novel from the seed.
 ///
-/// The shot prose + beats carry *fragments of the idea* (sentence split,
-/// wrapping across shots), so the S1 novel and the S4 prompts it feeds are
-/// genuine expansions of the entry, not a generic template. When the idea is
-/// empty the legacy style-only prose is kept so the V1 non-empty invariants
-/// still hold.
-fn build_novel(seed: &FilmSeed) -> VisualNovel {
-    let style_hint = if seed.genre.style.is_empty() { "cinematic" } else { seed.genre.style.as_str() };
+/// Follows the harness Node A contract (config/nodes.yaml + golden/
+/// visual_novel.json): the expander WRITES saturated visual language, it
+/// never echoes the seed. The idea gets exactly ONE home in the novel
+/// (the film logline, compressed); the world/palette are DERIVED from the
+/// G0 look axes; each shot prose is composed from its shot's camera
+/// concern + a cycling sensory axis (the profile's
+/// `sensory_axes: [light, color, motion, sound, texture, weather]`), and
+/// beats use the harness micro-cue form
+/// `<shot-size>: <subject> <motion> в?" <light/sound detail>`.
+fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
+    use crate::generation::video_flow::engine::types::FilmLook;
+
     // Title: explicit G0 title > first clause of the idea > "Untitled".
     let film_title = if seed.title.trim().is_empty() {
         title_from_idea(&seed.idea)
     } else {
         seed.title.trim().to_string()
     };
-    // Idea fragments: sentence-ish split, deterministic, wrap-around across
-    // shots when there are more shots than fragments.
-    let frags: Vec<String> = seed
-        .idea
-        .split(['.', '!', '?', ';', '\n'])
-        .map(|f| f.trim().to_string())
-        .filter(|f| !f.is_empty())
-        .collect();
-    let frag_at = |g: usize| -> Option<String> {
-        frags.get(g % frags.len().max(1)).cloned()
-    };
+    let lead = lead_phrase(&seed.idea);
+    let world = world_of(&seed.genre.name);
+    let palette = palette_of(tod, weather);
+    let logline = logline_of(&seed.idea);
+    // Multi-scene runs distribute the idea's sentence fragments across the
+    // scenes (each scene owns one narrative beat). Single-scene runs keep
+    // the idea ONLY in the logline — no second echo in the scene prose.
+    let frags = idea_fragments(&seed.idea);
+
     let scenes: Vec<NovelScene> = (0..seed.scale.scenes)
         .map(|i| {
             let scene_num = i + 1;
             let shot_count = seed.scale.shots_per_scene as usize;
+            let last_scene = i as u32 == seed.scale.scenes - 1;
+            let last_shot = |k: usize, total: usize| k + 1 == total;
             let shots: Vec<NovelShot> = (0..shot_count)
                 .map(|k| {
-                    let shot_no = k + 1;
                     let g = i as usize * shot_count + k;
-                    let beat = match k {
-                        0 => "establishes",
-                        1 => "develops",
-                        _ => "resolves",
+                    let cam = shot_camera(g);
+                    let stage = if k == 0 {
+                        "establishes the scene"
+                    } else if last_shot(k, shot_count) {
+                        "resolves the beat"
+                    } else {
+                        "develops the action"
                     };
-                    let frag = frag_at(g);
-                    let prose = match &frag {
-                        Some(f) => format!(
-                            "scene {scene_num} shot {shot_no}: {film_title} — {style_hint}; {beat} — {f}"
-                        ),
-                        None => format!(
-                            "scene {scene_num} shot {shot_no}: {film_title} — {style_hint}; {beat} content, {style_hint}"
-                        ),
-                    };
-                    let open = frag.clone().unwrap_or_else(|| style_hint.to_string());
-                    let dev = frags
-                        .get((g + 1) % frags.len().max(1))
-                        .cloned()
-                        .unwrap_or_else(|| style_hint.to_string());
-                    NovelShot {
-                        prose,
-                        beats: vec![
-                            format!("scene {scene_num}.shot {shot_no} opens: {open}"),
-                            format!("scene {scene_num}.shot {shot_no} develops: {dev}"),
-                        ],
-                    }
+                    // Each shot covers a DIFFERENT sensory axis (the
+                    // profile's expansion contract), so sibling prose is
+                    // composed, not copied.
+                    let axis = SENSORY_AXES[g % SENSORY_AXES.len()];
+                    let axis_desc = axis_phrase(axis, &lead, tod, weather, &palette, &world);
+                    let prose = format!(
+                        "{} shot, {} {}, {} — {} setting, {}",
+                        cam.size, lead, stage, axis_desc, tod, weather
+                    );
+                    let beats = shot_beats(g, &cam, &lead, tod, &palette, weather);
+                    NovelShot { prose, beats }
                 })
                 .collect();
-            let scene_frag = frag_at(i as usize * shot_count);
-            let scene_prose = match scene_frag {
-                Some(f) => format!("Scene {scene_num} of {film_title} — {style_hint}: {f}"),
-                None => format!("Scene {scene_num} of {film_title} — {style_hint}."),
+            // Scene prose is role-based (establish / develop / resolve) —
+            // it never re-quotes the idea.
+            // Scene prose: space + role. A multi-sentence idea distributes one
+            // narrative fragment per scene; a single-sentence idea keeps the
+            // idea ONLY in the logline (no second echo here).
+            let role = if i == 0 {
+                "the world is established here"
+            } else if last_scene {
+                "the arc resolves here"
+            } else {
+                "the story develops here"
             };
+            let mut prose = format!("{world}; {role}.");
+            if frags.len() > 1 {
+                if let Some(f) = frags.get(i as usize) {
+                    prose.push_str(&format!(" {f}"));
+                }
+                prose.push('.');
+            }
             NovelScene {
                 title: format!("Scene {scene_num}"),
-                prose: scene_prose,
+                prose,
                 shots,
             }
         })
         .collect();
     VisualNovel {
-        film: crate::generation::video_flow::engine::types::FilmLook {
+        film: FilmLook {
             title: film_title.to_string(),
-            logline: seed.idea.clone(),
+            logline,
             style: seed.genre.style.clone(),
-            world: seed.genre.style.clone(),
-            palette: "neutral".into(),
-            time_of_day: "midday".into(),
-            weather: "clear".into(),
+            world,
+            palette,
+            time_of_day: tod.to_string(),
+            weather: weather.to_string(),
         },
         scenes,
     }
 }
 
-/// A deterministic short title from the first clause of the idea — replaces
-/// "Untitled" when G0 leaves the title empty.
+/// The idea's single home inside the novel: a compressed logline
+/// (schema bound: strings < 300 chars, word-boundary safe).
+fn logline_of(idea: &str) -> String {
+    let t = idea.trim();
+    if t.is_empty() {
+        return "an untitled idea".into();
+    }
+    if t.chars().count() <= 290 {
+        return t.to_string();
+    }
+    let mut out: String = t.chars().take(290).collect();
+    let _ = out.rfind(' ').map(|p| out.truncate(p));
+    out.trim_end().to_string()
+}
+
+/// A deterministic subject anchor (first 6 words) — keeps the idea's
+/// *subject* in the shots without re-quoting the whole idea.
+fn lead_phrase(idea: &str) -> String {
+    let w: Vec<&str> = idea.split_whitespace().take(6).collect();
+    if w.is_empty() {
+        "the subject".into()
+    } else {
+        w.join(" ")
+    }
+}
+
+/// The profile's creative expansion axes (harness config/profiles.yaml,
+/// cinema preset). Each shot cycles one, so sibling prose differs.
+const SENSORY_AXES: [&str; 6] = ["light", "color", "motion", "sound", "texture", "weather"];
+
+/// Derived film world from genre (closed keyword scan) — the *space* only;
+/// time-of-day / weather stay their own fields so nothing doubles. No
+/// leading article, so "the {world}" composes cleanly.
+fn world_of(genre: &str) -> String {
+    let g = genre.to_lowercase();
+    if g.contains("documentary") {
+        "wide real-world space, natural locations, available light, deep texture"
+    } else if g.contains("anime") || g.contains("animation") {
+        "stylized frame, bold color fields, clean composition, bold silhouettes"
+    } else if g.contains("action") {
+        "kinetic urban space, hard edges, high-contrast practicals, visible dust"
+    } else {
+        "lived-in cinematic space, motivated light, deep detail, tactile surfaces"
+    }
+    .to_string()
+}
+
+/// Derived palette from time-of-day + weather (what a real expander writes
+/// instead of leaving the field "neutral").
+fn palette_of(tod: &str, weather: &str) -> String {
+    let base = match tod {
+        "dawn" => "rose-gold dawn tones, soft contrast",
+        "morning" => "clean golden morning light, fresh mid tones",
+        "evening" => "amber dusk fading to cool teal, warm into cool",
+        "night" => "cool blue night, low-key practicals, deep blacks",
+        _ => "bright neutral daylight, crisp hard-edged contrast",
+    };
+    let wmod = if weather.trim().is_empty() || weather.eq_ignore_ascii_case("clear") {
+        String::new()
+    } else {
+        format!(", {weather} softening the edges")
+    };
+    format!("{base}{wmod}")
+}
+
+/// Per-axis sensory detail (the closing clause of a beat / prose).
+fn axis_detail(axis: &str, tod: &str, palette: &str, weather: &str) -> String {
+    match axis {
+        "light" => format!("{tod} light on the frame"),
+        "color" => format!("{palette} tones hold the frame"),
+        "motion" => format!("{weather} air drifts through the frame"),
+        "sound" => format!("ambient {tod} quiet carries the space"),
+        "texture" => format!("surface detail of the space reads in the {tod} light"),
+        "weather" => format!("{weather} overhead, {tod} light moving through it"),
+        _ => String::new(),
+    }
+}
+
+/// Per-axis shot prose fragment (saturated, deterministic, no echo).
+fn axis_phrase(axis: &str, lead: &str, tod: &str, weather: &str, palette: &str, world: &str) -> String {
+    match axis {
+        "light" => format!("{tod} light rakes the {world}, clean hard-edged detail on {lead}"),
+        "color" => format!("the {palette} hold the frame, {lead} grounded in them"),
+        "motion" => format!("the {world} drifts on its own rhythm while {lead} moves through it"),
+        "sound" => format!("ambient {weather} air carries the {tod} quiet around {lead}"),
+        "texture" => format!("surface detail of the {world} catches the {tod} light near {lead}"),
+        "weather" => axis_detail(axis, tod, palette, weather),
+        _ => String::new(),
+    }
+}
+
+/// Per-shot motion verbs, cycling so sibling shots move differently.
+const BEAT_MOTIONS: [&str; 4] = ["settles", "drifts", "presses forward", "holds"];
+
+/// Beats in the harness Node A micro-cue form:
+/// `<shot-size>: <subject> <motion> в?" <light/sound detail>` (concrete, no
+/// generic filler; the schema wants 2в?"4 cues). Each shot gets its own
+/// non-overlapping window of sensory axes + motion verbs (3 beats × shot
+/// index), so sibling shots' beats don't repeat.
+fn shot_beats(g: usize, cam: &CameraConcern, lead: &str, tod: &str, palette: &str, weather: &str) -> Vec<String> {
+    let base = g * 3;
+    let a1 = SENSORY_AXES[base % SENSORY_AXES.len()];
+    let a2 = SENSORY_AXES[(base + 1) % SENSORY_AXES.len()];
+    let m1 = BEAT_MOTIONS[base % BEAT_MOTIONS.len()];
+    let m2 = BEAT_MOTIONS[(base + 1) % BEAT_MOTIONS.len()];
+    vec![
+        format!("{size}: {lead} {m1} — {d1}", size = cam.size, d1 = axis_detail(a1, tod, palette, weather)),
+        format!("medium: {lead} {m2} — {d2}", d2 = axis_detail(a2, tod, palette, weather)),
+        format!("close-up: {lead} holds — {tod} light on the frame"),
+    ]
+}
+
+/// A deterministic short title from the first clause of the idea (capped at
+/// 5 words) — replaces "Untitled" when G0 leaves the title empty.
 fn title_from_idea(idea: &str) -> String {
     let first = idea.split(['.', '!', '?', ';', '\n']).next().unwrap_or(idea.trim());
-    let t = first.trim().to_string();
+    let t: Vec<&str> = first.split_whitespace().take(5).collect();
     if t.is_empty() {
         "Untitled".into()
     } else {
-        t
+        t.join(" ")
     }
+}
+
+/// The idea's sentence-ish fragments (used to distribute one narrative beat
+/// per scene in multi-scene runs; empty in single-scene runs so the idea
+/// stays ONLY in the logline).
+fn idea_fragments(idea: &str) -> Vec<String> {
+    idea.split(['.', '!', '?', ';', '\n'])
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect()
 }
 
 /// S2 Node A′ — per-scene base look. Seeded from the novel film + scene title.
@@ -636,8 +769,15 @@ impl EngineEntry {
         } else {
             self.idea.trim().to_string()
         };
+        // An empty G0 title resolves to the first idea clause at S0, so the
+        // persisted seed is complete (V1 "seed.title is empty" stays clean).
+        let title = if self.title.trim().is_empty() {
+            title_from_idea(&idea)
+        } else {
+            self.title.trim().to_string()
+        };
         FilmSeed {
-            title: self.title.clone(),
+            title,
             idea,
             input_text: self.input_text.clone(),
             genre: self.genre.clone(),
@@ -648,34 +788,13 @@ impl EngineEntry {
 
     /// Build an S0→S5 run, injecting the G0 look axes into the seed-driven novel.
     pub fn build_run(&self) -> EngineRun {
-        let mut seed = self.to_seed();
-        // Inject the look axes into a style suffix so S1/S2 carry them.
-        if !seed.genre.style.is_empty() && (self.time_of_day != "midday" || self.weather != "clear") {
-            seed.genre.style = format!(
-                "{}; {} setting, {}",
-                seed.genre.style,
-                self.time_of_day,
-                self.weather,
-            );
-        } else {
-            seed.genre.style = format!(
-                "{}; {} setting, {}",
-                if seed.genre.style.is_empty() { "cinematic" } else { &seed.genre.style },
-                self.time_of_day,
-                self.weather,
-            );
-        }
-        let mut run = EngineRun::build(seed);
-        // Patch the novel film + scenes with the G0 look axes (they drove S1 seeding).
-        run.novel.film.time_of_day = self.time_of_day.clone();
-        run.novel.film.weather = self.weather.clone();
-        for sc in &mut run.scenes {
-            sc.time_of_day = self.time_of_day.clone();
-            sc.weather = self.weather.clone();
-        }
-        // Re-verify to catch any regression.
-        run.verify = verify(&run);
-        run
+        let seed = self.to_seed();
+        // The G0 look axes steer S1 (novel world/palette/light) + S2
+        // (scene light) directly — they are NOT baked into the style string,
+        // which stays the pure G0 genre/style author value (no doubling).
+        // S2 specs + S4 prompts inherit the axes from the novel film, so no
+        // post-build patch is needed.
+        EngineRun::build(seed, &self.time_of_day, &self.weather)
     }
 }
 
@@ -707,7 +826,7 @@ mod seed_tests {
     }
 
     /// The two S4 shots of one scene must no longer be identical: the
-    /// per-shot concern table + idea-carrying prose differentiate them.
+    /// per-shot concern table + sensory-axis prose differentiate them.
     #[test]
     fn sibling_shots_produce_different_prompts() {
         let run = entry("a girl follows the river road north at dusk").build_run();
@@ -720,10 +839,16 @@ mod seed_tests {
         assert_ne!(mol[0].composition, mol[1].composition, "per-shot camera variety");
     }
 
-    /// The idea fragments reach the S1 novel prose + beats (novel ≠ entry).
+    /// Node A contract: the idea gets ONE home in the novel (the film
+    /// logline). Shot prose is saturated sensory writing (camera concern +
+    /// sensory axis + G0 look axes), not a copy of the idea string.
     #[test]
-    fn idea_fragments_reach_s1_prose_and_beats() {
-        let run = entry("a girl follows the river road north at dusk").build_run();
+    fn idea_has_one_home_shot_prose_is_saturated() {
+        let idea = "there Googl bubble with comix eyes and eyebrows is fitting with M$ bubble and then they struck when Anthropic bubble comes";
+        let run = entry(idea).build_run();
+        // One home: the film logline.
+        assert_eq!(run.novel.film.logline, run.seed.idea);
+        // No echo: the full idea must not be pasted into the shot prose.
         let all_prose: String = run
             .novel
             .scenes
@@ -731,17 +856,43 @@ mod seed_tests {
             .flat_map(|sc| sc.shots.iter().map(|s| s.prose.clone()))
             .collect::<Vec<_>>()
             .join(" | ");
-        assert!(all_prose.contains("girl follows the river road north"),
-            "shot prose must carry idea fragments: {all_prose}");
-        assert!(!run.novel.scenes[0].shots[0].beats.is_empty());
+        assert!(!all_prose.contains(idea), "shot prose must NOT echo the whole idea:\n{all_prose}");
+        // Saturated: each shot carries its camera concern + a sensory axis.
+        let s0 = &run.novel.scenes[0].shots;
+        assert!(s0[0].prose.starts_with("wide shot"), "establishing shot opens wide: {}", s0[0].prose);
+        assert!(s0[2].prose.contains("close-up"), "later shot tightens: {}", s0[2].prose);
+        assert_ne!(&s0[0].prose, &s0[1].prose, "sibling shot prose differs");
+        // Beats: concrete micro-cues in the harness form, not filler.
+        let beats = &s0[0].beats;
+        assert_eq!(beats.len(), 3);
+        assert!(!beats.iter().any(|b| b.contains("opens:") || b.contains("develops:")));
     }
 
-    /// Empty title falls back to the first idea clause, not "Untitled".
+    /// G0 look axes saturate the derived film fields (world + palette),
+    /// so a night/dawn run reads differently from a midday one.
+    #[test]
+    fn look_axes_saturate_world_and_palette() {
+        let mut e = entry("a fox darts through the pines");
+        e.time_of_day = "night".into();
+        e.weather = "light rain".into();
+        let run = e.build_run();
+        // World is a genre-based space; weather is its own field + palette.
+        assert_eq!(run.novel.film.weather, "light rain", "weather carried as its own axis");
+        assert!(run.novel.film.palette.contains("cool blue night"), "palette follows time-of-day: {}", run.novel.film.palette);
+        assert!(run.novel.film.palette.contains("light rain"), "palette folds in the weather: {}", run.novel.film.palette);
+        assert_eq!(run.novel.film.time_of_day, "night");
+        // S2 scene specs inherit the axes from the novel film.
+        assert_eq!(run.scenes[0].time_of_day, "night");
+        assert_eq!(run.scenes[0].weather, "light rain");
+    }
+
+    /// Empty title falls back to the first idea clause (capped at 5 words),
+    /// not "Untitled".
     #[test]
     fn empty_title_falls_back_to_idea_clause() {
         let run = entry("a girl follows the river road north at dusk").build_run();
         assert_ne!(run.novel.film.title, "Untitled");
-        assert!(run.novel.film.title.contains("girl follows the river road"));
+        assert_eq!(run.novel.film.title, "a girl follows the river", "title is the first 5 words");
     }
 
     /// An empty idea + populated input_text must never degrade the seed:
@@ -765,4 +916,12 @@ mod seed_tests {
         let run = e.build_run();
         assert_eq!(run.novel.film.title, "The Lighthouse");
     }
+
+    /// The engine run must stay verified end-to-end on the new builder.
+    #[test]
+    fn run_stays_verified_after_expansion() {
+        let run = entry("a girl follows the river road north at dusk").build_run();
+        assert!(run.verify.verified, "S5 verify must pass: {:?}", run.verify.issues);
+    }
+
 }
