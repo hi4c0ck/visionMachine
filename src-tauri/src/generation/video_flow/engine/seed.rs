@@ -298,7 +298,7 @@ impl EngineRun {
                 .scenes
                 .iter()
                 .enumerate()
-                .map(|(i, sc)| build_scene_spec(i, sc, &novel))
+                .map(|(i, sc)| build_scene_spec(i, sc, &novel, &seed.genre.name))
                 .collect();
 
         // S3: shot specs - one per novel shot, concern-grouped closed defaults.
@@ -361,7 +361,7 @@ fn normalize_seed(seed: FilmSeed) -> FilmSeed {
 }
 
 /// S1 Node A — deterministic visual novel from the seed.
-/// S1 Node A в?" deterministic visual novel from the seed.
+/// S1 Node A —" deterministic visual novel from the seed.
 ///
 /// Follows the harness Node A contract (config/nodes.yaml + golden/
 /// visual_novel.json): the expander WRITES saturated visual language, it
@@ -371,7 +371,7 @@ fn normalize_seed(seed: FilmSeed) -> FilmSeed {
 /// concern + a cycling sensory axis (the profile's
 /// `sensory_axes: [light, color, motion, sound, texture, weather]`), and
 /// beats use the harness micro-cue form
-/// `<shot-size>: <subject> <motion> в?" <light/sound detail>`.
+/// `<shot-size>: <subject> <motion> —" <light/sound detail>`.
 fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
     use crate::generation::video_flow::engine::types::FilmLook;
 
@@ -411,12 +411,14 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
                     // profile's expansion contract), so sibling prose is
                     // composed, not copied.
                     let axis = SENSORY_AXES[g % SENSORY_AXES.len()];
-                    let axis_desc = axis_phrase(axis, &lead, tod, weather, &palette, &world);
-                    let prose = format!(
-                        "{} shot, {} {}, {} — {} setting, {}",
-                        cam.size, lead, stage, axis_desc, tod, weather
-                    );
-                    let beats = shot_beats(g, &cam, &lead, tod, &palette, weather);
+                    let axis_desc = axis_phrase(axis, &lead, &world);
+                    // Prose carries ONLY new content: the subject, its stage,
+                    // and one sensory detail. No shot-size prefix (S4 already
+                    // adds the S3 composition) and no time-of-day/weather tail
+                    // (S4 base already says both) — so nothing duplicates in
+                    // the derived prompts.
+                    let prose = format!("{lead} {stage}, {axis_desc}");
+                    let beats = shot_beats(g, &cam, &lead);
                     NovelShot { prose, beats }
                 })
                 .collect();
@@ -525,50 +527,63 @@ fn palette_of(tod: &str, weather: &str) -> String {
     format!("{base}{wmod}")
 }
 
-/// Per-axis sensory detail (the closing clause of a beat / prose).
-fn axis_detail(axis: &str, tod: &str, palette: &str, weather: &str) -> String {
+/// NEW sensory detail only (one per shot). Deliberately omits tokens the S4
+/// base/subject/concerns already carry (time-of-day, weather, palette, world,
+/// the subject itself) so nothing duplicates in the derived prompts: the
+/// S2 base owns the world/space context, S3 owns the camera mechanics.
+fn axis_phrase(axis: &str, _lead: &str, _world: &str) -> String {
     match axis {
-        "light" => format!("{tod} light on the frame"),
-        "color" => format!("{palette} tones hold the frame"),
-        "motion" => format!("{weather} air drifts through the frame"),
-        "sound" => format!("ambient {tod} quiet carries the space"),
-        "texture" => format!("surface detail of the space reads in the {tod} light"),
-        "weather" => format!("{weather} overhead, {tod} light moving through it"),
+        "light" => "dappled light shifts across the frame".into(),
+        "color" => "soft tonal shifts settle into the grade".into(),
+        "motion" => "background elements drift on their own rhythm".into(),
+        "sound" => "a low ambient hum moves through the space".into(),
+        "texture" => "fine surface detail reads in the open light".into(),
+        "weather" => "air moves through the frame on its own".into(),
         _ => String::new(),
     }
 }
-
-/// Per-axis shot prose fragment (saturated, deterministic, no echo).
-fn axis_phrase(axis: &str, lead: &str, tod: &str, weather: &str, palette: &str, world: &str) -> String {
-    match axis {
-        "light" => format!("{tod} light rakes the {world}, clean hard-edged detail on {lead}"),
-        "color" => format!("the {palette} hold the frame, {lead} grounded in them"),
-        "motion" => format!("the {world} drifts on its own rhythm while {lead} moves through it"),
-        "sound" => format!("ambient {weather} air carries the {tod} quiet around {lead}"),
-        "texture" => format!("surface detail of the {world} catches the {tod} light near {lead}"),
-        "weather" => axis_detail(axis, tod, palette, weather),
-        _ => String::new(),
-    }
-}
-
-/// Per-shot motion verbs, cycling so sibling shots move differently.
-const BEAT_MOTIONS: [&str; 4] = ["settles", "drifts", "presses forward", "holds"];
 
 /// Beats in the harness Node A micro-cue form:
-/// `<shot-size>: <subject> <motion> в?" <light/sound detail>` (concrete, no
-/// generic filler; the schema wants 2в?"4 cues). Each shot gets its own
-/// non-overlapping window of sensory axes + motion verbs (3 beats × shot
-/// index), so sibling shots' beats don't repeat.
-fn shot_beats(g: usize, cam: &CameraConcern, lead: &str, tod: &str, palette: &str, weather: &str) -> Vec<String> {
-    let base = g * 3;
-    let a1 = SENSORY_AXES[base % SENSORY_AXES.len()];
-    let a2 = SENSORY_AXES[(base + 1) % SENSORY_AXES.len()];
-    let m1 = BEAT_MOTIONS[base % BEAT_MOTIONS.len()];
-    let m2 = BEAT_MOTIONS[(base + 1) % BEAT_MOTIONS.len()];
+/// `<shot-size>: <subject> <motion> — <light/sound detail>` (concrete, no
+/// generic filler; the schema wants 2–4 cues). Each shot gets its own
+/// non-overlapping 3-beat window: sizes cycle close-up→medium→wide, motion
+/// verbs + sensory details offset by the global beat index, so sibling
+/// shots' beats don't repeat and no beat re-states the S4 motion block.
+fn shot_beats(g: usize, cam: &CameraConcern, lead: &str) -> Vec<String> {
+    let beat_sizes = ["close-up", "medium", "wide"];
+    let beat_verbs = ["settles", "drifts", "presses forward"];
+    let beat_details = [
+        "light shifts on the frame",
+        "sound swells under the beat",
+        "the space settles into quiet",
+    ];
+    // Rotate the window by the shot index (g*3 is always ≡ 0 mod 3, which
+    // is why the first version never rotated).
+    let pick = |idx: usize| (g + idx) % 3;
+    // First beat anchors on the shot's real S3 size; the other two cycle.
+    let sizes = [cam.size.as_str(), beat_sizes[pick(1)], beat_sizes[pick(2)]];
     vec![
-        format!("{size}: {lead} {m1} — {d1}", size = cam.size, d1 = axis_detail(a1, tod, palette, weather)),
-        format!("medium: {lead} {m2} — {d2}", d2 = axis_detail(a2, tod, palette, weather)),
-        format!("close-up: {lead} holds — {tod} light on the frame"),
+        format!(
+            "{}: {} {} — {}",
+            sizes[0],
+            lead,
+            beat_verbs[pick(0)],
+            beat_details[pick(2)]
+        ),
+        format!(
+            "{}: {} {} — {}",
+            beat_sizes[pick(1)],
+            lead,
+            beat_verbs[pick(1)],
+            beat_details[pick(0)]
+        ),
+        format!(
+            "{}: {} {} — {}",
+            beat_sizes[pick(2)],
+            lead,
+            beat_verbs[pick(2)],
+            beat_details[pick(1)]
+        ),
     ]
 }
 
@@ -595,7 +610,7 @@ fn idea_fragments(idea: &str) -> Vec<String> {
 }
 
 /// S2 Node A′ — per-scene base look. Seeded from the novel film + scene title.
-fn build_scene_spec(index: usize, sc: &NovelScene, novel: &VisualNovel) -> SceneSpec {
+fn build_scene_spec(index: usize, _sc: &NovelScene, novel: &VisualNovel, genre: &str) -> SceneSpec {
     SceneSpec {
         scene_id: format!("scene_{:02}", index + 1),
         time_of_day: novel.film.time_of_day.clone(),
@@ -612,9 +627,26 @@ fn build_scene_spec(index: usize, sc: &NovelScene, novel: &VisualNovel) -> Scene
             contrast: "medium".into(),
             film_stock: "kodak_250d".into(),
         },
-        ambience: sc.title.clone(),
+        // Real ambient cue from the genre (the golden fixture uses
+        // "forest, birds"-style sound, not a bare scene title).
+        ambience: ambience_of(genre),
         tempo: "medium".into(),
         effects_base: Vec::new(),
+    }
+}
+
+/// A deterministic ambient-sound cue per genre (matches the harness golden
+/// "ambience: forest, birds" shape — a real sound bed, not "Scene 1").
+fn ambience_of(genre: &str) -> String {
+    let g = genre.to_lowercase();
+    if g.contains("documentary") {
+        "natural location sound, wind, distant ambient life".into()
+    } else if g.contains("anime") || g.contains("animation") {
+        "stylized room tone, light foley".into()
+    } else if g.contains("action") {
+        "urban city hum, distant traffic, crowd murmur".into()
+    } else {
+        "quiet location ambience, soft natural sound bed".into()
     }
 }
 
@@ -929,11 +961,18 @@ mod seed_tests {
             .collect::<Vec<_>>()
             .join(" | ");
         assert!(!all_prose.contains(idea), "shot prose must NOT echo the whole idea:\n{all_prose}");
-        // Saturated: each shot carries its camera concern + a sensory axis.
+        // Dedup: S1 shot prose carries ONLY new content (subject + stage +
+        // one sensory detail) — no S3 camera-size mechanics (those live in
+        // the S3 spec + S4 prompt, not the novel), so nothing duplicates.
         let s0 = &run.novel.scenes[0].shots;
-        assert!(s0[0].prose.starts_with("wide shot"), "establishing shot opens wide: {}", s0[0].prose);
-        assert!(s0[2].prose.contains("close-up"), "later shot tightens: {}", s0[2].prose);
-        assert_ne!(&s0[0].prose, &s0[1].prose, "sibling shot prose differs");
+        let size_words = ["wide", "medium", "close-up", "over-the-shoulder"];
+        for p in s0.iter().map(|s| s.prose.as_str()) {
+            for w in &size_words {
+                assert!(!p.contains(w), "S1 shot prose must not carry S3 shot size '{w}': {p}");
+            }
+        }
+        assert!(s0[0].prose.contains("establishes"), "first shot establishes: {}", s0[0].prose);
+        assert_ne!(&s0[0].prose, &s0[1].prose, "sibling shot prose differs (stage + sensory axis)");
         // Beats: concrete micro-cues in the harness form, not filler.
         let beats = &s0[0].beats;
         assert_eq!(beats.len(), 3);

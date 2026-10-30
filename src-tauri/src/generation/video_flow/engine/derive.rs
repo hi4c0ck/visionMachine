@@ -182,7 +182,6 @@ pub fn derive(scene: &SceneSpec, shot: &ShotMolecule) -> ShotMolecule {
     .collect::<Vec<_>>()
     .join("; ");
 
-    let motion = motion_text(&shot.motion);
     let scene_tag = if inherit.is_empty() {
         String::new()
     } else {
@@ -192,9 +191,11 @@ pub fn derive(scene: &SceneSpec, shot: &ShotMolecule) -> ShotMolecule {
     let image_prompt = format!(
         "{base}. {delta}. {scene_tag}No on-screen text, no subtitles. Keep the identity and visual style of the first frame identical."
     );
+    // Motion is already in the delta (`motion_text`), so the video prompt
+    // does NOT repeat it — only the identity-lock + ambient-sound tail that
+    // the image prompt lacks.
     let video_prompt = format!(
-        "{base}. {delta}. Motion: {}. Realistic ambient sound only. No on-screen text. {scene_tag}Keep the identity and visual style of the first frame identical.",
-        if motion.is_empty() { "static" } else { &motion }
+        "{base}. {delta}. Realistic ambient sound only. No on-screen text. {scene_tag}Keep the identity and visual style of the first frame identical."
     );
 
     ShotMolecule {
