@@ -115,3 +115,31 @@ export async function applyFlow(
 	});
 	return out;
 }
+
+/**
+ * In-memory prompt overrides (Phase 3, design §4b): load a persisted flow,
+ * overwrite specific concrete sections (e.g. `@camera` / `@lighting`) with
+ * the user's edited text, and materialize the resulting composer pipes.
+ * One call returns the resulting pipe count. `edited` entries are
+ * camelCase-mapped onto the Rust `EditedSection` struct.
+ */
+export interface EditedSection {
+	pipeIndex: number;
+	sectionIndex: number;
+	prompt: string;
+}
+
+export async function applyFlowEdited(
+	sessionId: string,
+	flowVersion: number,
+	replace: boolean,
+	edited: EditedSection[]
+): Promise<number> {
+	const out = await invoke<number>('director_apply_flow_edited', {
+		sessionId,
+		flowVersion,
+		replace,
+		edited,
+	});
+	return out;
+}

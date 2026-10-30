@@ -2598,13 +2598,21 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			<span class="meta-spacer" aria-hidden="true"></span>
 			<!-- Director's-harness tabs (design doc §1): right-aligned so the
 			     active underline points down at the composer body. -->
+			<!-- Phase 4: Scoreboard is stub-only; hide it in production
+			     builds. Keep it in dev for the A/B/critic tooling. -->
 			<div class="harness-tabs" role="tablist" aria-label="Composer">
-				{#each [
-					{ id: 'pipes', label: 'Pipes' },
-					{ id: 'director', label: 'Director' },
-					{ id: 'extract', label: 'Extract' },
-					{ id: 'scoreboard', label: 'Scoreboard' },
-				] as tab}
+				{#each (import.meta.env.DEV
+					? [
+							{ id: 'pipes', label: 'Pipes' },
+							{ id: 'director', label: 'Director' },
+							{ id: 'extract', label: 'Extract' },
+							{ id: 'scoreboard', label: 'Scoreboard' },
+						]
+					: [
+							{ id: 'pipes', label: 'Pipes' },
+							{ id: 'director', label: 'Director' },
+							{ id: 'extract', label: 'Extract' },
+						]) as tab}
 					<button
 						class="harness-tab {composerTab === tab.id ? 'is-active' : ''}"
 						role="tab"

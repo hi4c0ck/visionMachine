@@ -503,6 +503,7 @@ pub fn run() {
             commands::director::director_load_flow,
             commands::director::director_log_signal,
             commands::director::director_apply_flow,
+            commands::director::director_apply_flow_edited,
             commands::generation::start_generation,
             commands::generation::start_session_generation,
             commands::generation::get_generation_group,

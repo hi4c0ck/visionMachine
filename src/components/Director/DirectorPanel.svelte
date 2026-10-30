@@ -6,7 +6,15 @@
 	// Destructive regenerate-pipes stays a sharp edge (I9): rendered disabled.
 	import { flashToast } from '$lib/flashToast';
 	import { ask } from '@tauri-apps/plugin-dialog';
-	import { runFlow, listFlows, loadFlow, applyFlow, type DirectorTab } from '$lib/directorStore';
+	import {
+		runFlow,
+		listFlows,
+		loadFlow,
+		applyFlow,
+		applyFlowEdited,
+		type EditedSection,
+		type DirectorTab,
+	} from '$lib/directorStore';
 	import { loadSession } from '$lib/composerStore';
 	import {
 		tagBars,
@@ -101,6 +109,177 @@
 	// is never silent. Clears on its own.
 	let feedback = $state<{ text: string; tone: string } | null>(null);
 	let applyWorking = $state(false);
+	// Wall-clock ms for the last run (the step-chain expand/structure/lower
+	// rows show it so the user sees the run actually happened, not just a chip).
+	let runDurationMs = $state<number | null>(null);
+
+	// Step-chain values for the Phase-1 hot path (4 rows: expand / structure /
+	// critic / lower). Real values, not placeholders.
+	const stepChain = $derived.by(() => {
+		const e = engine;
+		const d = doc;
+		if (!d) return null;
+		const ms = runDurationMs != null ? `${runDurationMs}ms` : '—';
+		const criticModel = d.criticModel;
+		return [
+			{
+				name: 'expand',
+				ver: 'v1',
+				src: e ? (e.expansion === 'llm' ? `LLM · ${e.expansion_note ?? ''}`.trim() : 'template') : '—',
+				state: '✓',
+				stateClass: 'step-ok',
+			},
+			{
+				name: 'structure',
+				ver: 'v1',
+				src: e ? `local · ${e.scenes.length} scene(s)` : '—',
+				state: '✓',
+				stateClass: 'step-ok',
+			},
+			{
+				name: 'critic',
+				ver: `v${d.regen.version.criticModelVersion}`,
+				src: criticModel?.untrained ? 'untrained stub' : `model v${d.regen.version.criticModelVersion}`,
+				state: '—',
+				stateClass: 'step-mut',
+			},
+			{
+				name: 'lower',
+				ver: 'v1',
+				src: e ? `local · ${e.molecules.length} molecule(s)` : '—',
+				state: '✓',
+				stateClass: 'step-ok',
+			},
+		];
+	});
+
+	// ── Phase 2: Extract tab — editable concrete sections ────────────────
+	// Mirrors the concrete structure produced by Rust's EngineRun::plan_from_engine:
+	// one pipe per shot, split into 5 concrete concern sections
+	// (Scene/Camera/Motion/Lighting/Transition). The TS `localExtract` list
+	// must match the Rust section ordering + pipeIndex/sectionIndex so that
+	// `applyFlowEdited` targets the right slots.
+	type LocalSection = {
+		pipeIndex: number; // shot ordinal (0-based across all shots)
+		sectionIndex: number; // 0=scene, 1=camera, 2=motion, 3=lighting, 4=transition
+		tag: string;
+		range: string;
+		prompt: string;
+		source: string;
+	};
+	let localExtract = $state<LocalSection[]>([]);
+	// Dirty count: how many sections have been edited away from their source.
+	const dirtyCount = $derived(localExtract.filter((s) => s.prompt.trim() !== s.source.trim()).length);
+
+	// Mirror of derive.rs helpers — must produce the SAME strings Rust does.
+	// Params are the mirror concern shapes (optional fields), matching
+	// engine.ts exactly so the Extract list stays 1:1 with the concrete plan.
+	function compositionText(cam: { size?: string; angle?: string; framing?: string; dof?: string }): string {
+		const bits: string[] = [];
+		if (cam.size) bits.push(`${cam.size} shot`);
+		if (cam.angle && cam.angle !== 'eye') bits.push(`${cam.angle} angle`);
+		if (cam.framing && cam.framing !== 'centered') bits.push(`${cam.framing} framing`);
+		if (cam.dof) bits.push(`${cam.dof} depth of field`);
+		return bits.join(', ');
+	}
+	function motionText(mot: { move?: string; zoom?: string; speed?: string }): string {
+		const bits: string[] = [];
+		if (mot.move && mot.move !== 'static') bits.push(mot.move);
+		if (mot.zoom && mot.zoom !== 'static') bits.push(`zoom ${mot.zoom}`);
+		if (mot.speed && mot.speed !== 'normal') bits.push(`${mot.speed} speed`);
+		return bits.join(', ');
+	}
+	function lightText(lit: { key?: string; contrast?: string; color_temp_K?: number; pattern?: string | null }): string {
+		const bits: string[] = [];
+		if (lit.key) bits.push(`${lit.key} key light`);
+		if (lit.contrast) bits.push(`${lit.contrast} contrast`);
+		if (lit.color_temp_K && lit.color_temp_K > 0) bits.push(`${lit.color_temp_K}K`);
+		if (lit.pattern) bits.push(lit.pattern);
+		return bits.join(', ');
+	}
+	function gradeText(grade: { palette?: string; saturation?: string; film_stock?: string }): string {
+		const bits: string[] = [];
+		if (grade.palette) bits.push(`${grade.palette} palette`);
+		if (grade.saturation && grade.saturation !== 'neutral') bits.push(grade.saturation);
+		if (grade.film_stock) bits.push(`${grade.film_stock} film stock`);
+		return bits.join(', ');
+	}
+
+	// Seed localExtract from the engine's shot specs + concerns (1:1 mirror
+	// of Rust's plan_from_engine). `source` holds the original prompt so a
+	// section is "dirty" when its `prompt` no longer equals `source`.
+	$effect(() => {
+		const e = engine;
+		if (!e?.specs || !e?.scenes) {
+			localExtract = [];
+			return;
+		}
+		// specsByScene gives us the real per-scene grouping with scene data.
+		const out: LocalSection[] = [];
+		let shotOrd = 0; // global shot ordinal = pipeIndex
+		for (const grp of specsByScene(e)) {
+			for (const sp of grp.specs) {
+				const camT = compositionText(sp.concerns.camera);
+				const lensSuffix = sp.concerns.lens.focal_mm && sp.concerns.lens.focal_mm > 0
+					? ` · ${sp.concerns.lens.focal_mm}mm lens` : '';
+				const camText = camT + lensSuffix;
+				const motT = motionText(sp.concerns.motion);
+				const litT = lightText(sp.concerns.lighting);
+				const gradeT = gradeText(sp.concerns.grade);
+				const lightGrade = [litT, gradeT].filter(Boolean).join('; ');
+				const transT = `${sp.transition_in} → ${sp.transition_out}`;
+
+				const clipF = sp.clip_s * 24;
+				const rng = (a: number, b: number) => `${String(a).padStart(2, '0')}–${b}`;
+				const push = (sectionIndex: number, tag: string, prompt: string, source: string) => {
+					if (prompt.trim())
+						out.push({ pipeIndex: shotOrd, sectionIndex, tag, range: rng(0, clipF), prompt, source });
+				};
+				push(0, 'scene', sp.content.prose, sp.content.prose);
+				push(1, 'camera', camText, camText);
+				push(2, 'motion', motT, motT);
+				push(3, 'lighting', lightGrade, lightGrade);
+				push(4, 'transition', transT, transT);
+
+				shotOrd++;
+			}
+		}
+		localExtract = out;
+	});
+
+	const isEdited = (s: LocalSection) => s.prompt.trim() !== s.source.trim();
+
+	function editedList() {
+		return localExtract
+			.filter((s) => isEdited(s))
+			.map((s) => ({ pipeIndex: s.pipeIndex, sectionIndex: s.sectionIndex, prompt: s.prompt }));
+	}
+
+	// Destructive regenerate from the EDITED sections (Phase 3).
+	async function regeneratePipes() {
+		if (!doc) return;
+		const target = activeRun ?? doc.flowVersion;
+		const edits = editedList();
+		const ok = await ask(
+			`Regenerate pipes from flow v${target}${edits.length ? ` with ${edits.length} edited section(s)` : ''}?\n\n` +
+				`Replaces the session's composer pipes. No fallback — replay via the triple if needed.`,
+			{ title: 'Regenerate pipes', kind: 'warning', okLabel: 'Regenerate', cancelLabel: 'Cancel' },
+		);
+		if (!ok) return;
+		applyWorking = true;
+		showFeedback(edits.length ? `Applying ${edits.length} edit(s)…` : 'Applying flow → composer…', 'tone-neutral');
+		try {
+			const count = await applyFlowEdited(sessionId, target, true, edits);
+			await onLogSignal('edit_diff', `apply-edited-${target}`, `materialized ${count} pipes (${edits.length} edited)`).catch(() => {});
+			await loadSession(sessionId);
+			showFeedback(`Materialized ${count} pipe(s) into the composer`, 'tone-ok');
+		} catch (e) {
+			showFeedback(`Regenerate failed: ${String(e)}`, 'tone-danger');
+			flashToast(String(e));
+		} finally {
+			applyWorking = false;
+		}
+	}
 
 	function showFeedback(text: string, tone = 'tone-ok') {
 		feedback = { text, tone };
@@ -109,44 +288,6 @@
 		(showFeedback as any)._t = setTimeout(() => {
 			feedback = null;
 		}, 4000);
-	}
-
-	// Confirm/rewrite a pipeline gate: persists the decision to the signal
-	// log (I7) and reflects it live on the gate strip. "rewrite" backtracks
-	// the gate's first upstream step (Node A = re-run the LLM novel), then
-	// re-runs S0→S5 so the user sees the regeneration happen.
-	async function gateAction(gateId: string, action: 'confirm' | 'rewrite') {
-		if (action === 'confirm') {
-			confirmedGates = new Set(confirmedGates).add(gateId);
-			await onLogSignal('accept', gateId, 'gate confirmed').catch(() => {});
-			showFeedback(`${gateId} confirmed`);
-			return;
-		}
-		// rewrite → backtrack to Node A: re-run the flow (LLM novel if a
-		// provider is set, else the deterministic template), then confirm the
-		// decision in the log.
-		running = true;
-		onRunningChange?.(true);
-		runError = null;
-		try {
-			const result = await runFlow(sessionId, entry.idea || entry.input_text?.trim() || '', buildEntry());
-			doc = result;
-			activeRun = result.flowVersion;
-			backfillEntryFromEngine(result);
-			await onLogSignal('reject', gateId, `backtrack node_a`);
-			const src = result.engine?.expansion;
-			const note = result.engine?.expansion_note ?? '';
-			showFeedback(
-				`${gateId} rewritten${src === 'llm' ? ` (LLM · ${note})` : note ? ` (${note})` : ''}`,
-			);
-			await refreshFlows();
-		} catch (e) {
-			runError = String(e);
-			flashToast(runError);
-		} finally {
-			running = false;
-			onRunningChange?.(false);
-		}
 	}
 
 	// Accept / reject the whole run (annotation queue, design §5): log the
@@ -335,8 +476,10 @@
 		running = true;
 		onRunningChange?.(true);
 		runError = null;
+		const t0 = Date.now();
 		try {
 			const result = await runFlow(sessionId, entry.idea || entry.input_text?.trim() || '', buildEntry());
+			runDurationMs = Date.now() - t0;
 			doc = result;
 			activeRun = result.flowVersion;
 			backfillEntryFromEngine(result);
@@ -425,28 +568,15 @@
 
 <div class="director-root" data-tab={activeTab}>
 	{#if activeTab === 'director'}
-		<!-- ── Gate strip (G0–G4) — the flow's confirmation spine ── -->
-		{#if engine}
-			<div class="gate-strip" role="list" aria-label="Pipeline gates">
-				{#each gatesShown as g (g.gate)}
-					<span class="gate {gateTone(g)}" role="listitem" title={g.confirm}>
-						<code class="gate-id">{g.gate}</code>
-						<span class="gate-glyph" aria-hidden="true">{gateGlyph(g)}</span>
-						<span class="gate-note">
-							{#if g.backtrack.length}bt:{g.backtrack.join('|')}{/if}
-						</span>
-					</span>
-				{/each}
-			</div>
-		{:else if doc}
-			<div class="phase0-notice">
-				<span class="muted">This run predates the engine — rebuild it below with one click to see the S0→S5 flow.</span>
-			</div>
-		{/if}
+		<!-- ── Phase 1 hot path: ① DIRECTION · ② NOVEL · ③ STEP CHAIN ──
+		     The creator's primary control flow is three blocks. All the
+		     expert-level detail (gate strip, G0 grid, S2/S3/S4, timeline, S5)
+		     is demoted into the Advanced disclosure at the bottom of this tab
+		     so the hot path never shows it. -->
 
-		<!-- ── ① G0 · Entry parameters — always available (the S0 entry) ── -->
-		<section class="stage">
-			<h3 class="block-heading">① G0 · Entry parameters <span class="muted">· S0 seed</span></h3>
+		<!-- ① DIRECTION — the single primary control: type the idea, run. -->
+		<section class="stage hot">
+			<h3 class="block-heading">① DIRECTION <span class="muted">· S0 entry</span></h3>
 			<TextBlock
 				label="Idea"
 				bind:value={entry.idea}
@@ -454,295 +584,305 @@
 				locked={running}
 				onRun={handleRun}
 			/>
-			<div class="g0-grid">
-				<label class="field grow">
-					<span class="field-label">title</span>
-					<input
-						bind:value={entry.title}
-						placeholder="optional film title (defaults from the idea)"
-					/>
-				</label>
-				<label class="field">
-					<span class="field-label">genre</span>
-					<select bind:value={entry.genre.name}>
-						{#each GENRE_PRESETS as g}
-							<option value={g.name}>{g.name}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="field grow">
-					<span class="field-label">style</span>
-					<input
-						bind:value={entry.genre.style}
-						placeholder="visual style string"
-					/>
-				</label>
-				<label class="field">
-					<span class="field-label">ratio</span>
-					<select bind:value={entry.ratio}>
-						{#each RATIOS as r}
-							<option value={r}>{r}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="field">
-					<span class="field-label">scenes</span>
-					<input
-						type="number"
-						min="1"
-						max="24"
-						bind:value={entry.scale.scenes}
-					/>
-				</label>
-				<label class="field">
-					<span class="field-label">shots/scene</span>
-					<input
-						type="number"
-						min="1"
-						max="5"
-						bind:value={entry.scale.shots_per_scene}
-					/>
-				</label>
-				<label class="field">
-					<span class="field-label">clip_s</span>
-					<span class="clip-range">
-						<input
-							type="number"
-							min="4"
-							max="12"
-							bind:value={entry.scale.clip_s[0]}
-						/>–
-						<input
-							type="number"
-							min="4"
-							max="12"
-							bind:value={entry.scale.clip_s[1]}
-						/>
-					</span>
-				</label>
-				<label class="field">
-					<span class="field-label">time of day</span>
-					<select bind:value={entry.time_of_day}>
-						{#each VOCAB.time_of_day as t}
-							<option value={t}>{t}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="field grow">
-					<span class="field-label">weather</span>
-					<input bind:value={entry.weather} placeholder="clear, brief clouds, …" />
-				</label>
-			</div>
 		</section>
 
+		<!-- ② NOVEL — read-only collapsed rows (the S1 visual novel state). -->
 		{#if engine}
-			<!-- ── ② S1 · Visual Novel (G1 review point) ── -->
-			<section class="stage">
-				<div class="stage-head">
-					<h3 class="block-heading">
-						② S1 · Visual Novel
-						<span class="muted chip {engine.expansion === 'llm' ? 'chip-llm' : 'chip-fallback'}" title={engine.expansion_note ?? ''}>
-							{expansionLabel(engine)} · G1
-						</span>
-					</h3>
-					<div class="stage-actions">
-						<button class="mini" onclick={() => void gateAction('g1_novel_review', 'confirm')}>
-							confirm
-						</button>
-						<button class="mini" disabled={running} onclick={() => void gateAction('g1_novel_review', 'rewrite')}>
-							rewrite
-						</button>
-					</div>
-				</div>
-				<div class="novel-film" title={engine.novel.film.logline}>
-					<code class="nf-title">{engine.novel.film.title}</code>
-					<span class="nf-meta">
-						{engine.novel.film.time_of_day} · {engine.novel.film.weather} ·
-						{engine.novel.film.palette}
+			<section class="stage hot">
+				<h3 class="block-heading">
+					② NOVEL
+					<span class="muted chip {engine.expansion === 'llm' ? 'chip-llm' : 'chip-fallback'}"
+						title={engine.expansion_note ?? ''}>
+						{expansionLabel(engine)}
 					</span>
-					<p class="nf-logline">{engine.novel.film.logline}</p>
-				</div>
-				{#each engine.novel.scenes as sc, si}
-					<details class="novel-scene" open={si === 0}>
-						<summary>
-							<span class="nc-title">{sc.title}</span>
-							<span class="nc-meta">{sc.shots.length} shots</span>
-						</summary>
-						<p class="nc-prose">{sc.prose}</p>
-						<ul class="nc-shots">
-							{#each sc.shots as sh, ki}
-								<li>
-									<code class="nc-shotno">scene_{si + 1}.shot_{ki + 1}</code>
-									<span class="nc-shotprose">{sh.prose}</span>
-									<span class="nc-beats">{sh.beats.length} beats</span>
-								</li>
-							{/each}
-						</ul>
-					</details>
-				{/each}
-			</section>
-
-			<!-- ── ③ S2 · Scene base look ── -->
-			<section class="stage">
-				<h3 class="block-heading">③ S2 · Scene base look <span class="muted">· {engine.scenes.length} spec(s)</span></h3>
-				<ul class="scene-rows">
-					{#each engine.scenes as sc}
-						<li>
-							<code class="sr-id">{sc.scene_id}</code>
-							<span class="sr-meta">
-								{sc.time_of_day} · {sc.weather} · {sc.light.key}/{sc.light.contrast}
-								{sc.light.color_temp_K}K · {sc.grade.film_stock} · {sc.tempo}
-							</span>
-							{#if sc.effects_base.length}<span class="sr-fx">fx:{sc.effects_base.join(',')}</span>{/if}
-						</li>
-					{/each}
+				</h3>
+				<ul class="novel-rows">
+					<li>
+						<code class="nr-id">primary</code>
+						<span class="nr-text">{engine.novel.scenes.map((s) => s.prose).join(' · ')}</span>
+					</li>
+					<li>
+						<code class="nr-id">secondary</code>
+						<span class="nr-text">
+							{engine.novel.scenes.map((s) => s.shots.map((sh) => sh.prose).join(' · ')).join(' · ')}
+						</span>
+					</li>
+					<li>
+						<code class="nr-id">ambient</code>
+						<span class="nr-text">{engine.novel.film.logline}</span>
+					</li>
 				</ul>
 			</section>
 
-			<!-- ── ④ S3 · Shot sheets (G2 review point) ── -->
-			<section class="stage">
-				<div class="stage-head">
-					<h3 class="block-heading">④ S3 · Shot sheets <span class="muted">· {engine.specs.length} · G2</span></h3>
-					<div class="stage-actions">
-						<button class="mini" onclick={() => void gateAction('g2_spec_review', 'confirm')}>
-							confirm
-						</button>
-						<button class="mini" disabled={running} onclick={() => void gateAction('g2_spec_review', 'rewrite')}>
-							rewrite
-						</button>
-					</div>
-				</div>
-				{#each specsByScene(engine) as grp}
-					<div class="shot-scene">
-						<code class="ss-scene">{grp.scene.scene_id} · {grp.scene.time_of_day}</code>
-						{#each grp.specs as sp}
-							{@const slices = foldSlices(sp)}
-							<article class="shot-sheet" class:open={openShot === sp.shot_id}>
-								<header class="ss-head" role="button" tabindex="0"
-									onclick={() => (openShot = openShot === sp.shot_id ? null : sp.shot_id)}
-									onkeydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openShot = openShot === sp.shot_id ? null : sp.shot_id; } }}>
-									<code class="ss-id">{sp.shot_id}</code>
-									<span class="ss-meta">
-										{sp.clip_s}s · {sp.transition_in}→{sp.transition_out} · {concernSummary(sp.concerns)}
-									</span>
-									<span class="ss-tick">{openShot === sp.shot_id ? '▾' : '▸'}</span>
-								</header>
-								{#if openShot === sp.shot_id}
-									<div class="ss-body">
-										<p class="ss-prose">{sp.content.prose}</p>
-										{#if sp.content.beats.length}
-											<ul class="ss-beats">
-												{#each sp.content.beats as b}
-													<li>{b}</li>
-												{/each}
-											</ul>
-										{/if}
-										{#if slices.length}
-											<div class="ss-slices">
-												{#each slices as sl}
-													<div class="slice">
-														<code class="slice-range">{sl.from_s}–{sl.to_s}s</code>
-														<span class="slice-note">{sl.note}</span>
-														<ul class="slice-deltas">
-															{#each sl.deltas as d}
-																<li><code>{d}</code></li>
-															{/each}
-														</ul>
-													</div>
-												{/each}
-											</div>
-										{/if}
-									</div>
-								{/if}
-							</article>
+			<!-- ③ STEP CHAIN — the 4 rows + the single Run button. -->
+			<section class="stage hot">
+				<h3 class="block-heading">③ STEP CHAIN <span class="muted">· {doc?.flowVersion ?? '—'}</span></h3>
+				<ul class="step-chain">
+					{#if stepChain}
+						{#each stepChain as row}
+							<li class="step {row.stateClass} {runError ? 'step-fail' : ''}">
+								<code class="step-name">{row.name}</code>
+								<code class="step-ver">{row.ver}</code>
+								<span class="step-src">{row.src}</span>
+								<span class="step-state">{row.state}</span>
+							</li>
 						{/each}
-					</div>
-				{/each}
+					{:else}
+						<li class="hint">No run yet — type an idea and press Run.</li>
+					{/if}
+				</ul>
+				{#if runError}
+					<p class="flow-error" role="alert">{runError}</p>
+				{/if}
+				<div class="step-actions">
+					<button
+						class="btn primary"
+						disabled={running || !entry.idea.trim()}
+						title={!entry.idea.trim() ? 'Write the idea first' : undefined}
+						onclick={handleRun}>
+						{running ? 'Running…' : 'Run S0→S5'}
+					</button>
+					{#if doc}
+						<button class="btn" onclick={() => void annotateRun('accept')}>Accept</button>
+						<button class="btn" onclick={() => void annotateRun('reject')}>Reject</button>
+					{/if}
+				</div>
 			</section>
 
-			<!-- ── ⑤ S4 · Prompt build (deterministic: what the media models receive) ── -->
-			<section class="stage">
-				<h3 class="block-heading">
-					⑤ S4 · Prompt build
-					<span class="muted">
-						· deterministic media prompts · not generated media · {FRAME_RATE}fps
-					</span>
-				</h3>
-				<p class="hint s4-note">
-					Each shot's <b>image</b>/<b>video</b> text is what you feed a media model
-					(base scene look + the shot's composition/lens/motion + identity-lock). It is
-					derived, not generated — there are no images or clips here yet.
-				</p>
-				{#each engine.molecules as m}
-					<details class="prompt-block">
-						<summary>
-							<code class="pb-id">{m.inherit}</code>
-							<span class="pb-meta">{m.clip_s}s · {m.transition_in}→{m.transition_out}</span>
-						</summary>
-						<div class="pb-rows">
-							<div class="pb-row">
-								<code class="pb-kind">image</code>
-								<p>{m.prompts.image}</p>
-							</div>
-							<div class="pb-row">
-								<code class="pb-kind">video</code>
-								<p>{m.prompts.video}</p>
-							</div>
-						</div>
-					</details>
-				{/each}
-			</section>
+			<!-- ── Advanced disclosure: gate strip + G0 grid + S2/S3/S4/timeline/S5 ── -->
+			<details class="advanced">
+				<summary class="advanced-summary">Advanced view <span class="muted">· gates · S2–S5 · timeline · verify</span></summary>
 
-			<!-- ── ⑥ Verified timeline ── -->
-			<section class="stage">
-				<h3 class="block-heading">⑥ Timeline <span class="muted">· verified · {engine.verify.total_frames}f</span></h3>
-				<div class="tl-strip">
-					{#each timelineRows(engine) as r}
-						<span class="tl-cell" title={r.subject}>
-							<code class="tl-id">{r.shot_id}</code>
-							<span class="tl-subject">{r.subject}</span>
-							<span class="tl-concern">{r.concern}</span>
-							<span class="tl-frames">[{r.from_s}s–{r.to_s}s] · {r.frames}f · {r.transition_out}</span>
+				<!-- Gate strip (G0–G4) — the flow's confirmation spine. -->
+				<div class="gate-strip" role="list" aria-label="Pipeline gates">
+					{#each gatesShown as g (g.gate)}
+						<span class="gate {gateTone(g)}" role="listitem" title={g.confirm}>
+							<code class="gate-id">{g.gate}</code>
+							<span class="gate-glyph" aria-hidden="true">{gateGlyph(g)}</span>
+							<span class="gate-note">
+								{#if g.backtrack.length}bt:{g.backtrack.join('|')}{/if}
+							</span>
 						</span>
 					{/each}
 				</div>
-			</section>
 
-			<!-- ── ⑦ S5 · Verify ── -->
-			<section class="stage">
-				<h3 class="block-heading">⑦ S5 · Verify</h3>
-				{#if engine.verify.verified}
-					<p class="verify ok">
-						✓ ALL PASS — schema · tag-closure · counts · frame floor · invariants
-					</p>
-				{:else}
-					<ul class="verify issues">
-						{#each engine.verify.issues as iss}
-							<li><code>{iss}</code></li>
+				<!-- G0 grid — all 8 fields, demoted from the hot path. -->
+				<section class="stage">
+					<h3 class="block-heading">G0 · Entry parameters <span class="muted">· S0 seed</span></h3>
+					<div class="g0-grid">
+						<label class="field grow">
+							<span class="field-label">title</span>
+							<input bind:value={entry.title} placeholder="optional film title (defaults from the idea)" />
+						</label>
+						<label class="field">
+							<span class="field-label">genre</span>
+							<select bind:value={entry.genre.name}>
+								{#each GENRE_PRESETS as g}<option value={g.name}>{g.name}</option>{/each}
+							</select>
+						</label>
+						<label class="field grow">
+							<span class="field-label">style</span>
+							<input bind:value={entry.genre.style} placeholder="visual style string" />
+						</label>
+						<label class="field">
+							<span class="field-label">ratio</span>
+							<select bind:value={entry.ratio}>
+								{#each RATIOS as r}<option value={r}>{r}</option>{/each}
+							</select>
+						</label>
+						<label class="field">
+							<span class="field-label">scenes</span>
+							<input type="number" min="1" max="24" bind:value={entry.scale.scenes} />
+						</label>
+						<label class="field">
+							<span class="field-label">shots/scene</span>
+							<input type="number" min="1" max="5" bind:value={entry.scale.shots_per_scene} />
+						</label>
+						<label class="field">
+							<span class="field-label">clip_s</span>
+							<span class="clip-range">
+								<input type="number" min="4" max="12" bind:value={entry.scale.clip_s[0]} />–
+								<input type="number" min="4" max="12" bind:value={entry.scale.clip_s[1]} />
+							</span>
+						</label>
+						<label class="field">
+							<span class="field-label">time of day</span>
+							<select bind:value={entry.time_of_day}>
+								{#each VOCAB.time_of_day as t}<option value={t}>{t}</option>{/each}
+							</select>
+						</label>
+						<label class="field grow">
+							<span class="field-label">weather</span>
+							<input bind:value={entry.weather} placeholder="clear, brief clouds, …" />
+						</label>
+					</div>
+				</section>
+
+				<!-- S1 · Visual Novel — full scene/shot tree. -->
+				<section class="stage">
+					<h3 class="block-heading">S1 · Visual Novel <span class="muted">· G1</span></h3>
+					<div class="novel-film" title={engine.novel.film.logline}>
+						<code class="nf-title">{engine.novel.film.title}</code>
+						<span class="nf-meta">
+							{engine.novel.film.time_of_day} · {engine.novel.film.weather} ·
+							{engine.novel.film.palette}
+						</span>
+						<p class="nf-logline">{engine.novel.film.logline}</p>
+					</div>
+					{#each engine.novel.scenes as sc, si}
+						<details class="novel-scene" open={si === 0}>
+							<summary>
+								<span class="nc-title">{sc.title}</span>
+								<span class="nc-meta">{sc.shots.length} shots</span>
+							</summary>
+							<p class="nc-prose">{sc.prose}</p>
+							<ul class="nc-shots">
+								{#each sc.shots as sh, ki}
+									<li>
+										<code class="nc-shotno">scene_{si + 1}.shot_{ki + 1}</code>
+										<span class="nc-shotprose">{sh.prose}</span>
+										<span class="nc-beats">{sh.beats.length} beats</span>
+									</li>
+								{/each}
+							</ul>
+						</details>
+					{/each}
+				</section>
+
+				<!-- S2 · Scene base look. -->
+				<section class="stage">
+					<h3 class="block-heading">S2 · Scene base look <span class="muted">· {engine.scenes.length} spec(s)</span></h3>
+					<ul class="scene-rows">
+						{#each engine.scenes as sc}
+							<li>
+								<code class="sr-id">{sc.scene_id}</code>
+								<span class="sr-meta">
+									{sc.time_of_day} · {sc.weather} · {sc.light.key}/{sc.light.contrast}
+									{sc.light.color_temp_K}K · {sc.grade.film_stock} · {sc.tempo}
+								</span>
+								{#if sc.effects_base.length}<span class="sr-fx">fx:{sc.effects_base.join(',')}</span>{/if}
+							</li>
 						{/each}
 					</ul>
-				{/if}
-			</section>
+				</section>
 
-			<!-- ── Run + destructive apply — always visible: a pre-engine doc
-			     is one click from a full S0→S5 rebuild ── -->
+				<!-- S3 · Shot sheets. -->
+				<section class="stage">
+					<h3 class="block-heading">S3 · Shot sheets <span class="muted">· {engine.specs.length} · G2</span></h3>
+					{#each specsByScene(engine) as grp}
+						<div class="shot-scene">
+							<code class="ss-scene">{grp.scene.scene_id} · {grp.scene.time_of_day}</code>
+							{#each grp.specs as sp}
+								{@const slices = foldSlices(sp)}
+								<article class="shot-sheet" class:open={openShot === sp.shot_id}>
+									<header class="ss-head" role="button" tabindex="0"
+										onclick={() => (openShot = openShot === sp.shot_id ? null : sp.shot_id)}
+										onkeydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openShot = openShot === sp.shot_id ? null : sp.shot_id; } }}>
+										<code class="ss-id">{sp.shot_id}</code>
+										<span class="ss-meta">
+											{sp.clip_s}s · {sp.transition_in}→{sp.transition_out} · {concernSummary(sp.concerns)}
+										</span>
+										<span class="ss-tick">{openShot === sp.shot_id ? '▾' : '▸'}</span>
+									</header>
+									{#if openShot === sp.shot_id}
+										<div class="ss-body">
+											<p class="ss-prose">{sp.content.prose}</p>
+											{#if sp.content.beats.length}
+												<ul class="ss-beats">
+													{#each sp.content.beats as b}<li>{b}</li>{/each}
+												</ul>
+											{/if}
+											{#if slices.length}
+												<div class="ss-slices">
+													{#each slices as sl}
+														<div class="slice">
+															<code class="slice-range">{sl.from_s}–{sl.to_s}s</code>
+															<span class="slice-note">{sl.note}</span>
+															<ul class="slice-deltas">
+																{#each sl.deltas as d}<li><code>{d}</code></li>{/each}
+															</ul>
+														</div>
+													{/each}
+												</div>
+											{/if}
+										</div>
+									{/if}
+								</article>
+							{/each}
+						</div>
+					{/each}
+				</section>
+
+				<!-- S4 · Prompt build (deterministic media prompts, not generated media). -->
+				<section class="stage">
+					<h3 class="block-heading">S4 · Prompt build
+						<span class="muted">· deterministic media prompts · not generated media · {FRAME_RATE}fps</span>
+					</h3>
+					<p class="hint s4-note">
+						Each shot's <b>image</b>/<b>video</b> text is what you feed a media model
+						(base scene look + the shot's composition/lens/motion + identity-lock). It is
+						derived, not generated — there are no images or clips here yet.
+					</p>
+					{#each engine.molecules as m}
+						<details class="prompt-block">
+							<summary>
+								<code class="pb-id">{m.inherit}</code>
+								<span class="pb-meta">{m.clip_s}s · {m.transition_in}→{m.transition_out}</span>
+							</summary>
+							<div class="pb-rows">
+								<div class="pb-row">
+									<code class="pb-kind">image</code>
+									<p>{m.prompts.image}</p>
+								</div>
+								<div class="pb-row">
+									<code class="pb-kind">video</code>
+									<p>{m.prompts.video}</p>
+								</div>
+							</div>
+						</details>
+					{/each}
+				</section>
+
+				<!-- Timeline. -->
+				<section class="stage">
+					<h3 class="block-heading">Timeline <span class="muted">· verified · {engine.verify.total_frames}f</span></h3>
+					<div class="tl-strip">
+						{#each timelineRows(engine) as r}
+							<span class="tl-cell" title={r.subject}>
+								<code class="tl-id">{r.shot_id}</code>
+								<span class="tl-subject">{r.subject}</span>
+								<span class="tl-concern">{r.concern}</span>
+								<span class="tl-frames">[{r.from_s}s–{r.to_s}s] · {r.frames}f · {r.transition_out}</span>
+							</span>
+						{/each}
+					</div>
+				</section>
+
+				<!-- S5 · Verify. -->
+				<section class="stage">
+					<h3 class="block-heading">S5 · Verify</h3>
+					{#if engine.verify.verified}
+						<p class="verify ok">
+							✓ ALL PASS — schema · tag-closure · counts · frame floor · invariants
+						</p>
+					{:else}
+						<ul class="verify issues">
+							{#each engine.verify.issues as iss}<li><code>{iss}</code></li>{/each}
+						</ul>
+					{/if}
+				</section>
+			</details>
+		{:else if doc}
+			<div class="phase0-notice">
+				<span class="muted">This run predates the engine — rebuild it below with one click to see the S0→S5 flow.</span>
+			</div>
 		{/if}
-		<section class="stage actions">
-			<button class="btn primary" disabled={running || !entry.idea.trim()} title={!entry.idea.trim() ? 'Write the idea first' : undefined} onclick={handleRun}>
-				{running ? 'Running…' : 'Run S0→S5'}
-			</button>
-			{#if doc}
-				<button class="btn" onclick={() => void annotateRun('accept')}>
-					Accept
-				</button>
-				<button class="btn" onclick={() => void annotateRun('reject')}>
-					Reject
-				</button>
-			{/if}
-			<!-- Destructive apply (I9, design §4): materialize the flow's
-			     structured plan into composer pipes via save_composer.
-			     replace vs append, gated by a confirm dialog. -->
-			{#if doc}
+
+		<!-- Destructive apply (I9, design §4): materialize the flow's
+		     structured plan into composer pipes via save_composer.
+		     replace vs append, gated by a confirm dialog. -->
+		{#if doc}
+			<section class="stage actions">
 				<button class="btn danger" disabled={applyWorking} onclick={() => void applyPipes(true)}>
 					Regenerate pipes
 					<span class="btn-note">replace · no fallback · replay v{doc.regen.version.flowVersion}</span>
@@ -750,15 +890,11 @@
 				<button class="btn danger" disabled={applyWorking} onclick={() => void applyPipes(false)}>
 					<span class="btn-note">append</span>
 				</button>
-			{/if}
-		</section>
+			</section>
+		{/if}
 
 		{#if feedback}
 			<p class="action-feedback {feedback.tone}" role="status">{feedback.text}</p>
-		{/if}
-
-		{#if runError}
-			<p class="flow-error" role="alert">{runError}</p>
 		{/if}
 	{/if}
 
@@ -766,37 +902,74 @@
 		{#if doc}
 			<div class="extract-head">
 				<span class="muted">
-					{sessionName} · v{doc.flowVersion} · {sections.length} sections
-					{#if engine}· engine sheet{/if} · {pipeCount} pipes in composer
+					{sessionName} · v{doc.flowVersion}
+					{#if localExtract.length}
+						· {localExtract.length} concrete section(s) across {Math.ceil(localExtract.length / 5)} shot pipe(s)
+					{:else}
+						· no engine structure yet
+					{/if}
+					· {dirtyCount} edited · {pipeCount} pipes in composer
 				</span>
 				<div class="extract-head-btns">
 					<button class="btn" onclick={copyExtract}>Copy sections</button>
 					{#if engine}
 						<button class="btn" onclick={copyEngineSheet}>Copy engine sheet</button>
 					{/if}
+					<!-- Phase 2: the single destructive control — regenerate from
+					     the edited concrete sections (replace only; no append). -->
+					<button class="btn danger" disabled={applyWorking || !doc} onclick={() => void regeneratePipes()}>
+						Regenerate pipes
+						<span class="btn-note">
+							replace {pipeCount} pipes · {dirtyCount} edited · replay v{doc.regen.version.flowVersion}
+						</span>
+					</button>
 				</div>
 			</div>
-			{#each sections as s, i}
-				<article class="extract-block">
-					<header class="extract-meta">
-						<span class="tag-word">{s.tag}</span>
-						<code class="range">{String(s.frameStart).padStart(2, '0')}–{s.frameEnd}</code>
-						<span class="provenance" class:active={s.from.length > 0}>
-							{#if s.from.length > 0}
-								source: {s.from.join(' · ')}
-							{:else}
-								source: —
+
+			<!-- The concrete, editable structure (mirror of Rust plan_from_engine):
+			     one group per shot pipe, five concern sections each. -->
+			{#if localExtract.length}
+				{#each localExtract as s, i}
+					{@const edited = isEdited(s)}
+					<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
+						<header class="extract-meta">
+							<code class="extract-pipe">pipe {String(s.pipeIndex).padStart(2, '0')}</code>
+							<span class="tag-word">{s.tag}</span>
+							<code class="range">{s.range}</code>
+							{#if edited}
+								<span class="dirty-mark" title="edited">●</span>
 							{/if}
-						</span>
-					</header>
-					<p class="extract-prompt">{s.prompt || '—'}</p>
-				</article>
-			{/each}
+							<span class="provenance">source: {s.source || '—'}</span>
+						</header>
+						<!-- Editable concrete prompt. -->
+						<textarea
+							class="extract-prompt-edit"
+							rows="2"
+							bind:value={s.prompt}
+						></textarea>
+					</article>
+				{/each}
+			{:else}
+				{#each sections as s, i}
+					<article class="extract-block">
+						<header class="extract-meta">
+							<span class="tag-word">{s.tag}</span>
+							<code class="range">{String(s.frameStart).padStart(2, '0')}–{s.frameEnd}</code>
+							<span class="provenance" class:active={s.from.length > 0}>
+								{#if s.from.length > 0}
+									source: {s.from.join(' · ')}
+								{:else}
+									source: —
+								{/if}
+							</span>
+						</header>
+						<p class="extract-prompt">{s.prompt || '—'}</p>
+					</article>
+				{/each}
+			{/if}
 			<p class="hint">
-				This text is self-sufficient: it can be used to regenerate pipes later (I4).
-				{#if engine}
-					The engine sheet adds the S4 identity-locked prompts + verified timeline.
-				{/if}
+				Concrete sections carry only their concern's text — edit any, mark ●, then
+				Regenerate pipes materializes the edits into the composer (no fallback).
 			</p>
 		{:else}
 			<p class="hint">Run the Director tab first — the final structural text appears here.</p>
@@ -1032,6 +1205,120 @@
 	.stage:first-of-type {
 		border-top: none;
 		padding-top: 0;
+	}
+
+	/* ── Phase-1 hot path (① DIRECTION · ② NOVEL · ③ STEP CHAIN) ── */
+	.stage.hot {
+		/* hairline-separated block (Template A), tighter than the full stages */
+	}
+
+	.novel-rows {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.novel-rows li {
+		display: flex;
+		gap: 8px;
+		align-items: baseline;
+		padding: 4px 6px;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		background: var(--input-bg);
+		cursor: default;
+	}
+	.nr-id {
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		color: var(--muted-foreground, var(--foreground));
+		min-width: 72px;
+	}
+	.nr-text {
+		font-size: 12px;
+		line-height: 1.5;
+		color: var(--foreground);
+	}
+
+	.step-chain {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.step {
+		display: grid;
+		grid-template-columns: 72px 44px 1fr auto;
+		gap: 8px;
+		align-items: center;
+		padding: 6px 8px;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+	}
+	.step-name, .step-ver, .step-src, .step-state {
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+	}
+	.step-ver { color: var(--muted-foreground, var(--foreground)); }
+	.step-src { color: var(--muted-foreground, var(--foreground)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.step-ok { border-left: 3px solid var(--success-color, #22c55e); }
+	.step-mut { border-left: 3px solid var(--border-color); }
+	.step-fail { border-left: 3px solid var(--danger-color, #ef4444); }
+
+	.step-actions {
+		display: flex;
+		gap: 8px;
+		margin-top: 4px;
+	}
+
+	/* ── Advanced disclosure (gates + G0 grid + S2–S5) ── */
+	.advanced {
+		margin-top: 8px;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+	}
+	.advanced-summary {
+		padding: 8px 10px;
+		cursor: pointer;
+		font-weight: 600;
+		user-select: none;
+	}
+	.advanced-summary .muted { font-weight: 400; margin-left: 8px; }
+	.advanced[open] .advanced-summary {
+		border-bottom: 1px solid var(--border-color);
+	}
+
+	/* ── Extract: concrete editable sections ── */
+	.extract-pipe {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		color: var(--muted-foreground, var(--foreground));
+	}
+	.dirty-mark {
+		color: var(--danger-color, #ef4444);
+		font-size: 10px;
+	}
+	.extract-block.dirty .extract-prompt-edit {
+		border-color: var(--danger-color, #ef4444);
+	}
+	.extract-prompt-edit {
+		width: 100%;
+		box-sizing: border-box;
+		margin-top: 4px;
+		padding: 6px 8px;
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		line-height: 1.5;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		background: var(--input-bg);
+		color: var(--foreground);
+		resize: vertical;
+		min-height: 40px;
 	}
 	.stage-head {
 		display: flex;

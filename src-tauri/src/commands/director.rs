@@ -16,7 +16,7 @@
 use crate::AppState;
 use crate::generation::video_flow::{
     append_signal_jsonl, materialize_pipes, validate_plan, FlowDocument, SignalKind,
-    SignalRecord, VideoFlow,
+    SignalRecord, StructuredVideoPlan, VideoFlow,
 };
 use serde::Serialize;
 use std::path::PathBuf;
@@ -411,10 +411,7 @@ pub async fn director_apply_flow(
     // the coarse marker-bridge `doc.structured` only for pre-engine docs that
     // have no engine run. Materialize into composer pipes; validate first so
     // a hand-edited or out-of-bounds doc can't slip past.
-    let plan = match doc.engine.as_ref().map(|run| run.plan_from_engine(flow_version)) {
-        Some(concrete) => concrete,
-        None => doc.structured.clone(),
-    };
+    let plan = build_apply_plan(&doc, flow_version);
     let cfg = crate::generation::video_flow::FlowConfig::default_flow();
     validate_plan(&plan, &cfg.structure).map_err(|e| e.to_string())?;
     let pipes = materialize_pipes(&plan, &cfg.materialize).map_err(|e| e.to_string())?;
@@ -423,39 +420,286 @@ pub async fn director_apply_flow(
     }
 
     // Merge into the session's composer and persist.
-    let count = {
-        let db = &state.db.lock().await;
-        let existing = db
-            .get_composer(&session_id)
-            .await
-            .map_err(|e| format!("load composer: {e}"))?;
-        let composer = if replace {
-            crate::models::ComposerConfig {
-                id: existing.id.clone(),
-                session_id: existing.session_id.clone(),
-                name: existing.name.clone(),
-                pipes: pipes.clone(),
-                fps: existing.fps,
-                resolution: existing.resolution.clone(),
-                orientation: existing.orientation.clone(),
-                crop_mode: existing.crop_mode.clone(),
-                custom_width: existing.custom_width,
-                custom_height: existing.custom_height,
-                video_ratio: existing.video_ratio.clone(),
-                total_generated_frames: existing.total_generated_frames,
-                created_at: None,
-                updated_at: None,
-            }
-        } else {
-            let mut c = existing.clone();
-            for p in &pipes {
-                c.pipes.push(p.clone());
-            }
-            c
-        };
-        db.save_composer(&composer).await.map_err(|e| format!("save composer: {e}"))?;
-        composer.pipes.len() as u32
-    };
+    let count = merge_and_save_composer(&state, &session_id, replace, &pipes).await?;
 
     Ok(count)
+}
+
+// ── Phase 3: edited-section apply (in-memory, no new flow version) ─────────
+
+/// One concrete section-prompt override from the UI.
+/// `pipe_index` / `section_index` are 0-based into the materialized plan's
+/// pipes; out-of-bounds entries are silently ignored (never panic).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditedSection {
+    pub pipe_index: u32,
+    pub section_index: u32,
+    pub prompt: String,
+}
+
+/// The single source for which plan a run materializes from: prefer the
+/// CONCRETE engine plan when `doc.engine` is present, fall back to the
+/// coarse marker-bridge `doc.structured` for pre-engine docs.
+pub fn build_apply_plan(doc: &FlowDocument, flow_version: u32) -> StructuredVideoPlan {
+    doc.engine
+        .as_ref()
+        .map(|run| run.plan_from_engine(flow_version))
+        .unwrap_or_else(|| doc.structured.clone())
+}
+
+/// Overwrite section prompts in-place from a list of `EditedSection` entries.
+/// Out-of-bounds `pipe_index` / `section_index` are ignored (never panic).
+pub fn apply_section_edits(plan: &mut StructuredVideoPlan, edited: &[EditedSection]) {
+    for e in edited {
+        if let Some(pipe) = plan.pipes.get_mut(e.pipe_index as usize) {
+            if let Some(section) = pipe.sections.get_mut(e.section_index as usize) {
+                section.prompt = e.prompt.clone();
+            }
+        }
+    }
+}
+
+/// Shared composer merge + save used by both apply commands.
+/// Returns the resulting total pipe count.
+async fn merge_and_save_composer(
+    state: &crate::AppState,
+    session_id: &str,
+    replace: bool,
+    pipes: &[crate::models::composer::Pipe],
+) -> Result<u32, String> {
+    let db = &state.db.lock().await;
+    let existing = db
+        .get_composer(session_id)
+        .await
+        .map_err(|e| format!("load composer: {e}"))?;
+    let composer = if replace {
+        crate::models::ComposerConfig {
+            id: existing.id.clone(),
+            session_id: existing.session_id.clone(),
+            name: existing.name.clone(),
+            pipes: pipes.to_vec(),
+            fps: existing.fps,
+            resolution: existing.resolution.clone(),
+            orientation: existing.orientation.clone(),
+            crop_mode: existing.crop_mode.clone(),
+            custom_width: existing.custom_width,
+            custom_height: existing.custom_height,
+            video_ratio: existing.video_ratio.clone(),
+            total_generated_frames: existing.total_generated_frames,
+            created_at: None,
+            updated_at: None,
+        }
+    } else {
+        let mut c = existing.clone();
+        for p in pipes {
+            c.pipes.push(p.clone());
+        }
+        c
+    };
+    db.save_composer(&composer).await.map_err(|e| format!("save composer: {e}"))?;
+    Ok(composer.pipes.len() as u32)
+}
+
+/// Apply a persisted flow's plan **with in-memory section-prompt overrides**,
+/// materialize into composer pipes, and merge/save to the session composer.
+/// No new flow version is persisted — the edits live only in the pipes.
+///
+/// `edited`: optional concrete section-prompt overrides (0-based indices
+/// into the plan's pipes/sections). When empty the behaviour is identical
+/// to `director_apply_flow` (the "no overrides = plain apply" equivalence).
+///
+/// `replace`: true = the flow's pipes replace the session's composer pipes;
+/// false = append after the existing ones. Returns the resulting pipe count.
+#[tauri::command]
+pub async fn director_apply_flow_edited(
+    session_id: String,
+    flow_version: u32,
+    replace: bool,
+    edited: Vec<EditedSection>,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let path = dir.join(FlowDocument::default_filename(flow_version));
+    let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
+
+    let mut plan = build_apply_plan(&doc, flow_version);
+    apply_section_edits(&mut plan, &edited);
+
+    let cfg = crate::generation::video_flow::FlowConfig::default_flow();
+    validate_plan(&plan, &cfg.structure).map_err(|e| e.to_string())?;
+    let pipes = materialize_pipes(&plan, &cfg.materialize).map_err(|e| e.to_string())?;
+    if pipes.is_empty() {
+        return Err("plan carries no materializable pipes".into());
+    }
+
+    let count = merge_and_save_composer(&state, &session_id, replace, &pipes).await?;
+    Ok(count)
+}
+
+// ── Unit tests (pure helpers, no DB access) ───────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generation::video_flow::engine::seed::EngineEntry;
+    use crate::generation::video_flow::engine::types::{Genre, SeedScale};
+    use crate::generation::video_flow::{
+        Critic, CriticInput, CriticSectionView, DefaultCritic, FlowConfig,
+        IntentSnapshot, LayeredExpander, ModelResolver, ModelRole,
+        PassthroughLayeredExpander, RegenerationContract, StubModelResolver,
+        lower_to_elements, structure_plan, VersionTriple,
+    };
+
+    fn test_entry() -> EngineEntry {
+        EngineEntry {
+            title: String::new(),
+            idea: "a red fox darts through the tall pine forest at dusk as golden light spills across the meadow".into(),
+            input_text: Some("a red fox darts through the tall pine forest at dusk as golden light spills across the meadow".into()),
+            genre: Genre {
+                name: "Cinematic".into(),
+                style: "cinematic natural light".into(),
+            },
+            ratio: "16:9".into(),
+            scale: SeedScale { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
+            time_of_day: "midday".into(),
+            weather: "clear".into(),
+        }
+    }
+
+    /// Build a minimal `FlowDocument` with a known `structured` plan and an
+    /// `engine` run, mirroring how the flow_doc / mod tests construct fixtures.
+    fn test_doc(with_engine: bool) -> FlowDocument {
+        let cfg = FlowConfig::default_flow();
+        let long = "a red fox darts through the tall pine forest at dusk as golden light \
+                     spills across the meadow and a distant river catches the fading sun in \
+                     long slow reflections while the wind moves the dry grass and the whole \
+                     valley settles into quiet evening";
+        let intent = IntentSnapshot::new(long);
+        let novel = PassthroughLayeredExpander.expand(&intent, &cfg.expand).unwrap();
+        let marker_text = format!(
+            "# A fox at dusk\n@@ cinematic, warm golden hour\n\
+             @camera:0-24\nwide tracking shot across the meadow\n\
+             @lighting:24-48\nlong shadows in the fading sun\n\
+             @transition:48-60\nsoft dissolve into the river"
+        );
+        let structured = structure_plan(&marker_text, &cfg.structure, cfg.flow_version).unwrap();
+        let critic_input = CriticInput {
+            sections: structured
+                .primary()
+                .sections
+                .iter()
+                .enumerate()
+                .map(|(i, s)| CriticSectionView {
+                    id: format!("s{i}"),
+                    prompt: s.prompt.clone(),
+                })
+                .collect(),
+            intent_clauses: intent.clauses.iter().map(|c| c.text.clone()).collect(),
+        };
+        let scoretree = DefaultCritic.score(&critic_input, &cfg.critic).unwrap();
+        let lowered = lower_to_elements(&structured).unwrap();
+        let triple = VersionTriple {
+            flow_version: cfg.flow_version,
+            expand_version: cfg.expand.step_version,
+            structure_version: cfg.structure.step_version,
+            critic_version: cfg.critic.step_version,
+            critic_model_version: 0,
+        };
+        let regen = RegenerationContract::new(triple, &lowered);
+        let critic_model = StubModelResolver.resolve(
+            ModelRole::Critic,
+            0,
+            cfg.learn.model_root.as_deref(),
+        );
+        let engine = if with_engine {
+            Some(test_entry().build_run())
+        } else {
+            None
+        };
+        FlowDocument {
+            flow_version: cfg.flow_version,
+            intent,
+            novel,
+            structured,
+            scoretree,
+            lowered,
+            regen,
+            critic_model: Some(critic_model),
+            engine,
+        }
+    }
+
+    // (a) build_apply_plan picks the engine concrete plan when doc.engine
+    //     is present, and falls back to doc.structured otherwise.
+    #[test]
+    fn build_apply_plan_prefers_engine_when_present() {
+        let doc = test_doc(true);
+        let plan = build_apply_plan(&doc, 1);
+        // The engine plan has one pipe per shot; with 2 shots_per_scene it
+        // should have >= 2 pipes (the structured plan has exactly 1 pipe).
+        assert!(
+            plan.pipes.len() >= 2,
+            "engine plan should have >= 2 pipes, got {}",
+            plan.pipes.len()
+        );
+        // The structured fallback has exactly 1 pipe.
+        let doc_no_engine = test_doc(false);
+        let fallback = build_apply_plan(&doc_no_engine, 1);
+        assert_eq!(fallback.pipes.len(), 1, "structured fallback has 1 pipe");
+    }
+
+    // (b) apply_section_edits overwrites the right section and ignores
+    //     out-of-bounds indices without panicking.
+    #[test]
+    fn apply_section_edits_overwrites_and_ignores_oob() {
+        let doc = test_doc(false); // structured fallback: 1 pipe, 3 sections
+        let mut plan = build_apply_plan(&doc, 1);
+        let original = plan.clone();
+        let pipe = &original.pipes[0];
+        let original_prompt = pipe.sections[0].prompt.clone();
+        assert_ne!(original_prompt, "MY OVERRIDE");
+
+        // Valid edit: pipe 0, section 0.
+        apply_section_edits(
+            &mut plan,
+            &[EditedSection {
+                pipe_index: 0,
+                section_index: 0,
+                prompt: "MY OVERRIDE".into(),
+            }],
+        );
+        assert_eq!(plan.pipes[0].sections[0].prompt, "MY OVERRIDE");
+        // Other sections untouched.
+        assert_eq!(
+            plan.pipes[0].sections[1].prompt,
+            original.pipes[0].sections[1].prompt
+        );
+
+        // Out-of-bounds: pipe 99 or section 99 — must not panic.
+        apply_section_edits(
+            &mut plan,
+            &[
+                EditedSection { pipe_index: 99, section_index: 0, prompt: "x".into() },
+                EditedSection { pipe_index: 0, section_index: 99, prompt: "y".into() },
+            ],
+        );
+        // Pipe 0 section 0 still has the override from above.
+        assert_eq!(plan.pipes[0].sections[0].prompt, "MY OVERRIDE");
+    }
+
+    // (c) empty `edited` vec leaves the plan byte-identical to
+    //     build_apply_plan's output (the "no overrides = plain apply"
+    //     equivalence).
+    #[test]
+    fn apply_section_edits_empty_vec_is_noop() {
+        let doc = test_doc(false);
+        let plan = build_apply_plan(&doc, 1);
+        let mut plan_edited = plan.clone();
+        apply_section_edits(&mut plan_edited, &[]);
+        assert_eq!(plan, plan_edited, "empty edits must leave plan unchanged");
+    }
 }
