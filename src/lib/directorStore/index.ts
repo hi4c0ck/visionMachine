@@ -44,7 +44,7 @@ export async function runFlow(
 	rs.error = null;
 	try {
 		const out = await invoke<RunFlowResult>('director_run_flow', {
-			session_id: sessionId,
+			sessionId,
 			text,
 			entry: entry ? JSON.stringify(entry) : null,
 		});
@@ -59,7 +59,7 @@ export async function runFlow(
 
 export async function listFlows(sessionId: string): Promise<FlowSummary[]> {
 	const out = await invoke<FlowSummary[]>('director_list_flows', {
-		session_id: sessionId,
+		sessionId,
 	});
 	return out ?? [];
 }
@@ -69,8 +69,8 @@ export async function loadFlow(
 	flowVersion: number
 ): Promise<FlowDocument> {
 	const out = await invoke<FlowDocument>('director_load_flow', {
-		session_id: sessionId,
-		flow_version: flowVersion,
+		sessionId,
+		flowVersion,
 	});
 	return out;
 }
@@ -82,9 +82,9 @@ export async function logSignal(
 	note?: string
 ): Promise<string> {
 	const out = await invoke<string>('director_log_signal', {
-		session_id: sessionId,
+		sessionId,
 		kind,
-		target_span: targetSpan,
+		targetSpan,
 		note: note ?? null,
 	});
 	return out;
