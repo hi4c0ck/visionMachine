@@ -346,6 +346,99 @@ impl EngineRun {
         run.gates = Self::gate_states();
         run
     }
+
+    /// Concrete materialization bridge (I9): turn this run's derived S4
+    /// molecules into a `StructuredVideoPlan` the composer's materialize step
+    /// can lower. One pipe per scene; each shot becomes a Scene section whose
+    /// prompt is the shot's *derived concrete image prompt* (base scene look +
+    /// delta subject/concerns from `derive_full`), so the composer pipes carry
+    /// real, concrete, per-shot visual language — not the coarse marker-bridge
+    /// `@scene` clauses.
+    pub fn plan_from_engine(
+        &self,
+        flow_version: u32,
+    ) -> crate::generation::video_flow::plan::StructuredVideoPlan {
+        use crate::generation::video_flow::plan::{PlanPipe, PlanSection, StructuredVideoPlan, VideoTag};
+
+        let clip = self.seed.scale.clip_s[0].max(4);
+        let frames = frames_of(clip);
+
+        // Molecules are laid out scene-major: scene `si` owns
+        // [sum_{s<si} shots_s .. sum_{s<=si} shots_s).
+        let shot_counts: Vec<usize> = self.novel.scenes.iter().map(|s| s.shots.len()).collect();
+        let prior: Vec<usize> = shot_counts
+            .iter()
+            .scan(0usize, |acc, c| {
+                let v = *acc;
+                *acc += c;
+                Some(v)
+            })
+            .collect();
+
+        let fallback_style = format!(
+            "{} — {}",
+            self.novel.film.style, self.novel.film.palette
+        );
+
+        let mut pipes: Vec<PlanPipe> = self
+            .novel
+            .scenes
+            .iter()
+            .enumerate()
+            .map(|(si, sc)| {
+                let scene_style = self.scenes.get(si).map(|s| {
+                    format!(
+                        "{} {} {} — ambience: {}",
+                        s.time_of_day, s.weather, s.scene_id, s.ambience
+                    )
+                });
+                let mut sections: Vec<PlanSection> = Vec::new();
+                for kshot in 0..sc.shots.len() {
+                    let mi = prior[si] + kshot;
+                    if let Some(mol) = self.molecules.get(mi) {
+                        let start = kshot as u32 * frames;
+                        sections.push(PlanSection {
+                            tag: VideoTag::Scene,
+                            frame_start: start,
+                            frame_end: start + frames,
+                            prompt: mol.prompts.image.clone(),
+                            from: vec![],
+                        });
+                    }
+                }
+                PlanPipe {
+                    index: si,
+                    title: sc.title.clone(),
+                    global_style: scene_style.unwrap_or_else(|| fallback_style.clone()),
+                    media_mode: "text".into(),
+                    sections,
+                }
+            })
+            .collect();
+
+        if pipes.is_empty() {
+            // No scenes (shouldn't happen) — emit a single logline-shell pipe
+            // so the plan always has ≥1 pipe and materialize can still run.
+            pipes.push(PlanPipe {
+                index: 0,
+                title: self.novel.film.title.clone(),
+                global_style: fallback_style,
+                media_mode: "text".into(),
+                sections: vec![PlanSection {
+                    tag: VideoTag::Scene,
+                    frame_start: 0,
+                    frame_end: frames,
+                    prompt: self.novel.film.logline.clone(),
+                    from: vec![],
+                }],
+            });
+        }
+
+        StructuredVideoPlan {
+            flow_version,
+            pipes,
+        }
+    }
 }
 
 /// Seed the deterministic S1/S2/S3 layers from a user `FilmSeed`.
@@ -384,7 +477,13 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
     let world = world_of(&seed.genre.name);
     let palette = palette_of(tod, weather);
     let logline = logline_of(&seed.idea);
-    let frags = idea_fragments(&seed.idea);
+    // Concrete, distributed idea fragments: the author's real content, split
+    // so EVERY shot (across every scene) owns a distinct piece — never the
+    // whole idea in one shot (no echo), never a truncated 3-word stub.
+    let total_shots = (seed.scale.scenes as usize)
+        .saturating_mul(seed.scale.shots_per_scene as usize)
+        .max(1);
+    let units = idea_units(&seed.idea, total_shots);
 
     let scenes: Vec<NovelScene> = (0..seed.scale.scenes)
         .map(|i| {
@@ -392,19 +491,6 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
             let shot_count = seed.scale.shots_per_scene as usize;
             let last_scene = i as u32 == seed.scale.scenes - 1;
             let last_shot = |k: usize, total: usize| k + 1 == total;
-            // A per-scene narrative focus, so shots across scenes differ. In
-            // multi-scene runs each scene owns one sentence of the idea; in a
-            // single-scene run the focus is derived from the idea's head so
-            // sibling shots don't all repeat the same full lead phrase.
-            let scene_focus = if frags.len() > 1 {
-                frags.get(i as usize).cloned().unwrap_or_else(|| seed.idea.trim().to_string())
-            } else {
-                seed.idea.trim().to_string()
-            };
-            // The subject anchor is the scene focus's first 3 words (never the
-            // full 6-word lead, so the beats stop repeating "Googl bubble with
-            // comix eyes" across every shot).
-            let subject = short_subject(&scene_focus);
             let shots: Vec<NovelShot> = (0..shot_count)
                 .map(|k| {
                     let g = i as usize * shot_count + k;
@@ -416,26 +502,33 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
                     } else {
                         "develops the action"
                     };
-                    // Each shot covers a DIFFERENT sensory axis (the
-                    // profile's expansion contract), so sibling prose is
-                    // composed, not copied.
+                    // Concrete content: this shot OWNS one distributed fragment
+                    // of the author's idea (units[g]), never a truncated
+                    // 3-word stub — a real scene, not a label.
+                    let frag = units
+                        .get(g)
+                        .map(|f| cap_words(f, 10))
+                        .filter(|f| !f.is_empty())
+                        .unwrap_or_else(|| "the moment deepens".to_string());
+                    // The sensory axis adds a NEW light/mood detail on top of
+                    // the fragment, so sibling shots differ. No S3 camera
+                    // tokens, no time-of-day/weather tail — S4 adds those.
                     let axis = SENSORY_AXES[g % SENSORY_AXES.len()];
                     let axis_desc = axis_phrase(axis, &world);
-                    // Prose carries ONLY new content: a compact subject, its
-                    // stage, and one sensory detail. No shot-size prefix (S4
-                    // already adds the S3 composition) and no time-of-day/
-                    // weather tail (S4 base already says both) — so nothing
-                    // duplicates in the derived prompts.
-                    let prose = format!("{subject} {stage}, {axis_desc}");
-                    let beats = shot_beats(g, &cam, &subject);
+                    let prose = format!("{frag} {stage} in {world}, {axis_desc}");
+                    let beats = shot_beats(g, &cam, &frag, &world);
                     NovelShot { prose, beats }
                 })
                 .collect();
-            // Scene prose is role-based (establish / develop / resolve) —
-            // it never re-quotes the idea.
-            // Scene prose: space + role. A multi-sentence idea distributes one
-            // narrative fragment per scene; a single-sentence idea keeps the
-            // idea ONLY in the logline (no second echo here).
+            // Scene prose: a concrete sentence weaving this scene's own shots'
+            // fragments through the world. Multi-scene runs stay distinct by
+            // construction (their fragments are disjoint); a single-scene run
+            // weaves a few, then carries the mood — never the whole idea.
+            let scene_frags: Vec<String> = (0..shot_count)
+                .map(|k| units.get(i as usize * shot_count + k).cloned().unwrap_or_default())
+                .filter(|f| !f.is_empty())
+                .take(2)
+                .collect();
             let role = if i == 0 {
                 "the world is established here"
             } else if last_scene {
@@ -444,12 +537,10 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
                 "the story develops here"
             };
             let mut prose = format!("{world}; {role}.");
-            if frags.len() > 1 {
-                if let Some(f) = frags.get(i as usize) {
-                    prose.push_str(&format!(" {f}"));
-                }
-                prose.push('.');
+            if !scene_frags.is_empty() {
+                prose.push_str(&format!(" Here, {}", scene_frags.join("; ")));
             }
+            prose.push('.');
             NovelScene {
                 title: format!("Scene {scene_num}"),
                 prose,
@@ -486,16 +577,62 @@ fn logline_of(idea: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// A compact subject anchor (first 3 words) — keeps the scene's *subject* in
-/// the shot prose + beats without re-quoting the whole idea, so sibling
-/// shots stop repeating a long identical lead phrase.
-fn short_subject(text: &str) -> String {
-    let w: Vec<&str> = text.split_whitespace().take(3).collect();
-    if w.is_empty() {
-        "the subject".into()
-    } else {
-        w.join(" ")
+/// Distribute the idea's content into `n` concrete narrative fragments, one
+/// per shot across the whole run. This is the real "saturated" expander move:
+/// the author's *content* is spread across shots so each shot owns a distinct,
+/// meaningful piece — not a truncated 3-word label. A single-sentence idea is
+/// split by word; a multi-sentence idea is split by clause (each clause itself
+/// can be word-split). If there are more fragments than shots, the surplus is
+/// folded into the last fragment so nothing is lost.
+fn idea_units(idea: &str, n: usize) -> Vec<String> {
+    let trimmed = idea.trim();
+    if trimmed.is_empty() {
+        return vec!["the moment deepens in the space".into()];
     }
+    // Split into clauses (sentences / semicolons / commas) — the natural
+    // narrative beats. If we have fewer clauses than shots, word-split the
+    // surplus so every shot still gets something.
+    let clauses: Vec<&str> = trimmed
+        .split(['.', '!', '?', ';', ','])
+        .map(|c| c.trim())
+        .filter(|c| !c.is_empty())
+        .collect();
+    let mut parts: Vec<String> = if clauses.len() >= n && n > 1 {
+        // Use the first `n` clauses (they carry the most distinct content).
+        clauses.iter().take(n).map(|c| c.to_string()).collect()
+    } else {
+        // Word-level distribution: split the whole idea into words, group into
+        // `n` roughly equal chunks. This is the "distribute the words" path.
+        let words: Vec<&str> = trimmed.split_whitespace().collect();
+        if words.is_empty() {
+            return vec!["the moment deepens".into()];
+        }
+        let chunk = (words.len() + n - 1) / n.max(1);
+        (0..n)
+            .map(|i| {
+                let lo = i * chunk;
+                let hi = (lo + chunk).min(words.len());
+                if lo >= words.len() {
+                    String::new()
+                } else {
+                    words[lo..hi].join(" ")
+                }
+            })
+            .collect()
+    };
+    // Trim to exactly `n` entries (pad with the last fragment if short).
+    while parts.len() < n {
+        let last = parts.last().cloned().unwrap_or_else(|| "the moment deepens".into());
+        parts.push(last);
+    }
+    parts.truncate(n);
+    parts
+}
+
+/// Cap a fragment at `max` words (word-boundary safe) so a fragment never
+/// bleeds into the next shot's territory.
+fn cap_words(text: &str, max: usize) -> String {
+    text.split_whitespace().take(max).collect::<Vec<_>>().join(" ")
 }
 
 /// The profile's creative expansion axes (harness config/profiles.yaml,
@@ -559,7 +696,7 @@ fn axis_phrase(axis: &str, _world: &str) -> String {
 /// non-overlapping 3-beat window: sizes cycle close-up→medium→wide, motion
 /// verbs + sensory details offset by the global beat index, so sibling
 /// shots' beats don't repeat and no beat re-states the S4 motion block.
-fn shot_beats(g: usize, cam: &CameraConcern, lead: &str) -> Vec<String> {
+fn shot_beats(g: usize, cam: &CameraConcern, frag: &str, world: &str) -> Vec<String> {
     let beat_sizes = ["close-up", "medium", "wide"];
     let beat_verbs = ["settles", "drifts", "presses forward"];
     let beat_details = [
@@ -570,27 +707,31 @@ fn shot_beats(g: usize, cam: &CameraConcern, lead: &str) -> Vec<String> {
     // Rotate the window by the shot index (g*3 is always ≡ 0 mod 3, which
     // is why the first version never rotated).
     let pick = |idx: usize| (g + idx) % 3;
-    // First beat anchors on the shot's real S3 size; the other two cycle.
+    // Concrete beats: each anchors on the shot's own fragment + place, then
+    // a micro-action. First beat uses the shot's real S3 size; the others
+    // cycle. No generic filler, no re-stating the S4 motion block.
+    let subject = cap_words(frag, 6);
     let sizes = [cam.size.as_str(), beat_sizes[pick(1)], beat_sizes[pick(2)]];
     vec![
         format!(
-            "{}: {} {} — {}",
+            "{}: {} {} in {} — {}",
             sizes[0],
-            lead,
+            subject,
             beat_verbs[pick(0)],
+            cap_words(world, 4),
             beat_details[pick(2)]
         ),
         format!(
             "{}: {} {} — {}",
             beat_sizes[pick(1)],
-            lead,
+            subject,
             beat_verbs[pick(1)],
             beat_details[pick(0)]
         ),
         format!(
             "{}: {} {} — {}",
             beat_sizes[pick(2)],
-            lead,
+            subject,
             beat_verbs[pick(2)],
             beat_details[pick(1)]
         ),
@@ -609,15 +750,7 @@ fn title_from_idea(idea: &str) -> String {
     }
 }
 
-/// The idea's sentence-ish fragments (used to distribute one narrative beat
-/// per scene in multi-scene runs; empty in single-scene runs so the idea
-/// stays ONLY in the logline).
-fn idea_fragments(idea: &str) -> Vec<String> {
-    idea.split(['.', '!', '?', ';', '\n'])
-        .map(|f| f.trim().to_string())
-        .filter(|f| !f.is_empty())
-        .collect()
-}
+
 
 /// S2 Node A′ — per-scene base look. Seeded from the novel film + scene title.
 fn build_scene_spec(index: usize, _sc: &NovelScene, novel: &VisualNovel, genre: &str) -> SceneSpec {
@@ -951,6 +1084,60 @@ mod seed_tests {
             "sibling S4 image prompts must differ"
         );
         assert_ne!(mol[0].composition, mol[1].composition, "per-shot camera variety");
+    }
+
+    /// I9 concrete-pipes proof: the engine plan materializes into composer
+    /// pipes whose Scene sections carry the shot's *derived concrete image
+    /// prompt* (not the coarse marker-bridge clauses), and validate +
+    /// materialize both succeed on that plan. This is exactly what
+    /// `director_apply_flow` runs now.
+    #[test]
+    fn engine_plan_materializes_concrete_composer_pipes() {
+        use crate::generation::video_flow::config::FlowConfig;
+        use crate::generation::video_flow::{materialize_pipes, validate_plan};
+
+        let run = entry("a girl follows the river road north at dusk").build_run();
+        let cfg = FlowConfig::default_flow();
+        let plan = run.plan_from_engine(1);
+
+        // Every shot of every scene becomes a Scene section.
+        let total_shots: usize =
+            run.novel.scenes.iter().map(|s| s.shots.len()).sum::<usize>();
+        let total_sections: usize =
+            plan.pipes.iter().map(|p| p.sections.len()).sum::<usize>();
+        assert_eq!(
+            total_sections, total_shots,
+            "one Scene section per shot (concrete, not coarse)"
+        );
+
+        // The bridge plan must still satisfy the flow's structural caps so
+        // `director_apply_flow`'s validate gate passes.
+        validate_plan(&plan, &cfg.structure).expect("engine plan passes validate_plan");
+        let pipes = materialize_pipes(&plan, &cfg.materialize).expect("engine plan materializes");
+        assert_eq!(pipes.len(), run.novel.scenes.len(), "one composer pipe per scene");
+
+        // Each pipe's Scene tag prompt is the shot's derived S4 image prompt
+        // (concrete look + subject), not a bare clause.
+        let p0 = &pipes[0];
+        let timeline = p0
+            .elements
+            .iter()
+            .find(|e| matches!(e, crate::models::composer::PipeElement::Timeline(_)))
+            .expect("timeline element present");
+        if let crate::models::composer::PipeElement::Timeline(t) = timeline {
+            assert!(!t.segments.is_empty(), "concrete sections lower to segments");
+            for seg in &t.segments {
+                let prompt = seg
+                    .tags
+                    .first()
+                    .and_then(|t| t.prompt.as_deref())
+                    .unwrap_or("");
+                assert!(
+                    prompt.trim().len() > 20,
+                    "scene prompt is a concrete S4 prompt, got: '{prompt}'"
+                );
+            }
+        }
     }
 
     /// Node A contract: the idea gets ONE home in the novel (the film

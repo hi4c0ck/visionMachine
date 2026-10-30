@@ -406,13 +406,18 @@ pub async fn director_apply_flow(
     let path = dir.join(FlowDocument::default_filename(flow_version));
     let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
 
-    // The doc already carries the structured plan (a StructuredVideoPlan).
-    // Materialize it into composer pipes; validate first so a hand-edited or
-    // out-of-bounds doc can't slip past.
-    let plan = &doc.structured;
+    // Prefer the CONCRETE engine plan (S4 molecules → per-scene pipes, each
+    // shot a Scene section carrying its derived image prompt). Fall back to
+    // the coarse marker-bridge `doc.structured` only for pre-engine docs that
+    // have no engine run. Materialize into composer pipes; validate first so
+    // a hand-edited or out-of-bounds doc can't slip past.
+    let plan = match doc.engine.as_ref().map(|run| run.plan_from_engine(flow_version)) {
+        Some(concrete) => concrete,
+        None => doc.structured.clone(),
+    };
     let cfg = crate::generation::video_flow::FlowConfig::default_flow();
-    validate_plan(plan, &cfg.structure).map_err(|e| e.to_string())?;
-    let pipes = materialize_pipes(plan, &cfg.materialize).map_err(|e| e.to_string())?;
+    validate_plan(&plan, &cfg.structure).map_err(|e| e.to_string())?;
+    let pipes = materialize_pipes(&plan, &cfg.materialize).map_err(|e| e.to_string())?;
     if pipes.is_empty() {
         return Err("plan carries no materializable pipes".into());
     }
