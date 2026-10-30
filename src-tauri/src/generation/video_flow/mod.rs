@@ -70,7 +70,10 @@ pub use error::{FlowError, FlowResult};
 pub use intent::{AssetRef, Clause, ClauseId, IntentSnapshot, SpanId, decompose_clauses};
 
 // ── novel ──────────────────────────────────────────────────────────────
-pub use novel::{Ambient, Layer, LayerKind, LayeredExpander, Novel, PassthroughLayeredExpander};
+pub use novel::{
+    Ambient, Layer, LayerKind, LayeredExpander, LookAxes, Novel, PassthroughLayeredExpander,
+    TemplateLayeredExpander,
+};
 
 // ── plan ───────────────────────────────────────────────────────────────
 pub use plan::{PlanPipe, PlanSection, StructuredVideoPlan, VideoTag};
@@ -150,8 +153,19 @@ impl VideoFlow {
         let intent = IntentSnapshot::new(raw);
 
         // Step 1: expand (layered narrative).
-        let expander = PassthroughLayeredExpander;
-        let novel = expander.expand(&intent, &self.config.expand)?;
+        //
+        // The LLM-free path uses the *template* expander: it fills the
+        // secondary/ambient layers from the G0 look axes so the novel is a
+        // real expansion, not the entry verbatim. The LLM `LayeredExpander`
+        // (provider-model) replaces both this and the look-axes derivation
+        // later; `PassthroughLayeredExpander` stays the seam's byte-stable
+        // pin (golden fixtures).
+        let look = match entry {
+            Some(e) => LookAxes::from(e),
+            None => LookAxes::from(&default_engine_entry(raw, &intent)),
+        };
+        let expander = TemplateLayeredExpander;
+        let novel = expander.expand_with_look(&intent, &self.config.expand, &look)?;
 
         // Step 2: structure (marker grammar → plan).
         // The deterministic path: structure the *novel primary text* using the
@@ -219,8 +233,9 @@ impl VideoFlow {
     /// structured text before committing to elements.
     pub fn plan_only(&self, raw: &str) -> FlowResult<StructuredVideoPlan> {
         let intent = IntentSnapshot::new(raw);
-        let expander = PassthroughLayeredExpander;
-        let novel = expander.expand(&intent, &self.config.expand)?;
+        let expander = TemplateLayeredExpander;
+        let look = LookAxes::from(&default_engine_entry(raw, &intent));
+        let novel = expander.expand_with_look(&intent, &self.config.expand, &look)?;
         let marker_text = self.marker_text_from_novel(&intent, &novel);
         let plan = structure_plan(&marker_text, &self.config.structure, self.config.flow_version)?;
         validate_plan(&plan, &self.config.structure)?;
@@ -254,8 +269,15 @@ impl VideoFlow {
         if !novel.secondary.is_empty() {
             out.push_str(&format!("@@ {}\n", novel.secondary[0].text));
         }
-        // Sections: one @scene per intent clause (the deterministic marker).
-        for clause in &intent.clauses {
+        // Sections: one @scene per intent clause, capped so the clause
+        // fan-out + trailing @scene can never overflow `max_sections_per_pipe`
+        // (the LLM structurer replaces this deterministic marker bridge later).
+        let clause_cap = self
+            .config
+            .structure
+            .max_sections_per_pipe
+            .saturating_sub(1);
+        for clause in intent.clauses.iter().take(clause_cap) {
             let ordinal = clause.id.as_str().split('-').nth(1).and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
             let frames = self.config.structure.default_section_frames;
             let start = ordinal * frames;
@@ -286,33 +308,39 @@ fn build_engine_run(
     intent: &IntentSnapshot,
     entry: Option<&crate::generation::video_flow::engine::seed::EngineEntry>,
 ) -> crate::generation::video_flow::engine::seed::EngineRun {
+    let entry = entry.cloned().unwrap_or_else(|| default_engine_entry(raw, intent));
+    entry.build_run()
+}
+
+/// The deterministic G0 entry derived from raw text when the UI supplies no
+/// explicit one. Shared by the engine build and the template expander's
+/// look-axes so the novel's secondary layers always steer from the same
+/// genre/time-of-day/weather the engine seed uses.
+fn default_engine_entry(
+    raw: &str,
+    intent: &IntentSnapshot,
+) -> crate::generation::video_flow::engine::seed::EngineEntry {
     use crate::generation::video_flow::engine::seed::EngineEntry;
     use crate::generation::video_flow::engine::types::{Genre, SeedScale};
 
-    let entry = match entry {
-        Some(e) => e.clone(),
-        None => {
-            let title = intent
-                .clauses
-                .first()
-                .map(|c| c.text.clone())
-                .unwrap_or_else(|| "Untitled".into());
-            EngineEntry {
-                title,
-                idea: raw.to_string(),
-                input_text: Some(raw.to_string()),
-                genre: Genre {
-                    name: "Cinematic".into(),
-                    style: "cinematic natural light".into(),
-                },
-                ratio: "16:9".into(),
-                scale: SeedScale { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
-                time_of_day: "midday".into(),
-                weather: "clear".into(),
-            }
-        }
-    };
-    entry.build_run()
+    let title = intent
+        .clauses
+        .first()
+        .map(|c| c.text.clone())
+        .unwrap_or_else(|| "Untitled".into());
+    EngineEntry {
+        title,
+        idea: raw.to_string(),
+        input_text: Some(raw.to_string()),
+        genre: Genre {
+            name: "Cinematic".into(),
+            style: "cinematic natural light".into(),
+        },
+        ratio: "16:9".into(),
+        scale: SeedScale { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
+        time_of_day: "midday".into(),
+        weather: "clear".into(),
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -404,10 +432,63 @@ mod tests {
 
     // ── Isolation invariant (I1) ─────────────────────────────────────────
 
+    // ── Template expansion seam: the LLM-free path genuinely expands ──
+
+    /// A 19-word idea (the reported "expansion too small" case) now clears
+    /// the full pipeline: the template expander's secondary layers lift the
+    /// post-expansion narrative past the 40-word floor.
+    #[test]
+    fn short_idea_produces_full_verified_flow() {
+        let short = "a girl walks into the dark pine forest at dusk and follows the old river road north";
+        let flow = default_flow();
+        let doc = flow.run_full(short).unwrap();
+        // Novel ≠ entry: the expansion added secondary layers.
+        assert!(doc.novel.secondary.len() >= 3, "template fills secondary layers");
+        // The floor validates the post-expansion total, not the raw entry.
+        assert!(doc.novel.narrative_word_count() >= flow.config.expand.min_novel_words);
+        // The style layer reached the plan's global style (the @@ marker).
+        assert!(!doc.structured.primary().global_style.is_empty());
+        // The engine run is verified + present.
+        let engine = doc.engine.as_ref().expect("engine always saturated");
+        assert!(engine.verify.verified, "engine S5 verify must pass");
+    }
+
+    #[test]
+    fn template_expansion_is_deterministic() {
+        let a = default_flow().run_full("a fox runs across the meadow at dawn").unwrap();
+        let b = default_flow().run_full("a fox runs across the meadow at dawn").unwrap();
+        assert_eq!(a.novel, b.novel, "template expansion must be stable");
+        assert_eq!(a.structured, b.structured);
+    }
+
+    #[test]
+    fn empty_expanded_novel_still_fails_floor() {
+        // A floor of 5000 on a 45-word entry + template layers still fails:
+        // the guard is real, not decorative.
+        let flow = VideoFlow::with_config({
+            let mut c = FlowConfig::default_flow();
+            c.expand.min_novel_words = 5000;
+            c
+        });
+        let err = flow.run_full(LONG).unwrap_err();
+        assert!(matches!(err, FlowError::TextOutput(ref m) if m.contains("too small")));
+    }
+
+    #[test]
+    fn multi_sentence_entry_never_overflows_sections() {
+        // ≥8 clauses + the tail @scene used to overflow max_sections_per_pipe.
+        let many = "a bird lands on a fence. The fence creaks. A child watches. A dog barks far away.
+                    A car passes by. The sun sets. The sky turns red. The fields go still.
+                    A moth circles the lamp. The night deepens slowly.";
+        let doc = default_flow().run_full(many).unwrap();
+        assert!(doc.structured.primary().sections.len() <= 8);
+    }
+
+    // ── Isolation invariant (I1) ─────────────────────────────────────────────
+
     #[test]
     fn critic_sees_only_critic_input() {
         // The critic step takes a `CriticInput`, not the full `StructuredVideoPlan`.
-        // This test confirms the type boundary (compile-time isolation).
         let doc = default_flow().run_full(LONG).unwrap();
         let _ = &doc.scoretree;
         // A `CriticInput` is the *only* input the critic sees — the type

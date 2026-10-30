@@ -99,6 +99,57 @@ impl Novel {
 /// Phase-0 default.
 pub trait LayeredExpander: Send + Sync {
     fn expand(&self, intent: &IntentSnapshot, cfg: &ExpandParams) -> FlowResult<Novel>;
+
+    /// LLM-free template expansion steered by G0 look axes. The default
+    /// ignores `look` (passthrough semantics); `TemplateLayeredExpander`
+    /// overrides it to fill the secondary + ambient layers deterministically.
+    fn expand_with_look(
+        &self,
+        intent: &IntentSnapshot,
+        cfg: &ExpandParams,
+        look: &LookAxes,
+    ) -> FlowResult<Novel> {
+        let _ = look;
+        self.expand(intent, cfg)
+    }
+}
+
+/// G0 look axes that steer the LLM-free template expansion: genre/style,
+/// ratio, time-of-day, weather. The LLM expander (later) replaces these
+/// axes with the provider's full context; the template keeps the flow
+/// honest today.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LookAxes {
+    pub genre_name: String,
+    pub style: String,
+    pub ratio: String,
+    pub time_of_day: String,
+    pub weather: String,
+}
+
+impl Default for LookAxes {
+    fn default() -> Self {
+        Self {
+            genre_name: "Cinematic".into(),
+            style: "cinematic natural light".into(),
+            ratio: "16:9".into(),
+            time_of_day: "midday".into(),
+            weather: "clear".into(),
+        }
+    }
+}
+
+impl From<&crate::generation::video_flow::engine::seed::EngineEntry> for LookAxes {
+    fn from(e: &crate::generation::video_flow::engine::seed::EngineEntry) -> Self {
+        Self {
+            genre_name: e.genre.name.clone(),
+            style: e.genre.style.clone(),
+            ratio: e.ratio.clone(),
+            time_of_day: e.time_of_day.clone(),
+            weather: e.weather.clone(),
+        }
+    }
 }
 
 /// Deterministic default: wraps the flat entry text into a single `primary`
@@ -145,6 +196,206 @@ impl LayeredExpander for PassthroughLayeredExpander {
             },
             secondary: Vec::new(),
             ambient: Vec::new(),
+        })
+    }
+}
+
+/// Deterministic template expansion (the LLM-free `expand_with_look`):
+/// fills the secondary layers (lighting / environment / motion) and the
+/// ambient dynamics from G0 look axes + entry-text keywords. The primary
+/// layer stays the entry text verbatim (identity-lock: the novel's main
+/// narrative never drifts from what the user typed); the template adds
+/// *implied* content the entry suggests but doesn't spell out — exactly
+/// the secondary/ambient layers the LLM seam would produce later.
+///
+/// The word floor is validated on the POST-expansion total, so a short
+/// idea legitimately clears it: the floor guards expansion output, which
+/// is what it was designed for.
+pub struct TemplateLayeredExpander;
+
+/// Lighting layer prose per time-of-day (closed-vocabulary, deterministic).
+fn lighting_layer(tod: &str, weather: &str) -> String {
+    let w = if weather.trim().is_empty() || weather.eq_ignore_ascii_case("clear") {
+        String::new()
+    } else {
+        format!(" under {weather}")
+    };
+    match tod {
+        "dawn" => "low warm dawn light rakes across the scene with long gentle shadows".into(),
+        "morning" => "soft golden morning light fills the scene with crisp clean shadows".into(),
+        "evening" => "low amber evening light stretches the shadows and warms the frame".into(),
+        "night" => "cool blue moonlight and scattered practicals carve quiet pools of light".into(),
+        _ => format!(
+            "bright natural {tod} light gives the scene clean hard-edged definition{w}"
+        ),
+    }
+}
+
+/// Extract up to 3 location cues from the entry text (closed keyword scan,
+/// deterministic order). Used to imply environment layers without inventing
+/// places the user never referenced.
+fn location_cues(entry: &str) -> Vec<&'static str> {
+    const CUES: [(&str, &str); 12] = [
+        ("forest", "the deep forest"),
+        ("meadow", "the open meadow"),
+        ("city", "the city street"),
+        ("street", "the city street"),
+        ("river", "the nearby river"),
+        ("ocean", "the ocean"),
+        ("beach", "the shoreline"),
+        ("desert", "the desert"),
+        ("mountain", "the mountain ridge"),
+        ("road", "the open road"),
+        ("lake", "the lake"),
+        ("field", "the wide field"),
+    ];
+    let lower = entry.to_lowercase();
+    let mut seen_kws: Vec<&str> = Vec::new();
+    let mut seen: Vec<&'static str> = Vec::new();
+    for (kw, label) in CUES {
+        if lower.contains(kw) && !seen_kws.iter().any(|k| *k == kw) {
+            seen_kws.push(kw);
+            seen.push(label);
+        }
+        if seen.len() >= 3 {
+            break;
+        }
+    }
+    seen
+}
+
+/// Ambient dynamics implied by the weather (the layer's independent motion).
+fn weather_ambient(weather: &str) -> Option<String> {
+    let w = weather.to_lowercase();
+    if w.contains("rain") || w.contains("storm") {
+        Some("rain streaks across the frame while gusts bend the nearby foliage".into())
+    } else if w.contains("fog") || w.contains("mist") {
+        Some("thin mist drifts slowly across the ground and softens distant details".into())
+    } else if w.contains("snow") {
+        Some("snowflakes fall on their own slow diagonal while the world mutes".into())
+    } else if w.contains("wind") {
+        Some("the wind moves grass and branches on their own rhythm".into())
+    } else if w.is_empty() || w.contains("clear") {
+        Some("leaves and grass stir gently in a light passing breeze".into())
+    } else {
+        None
+    }
+}
+
+impl LayeredExpander for TemplateLayeredExpander {
+    fn expand(&self, intent: &IntentSnapshot, cfg: &ExpandParams) -> FlowResult<Novel> {
+        // No look context: behave like the passthrough (floor on entry only).
+        self.expand_with_look(intent, cfg, &LookAxes::default())
+    }
+
+    fn expand_with_look(
+        &self,
+        intent: &IntentSnapshot,
+        cfg: &ExpandParams,
+        look: &LookAxes,
+    ) -> FlowResult<Novel> {
+        let text = normalize_text(&intent.entry_text);
+        if text.is_empty() {
+            return Err(FlowError::EmptyInput);
+        }
+        let all_spans: Vec<SpanId> = intent
+            .clauses
+            .iter()
+            .enumerate()
+            .filter_map(|(i, _)| intent.clause_span(i))
+            .collect();
+
+        // ── Secondary layers (implied content, from G0 axes) ────────────
+        let mut secondary: Vec<Layer> = Vec::new();
+
+        // Style: the G0 genre + style string becomes the global style layer.
+        let style_text = if look.style.trim().is_empty() {
+            look.genre_name.clone()
+        } else {
+            format!("{} look, {}", look.genre_name, look.style)
+        };
+        secondary.push(Layer {
+            kind: LayerKind::Atmosphere,
+            text: style_text,
+            from: all_spans.clone(),
+        });
+
+        // Lighting: time-of-day + weather templated.
+        let tod = look.time_of_day.clone();
+        let weather_str = look.weather.clone();
+        let lighting = lighting_layer(&tod, &weather_str).to_string();
+        secondary.push(Layer {
+            kind: LayerKind::Lighting,
+            text: format!("{tod} lighting: {lighting}"),
+            from: all_spans.clone(),
+        });
+
+        // Environment: location cues the entry text itself names (closed
+        // keyword scan — never invents places the user didn't imply).
+        for cue in location_cues(&text) {
+            secondary.push(Layer {
+                kind: LayerKind::Environment,
+                text: format!("the scene sits within the {cue}, its textures and depth implied by the {tod} light"),
+                from: all_spans.clone(),
+            });
+        }
+
+        // Motion: the entry's action words steer the camera language.
+        let motion_cue = if text.to_lowercase().contains("walk")
+            || text.to_lowercase().contains("run")
+            || text.to_lowercase().contains("move")
+        {
+            "the camera holds steady while the subject's motion carries the frame"
+        } else {
+            "a slow deliberate camera drift keeps the subject anchored in frame"
+        };
+        secondary.push(Layer {
+            kind: LayerKind::Motion,
+            text: motion_cue.to_string(),
+            from: all_spans.clone(),
+        });
+
+        // ── Ambient layers (independent dynamics, from weather) ────────
+        let mut ambient: Vec<Ambient> = Vec::new();
+        if let Some(dynamics) = weather_ambient(&weather_str) {
+            ambient.push(Ambient {
+                description: format!("ambient {weather_str} air moving through the scene"),
+                dynamics,
+                from: all_spans.clone(),
+            });
+        }
+
+        // ── The floor guards the POST-expansion narrative (primary +
+        //    secondary words), not the raw entry: the expansion itself is
+        //    what lifted a short idea past the minimum narrative mass. ──
+        let total_words =
+            word_count(&text) + secondary.iter().map(|l| word_count(&l.text)).sum::<usize>();
+        if cfg.min_novel_words > 0 && total_words < cfg.min_novel_words {
+            return Err(FlowError::text_output(format!(
+                "expansion too small: {total_words} words < min {}",
+                cfg.min_novel_words
+            )));
+        }
+        if cfg.max_novel_chars > 0 {
+            let chars = text.chars().count()
+                + secondary.iter().map(|l| l.text.chars().count()).sum::<usize>();
+            if chars > cfg.max_novel_chars {
+                return Err(FlowError::text_output(format!(
+                    "expansion too large: {chars} chars > max {}",
+                    cfg.max_novel_chars
+                )));
+            }
+        }
+
+        Ok(Novel {
+            step_version: cfg.step_version,
+            primary: Layer {
+                kind: LayerKind::Primary,
+                text,
+                from: all_spans.clone(),
+            },
+            secondary,
+            ambient,
         })
     }
 }
