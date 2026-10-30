@@ -921,11 +921,16 @@
 					<!-- Phase 2: the single destructive control — regenerate from
 					     the edited concrete sections (replace only; no append). -->
 					<button class="btn danger" disabled={applyWorking || !doc} onclick={() => void regeneratePipes()}>
-						Regenerate pipes
+						{applyWorking ? 'Applying…' : 'Regenerate pipes'}
 						<span class="btn-note">
-							replace {pipeCount} pipes · {dirtyCount} edited · replay v{doc.regen.version.flowVersion}
+							{applyWorking
+								? 'materializing the concrete plan into composer pipes'
+								: `replace ${pipeCount} pipes · ${dirtyCount} edited · replay v${doc.regen.version.flowVersion}`}
 						</span>
 					</button>
+					{#if feedback}
+						<p class="action-feedback {feedback.tone}" role="status">{feedback.text}</p>
+					{/if}
 				</div>
 			</div>
 
@@ -1230,19 +1235,19 @@
 		padding: 4px 6px;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
-		background: var(--input-bg);
+		background: var(--bg-elevated);
 		cursor: default;
 	}
 	.nr-id {
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;
-		color: var(--muted-foreground, var(--foreground));
+		color: var(--text-secondary);
 		min-width: 72px;
 	}
 	.nr-text {
 		font-size: 12px;
 		line-height: 1.5;
-		color: var(--foreground);
+		color: var(--text-primary);
 	}
 
 	.step-chain {
@@ -1266,8 +1271,9 @@
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;
 	}
-	.step-ver { color: var(--muted-foreground, var(--foreground)); }
-	.step-src { color: var(--muted-foreground, var(--foreground)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.step-ver { color: var(--text-secondary); }
+	.step-src { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.step-name, .step-state { color: var(--text-primary); }
 	.step-ok { border-left: 3px solid var(--success-color, #22c55e); }
 	.step-mut { border-left: 3px solid var(--border-color); }
 	.step-fail { border-left: 3px solid var(--danger-color, #ef4444); }
@@ -1299,7 +1305,7 @@
 	.extract-pipe {
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;
-		color: var(--muted-foreground, var(--foreground));
+		color: var(--text-muted, var(--text-secondary));
 	}
 	.dirty-mark {
 		color: var(--danger-color, #ef4444);
@@ -1318,8 +1324,8 @@
 		line-height: 1.5;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
-		background: var(--input-bg);
-		color: var(--foreground);
+		background: var(--bg-elevated);
+		color: var(--text-primary);
 		resize: vertical;
 		min-height: 40px;
 	}
