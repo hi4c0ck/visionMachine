@@ -54,6 +54,16 @@ pub struct EngineRun {
     pub verify: VerifyReport,
     /// Gate states (G0–G4) stamped to their "now" status.
     pub gates: Vec<GateState>,
+    /// Where the S1 novel came from (Template by default; Llm when the
+    /// provider's Node A wrote it). Backward-compatible: old docs load
+    /// with `Template` (serde default).
+    #[serde(default)]
+    pub expansion: ExpansionSource,
+    /// Named provenance note: the LLM model id (when `expansion == Llm`),
+    /// or "template · LLM failed: <reason>" on fallback. None when the
+    /// LLM path was not attempted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion_note: Option<String>,
 }
 
 /// One gate's in-run state. Absorbed shape of `harness/out/session.json`
@@ -82,6 +92,27 @@ pub struct VerifyReport {
     /// Per-shot frame counts at FRAME_RATE.
     pub frames: Vec<u32>,
     pub total_frames: u32,
+}
+
+/// Where the S1 novel came from. `Template` = the deterministic builder
+/// (always available, LLM-free). `Llm` = Node A through the app's text
+/// provider (the harness llm.json contract: production reads the active
+/// profile's providers.text slot). Never a silent fallback: when the LLM
+/// path failed, `expansion` stays `Template` and `expansion_note` names
+/// why (model + reason), so the UI + S5 report the actual source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpansionSource {
+    /// Deterministic template expansion (build_novel).
+    Template,
+    /// LLM Node A expansion (the provider's text model wrote the novel).
+    Llm,
+}
+
+impl Default for ExpansionSource {
+    fn default() -> Self {
+        Self::Template
+    }
 }
 
 /// S5 VERIFY — schema-ish V1, tag-closure V2, counts V3, frame floor V4,
@@ -229,17 +260,51 @@ impl EngineRun {
     /// or the S0 entry surface.
     pub fn build(seed_in: FilmSeed, tod: &str, weather: &str) -> Self {
         let seed = normalize_seed(seed_in);
-
-        // S1: visual novel — one film + scenes + shots with beats.
+        // S1: deterministic template novel (the always-available LLM-free
+        // producer). The LLM path (build_with_novel) swaps only this layer.
         let novel = build_novel(&seed, tod, weather);
+        Self::build_with_novel(
+            seed,
+            novel,
+            tod,
+            weather,
+            ExpansionSource::Template,
+            None,
+        )
+    }
 
-        // S2: scene specs — one per novel scene, look seeded from the novel film.
-        let scenes: Vec<SceneSpec> = novel.scenes.iter().enumerate().map(|(i, sc)| build_scene_spec(i, sc, &novel)).collect();
+    /// S2–S5 build from an ALREADY-PRODUCED S1 novel (the LLM Node A
+    /// output) + expansion provenance. S2/S3/S4/S5 stay deterministic from
+    /// the novel — only the S1 layer may be LLM-written; the G0 look axes
+    /// still drive S2/S4 regardless of what the LLM claimed.
+    pub fn build_with_novel(
+        seed_in: FilmSeed,
+        novel: VisualNovel,
+        tod: &str,
+        weather: &str,
+        expansion: ExpansionSource,
+        expansion_note: Option<String>,
+    ) -> Self {
+        let seed = normalize_seed(seed_in);
+        let mut novel = novel;
+        // G0 look axes win over the LLM's own time_of_day/weather: they
+        // steer S2 scene specs + S4 prompts on every path.
+        novel.film.time_of_day = tod.to_string();
+        novel.film.weather = weather.to_string();
 
-        // S3: shot specs — one per novel shot, concern-grouped defaults.
+        // S2: scene specs - one per novel scene, look seeded from the novel film.
+        let scenes: Vec<SceneSpec> =
+            novel
+                .scenes
+                .iter()
+                .enumerate()
+                .map(|(i, sc)| build_scene_spec(i, sc, &novel))
+                .collect();
+
+        // S3: shot specs - one per novel shot, concern-grouped closed defaults.
         let (specs, timeline) = build_specs_and_timeline(&seed, &novel, &scenes);
 
-        // S3′/S4: molecules — derived from (scene, spec pair), prompts filled.
+        // S3'/S4: molecules - derived from (scene, spec pair), prompts filled.
         // Specs are laid out scene-major (si, ki); the owning scene index is
         // the prefix count of shots, not a string match (scene ids are
         // zero-padded, novel_refs are not).
@@ -267,8 +332,15 @@ impl EngineRun {
             specs: specs.clone(),
             molecules: molecules.clone(),
             timeline: timeline.clone(),
-            verify: VerifyReport { verified: false, issues: Vec::new(), frames: Vec::new(), total_frames: 0 },
+            verify: VerifyReport {
+                verified: false,
+                issues: Vec::new(),
+                frames: Vec::new(),
+                total_frames: 0,
+            },
             gates: Vec::new(),
+            expansion,
+            expansion_note,
         };
         run.verify = verify(&run);
         run.gates = Self::gate_states();

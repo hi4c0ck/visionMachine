@@ -21,6 +21,7 @@
 		specsByScene,
 		timelineRows,
 		FRAME_RATE,
+		expansionLabel,
 		type EngineEntryInput,
 		type EngineRun,
 		type GateState,
@@ -393,7 +394,12 @@
 			<!-- ── ② S1 · Visual Novel (G1 review point) ── -->
 			<section class="stage">
 				<div class="stage-head">
-					<h3 class="block-heading">② S1 · Visual Novel <span class="muted">· auto-locked · G1</span></h3>
+					<h3 class="block-heading">
+						② S1 · Visual Novel
+						<span class="muted chip {engine.expansion === 'llm' ? 'chip-llm' : 'chip-fallback'}" title={engine.expansion_note ?? ''}>
+							{expansionLabel(engine)} · G1
+						</span>
+					</h3>
 					<div class="stage-actions">
 						<button class="mini" onclick={() => void onLogSignal('accept', 'G1', 'novel confirmed')}>
 							confirm
@@ -785,6 +791,29 @@
 	.muted {
 		color: var(--text-muted);
 		font-weight: 400;
+	}
+
+	/* S1 expansion-source chip: LLM (green tint) vs template fallback
+		(neutral). Design: quiet template-a, hairline, no new color families. */
+	.block-heading .chip {
+		display: inline-block;
+		margin-left: 0.35rem;
+		padding: 0.05rem 0.45rem;
+		border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
+		border-radius: 999px;
+		font-size: 0.72rem;
+		max-width: 22rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		vertical-align: baseline;
+	}
+	.chip-llm {
+		color: var(--text, inherit);
+		border-color: color-mix(in srgb, var(--ok-color, #22c55e) 45%, transparent);
+	}
+	.chip-fallback {
+		color: var(--text-muted);
 	}
 
 	.flow-error {

@@ -313,10 +313,9 @@ fn build_engine_run(
 }
 
 /// The deterministic G0 entry derived from raw text when the UI supplies no
-/// explicit one. Shared by the engine build and the template expander's
-/// look-axes so the novel's secondary layers always steer from the same
-/// genre/time-of-day/weather the engine seed uses.
-fn default_engine_entry(
+/// explicit one. Shared by the engine build, the template expander's
+/// look-axes, and the Node A LLM call (same seed every path).
+pub fn default_engine_entry(
     raw: &str,
     intent: &IntentSnapshot,
 ) -> crate::generation::video_flow::engine::seed::EngineEntry {

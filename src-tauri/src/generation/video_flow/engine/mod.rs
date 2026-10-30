@@ -26,6 +26,7 @@
 pub mod axes;
 pub mod derive;
 pub mod gates;
+pub mod llm;
 pub mod seed;
 pub mod tag_vocabulary;
 pub mod types;

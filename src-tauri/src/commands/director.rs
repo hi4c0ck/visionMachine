@@ -117,6 +117,51 @@ fn parse_entry(entry: &Option<String>) -> Result<Option<crate::generation::video
     }
 }
 
+/// The session's Node A LLM provider (harness `llm.json`: production reads
+/// the active profile's `providers.text` slot). `None` when the chain is
+/// broken (legacy session) or the profile has no saved settings, or the
+/// text slot has no base_url+model — then the run stays on the
+/// deterministic template (no unconfigured network call, ever).
+async fn node_a_provider_for_session(
+    db: &crate::storage::db::Database,
+    session_id: &str,
+) -> Option<crate::generation::video_flow::engine::llm::TextProvider> {
+    use sqlx::Row;
+    // sessions → projects → profiles (generation.rs::profile_name_for_session
+    // precedent; settings blobs are keyed by profile name, "default" seed).
+    let profile_name: Option<String> = sqlx::query(
+        "SELECT pr.name FROM sessions s \
+              JOIN projects p ON p.id = s.project_id \
+              JOIN profiles pr ON pr.id = p.profile_id \
+              WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&db.pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+    .flatten();
+    let profile_name = profile_name.unwrap_or_else(|| "default".into());
+
+    let raw = db.get_profile_settings(&profile_name).await.ok().flatten()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let settings = crate::commands::settings::normalize_settings(&value);
+    let slot = settings.providers.text;
+    let base_url = slot.base_url.trim().to_string();
+    let model = slot.model.trim().to_string();
+    if base_url.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some(
+        crate::generation::video_flow::engine::llm::TextProvider {
+            base_url,
+            api_key: slot.api_key,
+            model,
+        },
+    )
+}
+
 /// The newest flow version on disk (0 when no flow has been saved yet).
 fn next_flow_version(flow: &PathBuf) -> u32 {
     let mut best: u32 = 0;
@@ -160,9 +205,63 @@ pub async fn director_run_flow(
 
     let entry = parse_entry(&entry)?;
     let flow = VideoFlow::new();
-    let doc = flow
+    let mut doc = flow
         .run_full_with_entry(&text, entry.as_ref())
         .map_err(|e| e.to_string())?;
+
+    // Node A LLM expansion (Phase 1a, harness llm.json contract). When the
+    // session has a usable text provider, the LLM writes the S1 novel and
+    // the run is rebuilt around it (S2–S5 stay deterministic from that
+    // novel). Any failure keeps the deterministic template run already in
+    // `doc.engine` and names WHY the LLM didn't produce — never a silent
+    // fallback. A missing/unconfigured provider simply stays on template
+    // (nothing was attempted, so no note).
+    {
+        use crate::generation::video_flow::engine::llm::{self, TextProvider};
+        use crate::generation::video_flow::engine::seed::{ExpansionSource, EngineRun};
+
+        // The effective G0 entry: the UI's when supplied, else the same
+        // deterministic default the template path used — so the LLM and
+        // the fallback seed/counts/look-axes are identical.
+        let effective_entry = match entry {
+            Some(e) => e,
+            None => crate::generation::video_flow::default_engine_entry(&text, &doc.intent),
+        };
+
+        // Provider resolution is a short DB window; the LLM network call
+        // itself must NOT hold that lock (the flow_dir comment above).
+        let provider: Option<TextProvider> = {
+            let db = state.db.lock().await;
+            node_a_provider_for_session(&db, &session_id).await
+        };
+
+        if let Some(provider) = provider {
+            match llm::expand_node_a(&provider, &effective_entry).await {
+                Ok(novel) => {
+                    let tod = effective_entry.time_of_day.clone();
+                    let weather = effective_entry.weather.clone();
+                    let seed = effective_entry.to_seed();
+                    doc.engine = Some(EngineRun::build_with_novel(
+                        seed,
+                        novel,
+                        &tod,
+                        &weather,
+                        ExpansionSource::Llm,
+                        Some(provider.model.clone()),
+                    ));
+                }
+                Err(reason) => {
+                    if let Some(run) = doc.engine.as_mut() {
+                        run.expansion = ExpansionSource::Template;
+                        run.expansion_note = Some(format!(
+                            "template · LLM ({}) failed: {}",
+                            provider.model, reason
+                        ));
+                    }
+                }
+            }
+        }
+    }
 
     let version = next_flow_version(&dir).saturating_add(1);
     let path = dir.join(FlowDocument::default_filename(version));

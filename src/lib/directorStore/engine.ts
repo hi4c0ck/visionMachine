@@ -228,6 +228,9 @@ export interface GateState {
 	confirm: string;
 }
 
+/** Where the S1 novel came from (mirror of Rust `ExpansionSource`). */
+export type ExpansionSource = 'template' | 'llm';
+
 export interface VerifyReport {
 	verified: boolean;
 	issues: string[];
@@ -244,6 +247,23 @@ export interface EngineRun {
 	timeline: SceneTimeline;
 	verify: VerifyReport;
 	gates: GateState[];
+	/** Template by default (old docs load verbatim). */
+	expansion?: ExpansionSource;
+	/** LLM model id (when `expansion === 'llm'`) or the named fallback
+	 * "template · LLM ({model}) failed: {reason}". */
+	expansion_note?: string | null;
+}
+
+/** S1 source chip for the panel: 'LLM · {model}' / 'template' /
+ * 'template · LLM failed: {reason}' (truncated). */
+export function expansionLabel(run: EngineRun): string {
+	if (run.expansion === 'llm') {
+		return run.expansion_note ? `LLM · ${run.expansion_note}` : 'LLM';
+	}
+	if (run.expansion_note) {
+		return run.expansion_note;
+	}
+	return 'template';
 }
 
 // ── Closed tag vocabularies (mirror of tag_vocabulary.rs) ─────────────────
