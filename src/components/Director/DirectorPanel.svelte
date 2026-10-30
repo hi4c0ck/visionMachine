@@ -26,6 +26,7 @@
 		type EngineRun,
 		type GateState,
 	} from '$lib/directorStore/engine';
+	import { loadEntryDraft, saveEntryDraft } from '$lib/directorStore/entryDraft';
 	import TextBlock from './TextBlock.svelte';
 
 	let {
@@ -60,7 +61,9 @@
 	// ── G0 entry state (the S0 input the UI authors) ──────────────────────
 	// The idea is the single source of truth; the rest are G0 look/params.
 	// On load/run, backfilled from the engine seed so controls reflect the run.
-	let entry = $state<EngineEntryInput>({
+	// Persisted per session (entryDraft) so leaving the Director tab (panel
+	// unmounts on 'pipes') never loses typed text — a re-mount restores it.
+	const defaultEntry: EngineEntryInput = {
 		title: '',
 		idea: '',
 		input_text: '',
@@ -69,6 +72,16 @@
 		scale: { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
 		time_of_day: 'midday',
 		weather: 'clear',
+	};
+	// Clone: $state proxies the object it's given, so a shared const would
+	// get mutated through session A's typing and leak into session B.
+	const freshEntry = (): EngineEntryInput => structuredClone(defaultEntry);
+	let entry = $state<EngineEntryInput>(loadEntryDraft(sessionId) ?? freshEntry());
+
+	// Save the G0 draft whenever it changes (and on session switch) so a
+	// re-mount after 'Pipes' restores the typed text. Empty idea clears it.
+	$effect(() => {
+		saveEntryDraft(sessionId, entry);
 	});
 
 	let doc = $state<FlowDocument | null>(null);
@@ -105,7 +118,8 @@
 
 	let lastSession = $state(sessionId);
 	// Per-session isolation: when the session prop changes, reset in-tab state
-	// so a switched session never carries the previous session's run.
+	// so a switched session never carries the previous session's run; restore
+	// the new session's G0 draft instead of a stale entry.
 	$effect(() => {
 		if (sessionId !== lastSession) {
 			lastSession = sessionId;
@@ -115,6 +129,7 @@
 			runError = null;
 			openTag = null;
 			openShot = null;
+			entry = loadEntryDraft(sessionId) ?? freshEntry();
 		}
 	});
 
@@ -134,7 +149,22 @@
 					const d = await loadFlow(sessionId, newest.flowVersion);
 					doc = d;
 					activeRun = newest.flowVersion;
-					backfillEntryFromEngine(d, newest);
+					// Precedence: an unsaved G0 draft that differs from the
+					// committed doc's seed (post-run edits) wins; otherwise
+					// backfill the controls from the doc.
+					const draft = loadEntryDraft(sessionId);
+					const docIdea = (d.engine?.seed?.idea ?? d.intent?.entryText ?? '').trim();
+					if (draft && draft.idea.trim() && draft.idea.trim() !== docIdea) {
+						entry = draft;
+					} else {
+						backfillEntryFromEngine(d, newest);
+					}
+				} else {
+					// No persisted run: restore this session's in-progress G0
+					// draft (the idea may already have been typed, then the
+					// user left the tab / re-ran nothing).
+					flows = [];
+					entry = loadEntryDraft(sessionId) ?? freshEntry();
 				}
 			} catch (e) {
 				console.warn('director load_latest', e);
