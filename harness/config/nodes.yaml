@@ -1,0 +1,145 @@
+# ============================================================================
+#  video-harness / nodes.yaml
+#  Declaration of the two LLM nodes of the visual pipeline.
+#
+#  A node = { role, input model, output model, profile binding, prompt }
+#  Profiles live in profiles.yaml, tag sets in tag_vocabulary.yaml,
+#  response schemas in ../schemas/.
+#
+#  This file is DATA only. It does not contain executable code.
+# ============================================================================
+
+pipeline:
+  name: visual-to-generative-spec
+  stages: [node_a, node_b, assembly]
+  data_flow:
+    input:        { model: FilmSeed }                  # ../schemas/film_seed.schema.json
+    node_a_out:   { model: VisualNovel }                # ../schemas/visual_novel.schema.json
+    node_b_out:   { model: ShotSpec, per_item: shot }   # ../schemas/shot_spec.schema.json
+    assembly_in:  { list_of: ShotSpec, plus: VisualNovel.film }
+    assembly_out: { media: "clips + transitions + audio", tools: ["ffmpeg"] }
+
+# ----------------------------------------------------------------------------
+#  NODE A — text → visual-language novel  (creative / expansive)
+# ----------------------------------------------------------------------------
+node_a:
+  id: visual_novel_expander
+  role: |
+    Film director and visual novelist. From a sparse text seed, expand the
+    film world and every scene/shot into saturated visual language:
+    lighting, texture, sound, motion, color, weather, time of day, emotion.
+    Output is human-reviewable prose wrapped in a strict JSON shape.
+  input:
+    model: FilmSeed
+    schema: ../schemas/film_seed.schema.json
+  output:
+    model: VisualNovel
+    schema: ../schemas/visual_novel.schema.json
+    response_format: json_schema
+  profile:
+    binding: creative_profile          # key into profiles.yaml
+    default_preset: cinema            # which preset pair to use by default
+  prompt:
+    system: |
+      You are the film director. From the FilmSeed, write a saturated
+      VISUAL NOVEL in vivid English prose: the film's world/palette/
+      time_of_day/weather, then each scene and shot as dense visual language
+      (light, texture, sound, motion, color, weather, emotion).
+      Follow the exact JSON schema. Do NOT add fields outside the schema.
+      Follow every constraint in the active CreativeProfile.
+    user:
+      - seed_json                     # FilmSeed serialized
+      - genre_style: "{seed.genre.style}"
+      - style_preset_override: "{profile.stylePreset}"     # optional
+      - sensory_axes: "{profile.expansion.sensoryAxes}"
+  constraints:                        # hard rules enforced on output
+    - "scenes.length == seed.scale.scenes"
+    - "for every scene: shots.length == seed.scale.shotsPerScene"
+    - "shot.prose MUST cover every sensory_axis declared in the profile"
+    - "no on-screen text in prose"
+    - "technical fields in English, narrative fields may be any language"
+  repair: { retries: 2, on_error: append_to_system_prompt }
+
+# ----------------------------------------------------------------------------
+#  NODE B — visual novel shot → strict mechanical ShotSpec
+# ----------------------------------------------------------------------------
+node_b:
+  id: shot_spec_mechanical_wrap
+  role: |
+    DOP / mechanical writer. Convert ONE VisualNovel shot into a strict
+    ShotSpec JSON object. Only values from the declared tagVocabulary are
+    permitted. Every visual tag is an enum. `additionalProperties:false`
+    blocks drift. The two prompt strings must bake in-clip tags and preserve
+    the identity-lock line.
+  input:
+    model: "VisualNovel.single_shot_context"
+    fields_injected:
+      - film                      # film: { style, world, palette, time_of_day, weather }
+      - scene.title
+      - scene.prose
+      - shot.prose
+      - shot.beats
+      - seed.ratio
+      - seed.scale.clipS
+    schema: ../schemas/visual_novel.schema.json
+  output:
+    model: ShotSpec
+    schema: ../schemas/shot_spec.schema.json
+    response_format: json_schema
+    per_item: shot               # one call per shot (or batch with same schema)
+  profile:
+    binding: spec_profile       # key into profiles.yaml
+    default_preset: cinema
+  prompt:
+    system: |
+      You are the DOP / mechanical writer. Convert ONE VisualNovel shot
+      into a strict ShotSpec. Use ONLY values from the allowed enums in
+      the active tagVocabulary.
+      - Bake in-clip tags (lens, zoom, move, DoF, light, grade, effects,
+        transition_in) into both prompt strings.
+      - The video prompt MUST end with: "Keep the identity and visual
+        style of the first frame identical."
+      - Never put on-screen text into prompts.
+      - `clip_s` MUST be within `seed.scale.clipS`.
+    user:
+      - film_context              # VisualNovel.film serialized
+      - scene                     # { title, prose }
+      - shot                      # { prose, beats }
+      - ratio: "{seed.ratio}"
+      - clip_s_bounds: "{seed.scale.clipS}"
+      - tag_vocabulary_ref: "{active_preset.spec.tagVocabulary}"
+  constraints:
+    - "every tag field MUST be an enum value from the active tagVocabulary"
+    - "clip_s in seed.scale.clipS"
+    - "prompts.video MUST contain the identity-lock line"
+    - "prompts.image MUST NOT reference on-screen text"
+    - "effects ⊆ tagVocabulary.effects"
+    - "light.color_temp_K in [2500, 10000]"
+  repair: { retries: 2, on_error: append_to_system_prompt, retry_parser: json_repair }
+
+# ----------------------------------------------------------------------------
+#  ASSEMBLY — between-clip transitions, audio mix, optional TTS/subtitles
+# ----------------------------------------------------------------------------
+assembly:
+  id: ffmpeg_assembly
+  role: |
+    Consumes the ordered list of ShotSpecs plus VisualNovel.film.
+    Renders each clip already carries in-clip tags; assembly handles:
+    - between-clip transitions (transition_out of clip N, transition_in of N+1)
+    - audio mix: ambience + foley + sfx + music_cue; TTS fallback for stills
+    - optional subtitle burn (off by default; repo forbids on-screen text)
+    - final concat, grade, LUT (if `film_stock` is specified)
+    - output duration ≈ Σ shotSpec.clip_s + Σ transition overlap
+  input:
+    list_of: ShotSpec
+    ordered_by: [scene.index, shot.index]
+    plus: VisualNovel.film            # for global grade / music mood
+  output:
+    media: "final MP4 / MKV"
+    sidecar:
+      - timeline.json                 # transition + audio map for review
+      - manifest.json                 # shotSpec ids → clip files
+  tools: [ffmpeg]
+  # NOTE: the original repo has NO assembly pass; it just plays clips back
+  #       to back. This stage is the forward upgrade and is required because
+  #       single-clip models cannot render between-clip transitions.

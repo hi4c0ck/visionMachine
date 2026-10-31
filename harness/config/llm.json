@@ -1,0 +1,36 @@
+{
+  "note": "LLM transport + model configuration for the two visual nodes. OpenAI-compatible chat completions (same wire format as the source repo's /v1/chat/completions). Structured output via response_format=json_schema.",
+  "provider": {
+    "type": "openai-compatible",
+    "base_url": "https://apihub.agnes-ai.com/v1",
+    "chat_path": "/chat/completions",
+    "auth": {
+      "header": "Authorization",
+      "scheme": "Bearer",
+      "key_env": "AGNES_API_KEY",
+      "key_source": "settings",
+      "_note": "Production: read from VisionMachine Settings providers (the active profile's providers.text.baseURL + apiKey + model). Dev tests: AGNES_API_KEY env var or harness/.env (gitignored). NEVER embed a real key in committed config."
+    }
+  },
+  "models": {
+    "node_a": "agnes-3.0-flash",
+    "node_b": "agnes-2.5-flash",
+    "fallback_text_model": "agnes-2.5-flash"
+  },
+  "generation": {
+    "temperature": { "node_a": 0.5, "node_b": 0.3 },
+    "max_tokens": { "node_a": 4500, "node_b": 2000 },
+    "chat_template_kwargs": { "enable_thinking": false }
+  },
+  "structured_output": {
+    "mode": "response_format_json_schema",
+    "strict": true,
+    "fallback_mode_on_unsupported": "json_object",
+    "schema_names": { "node_a": "VisualNovel", "node_b": "ShotSpec" }
+  },
+  "retry": {
+    "attempts": 2,
+    "strategy": "append_validation_errors_to_system_prompt",
+    "sleep_ms": 1500
+  }
+}

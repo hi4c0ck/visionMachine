@@ -230,6 +230,11 @@ pub fn structure_plan(novel: &str, cfg: &StructureParams, flow_version: u32) -> 
         global_style,
         media_mode: "text".into(),
         sections,
+        // The marker-bridge plan is a sparse @tag-per-clause text, not a
+        // concrete per-shot plan: leave the explicit length unset so
+        // materialize falls back to the default floor (no dead tail is
+        // meaningful here — the sections tile the default pipe range).
+        length_frames: 0,
     };
 
     Ok(StructuredVideoPlan {
@@ -369,6 +374,7 @@ mod tests {
                     prompt: "x".into(),
                     from: Vec::new(),
                 }],
+                length_frames: 0,
             }],
         };
         assert!(validate_plan(&plan, &cfg()).is_err());

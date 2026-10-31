@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ShotMolecule",
+  "title": "ShotMolecule",
+  "description": "One shot as a DELTA from its SceneSpec. Only the meaningful change is explicit; the rest is inherited. `prompts` are the deterministic merge (scene base + shot delta), not LLM-guessed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "inherit", "subject", "composition", "lens", "motion",
+    "effects_delta", "audio", "transition_in", "transition_out", "clip_s", "prompts"
+  ],
+  "properties": {
+    "inherit":  { "type": "string", "description": "the SceneSpec id this shot derives from" },
+    "subject":  { "type": "string", "description": "the meaningful content/action of THIS shot (what makes it different)" },
+
+    "composition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["size", "angle", "framing", "dof"],
+      "properties": {
+        "size":    { "enum": ["wide", "medium", "close-up", "over-the-shoulder"] },
+        "angle":   { "enum": ["eye", "low", "high", "dutch", "overhead", "worm", "bird"] },
+        "framing": { "enum": ["rule_of_thirds", "centered", "symmetrical", "fill_frame", "negative_space"] },
+        "dof":     { "enum": ["shallow", "medium", "deep"] }
+      }
+    },
+
+    "lens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["focal_mm"],
+      "properties": {
+        "focal_mm":   { "enum": [14, 24, 35, 50, 85, 135] },
+        "distortion": { "type": "string" }
+      }
+    },
+
+    "motion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zoom", "move", "speed", "camera"],
+      "properties": {
+        "zoom":   { "enum": ["static", "in", "out", "crash", "rack_focus", "push", "pull"] },
+        "move":   { "enum": ["static", "pan", "tilt", "track", "dolly", "crane", "handheld", "steadicam", "orbit", "drone", "zoom"] },
+        "speed":  { "enum": ["slow", "normal", "fast", "speed_ramp"] },
+        "camera": { "type": "string" }
+      }
+    },
+
+    "effects_delta": {
+      "type": "array",
+      "description": "shot-level effects ADDED on top of SceneSpec.effects_base",
+      "items": { "enum": ["fog", "rain", "smoke", "lens_flare", "bokeh", "sparks", "dust", "snow", "fire", "magic_glow", "glitch", "none"] }
+    },
+
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["foley", "sfx", "music_cue", "silence"],
+      "description": "ambience is inherited from the scene; only the shot-specific layers are explicit",
+      "properties": {
+        "foley":    { "type": "string" },
+        "sfx":      { "type": "string" },
+        "music_cue":{ "type": "string" },
+        "silence":  { "type": "boolean" }
+      }
+    },
+
+    "transition_in":  { "enum": ["hard_cut", "crossfade", "dissolve", "wipe", "match_cut", "jump_cut", "whip_pan", "l_cut", "j_cut", "cut_on_action"] },
+    "transition_out": { "enum": ["hard_cut", "crossfade", "dissolve", "wipe", "match_cut", "jump_cut", "whip_pan", "l_cut", "j_cut", "cut_on_action"] },
+    "clip_s":         { "type": "integer", "minimum": 4, "maximum": 12 },
+
+    "prompts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "video"],
+      "description": "Filled deterministically by lib/derive.js from (scene base + this shot delta). Do NOT hand-write.",
+      "properties": {
+        "image": { "type": "string" },
+        "video": { "type": "string" }
+      }
+    }
+  }
+}

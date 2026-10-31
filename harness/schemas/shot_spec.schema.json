@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ShotSpec",
+  "title": "ShotSpec",
+  "description": "S3 output. One spec per confirmed timeline shot. Tags are grouped BY CONCERN (camera/lens/motion/lighting/grade/effects/audio) — video-engine tag notation. sub_timeline splits the shot into slices that track dynamic changes, grounded in the novel's detailed beats.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["shot_id", "novel_ref", "content", "clip_s", "transition_in", "transition_out", "concerns", "sub_timeline"],
+  "properties": {
+    "shot_id":    { "type": "string" },
+    "novel_ref":  { "type": "string", "description": "which novel shot this spec belongs to, e.g. scene_1.shot_2" },
+    "content": {
+      "type": "object",
+      "description": "The NOVEL content this shot expresses (the WHAT, not the HOW). Carried from the VisualNovel via novel_ref so the spec is self-contained and the narrative is never lost.",
+      "required": ["prose", "beats"],
+      "properties": {
+        "prose": { "type": "string" },
+        "beats": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "clip_s":     { "type": "integer", "minimum": 4, "maximum": 10 },
+    "transition_in":  { "enum": ["hard_cut","crossfade","dissolve","wipe","match_cut","jump_cut","whip_pan","l_cut","j_cut","cut_on_action"] },
+    "transition_out": { "enum": ["hard_cut","crossfade","dissolve","wipe","match_cut","jump_cut","whip_pan","l_cut","j_cut","cut_on_action"] },
+
+    "concerns": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The shot's visual/audio tags, grouped by concern. Each concern holds only its own tags.",
+      "required": ["camera", "lens", "motion", "lighting", "grade", "effects", "audio"],
+      "properties": {
+        "camera": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Framing + viewpoint (NOT lens, NOT movement).",
+          "required": ["size", "angle", "framing", "dof"],
+          "properties": {
+            "size":    { "enum": ["wide", "medium", "close-up", "over-the-shoulder"] },
+            "angle":   { "enum": ["eye", "low", "high", "dutch", "overhead", "worm", "bird"] },
+            "framing": { "enum": ["rule_of_thirds", "centered", "symmetrical", "fill_frame", "negative_space"] },
+            "dof":     { "enum": ["shallow", "medium", "deep"] }
+          }
+        },
+        "lens": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optics only.",
+          "required": ["focal_mm"],
+          "properties": {
+            "focal_mm":   { "enum": [14, 24, 35, 50, 85, 135] },
+            "distortion": { "type": "string" }
+          }
+        },
+        "motion": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Zoom + physical camera movement + speed.",
+          "required": ["zoom", "move", "speed"],
+          "properties": {
+            "zoom":  { "enum": ["static", "in", "out", "crash", "rack_focus", "push", "pull"] },
+            "move":  { "enum": ["static", "pan", "tilt", "track", "dolly", "crane", "handheld", "steadicam", "orbit", "drone", "zoom"] },
+            "speed": { "enum": ["slow", "normal", "fast", "speed_ramp"] }
+          }
+        },
+        "lighting": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Key light + color temperature + pattern.",
+          "required": ["key", "contrast", "color_temp_K", "pattern"],
+          "properties": {
+            "key":          { "enum": ["soft", "hard", "low-key", "high-key", "backlit"] },
+            "contrast":     { "enum": ["low", "medium", "high"] },
+            "color_temp_K": { "type": "integer", "minimum": 2500, "maximum": 10000 },
+            "pattern":      { "type": "string" }
+          }
+        },
+        "grade": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Color grade / look.",
+          "required": ["palette", "saturation", "contrast", "film_stock"],
+          "properties": {
+            "palette":    { "type": "string" },
+            "saturation": { "enum": ["saturated", "desaturated", "neutral"] },
+            "contrast":   { "enum": ["low", "medium", "high"] },
+            "film_stock": { "enum": ["kodak_250d","kodak_5219","kodak_5207","fuji_super_35","fuji_velvia","cine_organic","neutral","custom"] }
+          }
+        },
+        "effects": {
+          "type": "array",
+          "description": "Atmospheric / post effects present in the shot.",
+          "items": { "enum": ["fog","rain","smoke","lens_flare","bokeh","sparks","dust","snow","fire","magic_glow","glitch","none"] }
+        },
+        "audio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["foley", "sfx", "music_cue", "silence"],
+          "properties": {
+            "foley":     { "type": "string" },
+            "sfx":       { "type": "string" },
+            "music_cue": { "type": "string" },
+            "silence":   { "type": "boolean" }
+          }
+        }
+      }
+    },
+
+    "sub_timeline": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "description": "Slices WITHIN this shot that track dynamic changes closely. Each slice states the full concern state at that moment (clean enums). The concern-notation deltas between slices are COMPUTED by the harness, not written here.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from_s", "to_s", "note", "state"],
+        "properties": {
+          "from_s":  { "type": "integer", "minimum": 0 },
+          "to_s":    { "type": "integer", "minimum": 1 },
+          "note":    { "type": "string", "description": "What dynamically changes in this slice (one short sentence, from the novel beat)." },
+          "state": {
+            "type": "object",
+            "description": "Full concern-grouped state at this slice (same concern groups as the shot, clean enums). Omit a concern group to keep the previous state's value.",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

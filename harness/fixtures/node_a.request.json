@@ -1,0 +1,132 @@
+{
+  "_comment": "EXACT request body Node A sends to POST {base_url}/chat/completions (provider=openai-compatible). Generated from config/llm.json + schemas/visual_novel.schema.json + golden/film_seed.json.",
+  "url": "https://apihub.agnes-ai.com/v1/chat/completions",
+  "method": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer ${AGNES_API_KEY}"
+  },
+  "body": {
+    "model": "agnes-3.0-flash",
+    "temperature": 0.5,
+    "max_tokens": 4500,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "VisualNovel",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "film",
+            "scenes"
+          ],
+          "properties": {
+            "film": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "logline",
+                "style",
+                "world",
+                "palette",
+                "time_of_day",
+                "weather"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "logline": {
+                  "type": "string"
+                },
+                "style": {
+                  "type": "string"
+                },
+                "world": {
+                  "type": "string"
+                },
+                "palette": {
+                  "type": "string"
+                },
+                "time_of_day": {
+                  "enum": [
+                    "dawn",
+                    "morning",
+                    "midday",
+                    "afternoon",
+                    "evening",
+                    "night"
+                  ]
+                },
+                "weather": {
+                  "type": "string"
+                }
+              }
+            },
+            "scenes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "title",
+                  "prose",
+                  "shots"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "prose": {
+                    "type": "string"
+                  },
+                  "shots": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "prose",
+                        "beats"
+                      ],
+                      "properties": {
+                        "prose": {
+                          "type": "string"
+                        },
+                        "beats": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are the film director. From the FilmSeed, write a saturated VISUAL NOVEL: the film's world/palette/time_of_day/weather, then each scene and each shot as dense, sensory visual prose (light, texture, sound, motion, color, weather, emotion). Rules:\n- Output ONE JSON object. Only the schema fields, nothing else.\n- Keep every string under 300 characters. No repeated phrases. Do not list exclusions or negations — just describe what IS present.\n- Each shot's `beats` must be 2–4 CINEMATIC MICRO-CUES, each written as `<shot-size>: <subject> <motion> — <light/sound detail>`, concrete and sensory (e.g. `close-up: a chick wobbles on a mossy rail, dawn light on its down; medium: the girl's hand reaches toward it; wide: birds scatter from the branches, she turns slowly`). No generic filler like \"girl walks\"."
+      },
+      {
+        "role": "user",
+        "content": "FilmSeed: {\"title\":\"The Grizzly's Forest\",\"input_text\":\"Naive girl walking through forest inspired by animals, birds outside, then the grizzy nightwhack starts down with brief clouds but at the end she obtain keep him calm and friendly\",\"idea\":\"A naive girl walks through a forest full of animals and birds; a grizzly appears as night falls and brief clouds gather, but by the end she befriends it and keeps it calm and friendly.\",\"genre\":{\"name\":\"Documentary\",\"style\":\"warm nature documentary, natural available light, golden hour to dusk\"},\"ratio\":\"16:9\",\"scale\":{\"scenes\":1,\"shotsPerScene\":2,\"clipS\":[8,10]}}\ngenre style: \"warm nature documentary, natural available light, golden hour to dusk\"\ncreative profile: cinema (temp 0.7, detail medium, sensory axes: light,color,motion,sound,texture,weather)\nHard counts: scenes.length == 1, scenes[*].shots.length == 2.\nRespond with a single JSON object matching the VisualNovel schema only."
+      }
+    ]
+  }
+}

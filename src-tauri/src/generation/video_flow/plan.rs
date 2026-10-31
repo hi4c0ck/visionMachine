@@ -94,6 +94,15 @@ pub struct PlanPipe {
     pub global_style: String,
     pub media_mode: String,
     pub sections: Vec<PlanSection>,
+    /// Explicit cumulative content length in frames. When > 0, materialize
+    /// uses it as the pipe length (still capped by the max section end so
+    /// content never overflows) instead of the generic `default_pipe_frames`
+    /// floor. This is what a *concrete* engine plan carries: one pipe per
+    /// shot, lengthed to that shot's own cumulative clip, so the generated
+    /// pipe matches its content exactly (no dead tail). 0/absent (legacy /
+    /// sparse marker-bridge pipes) = fall back to the default floor.
+    #[serde(default)]
+    pub length_frames: u32,
 }
 
 /// The structured, versioned plan the flow passes to materialize.
@@ -149,6 +158,7 @@ mod tests {
                     prompt: "p".into(),
                     from: Vec::new(),
                 }],
+                length_frames: 0,
             }],
         };
         let json = serde_json::to_value(&plan).unwrap();

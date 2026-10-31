@@ -30,6 +30,11 @@ export interface PlanPipe {
 	globalStyle: string;
 	mediaMode: string;
 	sections: PlanSection[];
+	/** Explicit cumulative content length (frames). 0 = legacy/sparse pipe
+	 * (materialize falls back to the default floor); >0 = a concrete engine
+	 * pipe lengthed to its own cumulative shot-clip content, so the
+	 * generated composer pipe matches its content with no dead tail. */
+	lengthFrames: number;
 }
 
 export interface StructuredVideoPlan {

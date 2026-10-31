@@ -1,0 +1,8 @@
+{
+  "title": "The Grizzly's Forest",
+  "input_text": "Naive girl walking through forest inspired by animals, birds outside, then the grizzy nightwhack starts down with brief clouds but at the end she obtain keep him calm and friendly",
+  "idea": "A naive girl walks through a forest full of animals and birds; a grizzly appears as night falls and brief clouds gather, but by the end she befriends it and keeps it calm and friendly.",
+  "genre": { "name": "Documentary", "style": "warm nature documentary, natural available light, golden hour to dusk" },
+  "ratio": "16:9",
+  "scale": { "scenes": 1, "shotsPerScene": 2, "clipS": [8, 10] }
+}

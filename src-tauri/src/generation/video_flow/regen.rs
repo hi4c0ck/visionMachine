@@ -193,6 +193,7 @@ mod tests {
                         from: vec![SpanId::new("clause-1")],
                     },
                 ],
+                length_frames: 0,
             }],
         }
     }
@@ -245,6 +246,7 @@ mod tests {
                 global_style: String::new(),
                 media_mode: "text".into(),
                 sections: Vec::new(),
+                length_frames: 0,
             }],
         };
         assert!(matches!(

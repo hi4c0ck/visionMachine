@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "VisualNovel",
+  "title": "VisualNovel",
+  "description": "Node A output / Node B input. Saturated visual-language document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["film", "scenes"],
+  "properties": {
+    "film": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "logline", "style", "world", "palette", "time_of_day", "weather"],
+      "properties": {
+        "title":       { "type": "string" },
+        "logline":     { "type": "string" },
+        "style":       { "type": "string" },
+        "world":       { "type": "string" },
+        "palette":     { "type": "string" },
+        "time_of_day": { "enum": ["dawn", "morning", "midday", "afternoon", "evening", "night"] },
+        "weather":     { "type": "string" }
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "prose", "shots"],
+        "properties": {
+          "title": { "type": "string" },
+          "prose": { "type": "string" },
+          "shots": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["prose", "beats"],
+              "properties": {
+                "prose": { "type": "string" },
+                "beats": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

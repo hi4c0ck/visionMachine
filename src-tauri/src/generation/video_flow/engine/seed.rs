@@ -208,6 +208,56 @@ fn verify(run: &EngineRun) -> VerifyReport {
         }
     }
 
+    // V6: generated pipe length vs the CUMULATIVE S2/S3 scene length.
+    // The concrete plan is one pipe per shot, each lengthed to that shot's
+    // S3 clip; so (a) the S2 division total must equal the sum of the S3
+    // shot clips, (b) the cumulative generated frames must equal that
+    // total @ 24fps, and (c) the concrete plan's per-pipe lengths must sum
+    // to the same frames with no section overflowing its pipe.
+    let cum_s: u32 = run.specs.iter().map(|s| s.clip_s).sum();
+    if run.timeline.total_s != cum_s {
+        issues.push(format!(
+            "V6 S2 division total_s={} != cumulative S3 shot clips {}s",
+            run.timeline.total_s, cum_s
+        ));
+    }
+    if total != cum_s.saturating_mul(FRAME_RATE) {
+        issues.push(format!(
+            "V6 cumulative generated {}f != {}s @ {}fps ({}f)",
+            total,
+            cum_s,
+            FRAME_RATE,
+            cum_s.saturating_mul(FRAME_RATE)
+        ));
+    }
+    let plan = run.plan_from_engine(1);
+    let pipe_lens: Vec<u32> = plan
+        .pipes
+        .iter()
+        .map(|p| p.length_frames.max(p.sections.iter().map(|s| s.frame_end).max().unwrap_or(0)))
+        .collect();
+    let pipe_sum: u32 = pipe_lens.iter().sum();
+    if pipe_sum != total {
+        issues.push(format!(
+            "V6 sum of generated pipe lengths {}f != cumulative generated frames {}f",
+            pipe_sum, total
+        ));
+    }
+    for (i, p) in plan.pipes.iter().enumerate() {
+        let len = pipe_lens[i];
+        for s in &p.sections {
+            if s.frame_end > len {
+                issues.push(format!(
+                    "V6 pipe {} section '{}' ends at {}f > pipe length {}f",
+                    i,
+                    s.tag.keyword(),
+                    s.frame_end,
+                    len
+                ));
+            }
+        }
+    }
+
     VerifyReport {
         verified: issues.is_empty(),
         issues,
@@ -366,6 +416,13 @@ impl EngineRun {
 
         let clip = self.seed.scale.clip_s[0].max(4);
         let frames = frames_of(clip);
+        // Per-shot cumulative content length: each pipe is ONE shot, so its
+        // length is that shot's S3 clip (the spec value, which the timeline
+        // division also uses) — NOT the global seed clip. This is what V6
+        // compares against the S2 division's cumulative total_s.
+        let shot_frames = |sp: &crate::generation::video_flow::engine::types::ShotSpec| {
+            frames_of(sp.clip_s.max(4))
+        };
 
         let fallback_style = format!(
             "{} — {}",
@@ -418,9 +475,12 @@ impl EngineRun {
                     format!("{} → {}", spec.transition_in, spec.transition_out);
                 let scene_text = spec.content.prose.clone();
 
-                // Split the clip into concrete concern windows, one section
-                // per non-empty concern tag.
-                let seg = frames / 5 + 1;
+                // Split the shot's clip into concrete concern windows, one
+                // section per non-empty concern tag. The cumulative content
+                // of this pipe is the shot's own S3 clip (spec value), so
+                // both the section tiling and length_frames use shot frames.
+                let shot_f = shot_frames(spec);
+                let seg = shot_f / 5 + 1;
                 let mut sections: Vec<PlanSection> = Vec::new();
                 for (i, (tag, prompt)) in [
                     (VideoTag::Scene, scene_text),
@@ -437,7 +497,7 @@ impl EngineRun {
                     }
                     let start = (i as u32) * seg;
                     let end = if i == 4 {
-                        frames
+                        shot_f
                     } else {
                         ((i as u32 + 1) * seg).max(start + 1)
                     };
@@ -456,6 +516,12 @@ impl EngineRun {
                     global_style: scene_style,
                     media_mode: "text".into(),
                     sections,
+                    // This pipe IS one shot: its cumulative content is
+                    // `shot_f` (the shot's clip_s at 24fps), and the
+                    // concern sections tile to exactly that. Carry it
+                    // explicitly so materialize lengths the composer pipe
+                    // to the shot's content (no 240-frame dead tail).
+                    length_frames: shot_f,
                 });
             }
         }
@@ -475,6 +541,10 @@ impl EngineRun {
                     prompt: self.novel.film.logline.clone(),
                     from: vec![],
                 }],
+                // The logline-shell pipe carries one scene's worth of
+                // content; length it to that shot's clip so materialize
+                // matches content, not the 240-frame default floor.
+                length_frames: frames,
             });
         }
 
@@ -1055,7 +1125,11 @@ fn build_specs_and_timeline(
         });
     }
 
-    let total_s = seed.scale.scenes as u32 * seed.scale.shots_per_scene * seed.scale.clip_s[0];
+    // S2 division total = the CUMULATIVE shot-clip length: sum of the
+    // actual S3 shot clips (the clamped values each spec carries), NOT the
+    // raw G0 scale clip. This is what V6 compares the generated pipes
+    // against — one generated pipe per shot, each lengthed to its clip.
+    let total_s: u32 = specs.iter().map(|s| s.clip_s).sum();
     let timeline = SceneTimeline {
         timeline_id: "tl_01".into(),
         total_s,
@@ -1386,6 +1460,49 @@ mod seed_tests {
             plan.pipes[0].global_style.contains("midday clear"),
             "global style carries the G0 look axes: {}",
             plan.pipes[0].global_style
+        );
+
+        // LENGTH FIDELITY: each concrete pipe is lengthed to its own shot's
+        // S3 clip (entry() default clips to 8s → 192f), NOT the 240-frame
+        // default floor. Sum of pipe lengths == cumulative S2 division
+        // total_s @ 24fps == the S5 verify cumulative frames.
+        let cum_s: u32 = run.specs.iter().map(|s| s.clip_s).sum();
+        for p in &plan.pipes {
+            assert_eq!(
+                p.length_frames,
+                8 * 24,
+                "each shot pipe is lengthed to its 8s clip (192f), not the 240f floor: {}",
+                p.length_frames
+            );
+        }
+        let pipe_sum: u32 = plan.pipes.iter().map(|p| p.length_frames).sum();
+        assert_eq!(
+            pipe_sum,
+            cum_s.saturating_mul(24),
+            "sum of pipe lengths == cumulative S3 shot clips @ 24fps (no dead tail)"
+        );
+        assert_eq!(
+            run.verify.total_frames,
+            cum_s.saturating_mul(24),
+            "S5 cumulative generated frames == cumulative shot clips"
+        );
+        // V6 must pass (the run is fully self-consistent on this path).
+        assert!(
+            run.verify.verified,
+            "V6 length comparison must pass: {:?}",
+            run.verify.issues
+        );
+        // And materialize honors the explicit length: the composer pipe is
+        // 192f (content length), not the 240f default floor.
+        let pipes = crate::generation::video_flow::materialize_pipes(
+            &plan,
+            &crate::generation::video_flow::config::FlowConfig::default_flow().materialize,
+        )
+        .expect("concrete plan materializes");
+        assert_eq!(
+            pipes[0].length_frames,
+            192,
+            "materialized pipe is lengthed to its cumulative content (192f), not the 240f default floor"
         );
     }
 

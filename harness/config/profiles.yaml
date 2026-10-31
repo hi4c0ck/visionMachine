@@ -1,0 +1,170 @@
+# ============================================================================
+#  video-harness / profiles.yaml
+#  Preset generation profiles. Each preset = a { creative, spec } pair:
+#    creative -> binds to node_a
+#    spec     -> binds to node_b
+#  Values reference tag_vocabulary.yaml (tagVocabulary) and style_presets.
+#
+#  DATA ONLY. No executable code.
+# ============================================================================
+
+# Shared hard rules every profile inherits from the repo
+base_constraints:
+  - "response_format = json_schema"
+  - "no on-screen text in clip prompts"
+  - "ambient sound only, no music/subtitles in clip model output"
+  - "identity-lock line in every video prompt"
+  - "max_refs = 4 (film -> scene -> characters)"
+  - "language split: technical EN, narrative any"
+
+# ----------------------------------------------------------------------------
+#  1) CINEMA — repo default, general-purpose
+# ----------------------------------------------------------------------------
+presets:
+  cinema:
+    creative:
+      preset: cinema
+      role: "film director, visual novelist"
+      temperature: 0.7
+      style_preset: auto_from_genre        # pick from tag_vocabulary.style_presets
+      expansion:
+        scene_count_default: 5
+        shots_per_scene: [3, 5]
+        clip_s: [8, 10]
+        detail_level: medium
+        sensory_axes: [light, color, motion, sound, texture, weather]
+      consistency: { ref_depth: 3, max_refs: 4 }
+      language_split: { user: any, technical: en }
+    spec:
+      preset: cinema
+      role: "DOP / mechanical writer"
+      temperature: 0.3
+      payload_target: plan                 # 720P, ~10s clip (repo: agnes-video-2.5-flash)
+      tag_vocabulary: full                # all sets from tag_vocabulary.yaml
+      transitions: [hard_cut, crossfade, dissolve, match_cut, cut_on_action]
+      grade: { saturation: neutral }
+      prompt_templates: { image: shared, video: shared }
+      constraints: inherit_base
+      language_split: { user: any, technical: en }
+
+# ----------------------------------------------------------------------------
+#  2) TRAILER — short, high impact
+# ----------------------------------------------------------------------------
+  trailer:
+    creative:
+      preset: trailer
+      role: "trailer editor / visual novelist"
+      temperature: 0.8
+      style_preset: "Bande-annonce"
+      expansion:
+        scene_count_default: 2
+        shots_per_scene: [2, 3]
+        clip_s: [6, 8]
+        detail_level: high
+        sensory_axes: [impact, motion, color, contrast]
+      consistency: { ref_depth: 3, max_refs: 4 }
+      language_split: { user: any, technical: en }
+    spec:
+      preset: trailer
+      role: "DOP / mechanical writer"
+      temperature: 0.3
+      payload_target: plan
+      tag_vocabulary: full
+      transitions: [crossfade, match_cut, whip_pan, jump_cut]
+      grade: { contrast: high }
+      prompt_templates: { image: shared, video: shared }
+      constraints: inherit_base
+      language_split: { user: any, technical: en }
+
+# ----------------------------------------------------------------------------
+#  3) DOCUMENTARY — long-take, natural
+# ----------------------------------------------------------------------------
+  documentary:
+    creative:
+      preset: documentary
+      role: "documentary director / visual novelist"
+      temperature: 0.5
+      style_preset: Documentaire
+      expansion:
+        scene_count_default: 5
+        shots_per_scene: [1, 2]          # long takes, fewer cuts
+        clip_s: [10, 12]
+        detail_level: medium
+        sensory_axes: [available_light, sound, texture, time_of_day]
+      consistency: { ref_depth: 2, max_refs: 4 }
+      language_split: { user: any, technical: en }
+    spec:
+      preset: documentary
+      role: "DOP / mechanical writer"
+      temperature: 0.2
+      payload_target: plan
+      tag_vocabulary: [size, angle, framing, dof, lens_focal, move, speed,
+                      light_key, light_contrast, grade_saturation, film_stock,
+                      tempo, transition, effects]
+      transitions: [hard_cut, l_cut, j_cut]
+      move: [static, handheld]
+      effects: [none]                    # minimal VFX
+      grade: { saturation: neutral, film_stock: kodak_250d }
+      prompt_templates: { image: shared, video: shared }
+      constraints: inherit_base
+      language_split: { user: any, technical: en }
+
+# ----------------------------------------------------------------------------
+#  4) ANIMATION — stylized, free tier
+# ----------------------------------------------------------------------------
+  animation:
+    creative:
+      preset: animation
+      role: "animation director / visual novelist"
+      temperature: 0.7
+      style_preset: Anime                # or "Style Moebius"
+      expansion:
+        scene_count_default: 5
+        shots_per_scene: [3, 4]
+        clip_s: [8, 10]
+        detail_level: high
+        sensory_axes: [stylized_color, motion, texture, composition]
+      consistency: { ref_depth: 3, max_refs: 4 }
+      language_split: { user: any, technical: en }
+    spec:
+      preset: animation
+      role: "DOP / mechanical writer"
+      temperature: 0.3
+      payload_target: free               # free tier: num_frames/frame_rate, ~8s
+      tag_vocabulary: full
+      grade: { saturation: saturated }
+      effects: [bokeh, magic_glow]
+      prompt_templates: { image: shared, video: shared }
+      constraints: inherit_base
+      language_split: { user: any, technical: en }
+
+# ----------------------------------------------------------------------------
+#  5) ACTION — high energy
+# ----------------------------------------------------------------------------
+  action:
+    creative:
+      preset: action
+      role: "action director / visual novelist"
+      temperature: 0.75
+      style_preset: Action
+      expansion:
+        scene_count_default: 5
+        shots_per_scene: [4, 5]
+        clip_s: [8, 10]
+        detail_level: high
+        sensory_axes: [energy, motion, contrast, impact, sound]
+      consistency: { ref_depth: 3, max_refs: 4 }
+      language_split: { user: any, technical: en }
+    spec:
+      preset: action
+      role: "DOP / mechanical writer"
+      temperature: 0.3
+      payload_target: plan
+      tag_vocabulary: full
+      transitions: [jump_cut, whip_pan, cut_on_action]
+      speed: [speed_ramp, fast]
+      grade: { contrast: high, saturation: saturated }
+      effects: [sparks, smoke, dust]
+      prompt_templates: { image: shared, video: shared }
+      constraints: inherit_base
+      language_split: { user: any, technical: en }

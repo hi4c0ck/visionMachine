@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "SceneSpec",
+  "title": "SceneSpec",
+  "description": "The stable LOOK of a scene. Generated once per scene. Shots inherit from this; only meaningful changes are encoded at shot level.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "scene_id", "time_of_day", "weather", "light", "grade", "ambience", "tempo", "effects_base"
+  ],
+  "properties": {
+    "scene_id":    { "type": "string", "description": "e.g. 'scene_1' or the scene title" },
+    "time_of_day": { "enum": ["dawn", "morning", "midday", "afternoon", "evening", "night"] },
+    "weather":     { "type": "string", "description": "e.g. 'clear', 'brief clouds', 'light rain'" },
+
+    "light": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "contrast", "color_temp_K", "pattern"],
+      "properties": {
+        "key":          { "enum": ["soft", "hard", "low-key", "high-key", "backlit"] },
+        "contrast":     { "enum": ["low", "medium", "high"] },
+        "color_temp_K": { "type": "integer", "minimum": 2500, "maximum": 10000 },
+        "pattern":      { "type": "string" }
+      }
+    },
+
+    "grade": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["palette", "saturation", "contrast", "film_stock"],
+      "properties": {
+        "palette":    { "type": "string" },
+        "saturation": { "enum": ["saturated", "desaturated", "neutral"] },
+        "contrast":   { "enum": ["low", "medium", "high"] },
+        "film_stock": { "enum": ["kodak_250d", "kodak_5219", "kodak_5207", "fuji_super_35", "fuji_velvia", "cine_organic", "neutral", "custom"] }
+      }
+    },
+
+    "ambience": { "type": "string", "description": "base ambient sound for the scene" },
+    "tempo":    { "enum": ["slow", "medium", "fast", "staccato", "sustained"] },
+    "effects_base": {
+      "type": "array",
+      "description": "scene-level effects (fog, rain, etc.). Shot-level effects ADD to this.",
+      "items": { "enum": ["fog", "rain", "smoke", "lens_flare", "bokeh", "sparks", "dust", "snow", "fire", "magic_glow", "glitch", "none"] }
+    }
+  }
+}

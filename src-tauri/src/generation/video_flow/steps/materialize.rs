@@ -23,8 +23,17 @@ fn pipe_length(pipe: &PlanPipe, cfg: &MaterializeParams) -> u32 {
         .map(|s| s.frame_end)
         .max()
         .unwrap_or(0);
-    // Never shorter than the configured default; honor a longer plan.
-    cfg.default_pipe_frames.max(max_end)
+    // A concrete engine pipe carries its own cumulative content length
+    // (one pipe per shot, lengthed to that shot's clip): honor it so the
+    // generated pipe matches its content with no dead tail. A max over the
+    // section ends keeps content from ever overflowing the pipe.
+    // Legacy / sparse marker-bridge pipes (length_frames == 0) keep the
+    // configured default floor.
+    if pipe.length_frames > 0 {
+        pipe.length_frames.max(max_end)
+    } else {
+        cfg.default_pipe_frames.max(max_end)
+    }
 }
 
 /// Lower one plan pipe into a composer `Pipe` with a global style element and a
@@ -112,6 +121,7 @@ mod tests {
                         from: Vec::new(),
                     },
                 ],
+                length_frames: 0,
             }],
         }
     }
@@ -181,6 +191,7 @@ mod tests {
                 global_style: String::new(),
                 media_mode: "text".into(),
                 sections: Vec::new(),
+                length_frames: 0,
             }],
         };
         assert!(matches!(materialize_pipes(&p, &cfg()).unwrap_err(), FlowError::Materialize(_)));
@@ -192,6 +203,46 @@ mod tests {
         p.pipes[0].sections[1].frame_end = 500;
         let pipes = materialize_pipes(&p, &cfg()).unwrap();
         assert_eq!(pipes[0].length_frames, 500, "max section end wins over the default");
+    }
+
+    /// A concrete engine pipe carries its own cumulative content length
+    /// (length_frames > 0): the materialized composer pipe is lengthed to
+    /// THAT content, not the 240-frame default floor — so a shot whose
+    /// scenes sum to 8s×24=192f produces a 192f pipe, not a 240f one with
+    /// a 48-frame dead tail.
+    #[test]
+    fn explicit_length_frames_honored_instead_of_default_floor() {
+        let mut p = plan();
+        // The plan's sections tile 0-48 (48f of content); a concrete engine
+        // pipe would set its own cumulative length, e.g. 48f.
+        p.pipes[0].length_frames = 48;
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        assert_eq!(
+            pipes[0].length_frames,
+            48,
+            "explicit pipe length = the cumulative content length, not the 240f default"
+        );
+        // ...and it still can't be shorter than the content's max end.
+        let mut q = p.clone();
+        q.pipes[0].sections[1].frame_end = 60; // content now out-runs 48
+        let pq = materialize_pipes(&q, &cfg()).unwrap();
+        assert_eq!(
+            pq[0].length_frames, 60,
+            "max section end still wins over an explicit length"
+        );
+    }
+
+    /// Legacy / sparse pipes (length_frames == 0) keep the default floor —
+    /// the old behaviour — so the two plan kinds never collide.
+    #[test]
+    fn zero_length_frames_keeps_default_floor() {
+        let p = plan(); // length_frames: 0, content tiles to 48f
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        assert_eq!(
+            pipes[0].length_frames,
+            240,
+            "legacy pipe (length_frames=0) falls back to the default floor"
+        );
     }
 
     #[test]

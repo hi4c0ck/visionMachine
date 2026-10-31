@@ -1,0 +1,86 @@
+# ============================================================================
+#  video-harness / tag_vocabulary.yaml
+#  CLOSED enum sets. Node B (ShotSpec) may only emit values from here.
+#  The json_schema enums in ../schemas/shot_spec.schema.json are GENERATED
+#  from this file — one source of truth.
+#
+#  DATA ONLY. No executable code.
+# ============================================================================
+
+version: 1
+
+# ---------------------------------------------------------------------------
+#  ENUM TAG SETS  (each becomes a response_format `enum`)
+# ---------------------------------------------------------------------------
+tags:
+  size:        [wide, medium, close-up, over-the-shoulder]
+  angle:       [eye, low, high, dutch, overhead, worm, bird]
+  framing:     [rule_of_thirds, centered, symmetrical, fill_frame, negative_space]
+  dof:         [shallow, medium, deep]
+  lens_focal:  [14, 24, 35, 50, 85, 135]            # focal_mm (mm); + distortion free-text
+  zoom:        [static, in, out, crash, rack_focus, push, pull]
+  move:        [static, pan, tilt, track, dolly, crane, handheld, steadicam, orbit, drone, zoom]
+  speed:       [slow, normal, fast, speed_ramp]
+  light_key:   [soft, hard, low-key, high-key, backlit]
+  light_contrast: [low, medium, high]
+  grade_saturation: [saturated, desaturated, neutral]
+  grade_contrast:   [low, medium, high]
+  film_stock:  [kodak_250d, kodak_5219, kodak_5207, fuji_super_35, fuji_velvia,
+                cine_organic, neutral, custom]
+  effects:     [fog, rain, smoke, lens_flare, bokeh, sparks, dust, snow, fire,
+                magic_glow, glitch, none]
+  tempo:       [slow, medium, fast, staccato, sustained]
+  transition:  [hard_cut, crossfade, dissolve, wipe, match_cut, jump_cut,
+                whip_pan, l_cut, j_cut, cut_on_action]
+
+# ---------------------------------------------------------------------------
+#  NUMERIC BOUNDS  (clamped in Node B, not enum)
+# ---------------------------------------------------------------------------
+bounds:
+  clip_s:        { min: 4, max: 10 }        # 720P engine cap: max ~241f @24fps → 10s
+  color_temp_K:  { min: 2500, max: 10000 }
+  max_refs:      4                          # consistency drawer (repo: <=4 refs)
+  refs_per_type: 3                          # cImgs slice(0,3) in repo
+  shots_per_scene_max: 5                     # VisualNovel cap
+  scenes_max:      24
+
+# ---------------------------------------------------------------------------
+#  STYLE PRESETS  (learned from the repo's `G` genre-tag table, §8.1)
+#  Each = { label, style_string } ; Node A's `film.style` seeds from these.
+# ---------------------------------------------------------------------------
+style_presets:
+  fiction:
+    - { label: "Court-metrage d'auteur", style: "contemplative arthouse short film, natural light, 35mm grain" }
+    - { label: Drame,         style: "naturalistic drama, muted palette, intimate framing" }
+    - { label: Comedie,       style: "bright warm comedy, lively colors, wide lenses" }
+    - { label: Thriller,      style: "tense thriller, low-key lighting, cold teal tones" }
+    - { label: Horreur,      style: "atmospheric horror, deep shadows, desaturated" }
+    - { label: "Science-fiction", style: "visionary sci-fi, vast futuristic scale, clean cold light" }
+    - { label: Fantasy,       style: "epic fantasy, painterly landscapes, golden hour" }
+    - { label: Western,       style: "dusty western, anamorphic wide, sun-baked tones" }
+    - { label: "Film noir",   style: "black and white film noir, hard shadows, rain" }
+    - { label: Romance,       style: "soft romantic cinema, warm bokeh, pastel light" }
+    - { label: Aventure,      style: "adventure blockbuster, dynamic wide shots, saturated" }
+    - { label: Action,        style: "kinetic action, high contrast, motion energy" }
+    - { label: Guerre,        style: "gritty war film, desaturated, handheld" }
+    - { label: Historique,    style: "period drama, authentic costumes, candlelight" }
+    - { label: Policier,      style: "crime investigation, neon night city, moody" }
+    - { label: Cyberpunk,     style: "cyberpunk neon rain, dense city, magenta and cyan" }
+    - { label: "Post-apocalyptique", style: "post-apocalyptic wasteland, rusted ruins, dusty light" }
+  reel:
+    - { label: Documentaire,  style: "observational documentary, natural light, real locations" }
+    - { label: "Docu-fiction", style: "docu-fiction hybrid, handheld, authentic" }
+    - { label: Biopic,        style: "biographical drama, period accurate, intimate close-ups" }
+    - { label: "Film nature", style: "nature documentary, telephoto wildlife, majestic landscapes" }
+  animation:
+    - { label: "Animation 2D", style: "hand-drawn 2D animation, flat colors, ink outlines" }
+    - { label: Anime,         style: "japanese anime cinematic, detailed backgrounds, dramatic lighting" }
+    - { label: "Stop-motion", style: "stop-motion puppets, handmade textures, tabletop sets" }
+    - { label: "Style Moebius", style: "Moebius ligne claire comic art, pastel desert colors, flat non-3D drawing" }
+  experimental:
+    - { label: "Plan-sequence", style: "single continuous take, tracking camera, seamless" }
+    - { label: "Film muet",    style: "silent film look, expressive acting, grain" }
+  short_forms:
+    - { label: "Bande-annonce", style: "movie trailer, epic cuts, dramatic lighting" }
+    - { label: "Clip musical",  style: "music video, stylized, rhythmic visuals" }
+    - { label: Publicite,        style: "premium commercial, glossy, product hero shots" }
