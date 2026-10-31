@@ -9,7 +9,7 @@
 //!
 //!   S0 seed → S1 novel → S2 scene specs → S3 shot specs (+ sub-timeline)
 //!          → S3′ molecules (S4 derive fills prompts) → timeline
-//!   then S5 verify (V1..V5) runs against the produced state, and the
+//!   then S5 verify (V1–V7) runs against the produced state, and the
 //!   G0..G4 gate table is stamped with its "now" state (G0 confirmed = it
 //!   IS the input; G1/G2 pending = user review point; G3/G4 out of text
 //!   scope, auto-confirmable in batch).
@@ -82,12 +82,14 @@ pub struct GateState {
     pub confirm: String,
 }
 
-/// S5 VERIFY result. `issues` uses V1..V5 labels exactly as pipeline.js does.
+/// S5 VERIFY result. `issues` uses V1..V7 labels exactly as pipeline.js does.
+/// V1 shape · V2 tag-closure · V3 counts · V4 frame floor · V5 invariants ·
+/// V6 length comparison · V7 no-op sub-slice (every slice must add information).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VerifyReport {
     pub verified: bool,
-    /// V1..V5 labeled issues (empty = clean).
+    /// V1..V7 labeled issues (empty = clean).
     pub issues: Vec<String>,
     /// Per-shot frame counts at FRAME_RATE.
     pub frames: Vec<u32>,
@@ -204,6 +206,26 @@ fn verify(run: &EngineRun) -> VerifyReport {
         for w in ["subtitle", "caption", "title card"] {
             if contains_word(img, w) || contains_word(vid, w) {
                 issues.push(format!("V5 {} prompt contains on-screen text phrase '{w}'", m.inherit));
+            }
+        }
+    }
+
+    // V7: every sub-slice must ADD information — a non-empty concern delta
+    // against the previous folded effective state. This is the compact-data
+    // signal: the value itself, per shot, no cross-shot comparison and no
+    // numeric metric. A slice that changes nothing (a held or duplicated
+    // state) is a no-op: the user sees a named issue and either merges it
+    // into the neighbor's window or gives it a distinct concern change.
+    for sp in &run.specs {
+        let slices: Vec<Option<PartialConcerns>> =
+            sp.sub_timeline.iter().map(|s| s.state.clone()).collect();
+        let eff = axes::fold(&sp.concerns, &slices);
+        for i in 0..sp.sub_timeline.len() {
+            if axes::diff(&eff[i], &eff[i + 1]).is_empty() {
+                issues.push(format!(
+                    "V7 {} slice {} is a no-op (no concern delta); merge it or give it a distinct change",
+                    sp.shot_id, i + 1
+                ));
             }
         }
     }
@@ -1812,6 +1834,40 @@ mod seed_tests {
             pipes[0].length_frames,
             192,
             "materialized pipe is lengthed to its cumulative content (192f), not the 240f default floor"
+        );
+    }
+
+    /// V7: a sub-slice must ADD information (a non-empty concern delta vs
+    // the previous folded state). A clean seed run has no V7 issues;
+    // holding a slice (state → None) makes it a no-op and fires exactly
+    // one named V7 for that shot + slice. No metric, no cross-shot compare —
+    // the signal is the value itself.
+    #[test]
+    fn v7_flags_no_op_sub_slices() {
+        // Clean seed run: every sub-slice carries a concern delta → no V7.
+        let mut run = entry("a girl follows the river road north at dusk").build_run();
+        let v0 = verify(&run);
+        assert!(
+            v0.issues.iter().all(|i| !i.starts_with("V7")),
+            "clean seed run has no V7 no-op-slice issues, got: {:?}",
+            v0.issues
+        );
+
+        // Hold the develop slice of shot 0 (state → None): it now changes
+        // nothing, so it is a no-op and must be named.
+        run.specs[0].sub_timeline[1].state = None;
+        let v1 = verify(&run);
+        let v7: Vec<_> = v1.issues.iter().filter(|i| i.starts_with("V7")).collect();
+        assert_eq!(
+            v7.len(),
+            1,
+            "exactly one no-op slice is flagged: {:?}",
+            v1.issues
+        );
+        assert!(
+            v7[0].contains(&run.specs[0].shot_id) && v7[0].contains("slice 2"),
+            "V7 names the shot + slice: '{}'",
+            v7[0]
         );
     }
 
