@@ -499,6 +499,10 @@ export interface SessionData {
    *  Absent/legacy = null → the shaper derives ratio from Orientation. */
   videoRatio?: string | null;
   totalGeneratedFrames: number;
+  /** Session-level composed video artifact (the `<session>/session-video/
+   *  session.mp4` path), persisted in the composer row so re-opening the
+   *  session re-attaches it in the tool panel. Absent/legacy = null. */
+  sessionVideoPath?: string | null;
 }
 
 /**

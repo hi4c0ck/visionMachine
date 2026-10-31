@@ -81,6 +81,9 @@ pub async fn get_composer(
         "customHeight": composer.custom_height,
         "videoRatio": composer.video_ratio,
         "totalGeneratedFrames": composer.total_generated_frames,
+        // Session-level composed video artifact (persisted by the compose
+        // writer paths; re-opened sessions re-attach it in the tool panel).
+        "sessionVideoPath": composer.session_video_path,
         "directoryPath": directory_path,
     }))
 }
@@ -126,6 +129,12 @@ pub async fn save_composer(input: SaveInput, state: State<'_, AppState>) -> Resu
         custom_height: input.custom_height.or_else(|| existing.as_ref().and_then(|e| e.custom_height)),
         video_ratio: input.video_ratio.or_else(|| existing.as_ref().and_then(|e| e.video_ratio.clone())),
         total_generated_frames: input.total_generated_frames.unwrap_or(0),
+        // Preserve the session-level composed artifact so a pipe re-save
+        // (which the frontend's saveSession triggers on any composer change)
+        // never wipes the session-video path.
+        session_video_path: existing
+            .as_ref()
+            .and_then(|e| e.session_video_path.clone()),
         created_at: None,
         updated_at: None,
     };

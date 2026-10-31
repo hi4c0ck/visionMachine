@@ -40,6 +40,12 @@ export class SessionServiceImpl implements SessionService {
         // 0012: explicit video aspect-ratio (a model `limits.ratios` entry).
         // Absent on legacy blobs → null (shaper derives from orientation).
         videoRatio: typeof backendData.videoRatio === 'string' && backendData.videoRatio ? backendData.videoRatio : null,
+        // Session-level composed video artifact (persisted in the composer
+        // row by both compose writer paths). Absent on legacy rows → null.
+        sessionVideoPath:
+          typeof backendData.sessionVideoPath === 'string' && backendData.sessionVideoPath
+            ? backendData.sessionVideoPath
+            : null,
         createdAt: backendData.createdAt || Date.now(),
         updatedAt: backendData.updatedAt || Date.now(),
         directoryPath: backendData.directoryPath || '',

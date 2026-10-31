@@ -1365,6 +1365,16 @@ impl GroupCoordinator {
                 )
                 .await
                 .ok();
+            // Also persist the composed artifact at the SESSION level (the
+            // composer row): the group row alone is unreachable on re-open
+            // for sessions without a restorable group, so a restart would
+            // leave the tool panel empty even though the video exists.
+            if let Some(path) = output_path.as_ref() {
+                if let Ok(mut c) = this.db.get_composer(&session_id).await {
+                    c.session_video_path = Some(path.clone());
+                    let _ = this.db.save_composer(&c).await;
+                }
+            }
             this.emit(GroupEvent {
                 group_id: gid_owned.clone(),
                 kind: "compose-terminal".into(),

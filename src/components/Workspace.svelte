@@ -245,6 +245,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			toolsSessionVideo = null;
 			lastComposedSessionVideo = null;
 		}
+		// Session-level composed video persisted in the composer row: a manual
+		// "Compose video" (or a group auto-compose after a restart, when the
+		// group row itself is not restorable) re-attaches here, so the tool
+		// panel shows the full-session video on every re-open of the session.
+		// A missing file falls through to the pipe-clip fallback.
+		if (session.sessionVideoPath) {
+			const ok = await attachSessionVideo(session.sessionVideoPath, `${session.name} — session video`);
+			if (ok) return;
+		}
 		// Fall back to a single-pipe last-gen video only when nothing is
 		// attached yet; a session video that's already showing wins. Note the
 		// `previewIsSessionVideo` reset: single-pipe previews span only that

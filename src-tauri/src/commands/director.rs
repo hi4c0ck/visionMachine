@@ -525,6 +525,7 @@ async fn merge_and_save_composer(
             custom_height: existing.custom_height,
             video_ratio: existing.video_ratio.clone(),
             total_generated_frames: existing.total_generated_frames,
+            session_video_path: existing.session_video_path.clone(),
             created_at: None,
             updated_at: None,
         }

@@ -1844,6 +1844,26 @@ pub async fn compose_session_video(
         }),
     );
 
+    // Persist the composed artifact AT THE SESSION LEVEL (the composer row),
+    // not only in the (optional) generation-group row: re-opening the session
+    // re-attaches it in the tool panel even after a restart.
+    {
+        let db = &state.db.lock().await;
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| composition_error("COMPOSITION_PERSIST_FAILED", "Failed to persist session video path", serde_json::json!({ "error": e })))?;
+        let mut composer = composer;
+        composer.session_video_path = Some(result.output_path.clone());
+        db.save_composer(&composer).await.map_err(|e| {
+            composition_error(
+                "COMPOSITION_PERSIST_FAILED",
+                "Failed to persist session video path",
+                serde_json::json!({ "error": e }),
+            )
+        })?;
+    }
+
     Ok(serde_json::json!({
         "outputPath": result.output_path,
         "ffmpegSource": result.ffmpeg_source,
