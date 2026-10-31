@@ -1130,6 +1130,140 @@ fn shot_motion(g: usize) -> MotionConcern {
     }
 }
 
+/// Per-shot sub-slice journey (the S3 delta-driven slices). Keyed on the
+/// global shot index `g` so SIBLING shots tell DIFFERENT stories within the
+/// same clip: a different camera path, focal path, light-temperature arc,
+/// motion events, and slice split points. `g = 0` is the "establishing"
+/// journey (close-up→medium→wide, 85→50→35mm, cool→warm, dolly then track);
+/// every other shot varies. All values stay tag-closed.
+fn shot_sub_slices(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
+    // Camera size journey (start → mid → end).
+    let cam = [
+        ["close-up", "medium", "wide"],
+        ["wide", "close-up", "medium"],
+        ["medium", "wide", "close-up"],
+        ["over-the-shoulder", "medium", "wide"],
+        ["wide", "medium", "close-up"],
+        ["medium", "close-up", "wide"],
+    ][g % 6];
+    let framing = [
+        ["fill_frame", "rule_of_thirds", "centered"],
+        ["centered", "fill_frame", "rule_of_thirds"],
+        ["rule_of_thirds", "centered", "fill_frame"],
+        ["negative_space", "rule_of_thirds", "centered"],
+        ["fill_frame", "centered", "rule_of_thirds"],
+        ["centered", "fill_frame", "symmetrical"],
+    ][g % 6];
+    let dof = [
+        ["shallow", "medium", "deep"],
+        ["deep", "shallow", "medium"],
+        ["medium", "deep", "shallow"],
+        ["shallow", "medium", "deep"],
+        ["deep", "medium", "shallow"],
+        ["medium", "shallow", "deep"],
+    ][g % 6];
+    let focal = [
+        [85u32, 50, 35],
+        [24, 35, 50],
+        [35, 85, 50],
+        [50, 24, 35],
+        [14, 35, 85],
+        [50, 135, 35],
+    ][g % 6];
+    // Light-temperature arc (open K, close K) + its pattern words.
+    let (open_k, close_k, open_p, close_p) = match g % 6 {
+        0 => (4500, 5500, "cool", "warm"),
+        1 => (5500, 4500, "warm", "cool"),
+        2 => (3200, 6500, "firelight", "moonlight"),
+        3 => (4500, 6500, "dawn", "overcast"),
+        4 => (5000, 3000, "gold", "blue"),
+        _ => (6500, 4500, "tungsten", "daylight"),
+    };
+    // Motion events, keyed per slice (None = no motion delta there).
+    let m0: Option<(&str, &str)> = if g % 6 == 2 { Some(("push", "slow")) } else { None };
+    let m1: Option<(&str, &str)> = match g % 6 {
+        0 => Some(("dolly", "slow")),
+        1 => Some(("crane", "fast")),
+        3 => Some(("handheld", "fast")),
+        _ => None,
+    };
+    let m2: Option<(&str, &str)> = match g % 6 {
+        0 => Some(("track", "normal")),
+        1 => Some(("pan", "normal")),
+        2 => Some(("orbit", "normal")),
+        3 => Some(("tilt", "normal")),
+        4 => Some(("dolly", "slow")),
+        _ => Some(("steadicam", "normal")),
+    };
+    // Slice split points (seconds): [0, mid], [mid, mid2], [mid2, clip].
+    // Varying the split points so sibling shots don't share identical
+    // sub-slice windows (the "same timespan" complaint).
+    let (mid, mid2) = match g % 6 {
+        0 => (clip / 3, clip * 2 / 3),
+        1 => (clip / 2, clip * 3 / 4),
+        2 => (clip * 2 / 3, clip * 5 / 6),
+        3 => (clip / 4, clip * 3 / 4),
+        4 => (clip / 2, clip * 4 / 5),
+        _ => (clip * 2 / 5, clip * 4 / 5),
+    };
+    let mid = mid.max(1).min(clip - 1);
+    let mid2 = mid2.max(mid + 1).min(clip);
+
+    let motion_of = |mv: Option<(&str, &str)>| {
+        mv.map(|(m, sp)| MotionConcern {
+            zoom: "static".into(),
+            r#move: m.to_string(),
+            speed: sp.to_string(),
+        })
+    };
+    let cam_c = |i: usize| {
+        Some(CameraConcern {
+            size: cam[i].into(),
+            angle: "eye".into(),
+            framing: framing[i].into(),
+            dof: dof[i].into(),
+        })
+    };
+
+    vec![
+        SubSlice {
+            from_s: 0,
+            to_s: mid,
+            note: format!("{shot_ref} opens"),
+            state: Some(PartialConcerns {
+                camera: cam_c(0),
+                lens: Some(LensConcern { focal_mm: focal[0], distortion: None }),
+                lighting: Some(LightingConcern { key: "soft".into(), contrast: "medium".into(), color_temp_k: open_k, pattern: Some(open_p.into()) }),
+                motion: motion_of(m0),
+                grade: None, effects: None, audio: None,
+            }),
+        },
+        SubSlice {
+            from_s: mid,
+            to_s: mid2,
+            note: format!("{shot_ref} develops"),
+            state: Some(PartialConcerns {
+                camera: cam_c(1),
+                lens: Some(LensConcern { focal_mm: focal[1], distortion: None }),
+                motion: motion_of(m1),
+                lighting: None, grade: None, effects: None, audio: None,
+            }),
+        },
+        SubSlice {
+            from_s: mid2,
+            to_s: clip,
+            note: format!("{shot_ref} closes"),
+            state: Some(PartialConcerns {
+                camera: cam_c(2),
+                lens: Some(LensConcern { focal_mm: focal[2], distortion: None }),
+                lighting: Some(LightingConcern { key: "soft".into(), contrast: "medium".into(), color_temp_k: close_k, pattern: Some(close_p.into()) }),
+                motion: motion_of(m2),
+                grade: None, effects: None, audio: None,
+            }),
+        },
+    ]
+}
+
 /// S3 Node B + S2 division — concern-grouped shot specs (closed vocab defaults)
 /// and the shot timeline at transition points.
 fn build_specs_and_timeline(
@@ -1165,50 +1299,11 @@ fn build_specs_and_timeline(
                     silence: false,
                 },
             };
-            // Sub-timeline: three clean slices tracking a beat progression.
-            // Each slice carries ONLY the concerns that CHANGE there (the
-            // harness diffStates contract — a slice is a "special moment"
-            // because a concern moved, not because it restated the scene base).
-            // The golden shot_spec distribution: open ECU in cool light,
-            // develop with a dolly, close wide in warm light with a track.
-            // Camera+lens ride all three; lighting on open (cool 4500K) and
-            // close (warm 5500K); motion on develop (dolly) and close (track).
-            let sub = vec![
-                SubSlice {
-                    from_s: 0,
-                    to_s: clip / 3,
-                    note: format!("{shot_ref} opens"),
-                    state: Some(PartialConcerns {
-                        camera: Some(CameraConcern { size: "close-up".into(), angle: "eye".into(), framing: "fill_frame".into(), dof: "shallow".into() }),
-                        lens: Some(LensConcern { focal_mm: 85, distortion: None }),
-                        lighting: Some(LightingConcern { key: "soft".into(), contrast: "medium".into(), color_temp_k: 4500, pattern: Some("cool".into()) }),
-                        motion: None, grade: None, effects: None, audio: None,
-                    }),
-                },
-                SubSlice {
-                    from_s: clip / 3,
-                    to_s: clip * 2 / 3,
-                    note: format!("{shot_ref} develops"),
-                    state: Some(PartialConcerns {
-                        camera: Some(CameraConcern { size: "medium".into(), angle: "eye".into(), framing: "rule_of_thirds".into(), dof: "medium".into() }),
-                        lens: Some(LensConcern { focal_mm: 50, distortion: None }),
-                        motion: Some(MotionConcern { zoom: "static".into(), r#move: "dolly".into(), speed: "slow".into() }),
-                        lighting: None, grade: None, effects: None, audio: None,
-                    }),
-                },
-                SubSlice {
-                    from_s: clip * 2 / 3,
-                    to_s: clip,
-                    note: format!("{shot_ref} closes"),
-                    state: Some(PartialConcerns {
-                        camera: Some(CameraConcern { size: "wide".into(), angle: "eye".into(), framing: "centered".into(), dof: "deep".into() }),
-                        lens: Some(LensConcern { focal_mm: 35, distortion: None }),
-                        lighting: Some(LightingConcern { key: "soft".into(), contrast: "medium".into(), color_temp_k: 5500, pattern: Some("warm".into()) }),
-                        motion: Some(MotionConcern { zoom: "static".into(), r#move: "track".into(), speed: "normal".into() }),
-                        grade: None, effects: None, audio: None,
-                    }),
-                },
-            ];
+            // Sub-timeline: three clean slices tracking a beat progression,
+            // varied per global shot index (camera path, focal path,
+            // light-temperature arc, motion events, split points) so sibling
+            // shots don't collapse into an identical structure.
+            let sub = shot_sub_slices(g, clip, &shot_ref);
             specs.push(ShotSpec {
                 shot_id: shot_id.clone(),
                 novel_ref: shot_ref.clone(),
@@ -1482,17 +1577,14 @@ mod seed_tests {
         // 3 shots per scene → 3 pipes, one per shot.
         assert_eq!(plan.pipes.len(), 3, "one pipe per shot");
 
-        // Pin the EXACT tag sequence per pipe: DELTA-DRIVEN events. The
-        // harness diffStates contract — a concern emits a WINDOWED section
-        // only at the sub-slice where it actually CHANGES; a flat concern is
-        // not repeated (it lives ONCE in global_style, the sustained base).
-        // Seed sub-slices: open (camera+cool light), develop (camera+dolly),
-        // close (camera+warm light+track), then the cut-in transition.
-        // All three shots share the slice structure → identical tag order.
+        // Pin pipe 0 = the "establishing" journey (g=0): close-up→medium→wide,
+        // 85→50→35mm, cool→warm light, dolly then track. The concern events
+        // are DELTA-DRIVEN: a concern emits a windowed section only at the
+        // sub-slice where it actually changes.
         fn tags_of(p: &crate::generation::video_flow::PlanPipe) -> Vec<VideoTag> {
             p.sections.iter().map(|s| s.tag).collect()
         }
-        let expected_seq = vec![
+        let establishing_seq = vec![
             VideoTag::Scene,
             VideoTag::Camera,
             VideoTag::Lighting, // slice 0: cool open (4500K)
@@ -1505,13 +1597,31 @@ mod seed_tests {
             VideoTag::Motion, // slice 2: track
             VideoTag::Transition, // cut-in event
         ];
-        for p in &plan.pipes {
-            assert_eq!(
-                tags_of(p),
-                expected_seq,
-                "each shot pipe carries only the concern events that change per slice"
-            );
+        assert_eq!(
+            tags_of(&plan.pipes[0]),
+            establishing_seq,
+            "pipe 0 (establishing journey) carries the delta-driven concern events"
+        );
+
+        // The whole point of per-shot journeys: sibling shots must NOT be
+        // identical copies. Each shot's camera path, focal path, light-temp
+        // arc, motion events, and slice split points vary with the global
+        // shot index, so no two pipes have the same (tag, range, prompt)
+        // section list.
+        fn sections_key(
+            p: &crate::generation::video_flow::PlanPipe,
+        ) -> Vec<(VideoTag, u32, u32, String)> {
+            p.sections
+                .iter()
+                .map(|s| (s.tag, s.frame_start, s.frame_end, s.prompt.clone()))
+                .collect()
         }
+        let k0 = sections_key(&plan.pipes[0]);
+        let k1 = sections_key(&plan.pipes[1]);
+        let k2 = sections_key(&plan.pipes[2]);
+        assert_ne!(k0, k1, "shot 1's structure differs from the establishing shot");
+        assert_ne!(k0, k2, "shot 2's structure differs from the establishing shot");
+        assert_ne!(k1, k2, "the three sibling shots are pairwise distinct");
 
         // ARCS tile the shot (open/develop/close sub-slice windows, 24fps);
         // each Camera arc overlaps its matching Scene arc in the same window.
