@@ -461,9 +461,22 @@ impl EngineRun {
                     .clone()
                     .unwrap_or_else(|| film_ctx.clone());
 
-                // Surrounding-meta condition text (each spans the WHOLE
-                // shot — the pipe engine composes overlapping tags).
-                let camera_text = {
+                // ── SUSTAINED BASE → global_style ──────────────────────────
+                // The whole-shot look that holds when NOTHING changes: the
+                // scene's light+grade + the ambient sound bed + the base
+                // camera/motion. This is the "whole-scene scenario" that must
+                // live ONCE (in global_style) — it is NOT re-stated as a
+                // per-concern slab. The per-section tags below carry only the
+                // MOMENTS where a concern actually moves (the harness delta).
+                let base_light_grade = [
+                    light_text(&spec.concerns.lighting),
+                    grade_text(&spec.concerns.grade),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
+                let base_camera = {
                     let base = composition_text(&spec.concerns.camera);
                     let lens = if spec.concerns.lens.focal_mm > 0 {
                         format!(" · {}mm lens", spec.concerns.lens.focal_mm)
@@ -472,23 +485,30 @@ impl EngineRun {
                     };
                     format!("{base}{lens}")
                 };
-                let motion_text_ = motion_text(&spec.concerns.motion);
-                let lighting_text = [
-                    light_text(&spec.concerns.lighting),
-                    grade_text(&spec.concerns.grade),
-                ]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join("; ");
-                let transition_text =
-                    format!("{} → {}", spec.transition_in, spec.transition_out);
-                let effect_text = ambience
+                let base_motion = motion_text(&spec.concerns.motion);
+                let ambient = ambience
                     .clone()
                     .filter(|a| !a.is_empty())
                     .map(|a| format!("ambience: {a}"))
                     .unwrap_or_default();
+                let sustained_base = [
+                    base_light_grade.as_str(),
+                    base_camera.as_str(),
+                    base_motion.as_str(),
+                    ambient.as_str(),
+                ]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+                let scene_style = if sustained_base.is_empty() {
+                    scene_style.clone()
+                } else {
+                    format!("{scene_style} · {sustained_base}")
+                };
 
+                let transition_text =
+                    format!("{} → {}", spec.transition_in, spec.transition_out);
                 let shot_f = shot_frames(spec);
                 let mut sections: Vec<PlanSection> = Vec::new();
                 let add =
@@ -508,21 +528,23 @@ impl EngineRun {
                         }
                     };
 
-                // MAIN ARCS: the shot's STORY — S1 prose + beats distributed
-                // across the S3 sub-slice windows (open/develop/close), and
-                // the CAMERA rides those same windows (its shot-size + focal
-                // change across the shot, so it is a variable main arc, not a
-                // full-width slab). No sub-slices → one full-clip arc pair.
+                // MAIN ARCS: the shot's STORY — Scene (S1 prose + beat) and
+                // Camera ride each S3 sub-slice window. DELTA-DRIVEN (the
+                // harness diffStates contract): a concern emits a WINDOWED
+                // section ONLY at the slice where it changes; a flat concern
+                // is not repeated — it lives in the sustained base above.
                 let prose = spec.content.prose.clone();
                 if spec.sub_timeline.is_empty() {
+                    // No slices → the whole shot is one sustained base: one
+                    // Scene arc + one base-Camera arc, both full-clip.
                     add(&mut sections, VideoTag::Scene, &prose, 0, shot_f);
-                    add(&mut sections, VideoTag::Camera, &camera_text, 0, shot_f);
+                    add(&mut sections, VideoTag::Camera, &base_camera, 0, shot_f);
                 } else {
-                    // Per-slice camera/lens: the slice's own concern state when
-                    // present, else the shot's base concern (plain carry — the
-                    // TS carryForward mirror, NOT the axes::fold encode->decode
-                    // snap, so the text stays stable and deterministic).
                     for (i, sl) in spec.sub_timeline.iter().enumerate() {
+                        let s0 = sl.from_s.saturating_mul(24);
+                        let s1 = sl.to_s.saturating_mul(24).max(s0 + 1);
+                        let state = sl.state.as_ref();
+                        // SCENE arc: the beat/story at this moment.
                         let beat = spec
                             .content
                             .beats
@@ -537,46 +559,58 @@ impl EngineRun {
                         if !beat.is_empty() {
                             p.push_str(&format!(" · {beat}"));
                         }
-                        let s0 = sl.from_s.saturating_mul(24);
-                        let s1 = sl.to_s.saturating_mul(24).max(s0 + 1);
                         add(&mut sections, VideoTag::Scene, &p, s0, s1);
-                        // Camera rides this story slice (its shot-size + focal
-                        // in the window), overlapping the scene arc.
-                        let st_camera = sl
-                            .state
-                            .as_ref()
-                            .and_then(|s| s.camera.clone())
-                            .unwrap_or_else(|| spec.concerns.camera.clone());
-                        let st_lens = sl
-                            .state
-                            .as_ref()
-                            .and_then(|s| s.lens.clone())
-                            .unwrap_or_else(|| spec.concerns.lens.clone());
-                        let cam = composition_text(&st_camera);
-                        let lens = if st_lens.focal_mm > 0 {
-                            format!(" · {}mm lens", st_lens.focal_mm)
-                        } else {
-                            String::new()
-                        };
-                        add(&mut sections, VideoTag::Camera, &format!("{cam}{lens}"), s0, s1);
+                        // CAMERA event: only where this slice states a camera
+                        // change (the shot-size / focal move at this moment).
+                        if let Some(cc) = state.and_then(|s| s.camera.clone()) {
+                            let t = composition_text(&cc);
+                            let ls = state
+                                .and_then(|s| s.lens.clone())
+                                .filter(|l| l.focal_mm > 0)
+                                .map(|l| format!(" · {}mm lens", l.focal_mm))
+                                .unwrap_or_default();
+                            add(&mut sections, VideoTag::Camera, &format!("{t}{ls}"), s0, s1);
+                        }
+                        // LIGHTING event: only where this slice changes the
+                        // light (cool open / warm close), never a slab.
+                        if let Some(lc) = state.and_then(|s| s.lighting.clone()) {
+                            let t = [
+                                light_text(&lc),
+                                state
+                                    .and_then(|s| s.grade.clone())
+                                    .map(|g| grade_text(&g))
+                                    .unwrap_or_default(),
+                            ]
+                            .into_iter()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                            add(&mut sections, VideoTag::Lighting, &t, s0, s1);
+                        }
+                        // MOTION event: only where this slice moves (dolly /
+                        // track) — a real in-shot event, not a sustained bed.
+                        if let Some(mc) = state.and_then(|s| s.motion.clone()) {
+                            let t = motion_text(&mc);
+                            add(&mut sections, VideoTag::Motion, &t, s0, s1);
+                        }
+                        // EFFECT event: only where this slice adds an effect.
+                        if let Some(efx) = state.and_then(|s| s.effects.clone()) {
+                            let kept: Vec<_> = efx.into_iter().filter(|e| e != "none").collect();
+                            if !kept.is_empty() {
+                                add(
+                                    &mut sections,
+                                    VideoTag::Effect,
+                                    &format!("effects: {}", kept.join(", ")),
+                                    s0,
+                                    s1,
+                                );
+                            }
+                        }
                     }
                 }
 
-                // SURROUNDING META: sustained CONDITIONS wrap the WHOLE shot —
-                // they overlap the arcs (and each other) instead of chopping
-                // the clip, so the shot reads as one composed frame.
-                add(&mut sections, VideoTag::Motion, &motion_text_, 0, shot_f);
-                add(
-                    &mut sections,
-                    VideoTag::Lighting,
-                    &lighting_text,
-                    0,
-                    shot_f,
-                );
-                // Transition is a CUT EVENT (a concrete action), not a sustained
-                // condition: it occupies a short window at the shot's entry (the
-                // cut-in moment), not the whole shot. Event-like conditions get
-                // sub-windows; sustained ones keep the whole-shot span.
+                // TRANSITION: a cut EVENT at the shot's entry (a concrete
+                // action), not a sustained condition — a short cut-in window.
                 let trans_end = shot_f.min(8).max(1);
                 add(
                     &mut sections,
@@ -584,13 +618,6 @@ impl EngineRun {
                     &transition_text,
                     0,
                     trans_end,
-                );
-                add(
-                    &mut sections,
-                    VideoTag::Effect,
-                    &effect_text,
-                    0,
-                    shot_f,
                 );
 
                 pipes.push(PlanPipe {
@@ -1139,6 +1166,13 @@ fn build_specs_and_timeline(
                 },
             };
             // Sub-timeline: three clean slices tracking a beat progression.
+            // Each slice carries ONLY the concerns that CHANGE there (the
+            // harness diffStates contract — a slice is a "special moment"
+            // because a concern moved, not because it restated the scene base).
+            // The golden shot_spec distribution: open ECU in cool light,
+            // develop with a dolly, close wide in warm light with a track.
+            // Camera+lens ride all three; lighting on open (cool 4500K) and
+            // close (warm 5500K); motion on develop (dolly) and close (track).
             let sub = vec![
                 SubSlice {
                     from_s: 0,
@@ -1147,7 +1181,8 @@ fn build_specs_and_timeline(
                     state: Some(PartialConcerns {
                         camera: Some(CameraConcern { size: "close-up".into(), angle: "eye".into(), framing: "fill_frame".into(), dof: "shallow".into() }),
                         lens: Some(LensConcern { focal_mm: 85, distortion: None }),
-                        motion: None, lighting: None, grade: None, effects: None, audio: None,
+                        lighting: Some(LightingConcern { key: "soft".into(), contrast: "medium".into(), color_temp_k: 4500, pattern: Some("cool".into()) }),
+                        motion: None, grade: None, effects: None, audio: None,
                     }),
                 },
                 SubSlice {
@@ -1157,7 +1192,8 @@ fn build_specs_and_timeline(
                     state: Some(PartialConcerns {
                         camera: Some(CameraConcern { size: "medium".into(), angle: "eye".into(), framing: "rule_of_thirds".into(), dof: "medium".into() }),
                         lens: Some(LensConcern { focal_mm: 50, distortion: None }),
-                        motion: None, lighting: None, grade: None, effects: None, audio: None,
+                        motion: Some(MotionConcern { zoom: "static".into(), r#move: "dolly".into(), speed: "slow".into() }),
+                        lighting: None, grade: None, effects: None, audio: None,
                     }),
                 },
                 SubSlice {
@@ -1167,7 +1203,9 @@ fn build_specs_and_timeline(
                     state: Some(PartialConcerns {
                         camera: Some(CameraConcern { size: "wide".into(), angle: "eye".into(), framing: "centered".into(), dof: "deep".into() }),
                         lens: Some(LensConcern { focal_mm: 35, distortion: None }),
-                        motion: None, lighting: None, grade: None, effects: None, audio: None,
+                        lighting: Some(LightingConcern { key: "soft".into(), contrast: "medium".into(), color_temp_k: 5500, pattern: Some("warm".into()) }),
+                        motion: Some(MotionConcern { zoom: "static".into(), r#move: "track".into(), speed: "normal".into() }),
+                        grade: None, effects: None, audio: None,
                     }),
                 },
             ];
@@ -1444,57 +1482,45 @@ mod seed_tests {
         // 3 shots per scene → 3 pipes, one per shot.
         assert_eq!(plan.pipes.len(), 3, "one pipe per shot");
 
-        // Pin the EXACT tag sequence per pipe: MAIN ARCS — Scene + Camera ride
-        // each S3 sub-slice window (the camera's shot-size/focal change is a
-        // variable arc, not a full-width slab) — interleaved, then the
-        // SURROUNDING META that spans the whole shot. Shot 0's motion concern
-        // is empty ("static/normal") → its Motion section is SKIPPED.
+        // Pin the EXACT tag sequence per pipe: DELTA-DRIVEN events. The
+        // harness diffStates contract — a concern emits a WINDOWED section
+        // only at the sub-slice where it actually CHANGES; a flat concern is
+        // not repeated (it lives ONCE in global_style, the sustained base).
+        // Seed sub-slices: open (camera+cool light), develop (camera+dolly),
+        // close (camera+warm light+track), then the cut-in transition.
+        // All three shots share the slice structure → identical tag order.
         fn tags_of(p: &crate::generation::video_flow::PlanPipe) -> Vec<VideoTag> {
             p.sections.iter().map(|s| s.tag).collect()
         }
-        assert_eq!(
-            tags_of(&plan.pipes[0]),
-            vec![
-                VideoTag::Scene,
-                VideoTag::Camera,
-                VideoTag::Scene,
-                VideoTag::Camera,
-                VideoTag::Scene,
-                VideoTag::Camera,
-                VideoTag::Lighting,
-                VideoTag::Transition,
-                VideoTag::Effect
-            ],
-            "shot 0: 3 (scene,camera) arc pairs + whole-shot meta (motion empty → skipped)"
-        );
-        assert_eq!(
-            tags_of(&plan.pipes[1]),
-            vec![
-                VideoTag::Scene,
-                VideoTag::Camera,
-                VideoTag::Scene,
-                VideoTag::Camera,
-                VideoTag::Scene,
-                VideoTag::Camera,
-                VideoTag::Motion,
-                VideoTag::Lighting,
-                VideoTag::Transition,
-                VideoTag::Effect
-            ],
-            "shot 1: 3 (scene,camera) arc pairs + all whole-shot meta conditions"
-        );
+        let expected_seq = vec![
+            VideoTag::Scene,
+            VideoTag::Camera,
+            VideoTag::Lighting, // slice 0: cool open (4500K)
+            VideoTag::Scene,
+            VideoTag::Camera,
+            VideoTag::Motion, // slice 1: dolly
+            VideoTag::Scene,
+            VideoTag::Camera,
+            VideoTag::Lighting, // slice 2: warm close (5500K)
+            VideoTag::Motion, // slice 2: track
+            VideoTag::Transition, // cut-in event
+        ];
+        for p in &plan.pipes {
+            assert_eq!(
+                tags_of(p),
+                expected_seq,
+                "each shot pipe carries only the concern events that change per slice"
+            );
+        }
 
         // ARCS tile the shot (open/develop/close sub-slice windows, 24fps);
-        // Camera overlaps its matching Scene arc in the same window (the pipe
-        // engine composes overlapping tags as conditions), and the whole-shot
-        // META spans the whole shot.
+        // each Camera arc overlaps its matching Scene arc in the same window.
         let shot_f: u32 = run.specs[0].clip_s * 24;
         let p0 = &plan.pipes[0];
         let scenes: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Scene).collect();
         let cams: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Camera).collect();
         assert_eq!(scenes.len(), 3, "one scene arc per S3 sub-slice");
-        assert_eq!(cams.len(), 3, "one camera arc per S3 sub-slice");
-        // Each camera arc overlaps its matching scene arc in the same window.
+        assert_eq!(cams.len(), 3, "camera event rides every sub-slice");
         for i in 0..3 {
             assert_eq!(
                 (scenes[i].frame_start, scenes[i].frame_end),
@@ -1505,19 +1531,26 @@ mod seed_tests {
         assert_eq!((scenes[0].frame_start, scenes[0].frame_end), (0, 48), "arc 0 opens");
         assert_eq!((scenes[1].frame_start, scenes[1].frame_end), (48, 120), "arc 1 develops");
         assert_eq!((scenes[2].frame_start, scenes[2].frame_end), (120, shot_f), "arc 2 closes");
-        // Sustained meta (motion / lighting / effect) wraps the whole shot;
-        // the transition is a CUT EVENT and occupies a short leading window.
-        for meta in p0.sections.iter().filter(|s| !matches!(s.tag, VideoTag::Scene | VideoTag::Camera | VideoTag::Transition))
-        {
-            assert_eq!(
-                (meta.frame_start, meta.frame_end),
-                (0, shot_f),
-                "sustained meta spans the whole shot (overlaps the arcs), tag {:?}",
-                meta.tag
-            );
-        }
+        // DELTA-DRIVEN: lighting fires only on the cool-open + warm-close
+        // slices (2 sections, not a whole-shot slab); motion only on
+        // develop + close (dolly then track).
+        let lts: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Lighting).collect();
+        assert_eq!(lts.len(), 2, "lighting event only where the slice changes it");
+        assert_eq!((lts[0].frame_start, lts[0].frame_end), (0, 48), "cool open window");
+        assert_eq!((lts[1].frame_start, lts[1].frame_end), (120, shot_f), "warm close window");
+        let mts: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Motion).collect();
+        assert_eq!(mts.len(), 2, "motion event only where the slice moves");
+        assert_eq!((mts[0].frame_start, mts[0].frame_end), (48, 120), "develop dolly window");
+        assert_eq!((mts[1].frame_start, mts[1].frame_end), (120, shot_f), "close track window");
+        // No Effect event in the deterministic seed (effects_base empty) —
+        // the genre ambience bed moved to the sustained base in global_style.
+        assert!(
+            p0.sections.iter().all(|s| s.tag != VideoTag::Effect),
+            "flat ambience is not re-emitted as a whole-shot Effect slab"
+        );
+        // Transition = a cut EVENT: a short leading window, not the whole shot.
         let trans: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Transition).collect();
-        assert!(!trans.is_empty(), "transition section present");
+        assert_eq!(trans.len(), 1, "one cut-in event per shot");
         assert_eq!(trans[0].frame_start, 0, "transition opens the shot");
         assert!(
             trans[0].frame_end <= shot_f.min(8),
@@ -1536,39 +1569,43 @@ mod seed_tests {
                 .map(|s| s.prompt.as_str())
                 .unwrap_or("<missing>")
         }
-        // S3 camera ARCs: one per sub-slice, carrying that slice's concern
-        // state (close-up→medium→wide, 85→50→35mm) in the exact derive.rs
-        // format — the shot-internal camera journey, not a full-width slab.
-        fn camera_of(
+        // Camera events ride all 3 sub-slices (close-up→medium→wide,
+        // 85→50→35mm) in the exact derive.rs format — the shot-internal
+        // camera journey, not a full-width slab.
+        fn texts_of(
             p: &crate::generation::video_flow::plan::PlanPipe,
+            tag: VideoTag,
         ) -> Vec<String> {
             p.sections
                 .iter()
-                .filter(|s| s.tag == VideoTag::Camera)
+                .filter(|s| s.tag == tag)
                 .map(|s| s.prompt.clone())
                 .collect()
         }
         assert_eq!(
-            camera_of(&plan.pipes[0]),
+            texts_of(&plan.pipes[0], VideoTag::Camera),
             vec![
                 "close-up shot, fill_frame framing, shallow depth of field · 85mm lens",
                 "medium shot, rule_of_thirds framing, medium depth of field · 50mm lens",
                 "wide shot, deep depth of field · 35mm lens",
             ],
-            "camera arcs ride the 3 sub-slices (size + focal change per window)"
+            "camera events ride the 3 sub-slices (size + focal per window)"
         );
-        // S3 motion (shot_motion(0) is static/normal → no Motion section on
-        // pipe 0; shot 1 is "pan, slow speed").
+        // Lighting DELTA: only the two slices that change the light —
+        // the cool open (4500K) and the warm close (5500K). Never a slab.
         assert_eq!(
-            prompt_of(&plan.pipes[1], VideoTag::Motion),
-            "pan, slow speed",
-            "motion concern text (S3 shot_motion(1))"
+            texts_of(&plan.pipes[0], VideoTag::Lighting),
+            vec![
+                "soft key light, medium contrast, 4500K, cool",
+                "soft key light, medium contrast, 5500K, warm",
+            ],
+            "lighting fires only where the slice changes it (cool→warm)"
         );
-        // S2 lighting+grade (the scene spec's light + grade, joined by '; ').
+        // Motion DELTA: only where the camera moves (dolly develop, track close).
         assert_eq!(
-            prompt_of(&plan.pipes[0], VideoTag::Lighting),
-            "soft key light, medium contrast, 5000K, ambient; neutral palette, kodak_250d film stock",
-            "lighting concern text (S2 scene spec light + grade)"
+            texts_of(&plan.pipes[0], VideoTag::Motion),
+            vec!["dolly, slow speed", "track"],
+            "motion fires only where the slice moves"
         );
         // S3 transitions (first shot hard_cut, the rest crossfade).
         assert_eq!(
@@ -1581,11 +1618,17 @@ mod seed_tests {
             "crossfade → crossfade",
             "later shots crossfade"
         );
-        // Effect = the S2 genre ambience bed.
+        // SUSTAINED BASE now lives in global_style (the whole-scene look): the
+        // flat grade + the genre ambience bed that no longer appear as slabs.
         assert!(
-            prompt_of(&plan.pipes[0], VideoTag::Effect).starts_with("ambience:"),
-            "effect section carries the genre ambience: '{}'",
-            prompt_of(&plan.pipes[0], VideoTag::Effect)
+            plan.pipes[0].global_style.contains("kodak_250d"),
+            "sustained grade base lives in global_style, not a whole-shot slab: {}",
+            plan.pipes[0].global_style
+        );
+        assert!(
+            plan.pipes[0].global_style.contains("ambience:"),
+            "the genre ambience bed lives in global_style: {}",
+            plan.pipes[0].global_style
         );
 
         // FULL-NOVEL CONTEXT (user fix): every pipe's global style carries

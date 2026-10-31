@@ -162,16 +162,16 @@
 
 	// ── Phase 2: Extract tab — editable concrete sections ────────────────
 	// Mirrors the concrete structure produced by Rust's EngineRun::plan_from_engine:
-	// one pipe per shot. MAIN ARCS: Scene + Camera ride each S3 sub-slice window
-	// (the camera's shot-size/focal journey is a variable arc, not a full-width
-	// slab). SURROUNDING META: Motion/Lighting/Transition/Effect wrap the whole
-	// shot and overlap the arcs. The TS `localExtract` list must match the Rust
+	// one pipe per shot. DELTA-DRIVEN: a concern section is emitted ONLY at the
+	// sub-slice where it actually CHANGES (the harness diffStates contract); a
+	// flat concern is not repeated — it lives once in the pipe's global_style
+	// (the sustained base). The TS `localExtract` list must match the Rust
 	// section ordering + pipeIndex/occurrence so `applyFlowEdited` targets the
 	// right slots.
 	type LocalSection = {
 		pipeIndex: number; // shot ordinal (0-based across all shots)
 		tag: string; // the closed concern vocabulary — the addressing key
-		occurrence: number; // Nth section of this tag in the pipe (arcs are 0/1/2)
+		occurrence: number; // Nth section of this tag in the pipe
 		range: string;
 		prompt: string;
 		source: string;
@@ -230,28 +230,31 @@
 		const out: LocalSection[] = [];
 		let shotOrd = 0; // global shot ordinal = pipeIndex
 		for (const grp of specsByScene(e)) {
-			const ambience = grp.scene.ambience;
 			for (const sp of grp.specs) {
-				const motT = motionText(sp.concerns.motion);
-				const litT = lightText(sp.concerns.lighting);
-				const gradeT = gradeText(sp.concerns.grade);
-				const lightGrade = [litT, gradeT].filter(Boolean).join('; ');
 				const transT = `${sp.transition_in} → ${sp.transition_out}`;
-				const effectT = ambience ? `ambience: ${ambience}` : '';
 
-				// Per-slice camera helper (mirror of Rust's plain base-carry:
-				// the slice's own camera/lens when present, else the shot base).
-				const camFor = (cam: { size?: string; angle?: string; framing?: string; dof?: string }, lens: { focal_mm?: number }): string => {
+				// Per-slice concern helpers (mirror of the Rust delta-driven
+				// emission): a concern section is emitted ONLY where the slice
+				// states that concern — never re-stated as a whole-shot slab.
+				const camFor = (cam: { size?: string; angle?: string; framing?: string; dof?: string }, lens?: { focal_mm?: number }): string => {
 					const base = compositionText(cam);
-					const suf = lens.focal_mm && lens.focal_mm > 0 ? ` · ${lens.focal_mm}mm lens` : '';
+					const suf = lens?.focal_mm && lens.focal_mm > 0 ? ` · ${lens.focal_mm}mm lens` : '';
 					return base + suf;
+				};
+				const lightingFor = (lc: { key?: string; contrast?: string; color_temp_K?: number; pattern?: string | null }, grade?: { palette?: string; saturation?: string; film_stock?: string }): string => {
+					const parts = [lightText(lc), grade ? gradeText(grade) : ''].filter(Boolean);
+					return parts.join('; ');
+				};
+				const effectFor = (efx: string[] | undefined): string => {
+					const kept = (efx ?? []).filter((x) => x && x !== 'none');
+					return kept.length ? `effects: ${kept.join(', ')}` : '';
 				};
 
 				const clipF = sp.clip_s * 24;
 				const rng = (a: number, b: number) => `${String(a).padStart(2, '0')}–${b}`;
 
 				// Per-tag occurrence counter within this pipe (Rust's plan
-				// order: scene+camera arc pairs first, then whole-shot meta).
+				// order: delta-driven slice events first, then the cut-in).
 				const occ = new Map<string, number>();
 				const push = (tag: string, prompt: string, start: number, end: number) => {
 					if (prompt.trim() && end > start) {
@@ -268,11 +271,10 @@
 					}
 				};
 
-				// MAIN ARCS (mirror of Rust plan_from_engine): the shot's
-				// STORY — S1 prose + beats AND the CAMERA ride the S3
-				// sub-slice windows (the camera's shot-size/focal change is a
-				// variable arc, not a full-width slab). No sub-slices → one
-				// full-clip pair.
+				// DELTA-DRIVEN ARCS (mirror of Rust plan_from_engine): the
+				// shot's STORY (Scene) plus every concern that CHANGES at a
+				// slice (Camera / Lighting / Motion / Effect). No sub-slices →
+				// one sustained base pair (Scene + base Camera), both full-clip.
 				const prose = sp.content.prose;
 				const slices = sp.sub_timeline.length ? sp.sub_timeline : null;
 				if (!slices) {
@@ -282,27 +284,34 @@
 					slices.forEach((sl, i) => {
 						const s0 = sl.from_s * 24;
 						const s1 = Math.max(sl.to_s * 24, s0 + 1);
+						// SCENE arc: the beat/story at this moment.
 						let p = i === 0 ? `${prose} — ${sl.note}` : sl.note;
 						const beat = sp.content.beats[i];
 						if (beat) p += ` · ${beat}`;
 						push('scene', p, s0, s1);
-						// Camera rides this story slice (its own shot-size +
-						// focal), overlapping the scene arc.
-						const cam = sl.state?.camera ?? sp.concerns.camera;
-						const lens = sl.state?.lens ?? sp.concerns.lens;
-						push('camera', camFor(cam, lens), s0, s1);
+						const st = sl.state;
+						// CAMERA event: only where this slice states a camera.
+						if (st?.camera) push('camera', camFor(st.camera, st.lens ?? undefined), s0, s1);
+						// LIGHTING event: only where this slice changes the light.
+						if (st?.lighting) push('lighting', lightingFor(st.lighting, st.grade ?? undefined), s0, s1);
+						// MOTION event: only where this slice moves.
+						if (st?.motion) {
+							const mt = motionText({ move: st.motion.move, zoom: st.motion.zoom, speed: st.motion.speed });
+							if (mt) push('motion', mt, s0, s1);
+						}
+						// EFFECT event: only where this slice adds an effect.
+						if (st?.effects && st.effects.length) {
+							const ef = effectFor(st.effects);
+							if (ef) push('effect', ef, s0, s1);
+						}
 					});
 				}
 
-				// SURROUNDING META (mirror): conditions that wrap the WHOLE
-				// shot — they overlap the arcs (and each other), so the shot
-				// reads as one composed frame, not a chopped clip. The
-				// transition is a cut EVENT, not a sustained condition: it
-				// gets a short leading window, not the whole shot.
-				push('motion', motT, 0, clipF);
-				push('lighting', lightGrade, 0, clipF);
+				// SURROUNDING CUT-IN: the transition is a cut EVENT, not a
+				// sustained condition — a short leading window, not the whole
+				// shot. (The sustained look + ambience live in global_style,
+				// not as re-stated per-concern slabs.)
 				push('transition', transT, 0, Math.min(8, clipF));
-				push('effect', effectT, 0, clipF);
 
 				shotOrd++;
 			}
