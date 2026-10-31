@@ -2704,7 +2704,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 							if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
 						}}
 					/>
-				{:else}
+				{/if}
+				<!-- The harness panel (Director + Extract + Scoreboard) stays
+				     MOUNTED while Pipes is showing — only hidden, never unmounted.
+				     An unmount destroyed its in-memory state (Extract edits,
+				     gate confirms, open disclosures, in-flight run) and the
+				     re-mount re-seeded everything from the persisted doc, so
+				     the user's unsaved work was "swallowed" on every tab
+				     switch. display:none keeps it out of view and tab order
+				     without killing its state. -->
+				<div class="harness-mount" class:harness-hidden={composerTab === 'pipes'}>
 					<DirectorPanel
 						activeTab={composerTab}
 						sessionId={selectedSession.id}
@@ -2716,7 +2725,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						onMetaChange={(meta) => (tabMeta = meta)}
 						onApplied={(id) => reconcileComposerIntoProjects(id)}
 					/>
-				{/if}
+				</div>
 			{:else}
 				<div class="composer-empty">
 					<div class="empty-icon"><ChromeIcon id="proj-reel" size={40} /></div>
@@ -3121,6 +3130,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		height: 100%;
 		color: var(--text-muted, #6b6b80);
 		gap: 16px;
+	}
+
+	/* The harness panel stays mounted (state survives Pipes → back); when
+	   Pipes is active it is display:none. `contents` when visible keeps the
+	   wrapper layout-transparent so .director-root sizes exactly as before. */
+	.harness-mount {
+		display: contents;
+	}
+	.harness-hidden {
+		display: none;
 	}
 
 
