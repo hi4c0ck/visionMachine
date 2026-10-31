@@ -2,14 +2,15 @@
 //!
 //! This is the "solid pipes structure in the compose section" the flow targets:
 //! each `PlanPipe` becomes a composer `Pipe` carrying a global-style element and
-//! a timeline whose sections are the video-engine tags. The conversion is pure
+//! one concrete timeline zone [0, pipe_length] with every section tag nested
+//! inside it at its own sub-range. The conversion is pure
 //! and deterministic; it emits real `composer` model values (not serde blobs)
 //! so the output drops straight into the existing compose/save path.
 
 use crate::generation::video_flow::config::MaterializeParams;
 use crate::generation::video_flow::error::{FlowError, FlowResult};
 use crate::generation::video_flow::plan::{PlanPipe, StructuredVideoPlan};
-use crate::models::composer::{GlobalElement, Pipe, Segment, TagElement, TimelineElement};
+use crate::models::composer::{GlobalElement, Pipe, Segment, TagElement, TagType, TimelineElement};
 
 /// A video-engine tag's numeric value on a composer `TagElement`. Text-only
 /// sections carry no magnitude (the prompt is the content), so value is 0.0;
@@ -36,6 +37,24 @@ fn pipe_length(pipe: &PlanPipe, cfg: &MaterializeParams) -> u32 {
     }
 }
 
+/// The frontend's `TAG_SPECIFICATIONS` entry for a composer `TagType` — the
+/// color + name + construct rule the timeline pill needs to render in its lane
+/// color. Mirrored here (Rust is the source of the concrete engine pipes; the
+/// `get_composer` round-trip loses `spec` otherwise and the frontend fills the
+/// gray `#888` fallback, so every generated pill would be grey).
+fn tag_spec_json(t: &TagType) -> serde_json::Value {
+    use serde_json::json;
+    match t {
+        TagType::Scene => json!({"color": "#FF6B6B", "name": "Scene", "constructRule": "plain", "usePrompt": true}),
+        TagType::Camera => json!({"color": "#FFE66D", "name": "Camera", "constructRule": "json", "min": 0, "max": 360}),
+        TagType::Rotation => json!({"color": "#4ECDC4", "name": "Rotation", "constructRule": "json", "min": -180, "max": 180}),
+        TagType::Lighting => json!({"color": "#45B7D1", "name": "Lighting", "constructRule": "plain", "usePrompt": true}),
+        TagType::Effect => json!({"color": "#96CEB4", "name": "Effect", "constructRule": "markdown", "usePrompt": true}),
+        TagType::Zoom => json!({"color": "#DDA0DD", "name": "Zoom", "constructRule": "json", "min": 0.5, "max": 5}),
+        TagType::Transition => json!({"color": "#FF6B35", "name": "Transition", "constructRule": "plain", "usePrompt": true}),
+    }
+}
+
 /// Lower one plan pipe into a composer `Pipe` with a global style element and a
 /// timeline element whose segments are the plan's sections.
 fn plan_pipe_to_composer(pp: &PlanPipe, index: usize, cfg: &MaterializeParams) -> Pipe {
@@ -55,15 +74,25 @@ fn plan_pipe_to_composer(pp: &PlanPipe, index: usize, cfg: &MaterializeParams) -
     global.prompt = Some(pp.global_style.clone());
     pipe.elements.push(crate::models::composer::PipeElement::Global(global));
 
-    // One timeline element; each section is its own single-tag segment.
+    // ONE concrete zone per pipe = the whole shot [0, pipe_length]. Every
+    // section tag NESTS inside it at its own sub-range: the story/camera
+    // arcs keep their S3 sub-slice windows, the sustained meta (motion /
+    // lighting / effect) fill the zone, and the transition cut-in is a short
+    // leading window. A sub-tag can never exceed the zone's concrete
+    // boundary (the composer invariant). No more one-hidden-segment-per-tag.
+    let len = pipe_length(pp, cfg);
     let mut timeline = TimelineElement::new();
+    let mut zone = Segment::new(0, len);
     for s in &pp.sections {
-        let mut segment = Segment::new(s.frame_start, s.frame_end);
-        let mut tag = TagElement::new(s.tag.to_tag_type(), s.frame_start, s.frame_end, TAG_VALUE);
+        let tag_type = s.tag.to_tag_type();
+        let mut tag = TagElement::new(tag_type.clone(), s.frame_start, s.frame_end, TAG_VALUE);
         tag.prompt = Some(s.prompt.clone());
-        segment.tags.push(tag);
-        timeline.segments.push(segment);
+        // Carries the frontend's TAG_SPECIFICATIONS color/name so the pill
+        // renders in its lane color (not the gray #888 fallback).
+        tag.spec = Some(tag_spec_json(&tag_type));
+        zone.tags.push(tag);
     }
+    timeline.segments.push(zone);
     pipe.elements.push(crate::models::composer::PipeElement::Timeline(timeline));
 
     pipe
@@ -159,16 +188,59 @@ mod tests {
 
         let (g, t) = global_and_timeline(p);
         assert_eq!(g.prompt.as_deref(), Some("cinematic, warm golden hour"));
-        assert_eq!(t.segments.len(), 2, "one segment per plan section");
-        // Tags keep their video-engine type + the section prompt.
-        assert_eq!(t.segments[0].tags[0].tag, TagType::Camera);
-        assert_eq!(t.segments[0].tags[0].prompt.as_deref(), Some("wide tracking shot"));
-        assert_eq!(
-            t.segments[0].tags[0].frame_start,
-            0,
-            "segment frame range mirrors the section"
+        // ONE concrete zone per pipe [0, pipe_length]; every section tag nests
+        // inside it at its own sub-range (no hidden one-segment-per-tag hack).
+        assert_eq!(t.segments.len(), 1, "one concrete zone per pipe");
+        let zone = &t.segments[0];
+        assert_eq!((zone.frame_start, zone.frame_end), (0, 240), "zone = the whole pipe");
+        assert_eq!(zone.tags.len(), 2, "both section tags nest inside the zone");
+        // Sub-tags keep their own video-engine type + prompt + sub-range, and
+        // never exceed the zone's concrete boundary.
+        assert_eq!(zone.tags[0].tag, TagType::Camera);
+        assert_eq!(zone.tags[0].prompt.as_deref(), Some("wide tracking shot"));
+        assert_eq!((zone.tags[0].frame_start, zone.tags[0].frame_end), (0, 24), "camera nests at its sub-range");
+        assert_eq!(zone.tags[1].tag, TagType::Lighting);
+        assert_eq!((zone.tags[1].frame_start, zone.tags[1].frame_end), (24, 48), "lighting nests at its sub-range");
+        assert!(
+            zone.tags.iter().all(|tg| tg.frame_start >= zone.frame_start && tg.frame_end <= zone.frame_end),
+            "no sub-tag exceeds the zone boundary"
         );
-        assert_eq!(t.segments[1].tags[0].tag, TagType::Lighting);
+    }
+
+    /// Every materialized tag carries its frontend `TAG_SPECIFICATIONS` entry
+    /// (color + name) so the timeline pill renders in its lane color instead of
+    /// the gray `#888` fallback the session loader uses for a missing spec.
+    #[test]
+    fn materialized_tags_carry_their_lane_color_spec() {
+        let pipes = materialize_pipes(&plan(), &cfg()).unwrap();
+        let (_, t) = global_and_timeline(&pipes[0]);
+        // All section tags nest inside the single zone (segments[0]); each must
+        // carry its lane color.
+        let zone = &t.segments[0];
+        let cam_color = zone
+            .tags
+            .iter()
+            .find(|tg| tg.tag == TagType::Camera)
+            .and_then(|tg| tg.spec.as_ref())
+            .and_then(|s| s.get("color"))
+            .and_then(|v| v.as_str());
+        let lit_color = zone
+            .tags
+            .iter()
+            .find(|tg| tg.tag == TagType::Lighting)
+            .and_then(|tg| tg.spec.as_ref())
+            .and_then(|s| s.get("color"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            cam_color,
+            Some("#FFE66D"),
+            "camera tag carries its lane color (frontend TAG_SPECIFICATIONS)"
+        );
+        assert_eq!(
+            lit_color,
+            Some("#45B7D1"),
+            "lighting tag carries its lane color"
+        );
     }
 
     #[test]

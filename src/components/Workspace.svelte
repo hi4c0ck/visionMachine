@@ -1049,8 +1049,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	//  2. Persist composer mutations to SQLite via saveSession (debounced).
 	//     SQLite is the source of truth; no longer routes through saveProjects.
 	const saveTimers = new Map<string, number>();
-	setOnUpdate((sessionId) => {
-		// 1) UI re-sync - only for the session the user is currently viewing
+	// Re-sync a composer store session back into the projects tree that
+	// `selectedSession` (and thus the Pipes tab) actually renders from.
+	// The store's `sessions` Map and the `projects` tree are two holders;
+	// only store *mutations* fire `setOnUpdate`, but a backend load
+	// (loadSession, e.g. after an I9 apply) writes the store WITHOUT
+	// firing it. This is the one job the apply path still owes: push the
+	// freshly-loaded pipes into the tree so the Pipes tab shows them now,
+	// instead of only after the session is re-opened.
+	function reconcileComposerIntoProjects(sessionId: string) {
 		if (selectedSessionId === sessionId && selectedProject) {
 			const freshSession = sessions.get(sessionId);
 			if (freshSession) {
@@ -1065,6 +1072,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				});
 			}
 		}
+	}
+	setOnUpdate((sessionId) => {
+		// 1) UI re-sync - only for the session the user is currently viewing
+		reconcileComposerIntoProjects(sessionId);
 
 		// 2) Persistence - debounced per session
 		const pending = saveTimers.get(sessionId);
@@ -2694,6 +2705,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 							logSignal(selectedSession.id, kind, targetSpan, note)}
 						onRunningChange={(b) => (directorRunning = b)}
 						onMetaChange={(meta) => (tabMeta = meta)}
+						onApplied={(id) => reconcileComposerIntoProjects(id)}
 					/>
 				{/if}
 			{:else}

@@ -46,7 +46,11 @@ impl FlowConfig {
             },
             structure: StructureParams {
                 step_version: 1,
-                max_sections_per_pipe: 8,
+                // The concrete engine plan emits 2*N story sections (Scene +
+                // Camera ride the N sub-slice windows) + up to 4 whole-shot
+                // meta (Motion/Lighting/Transition/Effect). With the schema
+                // cap N<=4 that's <= 12, so the guardrail is 12.
+                max_sections_per_pipe: 12,
                 max_tags_per_section: 24,
                 default_section_frames: 24,
             },

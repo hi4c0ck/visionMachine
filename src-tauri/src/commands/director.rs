@@ -433,8 +433,13 @@ pub async fn director_apply_flow(
 /// engine plan skips empty concern sections, so a shot's lighting section
 /// does NOT always sit at a fixed index. Tag is the closed vocabulary both
 /// sides share (`VideoTag::from_keyword`), so the addressing is stable no
-/// matter how sections are ordered/skipped. Out-of-bounds pipe, unknown
-/// tag, or no matching section = silently ignored (never panic).
+/// matter how sections are ordered/skipped.
+///
+/// A pipe can carry several sections of the SAME tag (the three story
+/// arcs are all `scene`); `occurrence` picks the Nth one (0-based, in
+/// plan order). `None` = apply to every section of that tag (legacy
+/// behaviour). Out-of-bounds pipe, unknown tag, or no matching section =
+/// silently ignored (never panic).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditedSection {
@@ -444,7 +449,10 @@ pub struct EditedSection {
     /// `transition`/`effect`); closed vocabulary, parsed via
     /// `VideoTag::from_keyword`.
     pub tag: String,
-    /// The new prompt text for every section of that tag in the pipe.
+    /// The Nth section of this tag in the pipe (0-based). `None` = all.
+    #[serde(default)]
+    pub occurrence: Option<u32>,
+    /// The new prompt text.
     pub prompt: String,
 }
 
@@ -460,21 +468,32 @@ pub fn build_apply_plan(doc: &FlowDocument, flow_version: u32) -> StructuredVide
 
 /// Overwrite section prompts in-place from a list of `EditedSection` entries.
 ///
-/// Each edit targets **all** sections of the given closed-vocab tag within
-/// `pipe_index` (the concrete engine plan has at most one section per tag
-/// per pipe, so this is a 1:1 replacement in practice). Unknown tags and
-/// out-of-bounds `pipe_index` are ignored — never panic. The tag is
-/// case-insensitive and trims surrounding whitespace, matching
-/// `VideoTag::from_keyword`.
+/// Each edit targets sections of the given closed-vocab tag within
+/// `pipe_index`: when `occurrence` is `Some(n)` it replaces the Nth
+/// section of that tag (in plan order); when `None` it replaces **every**
+/// section of that tag (legacy behaviour, safe for the single-section
+/// meta tags). Unknown tags and out-of-bounds `pipe_index` are ignored —
+/// never panic. The tag is case-insensitive and trims surrounding
+/// whitespace, matching `VideoTag::from_keyword`.
 pub fn apply_section_edits(plan: &mut StructuredVideoPlan, edited: &[EditedSection]) {
     for e in edited {
-        let tag = VideoTag::from_keyword(&e.tag);
-        if let Some(pipe) = plan.pipes.get_mut(e.pipe_index as usize) {
-            for section in pipe.sections.iter_mut() {
-                if Some(section.tag) == tag {
-                    section.prompt = e.prompt.clone();
-                }
+        let Some(tag) = VideoTag::from_keyword(&e.tag) else {
+            continue;
+        };
+        let Some(pipe) = plan.pipes.get_mut(e.pipe_index as usize) else {
+            continue;
+        };
+        let mut seen = 0u32;
+        for section in pipe.sections.iter_mut() {
+            if section.tag != tag {
+                continue;
             }
+            match e.occurrence {
+                Some(n) if seen == n => section.prompt = e.prompt.clone(),
+                None => section.prompt = e.prompt.clone(),
+                _ => {}
+            }
+            seen += 1;
         }
     }
 }
@@ -685,13 +704,14 @@ mod tests {
         let original_prompt = pipe.sections[0].prompt.clone();
         assert_ne!(original_prompt, "MY OVERRIDE");
 
-        // Valid edit: pipe 0, the scene section's tag (the first section).
+        // Valid edit: pipe 0, the first section's tag.
         let scene_tag = original.pipes[0].sections[0].tag.keyword().to_string();
         apply_section_edits(
             &mut plan,
             &[EditedSection {
                 pipe_index: 0,
                 tag: scene_tag.clone(),
+                occurrence: None,
                 prompt: "MY OVERRIDE".into(),
             }],
         );
@@ -707,8 +727,8 @@ mod tests {
         apply_section_edits(
             &mut plan,
             &[
-                EditedSection { pipe_index: 0, tag: "nope".into(), prompt: "x".into() },
-                EditedSection { pipe_index: 99, tag: scene_tag.clone(), prompt: "y".into() },
+                EditedSection { pipe_index: 0, tag: "nope".into(), occurrence: None, prompt: "x".into() },
+                EditedSection { pipe_index: 99, tag: scene_tag.clone(), occurrence: None, prompt: "y".into() },
             ],
         );
         // The scene section still holds the override; no unknown-tag section
@@ -751,6 +771,7 @@ mod tests {
             &[EditedSection {
                 pipe_index: 0,
                 tag: camera_tag.clone(),
+                occurrence: None,
                 prompt: "CAMERA OVERRIDDEN".into(),
             }],
         );
@@ -768,5 +789,77 @@ mod tests {
             .find(|s| s.tag.keyword() != camera_tag.as_str())
             .expect("a non-camera section exists");
         assert_ne!(other.prompt, "CAMERA OVERRIDDEN");
+    }
+
+    // (e) OCCURRENCING tag edits: the concrete plan carries three `scene`
+    //     story arcs per pipe. `occurrence: Some(1)` must replace ONLY the
+    //     middle arc; the other two keep their prompts. `None` still
+    //     applies to every arc (legacy).
+    #[test]
+    fn apply_section_edits_occurrence_targets_single_arc() {
+        let doc = test_doc(true);
+        let mut plan = build_apply_plan(&doc, 1);
+        let pipe0 = &plan.pipes[0];
+        let scene_arcs: Vec<_> = pipe0
+            .sections
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.tag == VideoTag::Scene)
+            .collect();
+        assert!(
+            scene_arcs.len() >= 2,
+            "concrete plan carries multiple story arcs per pipe, got {}",
+            scene_arcs.len()
+        );
+        let scene_tag = VideoTag::Scene.keyword().to_string();
+        apply_section_edits(
+            &mut plan,
+            &[EditedSection {
+                pipe_index: 0,
+                tag: scene_tag.clone(),
+                occurrence: Some(1),
+                prompt: "MIDDLE ARC OVERRIDDEN".into(),
+            }],
+        );
+        let scenes: Vec<&crate::generation::video_flow::PlanSection> = plan.pipes[0]
+            .sections
+            .iter()
+            .filter(|s| s.tag == VideoTag::Scene)
+            .collect();
+        assert_eq!(scenes[1].prompt, "MIDDLE ARC OVERRIDDEN");
+        assert_ne!(
+            scenes[0].prompt,
+            "MIDDLE ARC OVERRIDDEN",
+            "arc 0 untouched"
+        );
+        // `occurrence: None` applies to EVERY arc of the tag.
+        apply_section_edits(
+            &mut plan,
+            &[EditedSection {
+                pipe_index: 0,
+                tag: scene_tag,
+                occurrence: None,
+                prompt: "ALL ARCS".into(),
+            }],
+        );
+        let all: Vec<&str> = plan.pipes[0]
+            .sections
+            .iter()
+            .filter(|s| s.tag == VideoTag::Scene)
+            .map(|s| s.prompt.as_str())
+            .collect();
+        assert!(all.iter().all(|p| *p == "ALL ARCS"), "None occurrence hits every arc");
+        // An out-of-range occurrence is ignored (never panics, no change).
+        let before = plan.clone();
+        apply_section_edits(
+            &mut plan,
+            &[EditedSection {
+                pipe_index: 0,
+                tag: VideoTag::Scene.keyword().to_string(),
+                occurrence: Some(99),
+                prompt: "NOPE".into(),
+            }],
+        );
+        assert_eq!(plan, before, "out-of-range occurrence is a no-op");
     }
 }

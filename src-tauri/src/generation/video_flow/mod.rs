@@ -475,12 +475,18 @@ mod tests {
 
     #[test]
     fn multi_sentence_entry_never_overflows_sections() {
-        // ≥8 clauses + the tail @scene used to overflow max_sections_per_pipe.
+        // ≥12 clauses + the tail @scene used to overflow max_sections_per_pipe.
+        // Assert against the live cap so it stays correct when the cap moves
+        // (the concrete engine plan raised it to 12 for scene+camera arcs).
         let many = "a bird lands on a fence. The fence creaks. A child watches. A dog barks far away.
                     A car passes by. The sun sets. The sky turns red. The fields go still.
-                    A moth circles the lamp. The night deepens slowly.";
+                    A moth circles the lamp. The night deepens slowly. The stars emerge.";
+        let cap = FlowConfig::default_flow().structure.max_sections_per_pipe;
         let doc = default_flow().run_full(many).unwrap();
-        assert!(doc.structured.primary().sections.len() <= 8);
+        assert!(
+            doc.structured.primary().sections.len() <= cap,
+            "marker bridge caps sections at the config value ({cap})",
+        );
     }
 
     // ── Isolation invariant (I1) ─────────────────────────────────────────────

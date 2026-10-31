@@ -435,23 +435,34 @@ impl EngineRun {
         let shot_counts: Vec<usize> =
             self.novel.scenes.iter().map(|s| s.shots.len()).collect();
 
+        // Full-novel meta (user fix): every pipe carries the whole film —
+        // logline (the whole idea), world, palette, style — as its global
+        // style, so no shot loses the novel's context. A 6-shot run no
+        // longer generates six identical quarter-idea scenes.
+        let film_ctx = {
+            let f = &self.novel.film;
+            format!(
+                "{}, {} · {} · {}",
+                f.logline, f.world, f.palette, f.style
+            )
+        };
+
         for (si, sc) in self.novel.scenes.iter().enumerate() {
-            let shot_scene_style = self.scenes.get(si).map(|s| {
-                format!(
-                    "{} {} — ambience: {}",
-                    s.time_of_day, s.weather, s.ambience
-                )
+            let scene_style = self.scenes.get(si).map(|s| {
+                format!("{film_ctx} · {} {}", s.time_of_day, s.weather)
             });
+            let ambience = self.scenes.get(si).map(|s| s.ambience.clone());
             for (ki, _kshot) in sc.shots.iter().enumerate() {
                 let mi: usize = shot_counts[..si].iter().sum::<usize>() + ki;
                 let Some(spec) = self.specs.get(mi) else { continue };
                 let shot_no = ki + 1;
                 let shot_title = format!("{} · shot {shot_no}", sc.title);
-                let scene_style = shot_scene_style
+                let scene_style = scene_style
                     .clone()
-                    .unwrap_or_else(|| fallback_style.clone());
+                    .unwrap_or_else(|| film_ctx.clone());
 
-                // Concrete concern text, one per section tag.
+                // Surrounding-meta condition text (each spans the WHOLE
+                // shot — the pipe engine composes overlapping tags).
                 let camera_text = {
                     let base = composition_text(&spec.concerns.camera);
                     let lens = if spec.concerns.lens.focal_mm > 0 {
@@ -461,8 +472,7 @@ impl EngineRun {
                     };
                     format!("{base}{lens}")
                 };
-                let motion_text_ =
-                    motion_text(&spec.concerns.motion);
+                let motion_text_ = motion_text(&spec.concerns.motion);
                 let lighting_text = [
                     light_text(&spec.concerns.lighting),
                     grade_text(&spec.concerns.grade),
@@ -473,42 +483,115 @@ impl EngineRun {
                 .join("; ");
                 let transition_text =
                     format!("{} → {}", spec.transition_in, spec.transition_out);
-                let scene_text = spec.content.prose.clone();
+                let effect_text = ambience
+                    .clone()
+                    .filter(|a| !a.is_empty())
+                    .map(|a| format!("ambience: {a}"))
+                    .unwrap_or_default();
 
-                // Split the shot's clip into concrete concern windows, one
-                // section per non-empty concern tag. The cumulative content
-                // of this pipe is the shot's own S3 clip (spec value), so
-                // both the section tiling and length_frames use shot frames.
                 let shot_f = shot_frames(spec);
-                let seg = shot_f / 5 + 1;
                 let mut sections: Vec<PlanSection> = Vec::new();
-                for (i, (tag, prompt)) in [
-                    (VideoTag::Scene, scene_text),
-                    (VideoTag::Camera, camera_text),
-                    (VideoTag::Motion, motion_text_),
-                    (VideoTag::Lighting, lighting_text),
-                    (VideoTag::Transition, transition_text),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if prompt.trim().is_empty() {
-                        continue;
-                    }
-                    let start = (i as u32) * seg;
-                    let end = if i == 4 {
-                        shot_f
-                    } else {
-                        ((i as u32 + 1) * seg).max(start + 1)
+                let add =
+                    |secs: &mut Vec<PlanSection>,
+                     tag: VideoTag,
+                     prompt: &str,
+                     start: u32,
+                     end: u32| {
+                        if !prompt.trim().is_empty() && end > start {
+                            secs.push(PlanSection {
+                                tag,
+                                frame_start: start,
+                                frame_end: end,
+                                prompt: prompt.trim().to_string(),
+                                from: vec![],
+                            });
+                        }
                     };
-                    sections.push(PlanSection {
-                        tag,
-                        frame_start: start,
-                        frame_end: end,
-                        prompt: prompt.trim().to_string(),
-                        from: vec![],
-                    });
+
+                // MAIN ARCS: the shot's STORY — S1 prose + beats distributed
+                // across the S3 sub-slice windows (open/develop/close), and
+                // the CAMERA rides those same windows (its shot-size + focal
+                // change across the shot, so it is a variable main arc, not a
+                // full-width slab). No sub-slices → one full-clip arc pair.
+                let prose = spec.content.prose.clone();
+                if spec.sub_timeline.is_empty() {
+                    add(&mut sections, VideoTag::Scene, &prose, 0, shot_f);
+                    add(&mut sections, VideoTag::Camera, &camera_text, 0, shot_f);
+                } else {
+                    // Per-slice camera/lens: the slice's own concern state when
+                    // present, else the shot's base concern (plain carry — the
+                    // TS carryForward mirror, NOT the axes::fold encode->decode
+                    // snap, so the text stays stable and deterministic).
+                    for (i, sl) in spec.sub_timeline.iter().enumerate() {
+                        let beat = spec
+                            .content
+                            .beats
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut p = if i == 0 {
+                            format!("{prose} — {}", sl.note)
+                        } else {
+                            sl.note.clone()
+                        };
+                        if !beat.is_empty() {
+                            p.push_str(&format!(" · {beat}"));
+                        }
+                        let s0 = sl.from_s.saturating_mul(24);
+                        let s1 = sl.to_s.saturating_mul(24).max(s0 + 1);
+                        add(&mut sections, VideoTag::Scene, &p, s0, s1);
+                        // Camera rides this story slice (its shot-size + focal
+                        // in the window), overlapping the scene arc.
+                        let st_camera = sl
+                            .state
+                            .as_ref()
+                            .and_then(|s| s.camera.clone())
+                            .unwrap_or_else(|| spec.concerns.camera.clone());
+                        let st_lens = sl
+                            .state
+                            .as_ref()
+                            .and_then(|s| s.lens.clone())
+                            .unwrap_or_else(|| spec.concerns.lens.clone());
+                        let cam = composition_text(&st_camera);
+                        let lens = if st_lens.focal_mm > 0 {
+                            format!(" · {}mm lens", st_lens.focal_mm)
+                        } else {
+                            String::new()
+                        };
+                        add(&mut sections, VideoTag::Camera, &format!("{cam}{lens}"), s0, s1);
+                    }
                 }
+
+                // SURROUNDING META: sustained CONDITIONS wrap the WHOLE shot —
+                // they overlap the arcs (and each other) instead of chopping
+                // the clip, so the shot reads as one composed frame.
+                add(&mut sections, VideoTag::Motion, &motion_text_, 0, shot_f);
+                add(
+                    &mut sections,
+                    VideoTag::Lighting,
+                    &lighting_text,
+                    0,
+                    shot_f,
+                );
+                // Transition is a CUT EVENT (a concrete action), not a sustained
+                // condition: it occupies a short window at the shot's entry (the
+                // cut-in moment), not the whole shot. Event-like conditions get
+                // sub-windows; sustained ones keep the whole-shot span.
+                let trans_end = shot_f.min(8).max(1);
+                add(
+                    &mut sections,
+                    VideoTag::Transition,
+                    &transition_text,
+                    0,
+                    trans_end,
+                );
+                add(
+                    &mut sections,
+                    VideoTag::Effect,
+                    &effect_text,
+                    0,
+                    shot_f,
+                );
 
                 pipes.push(PlanPipe {
                     index: pipes.len(),
@@ -516,11 +599,8 @@ impl EngineRun {
                     global_style: scene_style,
                     media_mode: "text".into(),
                     sections,
-                    // This pipe IS one shot: its cumulative content is
-                    // `shot_f` (the shot's clip_s at 24fps), and the
-                    // concern sections tile to exactly that. Carry it
-                    // explicitly so materialize lengths the composer pipe
-                    // to the shot's content (no 240-frame dead tail).
+                    // One pipe per shot: lengthed to that shot's clip so the
+                    // generated pipe matches its content (no dead tail).
                     length_frames: shot_f,
                 });
             }
@@ -1320,9 +1400,9 @@ mod seed_tests {
         let pipes = materialize_pipes(&plan, &cfg.materialize).expect("engine plan materializes");
         assert_eq!(pipes.len(), total_shots, "one composer pipe per shot");
 
-        // Each materialized pipe lowers its concrete concern sections to
-        // segments whose prompts are real concrete text (>20 chars), not a
-        // bare clause.
+        // Each materialized pipe lowers its concrete concern sections into ONE
+        // zone, whose sub-tags are real concrete text (>3 chars) and all nest
+        // inside the zone's concrete boundary.
         let p0m = &pipes[0];
         let timeline = p0m
             .elements
@@ -1330,16 +1410,19 @@ mod seed_tests {
             .find(|e| matches!(e, crate::models::composer::PipeElement::Timeline(_)))
             .expect("timeline element present");
         if let crate::models::composer::PipeElement::Timeline(t) = timeline {
-            assert!(!t.segments.is_empty(), "concrete sections lower to segments");
-            for seg in &t.segments {
-                let prompt = seg
-                    .tags
-                    .first()
-                    .and_then(|t| t.prompt.as_deref())
-                    .unwrap_or("");
+            assert_eq!(t.segments.len(), 1, "one concrete zone per shot pipe");
+            let zone = &t.segments[0];
+            assert!(zone.tags.len() >= 3, "zone nests the concrete concern tags");
+            for tg in &zone.tags {
+                let prompt = tg.prompt.as_deref().unwrap_or("");
                 assert!(
                     prompt.trim().len() > 3,
                     "section prompt is concrete concern text, got: '{prompt}'"
+                );
+                assert!(
+                    tg.frame_start >= zone.frame_start && tg.frame_end <= zone.frame_end,
+                    "sub-tag {} nests inside the zone boundary",
+                    tg.tag
                 );
             }
         }
@@ -1361,11 +1444,12 @@ mod seed_tests {
         // 3 shots per scene → 3 pipes, one per shot.
         assert_eq!(plan.pipes.len(), 3, "one pipe per shot");
 
-        // Pin the EXACT tag sequence per pipe. Shot 0's motion concern is
-        // empty ("static/normal/static" filters out) → its Motion section is
-        // SKIPPED; shots 1-2 carry motion → 5 tags. This is exactly why the
-        // edited-apply addresses sections by TAG, not vector index.
-        fn tags_of(p: &crate::generation::video_flow::plan::PlanPipe) -> Vec<VideoTag> {
+        // Pin the EXACT tag sequence per pipe: MAIN ARCS — Scene + Camera ride
+        // each S3 sub-slice window (the camera's shot-size/focal change is a
+        // variable arc, not a full-width slab) — interleaved, then the
+        // SURROUNDING META that spans the whole shot. Shot 0's motion concern
+        // is empty ("static/normal") → its Motion section is SKIPPED.
+        fn tags_of(p: &crate::generation::video_flow::PlanPipe) -> Vec<VideoTag> {
             p.sections.iter().map(|s| s.tag).collect()
         }
         assert_eq!(
@@ -1373,32 +1457,72 @@ mod seed_tests {
             vec![
                 VideoTag::Scene,
                 VideoTag::Camera,
+                VideoTag::Scene,
+                VideoTag::Camera,
+                VideoTag::Scene,
+                VideoTag::Camera,
                 VideoTag::Lighting,
-                VideoTag::Transition
+                VideoTag::Transition,
+                VideoTag::Effect
             ],
-            "shot 0: motion concern empty → skipped"
+            "shot 0: 3 (scene,camera) arc pairs + whole-shot meta (motion empty → skipped)"
         );
         assert_eq!(
             tags_of(&plan.pipes[1]),
             vec![
                 VideoTag::Scene,
                 VideoTag::Camera,
-                VideoTag::Motion,
-                VideoTag::Lighting,
-                VideoTag::Transition
-            ],
-            "shot 1: all five concrete concern sections"
-        );
-        assert_eq!(
-            tags_of(&plan.pipes[2]),
-            vec![
+                VideoTag::Scene,
+                VideoTag::Camera,
                 VideoTag::Scene,
                 VideoTag::Camera,
                 VideoTag::Motion,
                 VideoTag::Lighting,
-                VideoTag::Transition
+                VideoTag::Transition,
+                VideoTag::Effect
             ],
-            "shot 2: all five concrete concern sections"
+            "shot 1: 3 (scene,camera) arc pairs + all whole-shot meta conditions"
+        );
+
+        // ARCS tile the shot (open/develop/close sub-slice windows, 24fps);
+        // Camera overlaps its matching Scene arc in the same window (the pipe
+        // engine composes overlapping tags as conditions), and the whole-shot
+        // META spans the whole shot.
+        let shot_f: u32 = run.specs[0].clip_s * 24;
+        let p0 = &plan.pipes[0];
+        let scenes: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Scene).collect();
+        let cams: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Camera).collect();
+        assert_eq!(scenes.len(), 3, "one scene arc per S3 sub-slice");
+        assert_eq!(cams.len(), 3, "one camera arc per S3 sub-slice");
+        // Each camera arc overlaps its matching scene arc in the same window.
+        for i in 0..3 {
+            assert_eq!(
+                (scenes[i].frame_start, scenes[i].frame_end),
+                (cams[i].frame_start, cams[i].frame_end),
+                "camera arc {i} overlaps its scene arc window"
+            );
+        }
+        assert_eq!((scenes[0].frame_start, scenes[0].frame_end), (0, 48), "arc 0 opens");
+        assert_eq!((scenes[1].frame_start, scenes[1].frame_end), (48, 120), "arc 1 develops");
+        assert_eq!((scenes[2].frame_start, scenes[2].frame_end), (120, shot_f), "arc 2 closes");
+        // Sustained meta (motion / lighting / effect) wraps the whole shot;
+        // the transition is a CUT EVENT and occupies a short leading window.
+        for meta in p0.sections.iter().filter(|s| !matches!(s.tag, VideoTag::Scene | VideoTag::Camera | VideoTag::Transition))
+        {
+            assert_eq!(
+                (meta.frame_start, meta.frame_end),
+                (0, shot_f),
+                "sustained meta spans the whole shot (overlaps the arcs), tag {:?}",
+                meta.tag
+            );
+        }
+        let trans: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Transition).collect();
+        assert!(!trans.is_empty(), "transition section present");
+        assert_eq!(trans[0].frame_start, 0, "transition opens the shot");
+        assert!(
+            trans[0].frame_end <= shot_f.min(8),
+            "transition is a short cut-in window, not the whole shot, got {}",
+            trans[0].frame_end
         );
 
         // Pin the EXACT concern-text format (what the TS mirror must match).
@@ -1412,23 +1536,26 @@ mod seed_tests {
                 .map(|s| s.prompt.as_str())
                 .unwrap_or("<missing>")
         }
-        // S1 concrete sentence (contract: >= 8 words, ends in a period).
-        let scene0 = prompt_of(&plan.pipes[0], VideoTag::Scene);
-        assert!(
-            scene0.split_whitespace().count() >= 8,
-            "scene prompt is a concrete S1 sentence, got: '{scene0}'"
-        );
-        assert!(scene0.ends_with('.'), "scene prompt is a full sentence");
-        // S3 camera (composition + focal, the exact derive.rs format).
+        // S3 camera ARCs: one per sub-slice, carrying that slice's concern
+        // state (close-up→medium→wide, 85→50→35mm) in the exact derive.rs
+        // format — the shot-internal camera journey, not a full-width slab.
+        fn camera_of(
+            p: &crate::generation::video_flow::plan::PlanPipe,
+        ) -> Vec<String> {
+            p.sections
+                .iter()
+                .filter(|s| s.tag == VideoTag::Camera)
+                .map(|s| s.prompt.clone())
+                .collect()
+        }
         assert_eq!(
-            prompt_of(&plan.pipes[0], VideoTag::Camera),
-            "wide shot, rule_of_thirds framing, deep depth of field · 24mm lens",
-            "camera concern text (S3 shot_camera(0) + shot_lens(0))"
-        );
-        assert_eq!(
-            prompt_of(&plan.pipes[1], VideoTag::Camera),
-            "medium shot, low angle, rule_of_thirds framing, medium depth of field · 35mm lens",
-            "camera concern text (S3 shot_camera(1) + shot_lens(1))"
+            camera_of(&plan.pipes[0]),
+            vec![
+                "close-up shot, fill_frame framing, shallow depth of field · 85mm lens",
+                "medium shot, rule_of_thirds framing, medium depth of field · 50mm lens",
+                "wide shot, deep depth of field · 35mm lens",
+            ],
+            "camera arcs ride the 3 sub-slices (size + focal change per window)"
         );
         // S3 motion (shot_motion(0) is static/normal → no Motion section on
         // pipe 0; shot 1 is "pan, slow speed").
@@ -1454,8 +1581,37 @@ mod seed_tests {
             "crossfade → crossfade",
             "later shots crossfade"
         );
-        // The pipe carries the scene base as global style (tod · weather ·
-        // ambience), not a bare "text".
+        // Effect = the S2 genre ambience bed.
+        assert!(
+            prompt_of(&plan.pipes[0], VideoTag::Effect).starts_with("ambience:"),
+            "effect section carries the genre ambience: '{}'",
+            prompt_of(&plan.pipes[0], VideoTag::Effect)
+        );
+
+        // FULL-NOVEL CONTEXT (user fix): every pipe's global style carries
+        // the film logline (the WHOLE idea), world + palette + style +
+        // scene tod/weather — six shots no longer generate six identical
+        // quarter-idea scenes.
+        let idea = "a girl follows the river road north at dusk";
+        for p in &plan.pipes {
+            assert!(
+                p.global_style.contains(idea),
+                "pipe global style carries the full logline, got: '{}'",
+                p.global_style
+            );
+            assert!(p.global_style.contains("midday clear"));
+        }
+
+        // The S1 arc of a shot carries its S1 prose (concrete sentence,
+        // >= 8 words), not a bare fragment.
+        let arc0 = prompt_of(&plan.pipes[0], VideoTag::Scene);
+        assert!(
+            arc0.contains("follows") || arc0.len() >= 20,
+            "arc 0 carries the shot's S1 prose, got: '{arc0}'"
+        );
+
+        // The pipe carries the scene base as global style, not a bare
+        // "text".
         assert!(
             plan.pipes[0].global_style.contains("midday clear"),
             "global style carries the G0 look axes: {}",

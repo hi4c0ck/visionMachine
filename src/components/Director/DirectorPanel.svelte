@@ -47,6 +47,7 @@
 		onLogSignal,
 		onRunningChange,
 		onMetaChange,
+		onApplied,
 	} = $props<{
 		activeTab: DirectorTab;
 		sessionId: string;
@@ -66,6 +67,12 @@
 		 structural-text sections; `stale` = a newer flow doc exists than the
 		 one being scored. */
 		onMetaChange?: (meta: { extractSections: number; stale: boolean }) => void;
+		/** Composer reconcile hook (I9 apply): fires AFTER a destructive
+		 apply has reloaded the session from the backend, so the host can
+		 re-sync the freshly-applied pipes into its project tree (which the
+		 Pipes tab renders from). Without it, applied pipes stay hidden until
+		 the session is re-opened. */
+		onApplied?: (sessionId: string) => void;
 	}>();
 
 	// ── G0 entry state (the S0 input the UI authors) ──────────────────────
@@ -155,13 +162,16 @@
 
 	// ── Phase 2: Extract tab — editable concrete sections ────────────────
 	// Mirrors the concrete structure produced by Rust's EngineRun::plan_from_engine:
-	// one pipe per shot, split into 5 concrete concern sections
-	// (Scene/Camera/Motion/Lighting/Transition). The TS `localExtract` list
-	// must match the Rust section ordering + pipeIndex/sectionIndex so that
-	// `applyFlowEdited` targets the right slots.
+	// one pipe per shot. MAIN ARCS: Scene + Camera ride each S3 sub-slice window
+	// (the camera's shot-size/focal journey is a variable arc, not a full-width
+	// slab). SURROUNDING META: Motion/Lighting/Transition/Effect wrap the whole
+	// shot and overlap the arcs. The TS `localExtract` list must match the Rust
+	// section ordering + pipeIndex/occurrence so `applyFlowEdited` targets the
+	// right slots.
 	type LocalSection = {
 		pipeIndex: number; // shot ordinal (0-based across all shots)
 		tag: string; // the closed concern vocabulary — the addressing key
+		occurrence: number; // Nth section of this tag in the pipe (arcs are 0/1/2)
 		range: string;
 		prompt: string;
 		source: string;
@@ -169,6 +179,9 @@
 	let localExtract = $state<LocalSection[]>([]);
 	// Dirty count: how many sections have been edited away from their source.
 	const dirtyCount = $derived(localExtract.filter((s) => s.prompt.trim() !== s.source.trim()).length);
+	// Distinct shot pipes across the extracted structure (not a fixed divisor —
+	// each pipe carries its own arc + meta section count).
+	const extractPipeCount = $derived(new Set(localExtract.map((s) => s.pipeIndex)).size);
 
 	// Mirror of derive.rs helpers — must produce the SAME strings Rust does.
 	// Params are the mirror concern shapes (optional fields), matching
@@ -217,32 +230,79 @@
 		const out: LocalSection[] = [];
 		let shotOrd = 0; // global shot ordinal = pipeIndex
 		for (const grp of specsByScene(e)) {
+			const ambience = grp.scene.ambience;
 			for (const sp of grp.specs) {
-				const camT = compositionText(sp.concerns.camera);
-				const lensSuffix = sp.concerns.lens.focal_mm && sp.concerns.lens.focal_mm > 0
-					? ` · ${sp.concerns.lens.focal_mm}mm lens` : '';
-				const camText = camT + lensSuffix;
 				const motT = motionText(sp.concerns.motion);
 				const litT = lightText(sp.concerns.lighting);
 				const gradeT = gradeText(sp.concerns.grade);
 				const lightGrade = [litT, gradeT].filter(Boolean).join('; ');
 				const transT = `${sp.transition_in} → ${sp.transition_out}`;
+				const effectT = ambience ? `ambience: ${ambience}` : '';
+
+				// Per-slice camera helper (mirror of Rust's plain base-carry:
+				// the slice's own camera/lens when present, else the shot base).
+				const camFor = (cam: { size?: string; angle?: string; framing?: string; dof?: string }, lens: { focal_mm?: number }): string => {
+					const base = compositionText(cam);
+					const suf = lens.focal_mm && lens.focal_mm > 0 ? ` · ${lens.focal_mm}mm lens` : '';
+					return base + suf;
+				};
 
 				const clipF = sp.clip_s * 24;
 				const rng = (a: number, b: number) => `${String(a).padStart(2, '0')}–${b}`;
-				// `tag` is the addressing key (closed vocabulary), not a vector
-				// index — matches Rust's apply_section_edits. Empty prompts are
-				// skipped (mirrors plan_from_engine's skip-empty rule), so the
-				// set of tags per shot differs from shot to shot.
-				const push = (tag: string, prompt: string) => {
-					if (prompt.trim())
-						out.push({ pipeIndex: shotOrd, tag, range: rng(0, clipF), prompt, source: prompt });
+
+				// Per-tag occurrence counter within this pipe (Rust's plan
+				// order: scene+camera arc pairs first, then whole-shot meta).
+				const occ = new Map<string, number>();
+				const push = (tag: string, prompt: string, start: number, end: number) => {
+					if (prompt.trim() && end > start) {
+						const n = occ.get(tag) ?? 0;
+						occ.set(tag, n + 1);
+						out.push({
+							pipeIndex: shotOrd,
+							tag,
+							occurrence: n,
+							range: rng(start, end),
+							prompt,
+							source: prompt,
+						});
+					}
 				};
-				push('scene', sp.content.prose);
-				push('camera', camText);
-				push('motion', motT);
-				push('lighting', lightGrade);
-				push('transition', transT);
+
+				// MAIN ARCS (mirror of Rust plan_from_engine): the shot's
+				// STORY — S1 prose + beats AND the CAMERA ride the S3
+				// sub-slice windows (the camera's shot-size/focal change is a
+				// variable arc, not a full-width slab). No sub-slices → one
+				// full-clip pair.
+				const prose = sp.content.prose;
+				const slices = sp.sub_timeline.length ? sp.sub_timeline : null;
+				if (!slices) {
+					push('scene', prose, 0, clipF);
+					push('camera', camFor(sp.concerns.camera, sp.concerns.lens), 0, clipF);
+				} else {
+					slices.forEach((sl, i) => {
+						const s0 = sl.from_s * 24;
+						const s1 = Math.max(sl.to_s * 24, s0 + 1);
+						let p = i === 0 ? `${prose} — ${sl.note}` : sl.note;
+						const beat = sp.content.beats[i];
+						if (beat) p += ` · ${beat}`;
+						push('scene', p, s0, s1);
+						// Camera rides this story slice (its own shot-size +
+						// focal), overlapping the scene arc.
+						const cam = sl.state?.camera ?? sp.concerns.camera;
+						const lens = sl.state?.lens ?? sp.concerns.lens;
+						push('camera', camFor(cam, lens), s0, s1);
+					});
+				}
+
+				// SURROUNDING META (mirror): conditions that wrap the WHOLE
+				// shot — they overlap the arcs (and each other), so the shot
+				// reads as one composed frame, not a chopped clip. The
+				// transition is a cut EVENT, not a sustained condition: it
+				// gets a short leading window, not the whole shot.
+				push('motion', motT, 0, clipF);
+				push('lighting', lightGrade, 0, clipF);
+				push('transition', transT, 0, Math.min(8, clipF));
+				push('effect', effectT, 0, clipF);
 
 				shotOrd++;
 			}
@@ -255,7 +315,7 @@
 	function editedList() {
 		return localExtract
 			.filter((s) => isEdited(s))
-			.map((s) => ({ pipeIndex: s.pipeIndex, tag: s.tag, prompt: s.prompt }));
+			.map((s) => ({ pipeIndex: s.pipeIndex, tag: s.tag, occurrence: s.occurrence, prompt: s.prompt }));
 	}
 
 	// Destructive regenerate from the EDITED sections (Phase 3).
@@ -275,6 +335,7 @@
 			const count = await applyFlowEdited(sessionId, target, true, edits);
 			await onLogSignal('edit_diff', `apply-edited-${target}`, `materialized ${count} pipes (${edits.length} edited)`).catch(() => {});
 			await loadSession(sessionId);
+			onApplied?.(sessionId);
 			showFeedback(`Materialized ${count} pipe(s) into the composer`, 'tone-ok');
 		} catch (e) {
 			showFeedback(`Regenerate failed: ${String(e)}`, 'tone-danger');
@@ -332,8 +393,10 @@
 				() => {},
 			);
 			// Refresh the session's pipes in the composer store so the Pipes
-			// tab renders the materialized pipes.
+			// tab renders the materialized pipes; onApplied re-syncs the host's
+			// project tree (which the Pipes tab derives from).
 			await loadSession(sessionId);
+			onApplied?.(sessionId);
 			showFeedback(`Materialized ${count} pipe(s) into the composer`, 'tone-ok');
 		} catch (e) {
 			showFeedback(`Apply failed: ${String(e)}`, 'tone-danger');
@@ -907,7 +970,7 @@
 				<span class="muted">
 					{sessionName} · v{doc.flowVersion}
 					{#if localExtract.length}
-						· {localExtract.length} concrete section(s) across {Math.ceil(localExtract.length / 5)} shot pipe(s)
+						· {localExtract.length} concrete section(s) across {extractPipeCount} shot pipe(s)
 					{:else}
 						· no engine structure yet
 					{/if}
@@ -935,19 +998,26 @@
 			</div>
 
 			<!-- The concrete, editable structure (mirror of Rust plan_from_engine):
-			     one group per shot pipe, five concern sections each. -->
+			     one group per shot pipe. Story arcs tile the shot; the whole-shot
+			     meta conditions (camera/motion/lighting/transition/effect) span
+			     and overlap it. -->
 			{#if localExtract.length}
+				{#if engine}
+					<p class="hint extract-film-ctx">
+						Film context (all pipes): <b>{engine.novel.film.logline}</b>
+						· {engine.novel.film.world} · {engine.novel.film.palette}
+					</p>
+				{/if}
 				{#each localExtract as s, i}
 					{@const edited = isEdited(s)}
 					<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
 						<header class="extract-meta">
 							<code class="extract-pipe">pipe {String(s.pipeIndex).padStart(2, '0')}</code>
-							<span class="tag-word">{s.tag}</span>
+							<span class="tag-word">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
 							<code class="range">{s.range}</code>
 							{#if edited}
 								<span class="dirty-mark" title="edited">●</span>
 							{/if}
-							<span class="provenance">source: {s.source || '—'}</span>
 						</header>
 						<!-- Editable concrete prompt. -->
 						<textarea
@@ -1302,6 +1372,12 @@
 	}
 
 	/* ── Extract: concrete editable sections ── */
+	.extract-film-ctx {
+		margin: 0 0 6px;
+		font-size: 11px;
+		color: var(--text-secondary);
+		line-height: 1.5;
+	}
 	.extract-pipe {
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;

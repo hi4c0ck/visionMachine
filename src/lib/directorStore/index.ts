@@ -128,9 +128,13 @@ export async function applyFlow(
 // a shot's lighting section does NOT always sit at a fixed index. Tag is
 // shared by both sides — the target is stable no matter how sections are
 // ordered/skipped. Pipe index is 0-based across the plan's pipes.
+// `occurrence` picks the Nth section of a tag inside the pipe (0-based,
+// plan order): each shot pipe carries several `scene` story arcs, while
+// the meta tags are single. Omitted = apply to every section of the tag.
 export interface EditedSection {
 	pipeIndex: number;
 	tag: string; // scene | camera | motion | lighting | transition | effect
+	occurrence?: number;
 	prompt: string;
 }
 
