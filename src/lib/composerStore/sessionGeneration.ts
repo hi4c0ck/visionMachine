@@ -201,7 +201,9 @@ export function isComposeStale(
   // the resolution-preset dims — same rule as Rust `target_dims`).
   const presetDims: Record<string, Record<string, [number, number]>> = {
     '480p': { horizontal: [854, 480], vertical: [480, 854], square: [480, 480] },
-    '720p': { horizontal: [1280, 720], vertical: [720, 1280], square: [720, 720] },
+    // 720p mirrors RESOLUTION_DIMS: the model's native 16:9 grid (1280x704),
+    // not broadcast 1280x720.
+    '720p': { horizontal: [1280, 704], vertical: [704, 1280], square: [704, 704] },
     '1080p': { horizontal: [1920, 1080], vertical: [1080, 1920], square: [1080, 1080] },
   };
   const roundEven = (v: number) => Math.round(v / 2) * 2;
@@ -212,7 +214,7 @@ export function isComposeStale(
     session.customHeight >= 32 && session.customHeight <= 8192;
   const [cw, ch] = bothCustom
     ? [roundEven(session.customWidth!), roundEven(session.customHeight!)]
-    : (presetDims[session.resolution]?.[session.orientation] ?? [1280, 720]);
+    : (presetDims[session.resolution]?.[session.orientation] ?? [1280, 704]);
   const curCrop = session.cropMode ?? 'center';
   // Compare each known snapshot field against the current value.
   if (group.cropModeUsed != null && group.cropModeUsed !== curCrop) return true;

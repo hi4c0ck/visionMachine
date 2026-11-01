@@ -92,10 +92,17 @@ export const RESOLUTION_DIMS: Record<ResolutionPreset, Record<Orientation, { wid
     vertical: { width: 480, height: 854 },
     square: { width: 480, height: 480 },
   },
+  // 720p aligns to the agnes-video-2.5-flash NATIVE 16:9 grid at the 720P
+  // tier (catalog: measured 16:9 -> 1280x704, macroblock-aligned), NOT the
+  // broadcast 1280x720. Using the model's own grid keeps the recursive I2V
+  // loop consistent: a generated clip is 1280x704, its extracted last frame
+  // is 1280x704, and feeding that into keyframe mode no longer conflicts
+  // with the height the i2v route can compile (which is what forced the
+  // 1260x720 / 7:4 output drift).
   '720p': {
-    horizontal: { width: 1280, height: 720 },
-    vertical: { width: 720, height: 1280 },
-    square: { width: 720, height: 720 },
+    horizontal: { width: 1280, height: 704 },
+    vertical: { width: 704, height: 1280 },
+    square: { width: 704, height: 704 },
   },
   '1080p': {
     horizontal: { width: 1920, height: 1080 },

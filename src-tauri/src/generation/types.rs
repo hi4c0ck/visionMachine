@@ -165,8 +165,11 @@ pub fn resolution_dims(resolution: &str, orientation: &str) -> (u32, u32) {
     let base: (u32, u32) = match resolution.to_ascii_lowercase().as_str() {
         "480p" => (480, 854),
         "1080p" => (1080, 1920),
-        // 720p is the historical default.
-        _ => (720, 1280),
+        // 720p aligns to the agnes-video-2.5-flash native 16:9 grid at the
+        // 720P tier (catalog: measured 16:9 -> 1280x704, macroblock-aligned),
+        // not broadcast 1280x720. Keeping our target on the model's grid is
+        // what makes the recursive I2V loop consistent (no 1260x720 drift).
+        _ => (704, 1280),
     };
     match orientation {
         "vertical" => (base.0, base.1),
@@ -234,16 +237,17 @@ mod tests {
 
     #[test]
     fn resolution_dims_matches_frontend_table() {
-        // horizontal: (long, short) of the preset base.
-        assert_eq!(resolution_dims("720p", "horizontal"), (1280, 720));
+        // horizontal: (long, short) of the preset base. 720p is on the model's
+        // native 16:9 grid (1280x704), not broadcast 1280x720.
+        assert_eq!(resolution_dims("720p", "horizontal"), (1280, 704));
         assert_eq!(resolution_dims("1080p", "horizontal"), (1920, 1080));
         // vertical is the transposed pair.
-        assert_eq!(resolution_dims("720p", "vertical"), (720, 1280));
+        assert_eq!(resolution_dims("720p", "vertical"), (704, 1280));
         // square is the min-of-pair on both axes.
-        assert_eq!(resolution_dims("720p", "square"), (720, 720));
+        assert_eq!(resolution_dims("720p", "square"), (704, 704));
         assert_eq!(resolution_dims("1080p", "square"), (1080, 1080));
         // Unknown preset falls back to the 720p base.
-        assert_eq!(resolution_dims("garbage", "horizontal"), (1280, 720));
+        assert_eq!(resolution_dims("garbage", "horizontal"), (1280, 704));
     }
 
     #[test]
