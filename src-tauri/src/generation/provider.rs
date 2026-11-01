@@ -1441,6 +1441,75 @@ impl ProviderEngine {
                 let dest = task_dir.join("video.mp4");
                 match self.http.download(&video_url, &dest, slot.api_key.trim()).await {
                     Ok(()) => {
+                        // 0012 D5: align the freshly downloaded clip to the
+                        // session grid (letterbox, never stretch) so last-frame
+                        // extraction + compose operate on one uniform canvas.
+                        // Same target the compose step uses (session
+                        // resolution/orientation/custom dims). A no-op when
+                        // ffmpeg is absent or the clip is already on-grid —
+                        // the lossless path stays lossless.
+                        let grid_report: Result<Option<crate::generation::GridNormalizeResult>, String> =
+                            if input.target_w > 0 && input.target_h > 0 {
+                                let ffmpeg = crate::generation::resolve_ffmpeg();
+                                let ffprobe =
+                                    crate::generation::compose::resolve_ffprobe(&ffmpeg);
+                                let dest2 = dest.clone();
+                                let (gw, gh) = (input.target_w, input.target_h);
+                                let join = tokio::task::spawn_blocking(move || {
+                                    crate::generation::compose::normalize_clip_to_grid(
+                                        &ffmpeg,
+                                        ffprobe.as_deref(),
+                                        &dest2,
+                                        gw,
+                                        gh,
+                                    )
+                                })
+                                .await;
+                                match join {
+                                    Ok(inner) => inner.map(Some),
+                                    Err(e) => Err(format!("grid-normalize worker: {e}")),
+                                }
+                            } else {
+                                Ok(None)
+                            };
+                        let grid_note = match grid_report {
+                            Ok(Some(rep)) => {
+                                let note = json!({
+                                    "stage": "video-grid-normalize",
+                                    "nativeWidth": rep.native_w,
+                                    "nativeHeight": rep.native_h,
+                                    "targetWidth": input.target_w,
+                                    "targetHeight": input.target_h,
+                                    "normalized": rep.normalized,
+                                });
+                                self.log_entry(input, &secrets, &note).await;
+                                if rep.normalized {
+                                    on_event(&format!(
+                                        "grid-normalized {}x{} -> {}x{} (letterbox)",
+                                        rep.native_w, rep.native_h, input.target_w, input.target_h
+                                    ));
+                                }
+                                note
+                            }
+                            Ok(None) => json!(null),
+                            Err(e) => {
+                                // Non-fatal: a clip that stays off-grid is the
+                                // pre-D5 behavior (compose still letterboxes).
+                                // Log to request.log so the drift stays visible,
+                                // don't fail a multi-minute generation.
+                                log::warn!(
+                                    "[Generation] video task {} grid normalize skipped: {e}",
+                                    input.task_id
+                                );
+                                let note = json!({
+                                    "stage": "video-grid-normalize",
+                                    "skipped": e,
+                                });
+                                self.log_entry(input, &secrets, &note).await;
+                                note
+                            }
+                        };
+                        let _ = grid_note;
                         self.log_entry(
                             input,
                             &secrets,
