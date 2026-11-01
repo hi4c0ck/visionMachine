@@ -18,8 +18,7 @@ mod types;
 
 pub use compose::{
     compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeCancel, ComposeError, ComposeRegistry,
-    ComposeResult, ComposeStartError, GridNormalizeResult, SourceVideo, VideoMetadata,
-    grid_normalize_needed, normalize_clip_to_grid,
+    ComposeResult, ComposeStartError, SourceVideo, VideoMetadata,
 };
 pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration};
 pub use ffmpeg::{extract_last_frame, resolve_ffmpeg, FfmpegAvailability};
