@@ -188,16 +188,42 @@ pub fn trim_active(sources: &[SourceVideo]) -> bool {
     sources.iter().any(|s| s.trim_frames > 0)
 }
 
+/// The shared letterbox fragment: fit the source inside W x H preserving
+/// aspect, then pad the leftover with black. No crop, no stretch — used by
+/// `fit` and by `center` when the source aspect differs from the target.
+fn letterbox(w: u32, h: u32) -> String {
+    format!(
+        "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"
+    )
+}
+
+/// Is the source clip's aspect ratio the target's (within a small tolerance)?
+/// A 1280x720 clip vs a 1280x720 target is the SAME shape -> a plain rescale
+/// is exact. A 1260x720 keyframe clip vs a 1280x720 target is NOT (7:4 vs
+/// 16:9) -> a cover+crop would crop the height and read as a "stretched by
+/// height" seam; letterbox is the no-distortion choice instead.
+fn same_aspect(sw: u32, sh: u32, tw: u32, th: u32) -> bool {
+    if sw == 0 || sh == 0 || tw == 0 || th == 0 {
+        return true; // unknown source dims -> trust the plain scale
+    }
+    let a = sw as f64 / sh as f64;
+    let b = tw as f64 / th as f64;
+    (a - b).abs() <= 0.02
+}
+
 /// 0012: the ffmpeg filter fragment that normalizes ONE clip to the session
-/// target W x H under a crop mode. `none` is resolved by the caller to
-/// `center` for the re-encode fallback (a mix-sized set can never concat
-/// losslessly, so the auto-center guarantees a valid concat — plan 3.10).
-fn normalize_filter(crop_mode: &str, w: u32, h: u32) -> String {
+/// target W x H under a crop mode. `none` is resolved to `center` for the
+/// re-encode fallback (a mix-sized set can never concat losslessly).
+///
+/// `center` is aspect-aware: when the source clip already shares the target's
+/// aspect ratio it's a lossless plain rescale (byte-for-byte clean concat);
+/// when the aspect differs (a 7:4 keyframe clip into a 16:9 session) it
+/// letterboxes instead of cover-cropping, so the content is never stretched
+/// or its height eaten — the seam the user saw.
+fn normalize_filter(clip_w: u32, clip_h: u32, crop_mode: &str, w: u32, h: u32) -> String {
     let mode = if crop_mode == "none" { "center" } else { crop_mode };
     match mode {
-        "fit" => format!(
-            "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"
-        ),
+        "fit" => letterbox(w, h),
         "top" => format!(
             "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:0"
         ),
@@ -205,10 +231,14 @@ fn normalize_filter(crop_mode: &str, w: u32, h: u32) -> String {
             "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:ih-{h}"
         ),
         "exact" => format!("scale={w}:{h}"),
-        // "center" and any unknown value: cover-scale + center-crop.
-        _ => format!(
-            "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
-        ),
+        // "center" and any unknown value: preserve the content's aspect.
+        _ => {
+            if same_aspect(clip_w, clip_h, w, h) {
+                format!("scale={w}:{h}")
+            } else {
+                letterbox(w, h)
+            }
+        }
     }
 }
 
@@ -264,7 +294,15 @@ pub fn filter_args(
                     .as_deref()
                     .filter(|m| !m.is_empty())
                     .unwrap_or(crop_mode);
-                v_parts.push(normalize_filter(clip_mode, target_w, target_h));
+                // Pass the clip's own dims so `center` can pick plain rescale
+                // (same aspect) vs letterbox (different aspect) — no stretch.
+                v_parts.push(normalize_filter(
+                    metas[i].width,
+                    metas[i].height,
+                    clip_mode,
+                    target_w,
+                    target_h,
+                ));
             }
             if s.trim_frames > 0 {
                 v_parts.push(format!("trim=start_frame={}", s.trim_frames));
@@ -1262,24 +1300,26 @@ mod tests {
     #[test]
     fn filter_args_target_center_covers_and_crops() {
         // A target forces the labeled path on every clip, even with no trim.
+        // Source metas (720x1280) match the target (720x1280) in aspect, so
+        // `center` now emits a plain lossless rescale (no crop, no stretch).
         let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 720, 1280, "center");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
         let fc = &s[fc_idx + 1];
         assert!(
-            fc.contains("[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0]"),
-            "fc: {fc}"
+            fc.contains("[0:v]scale=720:1280[v0]"),
+            "same-aspect center = plain rescale. fc: {fc}"
         );
         assert!(
-            fc.contains("[1:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v1]"),
-            "fc: {fc}"
+            fc.contains("[1:v]scale=720:1280[v1]"),
+            "same-aspect center = plain rescale. fc: {fc}"
         );
         assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
         // Multiple filter chains in one -filter_complex MUST be `;`-separated,
         // otherwise ffmpeg reports "Trailing garbage after a filter: concat=…"
         // and the normalized single-clip compose crashes (exit -22).
         assert!(
-            fc.contains("crop=720:1280[v0];[1:v]"),
+            fc.contains("scale=720:1280[v0];[1:v]"),
             "labeled chains must be ;-separated. fc: {fc}"
         );
         assert!(
@@ -1298,11 +1338,33 @@ mod tests {
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         // Two chains: the normalize chain and the (n=1) concat chain.
+        // Source metas (720x1280) match the target (720x1280) -> plain scale.
         assert_eq!(
             fc,
-            "[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0];[v0]concat=n=1:v=1:a=0[v]",
+            "[0:v]scale=720:1280[v0];[v0]concat=n=1:v=1:a=0[v]",
             "single-clip normalize graph must be ;-separated. fc: {fc}"
         );
+    }
+
+    #[test]
+    fn filter_args_center_letterboxes_mismatched_aspect() {
+        // The user's real seam: a 1260x720 (7:4) keyframe clip into a 1280x720
+        // (16:9) session target. Aspects differ, so `center` letterboxes
+        // (fit + black pad) instead of cover-cropping the height. No stretch.
+        let mut srcs = srcs();
+        let mut m = metas();
+        m[0].width = 1260;
+        m[0].height = 720;
+        let a = filter_args(&srcs, &m, Path::new("out.mp4"), 1280, 720, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
+        assert!(
+            fc.contains("[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black[v0]"),
+            "mismatched-aspect center must letterbox, not crop/stretch. fc: {fc}"
+        );
+        // The sibling same-aspect clip (720x1280 -> not 16:9 either, still
+        // letterbox) — the point is NO clip uses increase+crop in center.
+        assert!(!fc.contains("force_original_aspect_ratio=increase"), "center must never cover-crop. fc: {fc}");
     }
 
     #[test]
@@ -1341,12 +1403,14 @@ mod tests {
     #[test]
     fn filter_args_target_none_autocenters() {
         // `none` resolves to center for the normalize step (plan 3.10).
+        // metas() are 720x1280 and the target is 720x1280 -> same aspect ->
+        // a plain lossless rescale, not a cover-crop.
         let a = filter_args(&srcs(), &metas(), Path::new("out.mp4"), 720, 1280, "none");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         assert!(
-            fc.contains("scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280[v0]"),
-            "fc: {fc}"
+            fc.contains("[0:v]scale=720:1280[v0]"),
+            "none->center same-aspect = plain rescale. fc: {fc}"
         );
     }
 
