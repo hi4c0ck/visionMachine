@@ -64,10 +64,18 @@ fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// image stage errors and the group's "continue" policy lets the video fall
 /// back to text mode - exactly today's behavior. Never worse, sometimes
 /// uniform.
+///
+/// Deliberately NOT gated on `media_mode` either: the shaper's wire-mode
+/// decision (`seconds_mode_wire`) routes to `"keyframe"` whenever a
+/// settled keyframe is present, regardless of the pipe's stored mode -
+/// so a TEXT-mode opening pipe (the flow-materialized pipes, e.g. the
+/// Director/LLM flow's one-pipe-per-shot plan) takes the same i2v route
+/// once its slot-1 keyframe is generated. `reference` mode is the only
+/// exclusion: its media rides `images[]`/`audios[]`, not keyframes, so a
+/// seeded keyframe would be dead weight there (and the model has no such
+/// keyframe route).
 fn opening_keyframe_needed(pipe: &Pipe) -> bool {
-    // Keyframes are inert in `reference` mode; only `keyframes` mode consumes
-    // a slot-1 frame as the video's `first_frame`.
-    if pipe.media_mode != "keyframes" {
+    if pipe.media_mode == "reference" {
         return false;
     }
     // A settled slot-1 (user-provided or previously caught) is kept as-is -
@@ -676,9 +684,10 @@ impl GroupCoordinator {
     /// carrying pipe 0 onto the SAME i2v grid as the rest of the session.
     ///
     /// Purely additive and non-destructive: it only acts when
-    /// `opening_keyframe_needed` is true (keyframes mode + image spec present
-    /// + slot-1 not settled). A settled slot-1 is never touched. Best-effort -
-    /// a persist failure just leaves the pipe in today's text-mode behavior.
+    /// `opening_keyframe_needed` is true (text or keyframes mode - not
+    /// reference - + slot-1 not settled). A settled slot-1 is never
+    /// touched. Best-effort - a persist failure just leaves the pipe in
+    /// today's text-mode behavior.
     async fn bootstrap_opening_keyframe(
         &self,
         input: &StartSessionGenerationInput,
@@ -1817,6 +1826,23 @@ mod tests {
         assert!(
             !opening_keyframe_needed(&pipe),
             "a settled opening keyframe must never be re-seeded"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_seeds_a_text_mode_pipe() {
+        // The flow-materialized pipes are `media_mode: "text"` (Director/
+        // LLM plan). The 14:30 "Hangar Descent · shot 1" regression: the old
+        // `!= "keyframes"` gate skipped them, so the opening clip ran t2v
+        // (1280x720) while the auto-caught interior clips ran i2v. A
+        // generated slot-1 keyframe drives the shaper to the keyframe
+        // route regardless of the stored mode, so text-mode opening pipes
+        // MUST be seeded too.
+        let mut pipe = keyframes_pipe();
+        pipe.media_mode = "text".into();
+        assert!(
+            opening_keyframe_needed(&pipe),
+            "a text-mode opening pipe must be seeded (content drives the wire route)"
         );
     }
 
