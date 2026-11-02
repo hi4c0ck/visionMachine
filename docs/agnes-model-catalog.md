@@ -167,6 +167,20 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
   `seconds` (STRING `"4"`–`"12"`, def `"5"`), `size` (`"720P"` ONLY —
   else 400), `aspect_ratio` (`21:9` `16:9` `4:3` `1:1` `3:4` `9:16`,
   def `16:9`; measured 16:9 → `1280x704`), `seed`, `n` (=1).
+   > **VERIFIED GRID NOTE (bundled ffprobe, 2026-11-02)** — conspicuous, do
+   > NOT chase a target table to "fix" the 704 guess: the `1280x704` figure
+   > above is a catalog guess, NOT the measured output. The model's native
+   > pixel grid is mode-dependent, confirmed by probing real Session 8 clips
+   > with the app's bundled ffprobe:
+   > - **text (t2v)** route -> `1280x720` (true 16:9)
+   > - **keyframe (i2v)** route -> `1260x720` (native 7:4; the requested
+   >   `aspect_ratio` is NOT honored on the i2v route)
+   > The API response carries only `size`/`quality` strings - never pixel
+   > dims - so this was invisible without probing the returned MP4.
+   > **Clean fix is routing, not a target change:** seed an opening i2v
+   > keyframe on the first pipe (see
+   > `GroupCoordinator::bootstrap_opening_keyframe`) so the whole session
+   > runs on one native grid; compose letterboxes any residual seam.
 - Mode rules: `keyframe` → `first_frame`/`last_frame` (≥1; no
   images/audios/videos); `reference` → `images[]` ≤5 + `audios[]` ≤3,
   `videos` FORBIDDEN (400); `text` → no media fields.

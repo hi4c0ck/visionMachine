@@ -5,7 +5,7 @@ use crate::generation::{
     compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeRegistry, GenerationService,
     GenerationTaskView, ModelSpecWire, SourceVideo, TaskStatus,
 };
-use crate::models::composer::LastGeneration;
+use crate::models::composer::{Keyframe, LastGeneration, Pipe};
 use crate::storage::{db::Database, generation_groups_db::GenerationGroupRow};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,6 +30,35 @@ fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
             p.into_inner()
         }
     }
+}
+
+/// Pure decision for the uniform-grid bootstrap (see `bootstrap_opening_keyframe`):
+/// should the OPENING pipe be seeded with a `txt2img` slot-1 keyframe so its
+/// video stage runs on the i2v (keyframe) route instead of the t2v route?
+///
+/// Today the opening pipe has nothing to auto-catch, so an empty slot-1
+/// falls back to text mode -> the t2v native grid, while every interior clip
+/// is i2v. Seeding a generated opening keyframe carries pipe 0 onto the SAME
+/// grid as the rest of the session, killing the one seam.
+fn opening_keyframe_needed(
+    pipe: &Pipe,
+    input: &StartSessionGenerationInput,
+) -> bool {
+    // Keyframes are inert in `reference` mode; only `keyframes` mode consumes
+    // a slot-1 frame as the video's `first_frame`.
+    if pipe.media_mode != "keyframes" {
+        return false;
+    }
+    // Without a resolved image spec there is nothing to generate the frame.
+    if input.image_spec.is_none() {
+        return false;
+    }
+    // A settled slot-1 (user-provided or previously caught) is kept as-is -
+    // mirrors auto-catch's non-destructive rule, never overwrites it.
+    if pipe.has_settled_slot1() {
+        return false;
+    }
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -535,6 +564,11 @@ impl GroupCoordinator {
         // every later app restart as a phantom stale group and keep
         // re-opening the progress modal over it. The in-memory run is rolled
         // back on the error path for the same reason.
+        // Uniform-grid bootstrap: seed a generated opening keyframe into the
+        // first pipe when it would otherwise fall back to text mode, so the
+        // whole session runs on the i2v native grid (no t2v|i2v seam).
+        self.bootstrap_opening_keyframe(&input, &composer, &first)
+            .await;
         let (tid, view) = match self.start_pipe(&input, &first).await {
             Ok(r) => r,
             Err(e) => {
@@ -559,6 +593,73 @@ impl GroupCoordinator {
         });
         Ok((gid, tid, view))
     }
+    /// Uniform-grid bootstrap (the "no t2v|i2v seam" fix).
+    ///
+    /// The opening pipe has no previous clip to auto-catch, so an empty slot-1
+    /// would make its video stage fall back to TEXT mode -> the t2v native
+    /// grid, while every interior clip is i2v. That asymmetry is the one seam
+    /// in a composed session. This seeds a `txt2img` slot-1 keyframe on the
+    /// opening pipe (persisted to the composer so the image stage is real and
+    /// survives a restart); the existing keyframe->video pipeline then
+    /// generates the frame and feeds it as the video's `first_frame`,
+    /// carrying pipe 0 onto the SAME i2v grid as the rest of the session.
+    ///
+    /// Purely additive and non-destructive: it only acts when
+    /// `opening_keyframe_needed` is true (keyframes mode + image spec present
+    /// + slot-1 not settled). A settled slot-1 is never touched. Best-effort -
+    /// a persist failure just leaves the pipe in today's text-mode behavior.
+    async fn bootstrap_opening_keyframe(
+        &self,
+        input: &StartSessionGenerationInput,
+        composer: &crate::models::ComposerConfig,
+        first_pipe_id: &str,
+    ) {
+        let Some(pipe) = composer.pipes.iter().find(|p| p.id == first_pipe_id) else {
+            return;
+        };
+        if !opening_keyframe_needed(pipe, input) {
+            return;
+        }
+        // The opening frame's prompt is the pipe's video prompt itself (the
+        // most descriptive available text); the image model renders the scene
+        // so the i2v stage has a concrete first frame to synthesize from.
+        // `txt2img` kind = generated image stage (vs `url` = user file).
+        let prompt = input
+            .prompts
+            .get(first_pipe_id)
+            .cloned()
+            .filter(|p| !p.trim().is_empty());
+        let kf = Keyframe {
+            id: uuid::Uuid::new_v4().to_string(),
+            frame: 0,
+            slot_index: 1,
+            kind: "txt2img".into(),
+            image_src: None,
+            prompt,
+            reference_url: None,
+            preview_remote_url: None,
+            preview_local_path: None,
+            status: "pending".into(),
+            force_regen: false,
+            image_size: None,
+            image_ratio: None,
+        };
+        if let Ok(mut c) = self.db.get_composer(&input.session_id).await {
+            if let Some(target) = c.pipes.iter_mut().find(|p| p.id == first_pipe_id) {
+                target.keyframes = vec![kf];
+                if self.db.save_composer(&c).await.is_ok() {
+                    log::info!(
+                        "[Generation] uniform-grid bootstrap: seeded opening txt2img keyframe on pipe {first_pipe_id} (i2v route)"
+                    );
+                } else {
+                    log::warn!(
+                        "[Generation] uniform-grid bootstrap persist failed for {first_pipe_id} (kept text-mode fallback)"
+                    );
+                }
+            }
+        }
+    }
+
     /// Start one pipe through the SHARED normal generation-start path
     /// (`commands::generation::build_pipe_start`) — the exact same
     /// prompt/specs/media/task construction `start_generation` uses, so a
@@ -1564,6 +1665,83 @@ mod tests {
         assert!(!cancel.load(Ordering::Acquire));
         cancel.store(true, Ordering::Release);
         assert!(cancel.load(Ordering::Acquire));
+    }
+
+    // --- uniform-grid bootstrap: the pure `opening_keyframe_needed` rule ---
+
+    fn base_input() -> StartSessionGenerationInput {
+        StartSessionGenerationInput {
+            session_id: "s1".into(),
+            prompts: Default::default(),
+            media_root: None,
+            image_model: None,
+            video_model: None,
+            seed: None,
+            profile_id: None,
+            image_spec: Some(
+                serde_json::from_value(serde_json::json!({ "id": "img" })).unwrap(),
+            ),
+            video_spec: None,
+            pipe_ids: None,
+            failure_policy: "continue".into(),
+            auto_compose: true,
+            run_stats: None,
+            pipe_params: None,
+            force_last_frames: std::collections::HashMap::new(),
+            trim_boundary: std::collections::HashMap::new(),
+        }
+    }
+
+    fn keyframes_pipe() -> crate::models::composer::Pipe {
+        crate::models::composer::Pipe::new("Pipe 1", 121)
+    }
+
+    #[test]
+    fn opening_keyframe_needed_seeds_an_unsettled_keyframes_pipe() {
+        let pipe = keyframes_pipe(); // media_mode defaults to "keyframes", empty keyframes
+        assert_eq!(pipe.media_mode, "keyframes");
+        assert!(!pipe.has_settled_slot1());
+        let input = base_input(); // image_spec present
+        assert!(
+            opening_keyframe_needed(&pipe, &input),
+            "an unsettled keyframes pipe WITH an image spec must be seeded"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_skips_a_settled_slot1() {
+        let mut pipe = keyframes_pipe();
+        let mut kf = crate::models::composer::Keyframe::new(1, 0);
+        kf.image_src = Some("https://example.com/open.png".into());
+        pipe.keyframes.push(kf);
+        assert!(pipe.has_settled_slot1(), "precondition: slot-1 is settled");
+        let input = base_input();
+        assert!(
+            !opening_keyframe_needed(&pipe, &input),
+            "a settled opening keyframe must never be re-seeded"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_skips_a_reference_mode_pipe() {
+        let mut pipe = keyframes_pipe();
+        pipe.media_mode = "reference".into();
+        let input = base_input();
+        assert!(
+            !opening_keyframe_needed(&pipe, &input),
+            "keyframes are inert in reference mode - no seed"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_requires_an_image_spec() {
+        let pipe = keyframes_pipe();
+        let mut input = base_input();
+        input.image_spec = None;
+        assert!(
+            !opening_keyframe_needed(&pipe, &input),
+            "without an image spec there is nothing to generate"
+        );
     }
 
     // Regression: a follow-up pipe started mid-run must have its task id
