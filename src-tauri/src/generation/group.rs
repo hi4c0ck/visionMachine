@@ -32,14 +32,31 @@ fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     }
 }
 
-/// Pure decision for the uniform-grid bootstrap (see `bootstrap_opening_keyframe`):
-/// should the OPENING pipe be seeded with a `txt2img` slot-1 keyframe so its
-/// video stage runs on the i2v (keyframe) route instead of the t2v route?
+/// ━━━ TEMPORARY WORKAROUND — REMOVE WHEN THE i2v ROUTE GRID FIX SHIPS ━━━
 ///
-/// Today the opening pipe has nothing to auto-catch, so an empty slot-1
-/// falls back to text mode -> the t2v native grid, while every interior clip
-/// is i2v. Seeding a generated opening keyframe carries pipe 0 onto the SAME
-/// grid as the rest of the session, killing the one seam.
+/// Agnes team confirmed (2026-11-02): the i2v model processes video at an
+/// internal resolution of 1344×768, then resizes to 720-pixel short side
+/// while preserving aspect ratio → **1260×720** (native 7:4). t2v and
+/// multi-reference are NOT affected (they output true 1280×720). This is
+/// a model-side behavior, not a client bug.
+///
+/// WORKAROUND: seed pipe 0 onto the i2v route (via a txt2img slot-1
+/// keyframe) so the ENTIRE session runs on the 1260×720 grid. Without
+/// this, pipe 0 = t2v = 1280×720, all other pipes = i2v = 1260×720 →
+/// one dimensional seam at compose time (the "jump" / "stretch" the user
+/// sees).
+///
+/// REMOVAL CONDITION: after the next model update, ffprobe-verify that
+/// i2v output dims match t2v. If they do (both 1280×720), delete:
+///   - `opening_keyframe_needed` (this function)
+///   - `bootstrap_opening_keyframe` (the seed method)
+///   - `fallback_image_spec` (the spec fallback)
+///   - the bootstrap call in `start_group`
+///   - the "TEMPORARY" grid note in docs/agnes-model-catalog.md
+/// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+///
+/// Pure decision: should the OPENING pipe be seeded with a `txt2img`
+/// slot-1 keyframe so its video stage runs on the i2v route?
 ///
 /// Deliberately NOT gated on the run's image spec: the seed is pure data.
 /// When an image spec IS available the image stage generates the opening

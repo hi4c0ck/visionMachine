@@ -177,10 +177,23 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
    >   `aspect_ratio` is NOT honored on the i2v route)
    > The API response carries only `size`/`quality` strings - never pixel
    > dims - so this was invisible without probing the returned MP4.
-   > **Clean fix is routing, not a target change:** seed an opening i2v
-   > keyframe on the first pipe (see
-   > `GroupCoordinator::bootstrap_opening_keyframe`) so the whole session
+   >
+   > **Root cause (confirmed by the Agnes team, 2026-11-02):** the i2v
+   > model processes video internally at 1344x768, then resizes to a
+   > 720-pixel short side while preserving aspect ratio -> 1260x720.
+   > t2v and multi-reference are NOT affected (both stay 1280x720).
+   >
+   > **TEMPORARY WORKAROUND - remove after the model fix ships.** Until
+   > then, `GroupCoordinator::bootstrap_opening_keyframe` seeds pipe 0
+   > onto the i2v route (txt2img slot-1 keyframe) so the whole session
    > runs on one native grid; compose letterboxes any residual seam.
+   >
+   > **Removal checklist (once a model update ships):**
+   > 1. ffprobe one fresh i2v clip -> if it now reports 1280x720, fixed.
+   > 2. Delete `opening_keyframe_needed`, `bootstrap_opening_keyframe`,
+   >    `fallback_image_spec` + the bootstrap call in `start_group`
+   >    (group.rs) and their tests.
+   > 3. Delete this TEMPORARY block.
 - Mode rules: `keyframe` → `first_frame`/`last_frame` (≥1; no
   images/audios/videos); `reference` → `images[]` ≤5 + `audios[]` ≤3,
   `videos` FORBIDDEN (400); `text` → no media fields.
