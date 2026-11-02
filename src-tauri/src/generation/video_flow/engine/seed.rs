@@ -1975,4 +1975,129 @@ mod seed_tests {
         assert!(run.verify.verified, "S5 verify must pass: {:?}", run.verify.issues);
     }
 
+    /// Node A golden (harness-style, the "LLM output is testable" pin).
+    ///
+    /// A strict-JSON VisualNovel — the exact contract `expand_node_a`
+    /// constrains the model to (same schema as
+    /// `harness/fixtures/node_a.request.json`) — is parsed with the
+    /// production parse path, repaired to the seed counts, and run through
+    /// the SAME deterministic S2–S5 bridge (`build_with_novel`) every LLM
+    /// run uses. Pinned:
+    ///  - expansion provenance (`Llm` + model note),
+    ///  - G0 look axes override the LLM's own tod/weather claims,
+    ///  - S5 verify (V1–V7) passes end-to-end,
+    ///  - the LLM's ACTUAL content survives into the concrete plan
+    ///    (logline/world into every pipe's global_style, each shot's beats
+    ///    into its scene sections) — no template boilerplate,
+    ///  - the plan materializes into one concern-split pipe per shot.
+    ///
+    /// LLM text drift is a Node A contract problem (schema + repair_counts);
+    /// anything failing here means the bridge between the LLM shape and the
+    /// concrete plan drifted.
+    #[test]
+    fn node_a_novel_runs_through_the_deterministic_bridge() {
+        use crate::generation::video_flow::config::FlowConfig;
+        use crate::generation::video_flow::engine::llm::{parse_novel, repair_counts};
+        use crate::generation::video_flow::engine::types::VisualNovel;
+        use crate::generation::video_flow::{materialize_pipes, validate_plan};
+
+        // 1 scene x 3 shots — matches entry()'s seed scale, so repair_counts
+        // is a no-op and the bridge runs on the counts as produced.
+        let e = entry("a girl follows the river road north at dusk");
+        let seed = e.to_seed();
+        let novel_json = serde_json::json!({
+            "film": {
+                "title": "Imperium",
+                "logline": "A crew enters the battleship and chases the shadow figure",
+                "style": "film noir",
+                "world": "imperium battleship interior",
+                "palette": "steel blue, amber instrument glow",
+                "time_of_day": "night",
+                "weather": "storm"
+            },
+            "scenes": [
+                { "title": "The Bridge",
+                  "prose": "doors open onto the command deck, holo-charts drifting",
+                  "shots": [
+                    { "prose": "the deck opens, a figure stands in the center",
+                      "beats": ["wide: the deck opens, instrument glow - a distant moan"] },
+                    { "prose": "the figure moves toward the far exit",
+                      "beats": ["medium: the figure steps right, panels flicker - low engine hum"] },
+                    { "prose": "the figure climbs toward the starship",
+                      "beats": ["close-up: the ladder rung glints, breath fog - hydraulic clank"] }
+                  ] }
+            ]
+        });
+        // Production parse path (bare-object branch) + production repair.
+        let mut novel: VisualNovel = parse_novel(&novel_json)
+            .expect("strict VisualNovel JSON must parse");
+        repair_counts(&mut novel, &e).expect("counts already match the seed scale");
+
+        let run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Llm,
+            Some("agnes-2.5-flash".into()),
+        );
+
+        // 1) Provenance: this run IS the LLM path, named.
+        assert_eq!(run.expansion, ExpansionSource::Llm);
+        assert_eq!(run.expansion_note.as_deref(), Some("agnes-2.5-flash"));
+
+        // 2) G0 look axes override the LLM's own tod/weather claims.
+        assert_eq!(run.novel.film.time_of_day, "midday", "G0 tod wins over the LLM's 'night'");
+        assert_eq!(run.novel.film.weather, "clear", "G0 weather wins over the LLM's 'storm'");
+
+        // 3) S5 verify (V1-V7) passes end-to-end on the LLM-built novel.
+        assert!(
+            run.verify.verified,
+            "S5 verify must pass on the Node A novel: {:?}",
+            run.verify.issues
+        );
+
+        // 4) Content survival: the LLM's ACTUAL text lands in the plan.
+        let plan = run.plan_from_engine(1);
+        let total_shots: usize =
+            run.novel.scenes.iter().map(|s| s.shots.len()).sum::<usize>();
+        assert_eq!(plan.pipes.len(), total_shots, "one pipe per LLM-written shot");
+        for (i, pipe) in plan.pipes.iter().enumerate() {
+            let shot = &run.novel.scenes[0].shots[i];
+            // film-level context on every pipe (no shot loses the whole idea).
+            for needle in [
+                "A crew enters the battleship",
+                "imperium battleship interior",
+                "steel blue, amber instrument glow",
+                "film noir",
+            ] {
+                assert!(
+                    pipe.global_style.contains(needle),
+                    "pipe {i} global_style must carry '{needle}'"
+                );
+            }
+            // The shot's S1 beat reaches its scene sections (delta-driven).
+            let beat = &shot.beats[0];
+            let scene_texts: String = pipe
+                .sections
+                .iter()
+                .filter(|s| s.tag.keyword() == "scene")
+                .map(|s| s.prompt.clone())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let token = beat.split_once(':').map(|(_, rest)| rest.trim()).unwrap_or(beat);
+            let probe = token.split(' ').take(2).collect::<Vec<_>>().join(" ");
+            assert!(
+                scene_texts.to_lowercase().contains(&probe.to_lowercase()),
+                "shot {i} scene sections must carry its beat '{beat}', got: {scene_texts}"
+            );
+        }
+
+        // 5) The LLM-built plan still passes the flow's structural gates.
+        let cfg = FlowConfig::default_flow();
+        validate_plan(&plan, &cfg.structure).expect("Node A plan passes validate_plan");
+        let pipes = materialize_pipes(&plan, &cfg.materialize).expect("Node A plan materializes");
+        assert_eq!(pipes.len(), total_shots, "one composer pipe per LLM shot");
+    }
+
 }

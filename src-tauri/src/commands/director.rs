@@ -128,10 +128,13 @@ async fn node_a_provider_for_session(
     session_id: &str,
 ) -> Option<crate::generation::video_flow::engine::llm::TextProvider> {
     use sqlx::Row;
-    // sessions → projects → profiles (generation.rs::profile_name_for_session
-    // precedent; settings blobs are keyed by profile name, "default" seed).
-    let profile_name: Option<String> = sqlx::query(
-        "SELECT pr.name FROM sessions s \
+    // sessions → projects → profiles. The profile_settings blobs are keyed
+    // by profile **id** (storage/db.rs schema: profile_settings.profile_id
+    // references profiles.id), so resolve pr.id — NOT pr.name. (A name-based
+    // resolve returns None for every user-created profile whose id ≠ name,
+    // which silently kept every LLM run on the template path.)
+    let profile_id: Option<String> = sqlx::query(
+        "SELECT pr.id FROM sessions s \
               JOIN projects p ON p.id = s.project_id \
               JOIN profiles pr ON pr.id = p.profile_id \
               WHERE s.id = ?",
@@ -143,9 +146,9 @@ async fn node_a_provider_for_session(
     .flatten()
     .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
     .flatten();
-    let profile_name = profile_name.unwrap_or_else(|| "default".into());
+    let profile_id = profile_id.unwrap_or_else(|| "default".into());
 
-    let raw = db.get_profile_settings(&profile_name).await.ok().flatten()?;
+    let raw = db.get_profile_settings(&profile_id).await.ok().flatten()?;
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
     let settings = crate::commands::settings::normalize_settings(&value);
     let slot = settings.providers.text;
