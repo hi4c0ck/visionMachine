@@ -3,7 +3,7 @@
 //! ordering stay authoritative.
 use crate::generation::{
     compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeRegistry, GenerationService,
-    GenerationTaskView, ModelSpecWire, SourceVideo, TaskStatus,
+    GenerationTaskView, ModelSpecLimits, ModelSpecWire, SourceVideo, TaskStatus,
 };
 use crate::models::composer::{Keyframe, LastGeneration, Pipe};
 use crate::storage::{db::Database, generation_groups_db::GenerationGroupRow};
@@ -56,6 +56,41 @@ fn opening_keyframe_needed(pipe: &Pipe) -> bool {
     // A settled slot-1 (user-provided or previously caught) is kept as-is -
     // mirrors auto-catch's non-destructive rule, never overwrites it.
     !pipe.has_settled_slot1()
+}
+
+/// A bounded image-gen spec fallback for the Agnes image model contract.
+///
+/// The frontend owns the model catalog (specs are DATA in
+/// `catalog.ts`) and normally hands a resolved `image_spec` to Rust. When it
+/// does NOT (the 11:35 "pipe 0 ran t2v" bug - a null `imageSpec` passthrough),
+/// a seeded opening keyframe's image stage hard-fails and the video falls
+/// back to text mode -> the t2v native grid. To make the uniform-grid
+/// invariant hold regardless of the frontend's spec passthrough, synthesize a
+/// minimal-but-correct image-gen spec from the named image model.
+///
+/// Only the fields the `image-gen` shaper actually reads are set (id/kind/
+/// endpoint/sync/request_format). `limits` is left empty on purpose: the
+/// shaper's `guard_supported` then drops size/ratio and the request goes out
+/// as model+prompt+extra_body, and the provider generates a default-size
+/// frame. The opening frame's exact pixel grid is NOT the deliverable - the
+/// i2v video route re-synthesizes the frame anyway; what matters is that a
+/// valid `first_frame` EXISTS so the route is keyframe, not text.
+fn fallback_image_spec(model_id: &str) -> ModelSpecWire {
+    ModelSpecWire {
+        id: model_id.to_string(),
+        kind: "image".into(),
+        endpoint: "/v1/images/generations".into(),
+        sync: true,
+        poll_endpoint: None,
+        request_format: "image-gen".into(),
+        limits: ModelSpecLimits::default(),
+        pending: None,
+        label: Some("Agnes Image (fallback spec)".into()),
+        read_only: None,
+        supports_seed: None,
+        guidance: None,
+        media: None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,6 +512,28 @@ impl GroupCoordinator {
         //    whole run; a mid-run settings edit no longer changes the shape.
         let pinned = resolve_run_stats(&composer, &input.run_stats);
         input.run_stats = Some(pinned);
+        // Uniform-grid spec fallback: the frontend normally hands a resolved
+        // image spec, but a null passthrough (the 11:35 pipe-0-t2v bug) makes
+        // every image stage hard-fail ("no resolved image spec") and the
+        // seeded opening keyframe can't generate - so the video falls back
+        // to text mode and the session seam returns. When a model is NAMED
+        // but its spec is missing, synthesize the bounded Agnes image-gen
+        // spec so the keyframe route stays reachable. No model named at all
+        // = no image stages = text-mode fallback, which is today's behavior
+        // (harmless, not a regression).
+        if input.image_spec.is_none() {
+            if let Some(model) = input
+                .image_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+            {
+                input.image_spec = Some(fallback_image_spec(model));
+                log::info!(
+                    "[Generation] group: image spec missing - synthesized bounded image-gen spec for '{model}' (uniform-grid bootstrap stays reachable)"
+                );
+            }
+        }
         // When a group will compose, the session-video output dir is shared
         // with the standalone "compose session" button. Reset any stale
         // manifest/output AND any staged clips a PREVIOUS group run left
@@ -1754,6 +1811,28 @@ mod tests {
             !opening_keyframe_needed(&pipe),
             "keyframes are inert in reference mode - no seed"
         );
+    }
+
+    #[test]
+    fn fallback_image_spec_is_a_valid_image_gen_spec() {
+        // The spec fallback is what keeps the i2v route reachable when the
+        // frontend omits the image spec (the 11:35 bug). It must be a
+        // well-formed image-gen spec the shaper can shape against.
+        let spec = fallback_image_spec("agnes-image-2.5-flash");
+        assert_eq!(spec.id, "agnes-image-2.5-flash");
+        assert_eq!(spec.kind, "image");
+        assert_eq!(spec.endpoint, "/v1/images/generations");
+        assert!(spec.sync);
+        assert_eq!(spec.request_format, "image-gen");
+        // limits left empty on purpose -> the shaper's guard_supported drops
+        // size/ratio; the provider still generates a default-size frame.
+        assert!(spec.limits.resolutions.is_none());
+        assert!(spec.limits.ratios.is_none());
+        // It must survive the wire round-trip serde the group input uses.
+        let v = serde_json::to_value(&spec).unwrap();
+        let back: ModelSpecWire = serde_json::from_value(v).unwrap();
+        assert_eq!(back.id, spec.id);
+        assert_eq!(back.request_format, "image-gen");
     }
 
     // Regression: a follow-up pipe started mid-run must have its task id
