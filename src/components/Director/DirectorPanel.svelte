@@ -1195,6 +1195,11 @@
 		gap: 18px;
 		padding: 12px 14px 40px;
 		min-height: 100%;
+		/* Native form controls (select / number / checkbox) render their
+		   dropdown chrome + spinners against the dark surface, not the
+		   default light OS control. */
+		color-scheme: dark;
+		font-synthesis: none;
 	}
 
 	.phase0-notice {
@@ -1224,19 +1229,23 @@
 	.block-heading .chip {
 		display: inline-block;
 		margin-left: 0.35rem;
-		padding: 0.05rem 0.45rem;
-		border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
+		padding: 0.12rem 0.5rem;
+		border: 1px solid var(--border-color);
 		border-radius: 999px;
-		font-size: 0.72rem;
-		max-width: 22rem;
+		font-size: 0.7rem;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		max-width: 24rem;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		vertical-align: baseline;
+		background: var(--bg-tertiary);
 	}
 	.chip-llm {
-		color: var(--text, inherit);
-		border-color: color-mix(in srgb, var(--ok-color, #22c55e) 45%, transparent);
+		color: var(--success-color, var(--text-secondary));
+		border-color: color-mix(in srgb, var(--success-color, #4ade80) 45%, transparent);
+		background: color-mix(in srgb, var(--success-color, #4ade80) 10%, transparent);
 	}
 	.chip-fallback {
 		color: var(--text-muted);
@@ -1260,7 +1269,7 @@
 	}
 	.action-feedback.tone-ok {
 		color: var(--text-primary);
-		border-left-color: var(--ok-color, var(--success-color, var(--accent-color)));
+		border-left-color: var(--success-color, var(--accent-color));
 	}
 	.action-feedback.tone-warn {
 		color: var(--text-primary);
@@ -1294,9 +1303,31 @@
 		padding-top: 0;
 	}
 
-	/* ── Phase-1 hot path (① DIRECTION · ② NOVEL · ③ STEP CHAIN) ── */
+	/* ── Phase-1 hot path (① DIRECTION · ② NOVEL · ③ STEP CHAIN) ──
+	   The primary control flow is elevated into a card surface, so it reads
+	   as "the thing you do first" and stays visually distinct from the
+	   demoted Advanced hairline rows below it. */
 	.stage.hot {
-		/* hairline-separated block (Template A), tighter than the full stages */
+		border-top: none;
+		padding-top: 0;
+		margin: 0;
+		gap: 10px;
+		background: var(--bg-secondary);
+		border: 1px solid var(--border-color);
+		border-radius: 10px;
+		padding: 14px 16px;
+		box-shadow: var(--shadow-sm, none);
+	}
+	.stage.hot + .stage.hot {
+		/* keep the three hot blocks flowing as one card stack with a quiet
+		   gap between them, not a hard hairline each */
+		margin-top: 12px;
+	}
+	.stage.hot .block-heading {
+		margin: 0;
+	}
+	.stage.hot .block-heading .muted {
+		letter-spacing: 0.04em;
 	}
 
 	.novel-rows {
@@ -1367,20 +1398,49 @@
 	.advanced {
 		margin-top: 8px;
 		border: 1px solid var(--border-color);
-		border-radius: 4px;
+		border-radius: 8px;
+		overflow: hidden;
 	}
 	.advanced-summary {
-		padding: 8px 10px;
+		position: relative;
+		padding: 9px 34px 9px 12px;
 		cursor: pointer;
 		font-weight: 600;
+		font-size: 12px;
+		letter-spacing: 0.02em;
 		user-select: none;
+		background: var(--bg-tertiary);
+		transition: background var(--transition-fast, 0.15s ease);
 	}
-	.advanced-summary .muted { font-weight: 400; margin-left: 8px; }
+	.advanced-summary:hover {
+		background: var(--bg-hover);
+	}
+	.advanced-summary::after {
+		content: '▸';
+		position: absolute;
+		right: 12px;
+		top: 50%;
+		transform: translateY(-50%);
+		font-family: var(--font-mono);
+		color: var(--text-muted);
+		transition: transform var(--transition-sin, 0.4s);
+	}
+	.advanced[open] .advanced-summary::after {
+		transform: translateY(-50%) rotate(90deg);
+	}
+	.advanced-summary .muted {
+		font-weight: 400;
+		margin-left: 8px;
+		letter-spacing: 0.02em;
+	}
 	.advanced[open] .advanced-summary {
 		border-bottom: 1px solid var(--border-color);
 	}
 
-	/* ── Extract: concrete editable sections ── */
+	/* ── Extract: concrete editable sections ──
+	   (the block / prompt-edit / dirty styles now live in the later
+	    "Extract: plain structural text" section; only the film-context line
+	    and pipe-label utilities are unique here.) */
 	.extract-film-ctx {
 		margin: 0 0 6px;
 		font-size: 11px;
@@ -1391,28 +1451,6 @@
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;
 		color: var(--text-muted, var(--text-secondary));
-	}
-	.dirty-mark {
-		color: var(--danger-color, #ef4444);
-		font-size: 10px;
-	}
-	.extract-block.dirty .extract-prompt-edit {
-		border-color: var(--danger-color, #ef4444);
-	}
-	.extract-prompt-edit {
-		width: 100%;
-		box-sizing: border-box;
-		margin-top: 4px;
-		padding: 6px 8px;
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
-		line-height: 1.5;
-		border: 1px solid var(--border-color);
-		border-radius: 4px;
-		background: var(--bg-elevated);
-		color: var(--text-primary);
-		resize: vertical;
-		min-height: 40px;
 	}
 	.stage-head {
 		display: flex;
@@ -1489,9 +1527,30 @@
 		color: var(--text-primary);
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border-color);
+		border-radius: 5px;
 		padding: 4px 6px;
 		width: 100%;
 		box-sizing: border-box;
+		transition: border-color var(--transition-fast, 0.15s ease),
+			box-shadow var(--transition-fast, 0.15s ease);
+	}
+	.field select:hover,
+	.field input:hover {
+		border-color: var(--border-light, var(--border-color));
+	}
+	.field select:focus,
+	.field input:focus {
+		outline: none;
+		border-color: var(--accent-color);
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.2));
+	}
+	.field select {
+		appearance: none;
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23808080' stroke-width='1.2'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 7px center;
+		padding-right: 24px;
+		cursor: pointer;
 	}
 	.field input[type='number'] {
 		width: 62px;
@@ -1854,19 +1913,26 @@
 	.btn {
 		font: inherit;
 		font-size: 12px;
+		font-weight: 500;
 		color: var(--text-primary);
 		background: var(--bg-elevated);
 		border: 1px solid var(--border-color);
+		border-radius: 6px;
 		padding: 6px 12px;
 		cursor: pointer;
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-		transition: border-color var(--transition-sin, 0.25s),
-			background var(--transition-sin, 0.25s);
+		transition: border-color var(--transition-fast, 0.15s ease),
+			background var(--transition-fast, 0.15s ease),
+			box-shadow var(--transition-fast, 0.15s ease);
 	}
 	.btn:hover:not(:disabled) {
 		border-color: var(--accent-color);
+	}
+	.btn:focus-visible {
+		outline: none;
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
 	}
 	.btn:disabled {
 		opacity: 0.45;
@@ -1876,15 +1942,30 @@
 		background: var(--accent-color);
 		color: var(--text-inverse);
 		border-color: transparent;
+		box-shadow: var(--shadow-sm, none);
+	}
+	.btn.primary:hover:not(:disabled) {
+		background: var(--accent-hover, var(--accent-color));
+		border-color: transparent;
 	}
 	.btn.danger {
 		color: var(--danger-color);
+		border-color: color-mix(in srgb, var(--danger-color) 50%, var(--border-color));
+		background: var(--danger-bg, transparent);
+	}
+	.btn.danger:hover:not(:disabled) {
 		border-color: var(--danger-color);
+		background: var(--danger-bg, var(--bg-hover));
 	}
 	.btn-note {
 		font-size: 10px;
+		font-weight: 400;
 		color: var(--text-muted);
 		font-family: var(--font-mono);
+		letter-spacing: 0.01em;
+	}
+	.btn.primary .btn-note {
+		color: color-mix(in srgb, var(--text-inverse) 70%, transparent);
 	}
 	.stage-actions {
 		display: flex;
@@ -1918,14 +1999,23 @@
 		gap: 6px;
 	}
 	.extract-block {
-		border-top: 1px solid var(--border-color);
-		padding: 10px 2px;
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		padding: 10px 12px;
+		margin-top: 8px;
+		background: var(--bg-secondary);
+		transition: border-color var(--transition-fast, 0.15s ease);
+	}
+	.extract-block.dirty {
+		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 55%, var(--border-color));
+		background: color-mix(in srgb, var(--warning-color, #fbbf24) 6%, var(--bg-secondary));
 	}
 	.extract-meta {
 		display: flex;
 		align-items: baseline;
 		gap: 10px;
 		margin-bottom: 6px;
+		flex-wrap: wrap;
 	}
 	.tag-word {
 		color: var(--text-secondary);
@@ -1944,6 +2034,36 @@
 	}
 	.provenance.active {
 		color: var(--text-secondary);
+	}
+	.dirty-mark {
+		margin-left: auto;
+		color: var(--warning-color, var(--text-muted));
+		font-size: 11px;
+	}
+	.extract-prompt-edit {
+		width: 100%;
+		box-sizing: border-box;
+		margin-top: 4px;
+		padding: 6px 8px;
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		line-height: 1.5;
+		border: 1px solid var(--border-color);
+		border-radius: 5px;
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+		resize: vertical;
+		min-height: 40px;
+		transition: border-color var(--transition-fast, 0.15s ease),
+			box-shadow var(--transition-fast, 0.15s ease);
+	}
+	.extract-prompt-edit:focus {
+		outline: none;
+		border-color: var(--accent-color);
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.2));
+	}
+	.extract-block.dirty .extract-prompt-edit {
+		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 60%, var(--border-color));
 	}
 	.extract-prompt {
 		font-size: 13px;
@@ -2128,5 +2248,28 @@
 		stroke-width: 0.5;
 		stroke-dasharray: 2 2;
 		opacity: 0.5;
+	}
+
+	/* ── Keyboard focus: one quiet accent ring across every interactive
+	   affordance (buttons already have it via :focus-visible; cover the
+	   summaries, gates, bars, and mini toggles here). ── */
+	.mini:focus-visible,
+	.bar-row:focus-visible,
+	.ss-head:focus-visible,
+	.gate:focus-visible,
+	.tb-collapsed:focus-visible,
+	.advanced-summary:focus-visible {
+		outline: none;
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
+		border-radius: 4px;
+	}
+
+	/* Respect the user's motion preference: drop the sine tweens, keep the
+	   state changes instant (design doc §6 motion is additive, not load-bearing). */
+	@media (prefers-reduced-motion: reduce) {
+		* {
+			transition-duration: 0.001ms !important;
+			transition-timing-function: linear !important;
+		}
 	}
 </style>

@@ -473,6 +473,21 @@ impl EngineRun {
             )
         };
 
+        // The film's PRINCIPAL — the one-word through-line that every pipe's
+        // continuity anchor says "the same {principal} persists". Derived
+        // from the logline's first content noun (the S1 subject). Bounded to
+        // one word so it reads as an identity, not a clause.
+        let principal = {
+            let raw = subject_phrase(&self.novel.film.logline);
+            let first = cap_words(&raw, 1);
+            let articles = ["the", "a", "an"];
+            if articles.iter().any(|a| first.eq_ignore_ascii_case(a)) {
+                "the main subject".to_string()
+            } else {
+                first
+            }
+        };
+
         for (si, sc) in self.novel.scenes.iter().enumerate() {
             let scene_style = self.scenes.get(si).map(|s| {
                 format!("{film_ctx} · {} {}", s.time_of_day, s.weather)
@@ -532,6 +547,14 @@ impl EngineRun {
                 } else {
                     format!("{scene_style} · {sustained_base}")
                 };
+                // Cross-pipe through-line: one bounded `continuity:` line so a
+                // generated clip knows "the same person / same place / does it
+                // keep going". The locus is the scene's own title (its place).
+                let locus = cap_words(&sc.title, 5);
+                let scene_style = format!(
+                    "{scene_style} · {}",
+                    continuity_line(&principal, &locus, si, ki)
+                );
 
                 let transition_text =
                     format!("{} → {}", spec.transition_in, spec.transition_out);
@@ -581,15 +604,24 @@ impl EngineRun {
                         } else {
                             Some(sl.absorbed_beats.join(" · "))
                         };
-                        let beat = beats_here.unwrap_or_default();
-                        let mut p = if i == 0 {
-                            format!("{prose} — {}", sl.note)
+                        // Lean per-slice Scene text (the "over-detail squish"
+                        // fix): slice 0 = the shot's own descriptive sentence
+                        // (prose) + one capped beat; later slices = just their
+                        // capped beat. The structural "opens/develops/closes"
+                        // note and the content-driven note/beat doubling are
+                        // dropped — that context now lives once in the pipe's
+                        // global_style (the continuity line + sustained base),
+                        // so a long LLM beat can't over-detail and squash.
+                        let beat = cap_words(&beats_here.unwrap_or_default(), 10);
+                        let p = if i == 0 {
+                            if beat.is_empty() {
+                                prose.clone()
+                            } else {
+                                format!("{prose} · {beat}")
+                            }
                         } else {
-                            sl.note.clone()
+                            beat.clone()
                         };
-                        if !beat.is_empty() {
-                            p.push_str(&format!(" · {beat}"));
-                        }
                         add(&mut sections, VideoTag::Scene, &p, s0, s1);
                         // CAMERA event: only where this slice states a camera
                         // change (the shot-size / focal move at this moment).
@@ -1014,6 +1046,31 @@ fn scene_sentence(g: usize, place: &str, fragment: &str, axis_detail: &str) -> S
     let verb = verbs[g % verbs.len()];
     let subject = subject_phrase(fragment);
     format!("{subject} {verb} {place}; {axis_detail}.")
+}
+
+/// One bounded `continuity:` line per pipe — the cross-pipe signal the
+/// generated clips currently lose ("who is the same person as before, is
+/// this the same place, and does the scene keep going"). Deliberately ONE
+/// short line in the pipe's global_style (never per-slice), so the media
+/// model gets the through-line without over-detail that makes it squash:
+/// - shot 0 of scene 0 -> the film opens here;
+/// - shot >0 in a scene -> continues the previous shot, same subject + place;
+/// - shot 0 of a later scene -> the scene shifts place but the SAME subject
+///   carries over (continuable across the cut).
+/// `subject` = the film's principal (one word, the through-line), `locus` =
+/// the scene's concrete place.
+fn continuity_line(subject: &str, locus: &str, si: usize, ki: usize) -> String {
+    if si == 0 && ki == 0 {
+        format!("continuity: the film opens here — {subject} in {locus}")
+    } else if ki == 0 {
+        format!(
+            "continuity: the scene shifts to {locus} but the same {subject} carries over from the previous scene"
+        )
+    } else {
+        format!(
+            "continuity: continues the previous shot — the same {subject} remains in {locus}"
+        )
+    }
 }
 
 /// Beats in the harness Node A micro-cue form:
@@ -2255,8 +2312,6 @@ mod seed_tests {
     /// "content drives activation" guarantee.
     #[test]
     fn content_driven_sub_slices_activate_only_on_the_llm_path() {
-        use crate::generation::video_flow::engine::types::{CameraConcern, LensConcern, MotionConcern, SceneSpec};
-
         let e = entry("a girl follows the river road north at dusk");
         let seed = e.to_seed();
 
@@ -2373,7 +2428,6 @@ mod seed_tests {
         use crate::generation::video_flow::engine::types::VisualNovel;
 
         let e = entry("a girl follows the river road north at dusk");
-        let seed = e.to_seed();
         // clip_s = 10s for the order_66 shot (matches the golden fixture).
         let e2 = EngineEntry {
             scale: crate::generation::video_flow::engine::types::SeedScale {
@@ -2469,6 +2523,117 @@ mod seed_tests {
                 all_beats.iter().any(|a| a == b),
                 "beat '{b}' must be present in absorbed_beats"
             );
+        }
+    }
+
+    /// Cross-pipe continuity + the over-detail squish guard: every pipe's
+    /// global_style carries a bounded `continuity:` line that names the
+    /// through-line (the film's principal subject), the per-scene locus, and
+    /// whether it continues the previous shot; and the per-slice Scene arcs
+    /// are LEAN (a long LLM beat is capped so a verbose beat can't squash
+    /// the model).
+    #[test]
+    fn every_pipe_carries_a_continuity_line_and_lean_scene_arcs() {
+        use crate::generation::video_flow::engine::types::VisualNovel;
+        use crate::generation::video_flow::plan::VideoTag;
+
+        let mut e = entry("a girl follows the river road north at dusk");
+        // Match the 1-scene × 2-shot novel below so V3 counts hold.
+        e.scale = crate::generation::video_flow::engine::types::SeedScale {
+            scenes: 1,
+            shots_per_scene: 2,
+            clip_s: [8, 10],
+        };
+        let seed = e.to_seed();
+        let beats = vec![
+            "close-up: the officer's hand grips the console - the hum drops out".to_string(),
+            "medium: a long, long, long, long, long beat with many descriptive words that must be capped before it reaches the model".to_string(),
+        ];
+        let novel = VisualNovel {
+            film: crate::generation::video_flow::engine::types::FilmLook {
+                title: "Bridge".into(),
+                logline: "the officer commands the deck".into(),
+                style: "cinematic natural light".into(),
+                world: "the command deck".into(),
+                palette: "steel blue".into(),
+                time_of_day: "midday".into(),
+                weather: "clear".into(),
+            },
+            scenes: vec![
+                crate::generation::video_flow::engine::types::NovelScene {
+                    title: "The Deck".into(),
+                    prose: "a wide deck, consoles lit".into(),
+                    shots: vec![
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the deck is quiet".into(),
+                            beats: beats.clone(),
+                        },
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the deck stirs".into(),
+                            beats: beats.clone(),
+                        },
+                    ],
+                }
+            ],
+        };
+
+        let run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Llm,
+            None,
+        );
+        assert!(
+            run.verify.verified,
+            "continuity-augmented run must still pass S5 verify: {:?}",
+            run.verify.issues
+        );
+
+        let plan = run.plan_from_engine(1);
+        assert_eq!(plan.pipes.len(), 2, "one pipe per shot");
+
+        // 1) Both pipes carry a `continuity:` line naming the same principal
+        //    subject ("officer" from the logline).
+        for (i, pipe) in plan.pipes.iter().enumerate() {
+            assert!(
+                pipe.global_style.contains("continuity:"),
+                "pipe {i} global_style must carry a continuity line, got: {}",
+                pipe.global_style
+            );
+            assert!(
+                pipe.global_style.to_lowercase().contains("officer"),
+                "pipe {i} continuity line must name the principal 'officer', got: {}",
+                pipe.global_style
+            );
+        }
+        // 2) The two pipes differ in their continuity marker: pipe 0 is the
+        //    film-opener; pipe 1 "continues the previous shot".
+        assert!(
+            plan.pipes[0].global_style.contains("the film opens here"),
+            "pipe 0 is the opener: {}",
+            plan.pipes[0].global_style
+        );
+        assert!(
+            plan.pipes[1].global_style.contains("continues the previous shot"),
+            "pipe 1 continues: {}",
+            plan.pipes[1].global_style
+        );
+
+        // 3) Lean scene arcs: every Scene section stays short enough that a
+        //    verbose beat can't dump a clause and squash the model.
+        for (i, pipe) in plan.pipes.iter().enumerate() {
+            for s in &pipe.sections {
+                if s.tag == VideoTag::Scene {
+                    let words = s.prompt.split_whitespace().count();
+                    assert!(
+                        words <= 24,
+                        "pipe {i} scene arc must stay lean (<=24 words), got {words}: '{}' — a too-tight detail dump makes the model squash",
+                        s.prompt
+                    );
+                }
+            }
         }
     }
 }

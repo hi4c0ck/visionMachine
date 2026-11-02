@@ -181,6 +181,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		/* native form chrome against the dark surface */
+		color-scheme: dark;
 	}
 
 	.tb-header {
@@ -202,7 +204,8 @@
 		justify-content: center;
 		background: none;
 		border: 1px solid transparent;
-		padding: 2px;
+		border-radius: 5px;
+		padding: 3px;
 		cursor: pointer;
 		color: var(--text-secondary);
 		transition: color var(--transition-sin, 0.3s),
@@ -217,6 +220,11 @@
 	.lock:not(:disabled):hover {
 		border-color: var(--border-color);
 		color: var(--text-primary);
+	}
+	.lock:focus-visible {
+		outline: none;
+		border-color: var(--accent-color);
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
 	}
 
 	.lock-closed .shackle {
@@ -259,15 +267,18 @@
 		color: var(--text-primary);
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border-color);
+		border-radius: 8px;
 		/* Reserve the icon's 16px no-text zone on the right + bottom so
 		   text never runs under it at full icon size. */
 		padding: 8px 44px 24px 8px;
-		transition: border-color var(--transition-sin, 0.3s);
+		transition: border-color var(--transition-sin, 0.3s),
+			box-shadow var(--transition-sin, 0.3s);
 	}
 
 	.tb-textarea:focus {
 		outline: none;
 		border-color: var(--accent-color);
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
 	}
 
 	.tb-textarea:disabled {
@@ -287,6 +298,7 @@
 		padding: 0;
 		background: var(--bg-elevated);
 		border: 1px solid var(--border-color);
+		border-radius: 7px;
 		color: var(--accent-color);
 		cursor: pointer;
 		/* 16px no-text zone clearance rule: when content nears the corner,
@@ -294,7 +306,13 @@
 		transform: scale(1);
 		transform-origin: bottom right;
 		transition: transform var(--transition-sin, 0.4s),
-			opacity var(--transition-sin, 0.4s);
+			opacity var(--transition-sin, 0.4s),
+			border-color var(--transition-sin, 0.4s);
+	}
+	.gen-icon:focus-visible {
+		outline: none;
+		border-color: var(--accent-color);
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
 	}
 
 	.near-icon .gen-icon {
@@ -333,12 +351,19 @@
 		padding: 6px 8px;
 		background: var(--bg-tertiary);
 		border: 1px solid var(--border-color);
+		border-radius: 8px;
 		cursor: pointer;
-		transition: border-color var(--transition-sin, 0.3s);
+		transition: border-color var(--transition-sin, 0.3s),
+			box-shadow var(--transition-sin, 0.3s);
 	}
 
 	.tb-collapsed:hover {
 		border-color: var(--accent-color);
+	}
+	.tb-collapsed:focus-visible {
+		outline: none;
+		border-color: var(--accent-color);
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
 	}
 
 	.tb-collapsed-text {
@@ -368,5 +393,19 @@
 
 	.tb-footer .warn {
 		color: var(--warning-color);
+	}
+
+	/* Respect the user's motion preference (design doc §6 is additive,
+	   not load-bearing): the sine tweens + spin collapse to instant. */
+	@media (prefers-reduced-motion: reduce) {
+		.gen-ring {
+			animation: none;
+		}
+		.lock-open .shackle,
+		.gen-icon,
+		.tb-textarea,
+		.tb-collapsed {
+			transition: none !important;
+		}
 	}
 </style>
