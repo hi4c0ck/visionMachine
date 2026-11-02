@@ -177,6 +177,12 @@ export interface SubSlice {
 	to_s: number;
 	note: string;
 	state?: PartialConcerns | null;
+	/**
+	 * Content-driven sub-slices CARRY the beat text(s) they own (including any
+	 * no-op beat collapsed into this slice by V7). Empty on the cycling
+	 * template path — the plan falls back to the positional `beats[i]`.
+	 */
+	absorbed_beats?: string[];
 }
 
 export interface ShotSpec {

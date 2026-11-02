@@ -556,8 +556,6 @@ impl EngineRun {
                     continuity_line(&principal, &locus, si, ki)
                 );
 
-                let transition_text =
-                    format!("{} → {}", spec.transition_in, spec.transition_out);
                 let shot_f = shot_frames(spec);
                 let mut sections: Vec<PlanSection> = Vec::new();
                 let add =
@@ -652,9 +650,24 @@ impl EngineRun {
                         }
                         // MOTION event: only where this slice moves (dolly /
                         // track) — a real in-shot event, not a sustained bed.
+                        // The MOVE is finite: a dolly occupies a bounded part
+                        // of the slice, then the camera HOLDS at the new
+                        // position. Bounding the window to the move (by
+                        // speed) instead of slabbing the whole slice stops
+                        // "dolly, slow" from claiming a full 5s of motion.
                         if let Some(mc) = state.and_then(|s| s.motion.clone()) {
                             let t = motion_text(&mc);
-                            add(&mut sections, VideoTag::Motion, &t, s0, s1);
+                            let slice_len = s1.saturating_sub(s0);
+                            // Move duration by speed: slow = 2s, normal = 1.5s,
+                            // fast = 1s (FRAME_RATE @24). Never longer than
+                            // the slice itself (then it fills it).
+                            let move_f = match mc.speed.as_str() {
+                                "slow" => 48,
+                                "fast" => 24,
+                                _ => 36,
+                            };
+                            let motion_end = (s0 + move_f.min(slice_len)).max(s0 + 1);
+                            add(&mut sections, VideoTag::Motion, &t, s0, motion_end);
                         }
                         // EFFECT event: only where this slice adds an effect.
                         if let Some(efx) = state.and_then(|s| s.effects.clone()) {
@@ -672,16 +685,66 @@ impl EngineRun {
                     }
                 }
 
-                // TRANSITION: a cut EVENT at the shot's entry (a concrete
-                // action), not a sustained condition — a short cut-in window.
-                let trans_end = shot_f.min(8).max(1);
-                add(
-                    &mut sections,
-                    VideoTag::Transition,
-                    &transition_text,
-                    0,
-                    trans_end,
-                );
+                // TRANSITION: a cut EVENT at the shot's ENTRIES, not a
+                // sustained condition. Two windows, both sized by the
+                // transition TYPE (closed table, deterministic):
+                //   in  -> [0, in_dur]: the morph INTO this shot
+                //   out -> [shot_f - out_dur, shot_f]: the morph OUT to the
+                //          next shot (this was previously never emitted, so
+                //          the model had no "how the shot leaves" signal and
+                //          the morph became awkward mid-sequence)
+                // hard_cut is a near-zero boundary change, not a windowed
+                // event — it emits nothing (the cut reads from the clip
+                // join itself), so we don't burn a section on it.
+                let trans_window = |t: &str, shot_f: u32| -> Option<(u32, u32)> {
+                    let d = match t {
+                        // hard cuts = the clip join itself; no windowed cue.
+                        "hard_cut" | "jump_cut" => 0,
+                        // l_cut / j_cut: audio leads video ~0.5s
+                        "l_cut" | "j_cut" => 12,
+                        // match_cut: the match carries ~1s of overlap
+                        "match_cut" => 24,
+                        // wipe/dissolve/crossfade: a real envelope, scaled to
+                        // the clip length (40% of a 10s shot, capped 24f)
+                        "crossfade" | "dissolve" | "wipe" => {
+                            (shot_f.saturating_mul(4) / 10).min(24)
+                        }
+                        _ => 0,
+                    };
+                    if d == 0 {
+                        None
+                    } else {
+                        Some((0, d))
+                    }
+                };
+                if let Some((ts, te)) = trans_window(&spec.transition_in, shot_f) {
+                    add(&mut sections, VideoTag::Transition, &spec.transition_in, ts, te);
+                }
+                // OUT window: mirror of the in-window at the tail. Emitted
+                // only when the shot actually morphs out (crossfade/dissolve/
+                // wipe/match/l/j) — a hard-cut exit stays silent.
+                let out_window = match spec.transition_out.as_str() {
+                    "crossfade" | "dissolve" | "wipe" | "match_cut" | "l_cut" | "j_cut" => {
+                        let d = trans_window(&spec.transition_out, shot_f)
+                            .map(|(_, e)| e)
+                            .unwrap_or(0);
+                        if d > 0 && shot_f > d + 1 {
+                            Some((shot_f - d, shot_f))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some((ts, te)) = out_window {
+                    add(
+                        &mut sections,
+                        VideoTag::Transition,
+                        &format!("{} (out)", spec.transition_out),
+                        ts,
+                        te,
+                    );
+                }
 
                 pipes.push(PlanPipe {
                     index: pipes.len(),
@@ -1875,22 +1938,49 @@ mod seed_tests {
         assert_eq!((lts[1].frame_start, lts[1].frame_end), (120, shot_f), "warm close window");
         let mts: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Motion).collect();
         assert_eq!(mts.len(), 2, "motion event only where the slice moves");
-        assert_eq!((mts[0].frame_start, mts[0].frame_end), (48, 120), "develop dolly window");
-        assert_eq!((mts[1].frame_start, mts[1].frame_end), (120, shot_f), "close track window");
+        // FINITE moves (speed-bounded, front-loaded): the dolly occupies ~2s
+        // (48f) of its [48,120] slice then holds; the track ~1.5s (36f) of
+        // its [120,192] slice. Neither slabs the whole slice.
+        assert_eq!((mts[0].frame_start, mts[0].frame_end), (48, 96), "develop dolly: 48f move, then hold");
+        assert_eq!((mts[1].frame_start, mts[1].frame_end), (120, 156), "close track: 36f move, then hold");
         // No Effect event in the deterministic seed (effects_base empty) —
         // the genre ambience bed moved to the sustained base in global_style.
         assert!(
             p0.sections.iter().all(|s| s.tag != VideoTag::Effect),
             "flat ambience is not re-emitted as a whole-shot Effect slab"
         );
-        // Transition = a cut EVENT: a short leading window, not the whole shot.
+        // Transition = windowed cut EVENTS at the shot's BOUNDARIES, sized
+        // by type. Shot 0 enters on a hard_cut (no windowed cue) and exits on
+        // a crossfade, so pipe 0 carries ONE transition section — the OUT
+        // envelope at the tail (shot_f-24 .. shot_f), not a head cut-in.
         let trans: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Transition).collect();
-        assert_eq!(trans.len(), 1, "one cut-in event per shot");
-        assert_eq!(trans[0].frame_start, 0, "transition opens the shot");
+        assert_eq!(trans.len(), 1, "shot 0: hard_cut in emits no section; only the crossfade out-window");
+        assert_eq!(
+            (trans[0].frame_start, trans[0].frame_end),
+            (shot_f - 24, shot_f),
+            "out-window = the crossfade envelope at the shot's tail"
+        );
         assert!(
-            trans[0].frame_end <= shot_f.min(8),
-            "transition is a short cut-in window, not the whole shot, got {}",
-            trans[0].frame_end
+            trans[0].frame_start > 0,
+            "the out-window sits at the tail, not the head"
+        );
+        // A morphing shot (crossfade in) gets BOTH a head in-window and a
+        // tail out-window.
+        let trans1: Vec<_> = plan.pipes[1]
+            .sections
+            .iter()
+            .filter(|s| s.tag == VideoTag::Transition)
+            .collect();
+        assert_eq!(trans1.len(), 2, "crossfade shot carries an in-window AND an out-window");
+        assert_eq!(
+            (trans1[0].frame_start, trans1[0].frame_end),
+            (0, 24),
+            "in-window = crossfade envelope at the head"
+        );
+        assert_eq!(
+            (trans1[1].frame_start, trans1[1].frame_end),
+            (shot_f - 24, shot_f),
+            "out-window = crossfade envelope at the tail"
         );
 
         // Pin the EXACT concern-text format (what the TS mirror must match).
@@ -1942,16 +2032,18 @@ mod seed_tests {
             vec!["dolly, slow speed", "track"],
             "motion fires only where the slice moves"
         );
-        // S3 transitions (first shot hard_cut, the rest crossfade).
+        // S3 transition prompts: a windowed cue carries its TYPE (in-window)
+        // or TYPE + " (out)" marker (out-window). Shot 0's in is a hard cut
+        // (no section) — its only transition section is the crossfade out.
         assert_eq!(
             prompt_of(&plan.pipes[0], VideoTag::Transition),
-            "hard_cut → crossfade",
-            "first shot enters with a hard cut"
+            "crossfade (out)",
+            "shot 0 exits via a crossfade out-window (hard-cut in emits no section)"
         );
         assert_eq!(
             prompt_of(&plan.pipes[1], VideoTag::Transition),
-            "crossfade → crossfade",
-            "later shots crossfade"
+            "crossfade",
+            "shot 1 enters via a crossfade in-window"
         );
         // SUSTAINED BASE now lives in global_style (the whole-scene look): the
         // flat grade + the genre ambience bed that no longer appear as slabs.

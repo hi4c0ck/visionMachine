@@ -244,7 +244,7 @@
 		let shotOrd = 0; // global shot ordinal = pipeIndex
 		for (const grp of specsByScene(e)) {
 			for (const sp of grp.specs) {
-				const transT = `${sp.transition_in} → ${sp.transition_out}`;
+				// (transition windows are now computed per boundary, see below)
 
 				// Per-slice concern helpers (mirror of the Rust delta-driven
 				// emission): a concern section is emitted ONLY where the slice
@@ -290,6 +290,10 @@
 				// one sustained base pair (Scene + base Camera), both full-clip.
 				const prose = sp.content.prose;
 				const slices = sp.sub_timeline.length ? sp.sub_timeline : null;
+				// Cap a beat to ~10 words (mirrors Rust cap_words(_, 10)) so a
+				// verbose LLM beat can't over-detail and squash the model.
+				const capWords = (s: string, n: number) =>
+					s.trim().split(/\s+/).slice(0, n).join(' ');
 				if (!slices) {
 					push('scene', prose, 0, clipF);
 					push('camera', camFor(sp.concerns.camera, sp.concerns.lens), 0, clipF);
@@ -297,20 +301,36 @@
 					slices.forEach((sl, i) => {
 						const s0 = sl.from_s * 24;
 						const s1 = Math.max(sl.to_s * 24, s0 + 1);
-						// SCENE arc: the beat/story at this moment.
-						let p = i === 0 ? `${prose} — ${sl.note}` : sl.note;
-						const beat = sp.content.beats[i];
-						if (beat) p += ` · ${beat}`;
-						push('scene', p, s0, s1);
+						// SCENE arc (lean): slice 0 = the shot's own sentence
+						// (prose) + one capped beat; later slices = just their
+						// capped beat. Content-driven slices carry their beat
+						// texts in absorbed_beats; the cycling template path
+						// falls back to the positional beats[i].
+						const beatHere = sl.absorbed_beats?.length
+							? sl.absorbed_beats.join(' · ')
+							: sp.content.beats[i] ?? '';
+						const beat = capWords(beatHere, 10);
+						const p = i === 0 ? (beat ? `${prose} · ${beat}` : prose) : beat;
+						if (p) push('scene', p, s0, s1);
 						const st = sl.state;
 						// CAMERA event: only where this slice states a camera.
 						if (st?.camera) push('camera', camFor(st.camera, st.lens ?? undefined), s0, s1);
 						// LIGHTING event: only where this slice changes the light.
 						if (st?.lighting) push('lighting', lightingFor(st.lighting, st.grade ?? undefined), s0, s1);
-						// MOTION event: only where this slice moves.
+						// MOTION event: a FINITE move (speed-bounded), not a
+						// whole-slice slab — the move occupies a bounded part of
+						// the slice, then the camera holds.
 						if (st?.motion) {
 							const mt = motionText({ move: st.motion.move, zoom: st.motion.zoom, speed: st.motion.speed });
-							if (mt) push('motion', mt, s0, s1);
+							if (mt) {
+								const sliceLen = s1 - s0;
+								const moveF =
+									st.motion.speed === 'slow' ? 48
+									: st.motion.speed === 'fast' ? 24
+									: 36;
+								const mEnd = Math.max(s0 + 1, s0 + Math.min(moveF, sliceLen));
+								push('motion', mt, s0, mEnd);
+							}
 						}
 						// EFFECT event: only where this slice adds an effect.
 						if (st?.effects && st.effects.length) {
@@ -320,11 +340,22 @@
 					});
 				}
 
-				// SURROUNDING CUT-IN: the transition is a cut EVENT, not a
-				// sustained condition — a short leading window, not the whole
-				// shot. (The sustained look + ambience live in global_style,
-				// not as re-stated per-concern slabs.)
-				push('transition', transT, 0, Math.min(8, clipF));
+				// TRANSITION: windowed cut EVENTS at the shot's BOUNDARIES,
+				// sized by the transition TYPE (mirrors Rust trans_window).
+				// hard_cut/jump_cut = the clip join itself → no section.
+				// Two windows: IN at [0, dur] and OUT at [clipF - dur, clipF].
+				const transDur = (t: string): number => {
+					if (t === 'l_cut' || t === 'j_cut') return 12;
+					if (t === 'match_cut') return 24;
+					if (t === 'crossfade' || t === 'dissolve' || t === 'wipe')
+						return Math.min(Math.floor((clipF * 4) / 10), 24);
+					return 0;
+				};
+				const inDur = transDur(sp.transition_in);
+				if (inDur > 0) push('transition', sp.transition_in, 0, inDur);
+				const outDur = transDur(sp.transition_out);
+				if (outDur > 0 && clipF > outDur + 1)
+					push('transition', `${sp.transition_out} (out)`, clipF - outDur, clipF);
 
 				shotOrd++;
 			}
