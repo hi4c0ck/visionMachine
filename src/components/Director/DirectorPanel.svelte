@@ -80,6 +80,19 @@
 	// On load/run, backfilled from the engine seed so controls reflect the run.
 	// Persisted per session (entryDraft) so leaving the Director tab (panel
 	// unmounts on 'pipes') never loses typed text — a re-mount restores it.
+	// Extract/scene tag word → theme lane color (design-system --tag-* tokens,
+	// which repaint on every theme). This is the panel's strongest per-theme
+	// hook: the same "scene/camera/..." labels read red/yellow/cyan/pink/
+	// orange in steel-dark vs. the muted sets in light.
+	const TAG_LANE_CLASS: Record<string, string> = {
+		scene: 'lane-red',
+		camera: 'lane-yellow',
+		lighting: 'lane-cyan',
+		motion: 'lane-pink',
+		transition: 'lane-orange',
+		effect: 'lane-blue',
+	};
+
 	const defaultEntry: EngineEntryInput = {
 		title: '',
 		idea: '',
@@ -1022,7 +1035,7 @@
 					<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
 						<header class="extract-meta">
 							<code class="extract-pipe">pipe {String(s.pipeIndex).padStart(2, '0')}</code>
-							<span class="tag-word">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
+							<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
 							<code class="range">{s.range}</code>
 							{#if edited}
 								<span class="dirty-mark" title="edited">●</span>
@@ -1040,7 +1053,7 @@
 				{#each sections as s, i}
 					<article class="extract-block">
 						<header class="extract-meta">
-							<span class="tag-word">{s.tag}</span>
+							<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}</span>
 							<code class="range">{String(s.frameStart).padStart(2, '0')}–{s.frameEnd}</code>
 							<span class="provenance" class:active={s.from.length > 0}>
 								{#if s.from.length > 0}
@@ -1195,10 +1208,10 @@
 		gap: 18px;
 		padding: 12px 14px 40px;
 		min-height: 100%;
-		/* Native form controls (select / number / checkbox) render their
-		   dropdown chrome + spinners against the dark surface, not the
-		   default light OS control. */
-		color-scheme: dark;
+		/* Native form controls follow the app theme: `color-scheme` is set per
+	   [data-theme] in design-system.css (dark themes -> dark, light -> light),
+	   so we must NOT hardcode it here (that would pin light-theme selects to
+	   the dark OS control). */
 		font-synthesis: none;
 	}
 
@@ -1208,12 +1221,29 @@
 		font-size: 12px;
 	}
 
+	/* Section heading: quiet hairline text + the theme's accent tick, so a
+	   theme switch is visible at the panel level (steel's orange vs
+	   jetbrains' blue accent shows up here first). */
 	.block-heading {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 		font-size: 12px;
 		font-weight: 600;
 		letter-spacing: 0.02em;
 		color: var(--text-secondary);
 		margin: 4px 0 2px;
+	}
+	.block-heading::before {
+		content: '';
+		flex-shrink: 0;
+		width: 3px;
+		height: 12px;
+		border-radius: 2px;
+		background: var(--gradient-accent, var(--accent-color));
+	}
+	.block-heading .muted {
+		font-weight: 400;
 	}
 	.block-heading .muted {
 		color: var(--text-muted);
@@ -1939,14 +1969,15 @@
 		cursor: not-allowed;
 	}
 	.btn.primary {
-		background: var(--accent-color);
+		background: var(--gradient-btn, var(--accent-color));
 		color: var(--text-inverse);
 		border-color: transparent;
-		box-shadow: var(--shadow-sm, none);
+		box-shadow: 0 2px 10px var(--accent-glow, var(--shadow-sm, none));
 	}
 	.btn.primary:hover:not(:disabled) {
-		background: var(--accent-hover, var(--accent-color));
+		background: var(--gradient-btn-hover, var(--accent-hover, var(--accent-color)));
 		border-color: transparent;
+		box-shadow: 0 3px 14px var(--accent-glow, var(--shadow-sm, none));
 	}
 	.btn.danger {
 		color: var(--danger-color);
@@ -2020,7 +2051,35 @@
 	.tag-word {
 		color: var(--text-secondary);
 		font-size: 12px;
-		font-weight: 500;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+	}
+	/* Theme lane colors: the design system ships per-theme --tag-* tokens
+	   (steel-dark's orange/red/cyan vs light's muted sets). Mapping each
+	   Extract tag word to its lane makes the panel visibly adopt the active
+	   theme instead of reading as flat gray. A colored 6px tick + tinted
+	   label = the "theme shows up here" hook. */
+	.tag-word::before {
+		content: '';
+		display: inline-block;
+		width: 6px;
+		height: 6px;
+		margin-right: 6px;
+		border-radius: 2px;
+		vertical-align: baseline;
+		background: var(--lane-color, var(--text-muted));
+	}
+	.tag-word.lane-red { --lane-color: var(--tag-red); color: color-mix(in srgb, var(--tag-red) 72%, var(--text-secondary)); }
+	.tag-word.lane-yellow { --lane-color: var(--tag-yellow); color: color-mix(in srgb, var(--tag-yellow) 78%, var(--text-secondary)); }
+	.tag-word.lane-cyan { --lane-color: var(--tag-cyan); color: color-mix(in srgb, var(--tag-cyan) 72%, var(--text-secondary)); }
+	.tag-word.lane-blue { --lane-color: var(--tag-blue); color: color-mix(in srgb, var(--tag-blue) 72%, var(--text-secondary)); }
+	.tag-word.lane-pink { --lane-color: var(--tag-pink); color: color-mix(in srgb, var(--tag-pink) 72%, var(--text-secondary)); }
+	.tag-word.lane-orange { --lane-color: var(--tag-orange); color: color-mix(in srgb, var(--tag-orange) 72%, var(--text-secondary)); }
+	.tag-word.lane-muted { --lane-color: var(--text-muted); }
+	/* On the dirty (warning-tinted) block, keep the tag readable but dim the
+	   lane tick so the edited-state border stays the primary signal. */
+	.extract-block.dirty .tag-word::before {
+		opacity: 0.6;
 	}
 	.range {
 		font-family: var(--font-mono);

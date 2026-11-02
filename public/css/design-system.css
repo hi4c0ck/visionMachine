@@ -278,6 +278,17 @@
     box-shadow 0.2s ease;
 }
 
+/* Native form chrome (select dropdowns, number spinners, scrollbars,
+   search controls) must follow the app theme, not the OS light default. */
+:root,
+[data-theme="jetbrains-dark"],
+[data-theme="steel-dark"] {
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  color-scheme: light;
+}
+
 /* ── Global Reset Enhancements ────────────────────────────────── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { font-size: 14px; }

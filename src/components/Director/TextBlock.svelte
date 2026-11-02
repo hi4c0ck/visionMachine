@@ -181,8 +181,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
-		/* native form chrome against the dark surface */
-		color-scheme: dark;
+		/* Native form chrome follows the app theme (color-scheme is set per
+		   [data-theme] in design-system.css — don't pin it to dark here). */
 	}
 
 	.tb-header {
