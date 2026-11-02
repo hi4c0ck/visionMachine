@@ -24,6 +24,7 @@
 //! engine is a parallel, richer text model that the flow can lower onto later.
 
 pub mod axes;
+pub mod beat_profiles;
 pub mod derive;
 pub mod gates;
 pub mod llm;

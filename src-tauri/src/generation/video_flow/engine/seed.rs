@@ -22,6 +22,7 @@
 //! node ever produces out-of-vocab state, `verify` will surface it named.
 
 use crate::generation::video_flow::engine::axes;
+use crate::generation::video_flow::engine::beat_profiles;
 use crate::generation::video_flow::engine::derive::{derive_full, frames_of, FRAME_RATE, MIN_FRAMES};
 use crate::generation::video_flow::engine::gates::{Gate, GateId, Gates, Step};
 use crate::generation::video_flow::engine::tag_vocabulary::TagVocabulary;
@@ -374,7 +375,10 @@ impl EngineRun {
                 .collect();
 
         // S3: shot specs - one per novel shot, concern-grouped closed defaults.
-        let (specs, timeline) = build_specs_and_timeline(&seed, &novel, &scenes);
+        // content-driven sub-slices activate ONLY on the LLM path (rich Node A
+        // beats); the deterministic template keeps its pinned cycling journey.
+        let content_driven = expansion == ExpansionSource::Llm;
+        let (specs, timeline) = build_specs_and_timeline(&seed, &novel, &scenes, content_driven);
 
         // S3'/S4: molecules - derived from (scene, spec pair), prompts filled.
         // Specs are laid out scene-major (si, ki); the owning scene index is
@@ -567,12 +571,17 @@ impl EngineRun {
                         let s1 = sl.to_s.saturating_mul(24).max(s0 + 1);
                         let state = sl.state.as_ref();
                         // SCENE arc: the beat/story at this moment.
-                        let beat = spec
-                            .content
-                            .beats
-                            .get(i)
-                            .cloned()
-                            .unwrap_or_default();
+                        // Content-driven slices CARRY their beat text(s) in
+                        // `absorbed_beats` (including any no-op beat collapsed
+                        // into this window, V7-merge) — no positional drift.
+                        // The cycling template path leaves it empty, so fall
+                        // back to the positional beat as before.
+                        let beats_here = if sl.absorbed_beats.is_empty() {
+                            spec.content.beats.get(i).cloned()
+                        } else {
+                            Some(sl.absorbed_beats.join(" · "))
+                        };
+                        let beat = beats_here.unwrap_or_default();
                         let mut p = if i == 0 {
                             format!("{prose} — {}", sl.note)
                         } else {
@@ -1158,7 +1167,139 @@ fn shot_motion(g: usize) -> MotionConcern {
 /// motion events, and slice split points. `g = 0` is the "establishing"
 /// journey (close-up→medium→wide, 85→50→35mm, cool→warm, dolly then track);
 /// every other shot varies. All values stay tag-closed.
-fn shot_sub_slices(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
+/// S3 sub-slices, **content-driven**: the shot's Node A beats set the camera
+/// journey + pacing. Each beat's closed-vocab shot-size prefix is the
+/// ACTIVATION signal — when a beat parses a size, that beat drives its
+/// sub-slice's concern state (lens / DoF / framing / lighting / motion) via
+/// the editable `beat_profiles` table, and the table's `pacing_weight` sets
+/// the slice's window width (wide establishes long, close-ups resolve short).
+///
+/// Guaranteed fallback: when NO beat carries a parseable size prefix, the
+/// per-shot **cycling** journey below is used unchanged (the pre-existing
+/// structure), so sibling variety is preserved and the S3 shape always holds.
+/// V7 no-op slices are always collapsed, so every emitted slice adds a real
+/// concern delta.
+/// S3 sub-slices.
+///
+/// `content_driven` selects the ACTUATION layer (the user's question: is this
+/// a new template or a content-driven one?):
+/// - `content_driven == false` (the deterministic template/seed path): ALWAYS
+///   the pre-existing per-shot **cycling** journey — sibling-variety by the
+///   global shot index. This is the structure the fidelity test pins.
+/// - `content_driven == true` (an LLM-authored novel, `build_with_novel`):
+///   the shot's Node A beats set the camera journey + pacing. Each beat's
+///   closed-vocab shot-size prefix is the activation signal — when it parses,
+///   that beat drives its sub-slice's concern state (lens / DoF / framing /
+///   lighting / motion) via the editable `beat_profiles` table, and the
+///   table's `pacing_weight` sets the slice's window width (wide establishes
+///   long, close-ups resolve short). Beats that DON'T parse a size prefix
+///   fall back to the cycling journey, so the S3 shape always holds.
+///
+/// V7 no-op slices are always collapsed (against the shot's real base), so
+/// every emitted slice adds a genuine concern delta.
+fn shot_sub_slices(
+    g: usize,
+    clip: u32,
+    shot_ref: &str,
+    beats: &[String],
+    base: &Concerns,
+    content_driven: bool,
+) -> Vec<SubSlice> {
+    if !content_driven {
+        return shot_sub_slices_cycling(g, clip, shot_ref);
+    }
+    let vocab = TagVocabulary::new();
+    let profiles = beat_profiles::beat_profiles();
+    let sizes: Vec<Option<&str>> =
+        beats.iter().map(|b| beat_profiles::parse_beat_size(b, &vocab)).collect();
+
+    // Activation gate: content drives the structure only when at least one
+    // beat names a closed-vocab shot size. Otherwise → the cycling journey.
+    if !sizes.iter().any(Option::is_some) {
+        return shot_sub_slices_cycling(g, clip, shot_ref);
+    }
+
+    // One slice per beat (S3 cap is 4). The table's pacing weight sets each
+    // slice's window width; normalized to fill the clip exactly.
+    let n = sizes.len().min(4).max(1);
+    let weights: Vec<f32> = (0..n)
+        .map(|i| {
+            sizes[i]
+                .and_then(|s| profiles.get(s))
+                .map(beat_profiles::pacing_of)
+                .unwrap_or(1.0)
+        })
+        .collect();
+    let total: f32 = weights.iter().sum::<f32>().max(1.0);
+    let mut bounds = vec![0u32];
+    let mut acc = 0f32;
+    for i in 1..=n {
+        acc += weights[i - 1];
+        let px = ((acc / total) * clip as f32).round() as u32;
+        bounds.push(px.clamp(i as u32, clip));
+    }
+
+    let roles = ["opens", "develops", "closes", "closes"];
+    let mut slices = (0..n)
+        .map(|i| {
+            let size = sizes[i].unwrap_or("medium");
+            let state = sizes[i]
+                .and_then(|s| profiles.get(s))
+                .map(|p| beat_profiles::profile_state(size, p))
+                .unwrap_or_default();
+            let role = roles.get(i).copied().unwrap_or("develops");
+            let beat_text = beats.get(i).cloned().unwrap_or_default();
+            SubSlice {
+                from_s: bounds[i],
+                to_s: bounds[i + 1],
+                note: format!("{shot_ref} {role}: {beat_text}"),
+                state: Some(state),
+                // Content-driven slices CARRY their beat text(s); the plan
+                // reader prefers these over the positional beats.
+                absorbed_beats: vec![beat_text],
+            }
+        })
+        .collect();
+
+    collapse_no_op_slices(&mut slices, base);
+    slices
+}
+
+/// V7 no-op collapse against the shot's REAL base: a slice whose folded
+/// effective concern state equals the previous slice's adds no information,
+/// so a beat that says nothing new is absorbed into the previously-kept
+/// slice's window (window extended, its beat text carried). This is what
+/// keeps `verify`'s V7 invariant clean on content-driven slices (it folds
+/// against `sp.concerns`, so the collapse must too — `Concerns::default()`
+/// would be the wrong base).
+fn collapse_no_op_slices(slices: &mut Vec<SubSlice>, base: &Concerns) {
+    let states: Vec<Option<PartialConcerns>> =
+        slices.iter().map(|s| s.state.clone()).collect();
+    let eff = axes::fold(base, &states); // eff[i] = state before slice i
+    let mut out: Vec<SubSlice> = Vec::new();
+    for (i, s) in slices.iter().enumerate() {
+        // Slice i is a no-op when its state adds nothing over the previous
+        // folded state — the exact condition verify() checks (V7).
+        let adds = out.is_empty() || !axes::diff(&eff[i], &eff[i + 1]).is_empty();
+        if adds {
+            out.push(s.clone());
+        } else if let Some(last) = out.last_mut() {
+            last.to_s = s.to_s.max(last.to_s);
+            // Carry the dropped beat's text so no narrative content is lost.
+            for b in &s.absorbed_beats {
+                if !b.is_empty() && !last.absorbed_beats.iter().any(|k| k == b) {
+                    last.absorbed_beats.push(b.clone());
+                }
+            }
+        }
+    }
+    *slices = out;
+}
+
+/// The pre-existing per-shot **cycling** journey — the guaranteed structure
+/// when beats carry no parseable shot-size prefixes (and the sibling-variety
+/// source). Unchanged from the original S3 sub-slice builder.
+fn shot_sub_slices_cycling(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
     // Camera size journey (start → mid → end).
     let cam = [
         ["close-up", "medium", "wide"],
@@ -1259,6 +1400,7 @@ fn shot_sub_slices(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
                 motion: motion_of(m0),
                 grade: None, effects: None, audio: None,
             }),
+            absorbed_beats: Vec::new(),
         },
         SubSlice {
             from_s: mid,
@@ -1270,6 +1412,7 @@ fn shot_sub_slices(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
                 motion: motion_of(m1),
                 lighting: None, grade: None, effects: None, audio: None,
             }),
+            absorbed_beats: Vec::new(),
         },
         SubSlice {
             from_s: mid2,
@@ -1282,6 +1425,7 @@ fn shot_sub_slices(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
                 motion: motion_of(m2),
                 grade: None, effects: None, audio: None,
             }),
+            absorbed_beats: Vec::new(),
         },
     ]
 }
@@ -1292,6 +1436,7 @@ fn build_specs_and_timeline(
     seed: &FilmSeed,
     novel: &VisualNovel,
     scenes: &[SceneSpec],
+    content_driven: bool,
 ) -> (Vec<ShotSpec>, SceneTimeline) {
     let clip = seed.scale.clip_s[0].clamp(4, 10);
     let mut specs: Vec<ShotSpec> = Vec::new();
@@ -1321,11 +1466,12 @@ fn build_specs_and_timeline(
                     silence: false,
                 },
             };
-            // Sub-timeline: three clean slices tracking a beat progression,
-            // varied per global shot index (camera path, focal path,
-            // light-temperature arc, motion events, split points) so sibling
-            // shots don't collapse into an identical structure.
-            let sub = shot_sub_slices(g, clip, &shot_ref);
+            // Sub-timeline: content-driven when this is an LLM novel (the
+            // beat shot-size prefixes set the journey + pacing via the
+            // editable beat_profiles table); the per-shot cycling journey is
+            // the guaranteed fallback (template path, or unparseable beats).
+            let beats = kshot.beats.clone();
+            let sub = shot_sub_slices(g, clip, &shot_ref, &beats, &concerns, content_driven);
             specs.push(ShotSpec {
                 shot_id: shot_id.clone(),
                 novel_ref: shot_ref.clone(),
@@ -2100,4 +2246,229 @@ mod seed_tests {
         assert_eq!(pipes.len(), total_shots, "one composer pipe per LLM shot");
     }
 
+    /// Content-driven activation proof: on the LLM path (`content_driven=true`)
+    /// a shot whose beats carry closed-vocab shot-size prefixes gets a
+    /// beat-driven sub-timeline (the beat's size sets the slice's camera
+    /// state; the table's pacing weight sets the slice's window width).
+    /// On the template path (`content_driven=false`) the same beats are
+    /// IGNORED — the pinned cycling journey is used instead. This is the
+    /// "content drives activation" guarantee.
+    #[test]
+    fn content_driven_sub_slices_activate_only_on_the_llm_path() {
+        use crate::generation::video_flow::engine::types::{CameraConcern, LensConcern, MotionConcern, SceneSpec};
+
+        let e = entry("a girl follows the river road north at dusk");
+        let seed = e.to_seed();
+
+        // A rich LLM novel: 1 scene, 3 shots, each with one beat that names
+        // a closed-vocab shot size (wide → medium → close-up).
+        let beat_wide = "wide: the hall opens, senators seated - a low ambient hum";
+        let beat_med = "medium: a senator rises, robes catch the light";
+        let beat_cu = "close-up: the speaker's hand grips the podium";
+
+        let novel = crate::generation::video_flow::engine::types::VisualNovel {
+            film: crate::generation::video_flow::engine::types::FilmLook {
+                title: "Council".into(),
+                logline: "a chamber of senators at a crossroads".into(),
+                style: "cinematic natural light".into(),
+                world: "the Grand Council chamber".into(),
+                palette: "amber wood, cool stone".into(),
+                time_of_day: "midday".into(),
+                weather: "clear".into(),
+            },
+            scenes: vec![
+                crate::generation::video_flow::engine::types::NovelScene {
+                    title: "The Chamber".into(),
+                    prose: "a wide chamber of senators, the air still".into(),
+                    shots: vec![
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the hall opens".into(),
+                            beats: vec![beat_wide.to_string()],
+                        },
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "a senator rises".into(),
+                            beats: vec![beat_med.to_string()],
+                        },
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the speaker grips the podium".into(),
+                            beats: vec![beat_cu.to_string()],
+                        },
+                    ],
+                }
+            ],
+        };
+
+        // The LLM path: content_driven=true → beats drive the sub-slices.
+        let llm_run = EngineRun::build_with_novel(
+            seed.clone(),
+            novel.clone(),
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Llm,
+            None,
+        );
+
+        // Each shot's S3 spec should have sub-slices whose camera state
+        // matches the beat's parsed shot size, and the V7 invariant holds
+        // (every slice adds a real concern delta against the shot base).
+        for (i, spec) in llm_run.specs.iter().enumerate() {
+            let beat = [beat_wide, beat_med, beat_cu][i];
+            let parsed_size = beat.split_once(':').unwrap().0.trim();
+            assert!(
+                !spec.sub_timeline.is_empty(),
+                "shot {i} must have at least one sub-slice"
+            );
+            let sl = &spec.sub_timeline[0];
+            let cam = sl.state.as_ref().and_then(|s| s.camera.as_ref());
+            assert_eq!(
+                cam.map(|c| c.size.as_str()),
+                Some(parsed_size),
+                "shot {i} sub-slice camera size must match the beat's parsed prefix '{parsed_size}', got {:?}",
+                cam.map(|c| c.size.as_str())
+            );
+            // absorbed_beats carries the beat text (content-driven path).
+            assert!(
+                sl.absorbed_beats.iter().any(|b| b.contains(parsed_size)),
+                "shot {i} sub-slice must carry its beat text in absorbed_beats"
+            );
+        }
+
+        // The template path: content_driven=false → cycling journey, NOT
+        // the beat-driven one. Same beats, different structure.
+        let tmpl_run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Template,
+            None,
+        );
+        // The cycling journey does NOT use absorbed_beats (empty on all slices).
+        for spec in &tmpl_run.specs {
+            for sl in &spec.sub_timeline {
+                assert!(
+                    sl.absorbed_beats.is_empty(),
+                    "template path must NOT carry absorbed_beats (cycling journey)"
+                );
+            }
+        }
+        // And the cycling journey's camera states are the per-shot-index
+        // cycling values, NOT the beat-driven parsed sizes.
+        // shot g=0 cycling = close-up→medium→wide (the g=0 template).
+        let tmpl_sl0 = &tmpl_run.specs[0].sub_timeline[0];
+        let tmpl_cam0 = tmpl_sl0.state.as_ref().and_then(|s| s.camera.as_ref());
+        assert_eq!(
+            tmpl_cam0.map(|c| c.size.as_str()),
+            Some("close-up"),
+            "template path shot 0 slice 0 uses the cycling g=0 camera path (close-up), NOT the beat's 'wide'"
+        );
+    }
+
+    /// The Order 66 council opening (the beat_profiles grammar source): a
+    /// content-driven LLM novel whose beats are wide→close-up→medium gets
+    /// pacing-weighted slice windows (wide = 1.5×, close-up = 0.8×, medium
+    /// = 1.0×), and the verify V1–V7 invariants pass end-to-end.
+    #[test]
+    fn order_66_council_content_driven_sub_slices() {
+        use crate::generation::video_flow::engine::types::VisualNovel;
+
+        let e = entry("a girl follows the river road north at dusk");
+        let seed = e.to_seed();
+        // clip_s = 10s for the order_66 shot (matches the golden fixture).
+        let e2 = EngineEntry {
+            scale: crate::generation::video_flow::engine::types::SeedScale {
+                scenes: 1,
+                shots_per_scene: 1,
+                clip_s: [10, 10],
+            },
+            ..e
+        };
+        let seed2 = e2.to_seed();
+
+        // The Order 66 LLM novel: one shot, three beats (wide→close-up→medium).
+        let beats = vec![
+            "wide: the hall is quiet, senators seated - a low ambient hum".to_string(),
+            "close-up: Qui-Gon's hand goes to the lightsaber - the hum drops out".to_string(),
+            "medium: the clones turn as one, blades raised - first blaster crack".to_string(),
+        ];
+        let novel = VisualNovel {
+            film: crate::generation::video_flow::engine::types::FilmLook {
+                title: "Order 66".into(),
+                logline: "The Council falls as the Order begins".into(),
+                style: "dark, tense".into(),
+                world: "the Grand Council chamber, Coruscant".into(),
+                palette: "steel blue, amber instrument glow".into(),
+                time_of_day: "midday".into(),
+                weather: "clear".into(),
+            },
+            scenes: vec![
+                crate::generation::video_flow::engine::types::NovelScene {
+                    title: "The Chamber".into(),
+                    prose: "a wide chamber of senators, the air still".into(),
+                    shots: vec![
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the chamber falls silent".into(),
+                            beats: beats.clone(),
+                        }
+                    ],
+                }
+            ],
+        };
+
+        let run = EngineRun::build_with_novel(
+            seed2,
+            novel,
+            &e2.time_of_day,
+            &e2.weather,
+            ExpansionSource::Llm,
+            None,
+        );
+
+        // V1–V7 verify must pass: every slice adds a concern delta.
+        assert!(
+            run.verify.verified,
+            "order_66 content-driven run must pass S5 verify: {:?}",
+            run.verify.issues
+        );
+
+        let spec = &run.specs[0];
+        // Pacing weights: wide=1.5, close-up=0.8, medium=1.0 → total=3.3.
+        // clip=10s → slice widths: 10×1.5/3.3=4.5s, 10×0.8/3.3=2.4s, 10×1.0/3.3=3.0s.
+        // Rounded: [0,4],[4,7],[7,10].
+        let slices = &spec.sub_timeline;
+        assert_eq!(slices.len(), 3, "three content-driven slices for three beats");
+        let width = |i: usize| slices[i].to_s - slices[i].from_s;
+        // Pacing weights: wide=1.5, close-up=0.8, medium=1.0 → the WIDE
+        // (establishing) slice gets the widest window, the close-up the
+        // narrowest. This is the pacing curve, in seconds.
+        assert!(
+            width(0) >= width(1) && width(0) >= width(2),
+            "the wide/establishing slice (weight 1.5) should be the widest, got [{},{},{}]",
+            width(0),
+            width(1),
+            width(2)
+        );
+        assert!(
+            width(1) <= width(2),
+            "close-up (weight 0.8) slice should be no wider than medium (weight 1.0), got {}s vs {}s",
+            width(1),
+            width(2)
+        );
+        // Camera states match the beat's parsed prefix.
+        let cam0 = slices[0].state.as_ref().and_then(|s| s.camera.as_ref());
+        let cam1 = slices[1].state.as_ref().and_then(|s| s.camera.as_ref());
+        let cam2 = slices[2].state.as_ref().and_then(|s| s.camera.as_ref());
+        assert_eq!(cam0.map(|c| c.size.as_str()), Some("wide"), "slice 0 = wide");
+        assert_eq!(cam1.map(|c| c.size.as_str()), Some("close-up"), "slice 1 = close-up");
+        assert_eq!(cam2.map(|c| c.size.as_str()), Some("medium"), "slice 2 = medium");
+        // absorbed_beats carries all three beat texts.
+        let all_beats: Vec<&str> = slices.iter().flat_map(|s| s.absorbed_beats.iter().map(|b| b.as_str())).collect();
+        assert_eq!(all_beats.len(), 3, "all three beats must be carried in absorbed_beats");
+        for b in &beats {
+            assert!(
+                all_beats.iter().any(|a| a == b),
+                "beat '{b}' must be present in absorbed_beats"
+            );
+        }
+    }
 }

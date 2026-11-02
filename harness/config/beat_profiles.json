@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "description": "Shot-size -> concern profile + pacing weight. Editable data: add/remove entries here; the Rust engine reads this via include_str! at compile time (no runtime IO). The ACTIVATION KEY is the closed-vocab shot-size prefix parsed from each Node A beat (`<size>: ...`), so content (the beat) drives which profile fires. Values must stay inside the closed tag vocabulary (tag_vocabulary.rs size/lens/light/motion sets).",
+  "profiles": {
+    "wide": {
+      "pacing_weight": 1.5,
+      "focal_mm": 24,
+      "dof": "deep",
+      "framing": "rule_of_thirds",
+      "lighting": { "key": "soft", "contrast": "medium", "color_temp_K": 5500, "pattern": "ambient" },
+      "motion": { "zoom": "static", "move": "static", "speed": "slow" }
+    },
+    "medium": {
+      "pacing_weight": 1.0,
+      "focal_mm": 50,
+      "dof": "medium",
+      "framing": "rule_of_thirds",
+      "lighting": { "key": "soft", "contrast": "medium", "color_temp_K": 5000, "pattern": "ambient" },
+      "motion": { "zoom": "static", "move": "dolly", "speed": "slow" }
+    },
+    "close-up": {
+      "pacing_weight": 0.8,
+      "focal_mm": 85,
+      "dof": "shallow",
+      "framing": "fill_frame",
+      "lighting": { "key": "soft", "contrast": "medium", "color_temp_K": 4500, "pattern": "cool" },
+      "motion": { "zoom": "in", "move": "dolly", "speed": "slow" }
+    },
+    "over-the-shoulder": {
+      "pacing_weight": 1.0,
+      "focal_mm": 50,
+      "dof": "medium",
+      "framing": "centered",
+      "lighting": { "key": "soft", "contrast": "low", "color_temp_K": 5000, "pattern": "warm" },
+      "motion": { "zoom": "static", "move": "static", "speed": "slow" }
+    }
+  }
+}

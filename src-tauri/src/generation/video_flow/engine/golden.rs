@@ -51,6 +51,64 @@ fn golden() -> ShotSpec {
     serde_json::from_str(GOLDEN_SHOT_SPEC).unwrap_or_else(|e| panic!("golden parse: {e}"))
 }
 
+/// The Order 66 council-chamber opening (the beat_profiles grammar source),
+/// kept as the authoritative on-disk harness/golden/order_66_council.json so
+/// the fixture — not a hand-pasted copy — drives the test.
+const ORDER_66_SHOT_SPEC: &str =
+    include_str!("../../../../../harness/golden/order_66_council.json");
+
+fn order_66() -> ShotSpec {
+    serde_json::from_str(ORDER_66_SHOT_SPEC)
+        .unwrap_or_else(|e| panic!("order_66 golden parse: {e}"))
+}
+
+/// The Order 66 shot spec round-trips and its concerns are tag-closed — the
+/// same two invariants the grizzly-forest golden pins, now for the
+/// reveal/ambush/cascade grammar the beat_profiles table was modeled on.
+#[test]
+fn order_66_shot_spec_round_trips_and_is_tag_closed() {
+    let spec = order_66();
+    assert_eq!(spec.shot_id, "tl_01_shot_1");
+    assert_eq!(spec.clip_s, 10);
+    assert_eq!(spec.content.beats.len(), 3, "three Order-66 beats");
+    // Round-trip is byte-stable through serde.
+    let v = serde_json::to_value(&spec).unwrap();
+    let back: ShotSpec = serde_json::from_value(v).unwrap();
+    assert_eq!(back, spec);
+    // Every concern value is inside the closed tag vocabulary.
+    let vocab = TagVocabulary::new();
+    assert!(
+        vocab.validate_concerns(&spec.concerns).is_empty(),
+        "order_66 concerns must be tag-closed: {:?}",
+        vocab.validate_concerns(&spec.concerns)
+    );
+}
+
+/// The Order 66 sub-timeline folds + diffs cleanly: each slice adds a real
+/// concern delta (the beat progression wide→close-up→medium), so the diff
+/// between consecutive effective states is non-empty for all three — the
+/// V7 no-op invariant holds on the content-driven grammar.
+#[test]
+fn order_66_sub_timeline_adds_a_delta_each_slice() {
+    let spec = order_66();
+    let slices: Vec<Option<PartialConcerns>> =
+        spec.sub_timeline.iter().map(|s| s.state.clone()).collect();
+    let eff = axes::fold(&spec.concerns, &slices);
+    for i in 0..spec.sub_timeline.len() {
+        let delta = axes::diff(&eff[i], &eff[i + 1]);
+        assert!(
+            !delta.is_empty(),
+            "order_66 slice {i} adds a concern delta: {delta:?}"
+        );
+    }
+    // The reveal slice (close-up) is the tight, shallow, cool 4500K state.
+    let v = serde_json::to_value(&eff[2]).unwrap();
+    assert_eq!(
+        v.get("camera").unwrap()["size"], "close-up",
+        "the second Order-66 beat is the hand-to-saber close-up"
+    );
+}
+
 #[test]
 fn golden_shot_spec_round_trips() {
     let spec = golden();

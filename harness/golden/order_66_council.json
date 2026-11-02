@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "description": "Golden ShotSpec for the Order 66 council-chamber opening (Episode 3, 'Order 66'): the reveal/ambush/cascade grammar that the beat_profiles table was modeled on. Used by the engine golden test to pin that the content-driven LLM path produces a verified, concrete plan whose scene/camera/lighting/motion events match the directorial grammar.",
+  "shot_id": "tl_01_shot_1",
+  "novel_ref": "scene_1.shot_1",
+  "content": {
+    "prose": "The Council chamber: a wide hall of senators, the air still, instruments dimmed.",
+    "beats": [
+      "wide: the hall is quiet, senators seated - a low ambient hum",
+      "close-up: Qui-Gon's hand goes to the lightsaber - the hum drops out",
+      "medium: the clones turn as one, blades raised - first blaster crack"
+    ]
+  },
+  "clip_s": 10,
+  "transition_in": "hard_cut",
+  "transition_out": "crossfade",
+  "concerns": {
+    "camera": { "size": "wide", "angle": "eye", "framing": "rule_of_thirds", "dof": "deep" },
+    "lens": { "focal_mm": 24, "distortion": "none" },
+    "motion": { "zoom": "static", "move": "static", "speed": "normal" },
+    "lighting": { "key": "soft", "contrast": "medium", "color_temp_K": 5000, "pattern": "ambient" },
+    "grade": { "palette": "steel blue", "saturation": "neutral", "contrast": "medium", "film_stock": "kodak_5219" },
+    "effects": ["none"],
+    "audio": { "foley": "chair creak, cloth", "sfx": "distant blaster", "music_cue": "sparse low strings", "silence": false }
+  },
+  "sub_timeline": [
+    { "from_s": 0, "to_s": 4, "note": "establishing the quiet hall", "state": { "camera": { "size": "wide", "framing": "rule_of_thirds", "dof": "deep" }, "lens": { "focal_mm": 24 }, "lighting": { "color_temp_K": 5500 } } },
+    { "from_s": 4, "to_s": 7, "note": "the hand to the saber", "state": { "camera": { "size": "close-up", "framing": "fill_frame", "dof": "shallow" }, "lens": { "focal_mm": 85 }, "lighting": { "color_temp_K": 4500 } } },
+    { "from_s": 7, "to_s": 10, "note": "the clones turn", "state": { "camera": { "size": "medium", "framing": "rule_of_thirds" }, "lens": { "focal_mm": 50 } } }
+  ]
+}

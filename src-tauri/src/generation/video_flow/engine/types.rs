@@ -275,6 +275,14 @@ pub struct SubSlice {
     /// Full concern-grouped state at this slice; omit a concern to carry prev.
     #[serde(default)]
     pub state: Option<PartialConcerns>,
+    /// Content-driven path (beat profiles): the beat texts this slice
+    /// CARRIES — one beat normally; when a no-op beat was collapsed into
+    /// this slice (V7 merge), its text lands here too so no narrative
+    /// content is lost. Empty on the cycling template path (the plan falls
+    /// back to the positional `content.beats[i]`). Additive: old goldens
+    /// round-trip unchanged (serde default, skipped when empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub absorbed_beats: Vec<String>,
 }
 
 /// A possibly-sparse concern state for a sub-slice (only the changed groups).
