@@ -40,25 +40,22 @@ fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// falls back to text mode -> the t2v native grid, while every interior clip
 /// is i2v. Seeding a generated opening keyframe carries pipe 0 onto the SAME
 /// grid as the rest of the session, killing the one seam.
-fn opening_keyframe_needed(
-    pipe: &Pipe,
-    input: &StartSessionGenerationInput,
-) -> bool {
+///
+/// Deliberately NOT gated on the run's image spec: the seed is pure data.
+/// When an image spec IS available the image stage generates the opening
+/// frame and the video runs keyframe mode (i2v grid). When it is NOT, the
+/// image stage errors and the group's "continue" policy lets the video fall
+/// back to text mode - exactly today's behavior. Never worse, sometimes
+/// uniform.
+fn opening_keyframe_needed(pipe: &Pipe) -> bool {
     // Keyframes are inert in `reference` mode; only `keyframes` mode consumes
     // a slot-1 frame as the video's `first_frame`.
     if pipe.media_mode != "keyframes" {
         return false;
     }
-    // Without a resolved image spec there is nothing to generate the frame.
-    if input.image_spec.is_none() {
-        return false;
-    }
     // A settled slot-1 (user-provided or previously caught) is kept as-is -
     // mirrors auto-catch's non-destructive rule, never overwrites it.
-    if pipe.has_settled_slot1() {
-        return false;
-    }
-    true
+    !pipe.has_settled_slot1()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,7 +614,14 @@ impl GroupCoordinator {
         let Some(pipe) = composer.pipes.iter().find(|p| p.id == first_pipe_id) else {
             return;
         };
-        if !opening_keyframe_needed(pipe, input) {
+        // Record WHY we skip so a future "why is pipe 0 still 1280x720?" is
+        // answerable from the app log instead of a code read.
+        if !opening_keyframe_needed(pipe) {
+            log::info!(
+                "[Generation] uniform-grid bootstrap: skip pipe {first_pipe_id} (mode={}, settled_slot1={})",
+                pipe.media_mode,
+                pipe.has_settled_slot1()
+            );
             return;
         }
         // The opening frame's prompt is the pipe's video prompt itself (the
@@ -646,7 +650,14 @@ impl GroupCoordinator {
         };
         if let Ok(mut c) = self.db.get_composer(&input.session_id).await {
             if let Some(target) = c.pipes.iter_mut().find(|p| p.id == first_pipe_id) {
-                target.keyframes = vec![kf];
+                // Repoint / add slot-1 ONLY - never clobber the pipe's other
+                // keyframes or a settled slot-1 (the gate already ruled that
+                // out, but belt-and-suspenders against a stale read).
+                if let Some(existing) = target.keyframes.iter_mut().find(|k| k.slot_index == 1) {
+                    *existing = kf.clone();
+                } else {
+                    target.keyframes.push(kf.clone());
+                }
                 if self.db.save_composer(&c).await.is_ok() {
                     log::info!(
                         "[Generation] uniform-grid bootstrap: seeded opening txt2img keyframe on pipe {first_pipe_id} (i2v route)"
@@ -1701,11 +1712,25 @@ mod tests {
         let pipe = keyframes_pipe(); // media_mode defaults to "keyframes", empty keyframes
         assert_eq!(pipe.media_mode, "keyframes");
         assert!(!pipe.has_settled_slot1());
-        let input = base_input(); // image_spec present
         assert!(
-            opening_keyframe_needed(&pipe, &input),
-            "an unsettled keyframes pipe WITH an image spec must be seeded"
+            opening_keyframe_needed(&pipe),
+            "an unsettled keyframes pipe must be seeded (no image-spec gate: \
+             a txt2img keyframe is harmless when no image spec is present - \
+             the image stage errors and the run falls back to text mode)"
         );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_seeds_even_without_an_image_spec() {
+        let pipe = keyframes_pipe();
+        // Regression: the 11:35 "pipe 0 ran t2v" bug - the old gate coupled
+        // the seed to the run's image_spec passthrough, which was null, so
+        // the bootstrap silently no-op'd.
+        assert!(
+            opening_keyframe_needed(&pipe),
+            "the seed must not depend on the run's image spec"
+        );
+        let _ = base_input(); // image_spec presence must be irrelevant
     }
 
     #[test]
@@ -1715,9 +1740,8 @@ mod tests {
         kf.image_src = Some("https://example.com/open.png".into());
         pipe.keyframes.push(kf);
         assert!(pipe.has_settled_slot1(), "precondition: slot-1 is settled");
-        let input = base_input();
         assert!(
-            !opening_keyframe_needed(&pipe, &input),
+            !opening_keyframe_needed(&pipe),
             "a settled opening keyframe must never be re-seeded"
         );
     }
@@ -1726,21 +1750,9 @@ mod tests {
     fn opening_keyframe_needed_skips_a_reference_mode_pipe() {
         let mut pipe = keyframes_pipe();
         pipe.media_mode = "reference".into();
-        let input = base_input();
         assert!(
-            !opening_keyframe_needed(&pipe, &input),
+            !opening_keyframe_needed(&pipe),
             "keyframes are inert in reference mode - no seed"
-        );
-    }
-
-    #[test]
-    fn opening_keyframe_needed_requires_an_image_spec() {
-        let pipe = keyframes_pipe();
-        let mut input = base_input();
-        input.image_spec = None;
-        assert!(
-            !opening_keyframe_needed(&pipe, &input),
-            "without an image spec there is nothing to generate"
         );
     }
 
