@@ -175,9 +175,12 @@ pub fn start(gen: Arc<GenerationService>, group: Arc<GroupCoordinator>, shared: 
     };
     let port = listener.local_addr().ok().map(|a| a.port()).unwrap_or(0);
     shared.set_port(port);
-    listener
-        .set_nonblocking(true)
-        .ok();
+    // Keep the listener BLOCKING (the default). This dedicated thread parks in
+    // accept() with zero CPU when idle and wakes on each browser poll. Making
+    // it non-blocking + running it through `for stream in incoming()` busy-
+    // spins on WouldBlock (os error 10035) — hot-spinning a core and flooding
+    // the log — so the non-blocking flag is deliberately NOT set.
+    listener.set_nonblocking(false).ok();
 
     let gen2 = gen.clone();
     let group2 = group.clone();
