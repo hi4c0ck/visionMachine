@@ -23,13 +23,28 @@ export interface RunState {
 
 // Per-session run state (the §1 guard: switching sessions never carries an
 // in-flight run into the new session). Keyed by session id.
+// BOUNDED: sessions swing in and out for the app lifetime, so without a
+// cap this Map is the "module-level asset that outlives the {#key}
+// remount and ratchets up" leak. On insert, evict oldest non-running keys
+// past the bound (the value is cheap to recreate — getRunState re-seeds).
 const runStates = new Map<string, RunState>();
+const RUN_STATE_CAP = 32;
 
 export function getRunState(sessionId: string): RunState {
 	let r = runStates.get(sessionId);
 	if (!r) {
 		r = { running: false, error: null };
 		runStates.set(sessionId, r);
+		// Evict the oldest settled entries (insertion order = first-seen) so
+		// the Map stays O(capped). Never evict a key that is mid-run: its
+		// `running` flag must survive until runFlow's finally clears it.
+		if (runStates.size > RUN_STATE_CAP) {
+			for (const key of runStates.keys()) {
+				if (runStates.size <= RUN_STATE_CAP) break;
+				const cand = runStates.get(key);
+				if (cand && !cand.running) runStates.delete(key);
+			}
+		}
 	}
 	return r;
 }

@@ -43,6 +43,12 @@
 	// when selectedSession is null during loading). Without this, the loader
 	// effect re-runs on every remount, calling listFlows in a loop.
 	const flowsLoadedForModule = new Set<string>();
+	// Bounded: the latch outlives {#key} remounts (module-level), so without a
+	// cap it ratchets up across session swings — the same unbounded module-
+	// asset leak as the composer store's sessions Map. Evict past the bound by
+	// insertion order (oldest settled ids first); a re-visited session just
+	// re-adds its id and re-lists, which is correct.
+	const LOADED_LATCH_CAP = 64;
 	import {
 		concernSummary,
 		specsByScene,
@@ -112,9 +118,33 @@
 		// values win.
 		overrides: {},
 	};
-	// Clone: $state proxies the object it's given, so a shared const would
-	// get mutated through session A's typing and leak into session B.
-	const freshEntry = (): EngineEntryInput => structuredClone(defaultEntry);
+	// ARCHITECTURAL IMMUTABILITY (one-copy-at-a-time structural-asset model):
+	// the G0 template is a single shared, READ-ONLY constant. It is deep-
+	// frozen so no code path can corrupt it in place — the "is the template
+	// still intact?" invariant is now ENFORCED, not assumed. Every session
+	// then owns its own deep VALUE copy (the one-and-only writable
+	// instance), so typing in session A can only touch A's copy, never the
+	// template or session B's copy.
+	// Deep-frozen template. `as EngineEntryInput` drops the nested Readonly
+	// wrappers at the TYPE level only — at runtime every nested object is
+	// still frozen, so the "one-copy-at-a-time" invariant is ENFORCED.
+	// freshEntry below produces a plain unfrozen VALUE copy, typed as
+	// EngineEntryInput (fully writable by the session's $state).
+	const frozenDefaultEntry = Object.freeze({
+		...defaultEntry,
+		genre: Object.freeze({ ...defaultEntry.genre }),
+		scale: Object.freeze({ ...defaultEntry.scale, clip_s: Object.freeze([...defaultEntry.scale.clip_s]) }),
+		overrides: Object.freeze({ ...defaultEntry.overrides }),
+	}) as EngineEntryInput;
+	// Fresh per-session entry: a deep VALUE copy of the frozen template.
+	// A copy (not the frozen object) so $state can proxy and the session
+	// can write its own idea/look without touching the read-only template.
+	const freshEntry = (): EngineEntryInput => ({
+		...frozenDefaultEntry,
+		genre: { ...frozenDefaultEntry.genre },
+		scale: { ...frozenDefaultEntry.scale, clip_s: [...frozenDefaultEntry.scale.clip_s] },
+		overrides: { ...frozenDefaultEntry.overrides },
+	});
 	// Phase 3: guarantee a stable `overrides` object (the StructurePanel binds
 	// into it). Old / pre-Phase-3 drafts + fresh entries lack the key, so
 	// normalize to `{}` (all pins absent = the tree's auto values win).
@@ -656,6 +686,14 @@
 		const sid = sessionId;
 		flowsLoadedFor = sid; // latch BEFORE await: prevents re-entry if effect re-runs
 		flowsLoadedForModule.add(sid); // module latch: survives remounts
+		// Enforce the cap: evict oldest settled ids (insertion order) past the
+		// bound so the module-level Set can't grow without limit across swings.
+		if (flowsLoadedForModule.size > LOADED_LATCH_CAP) {
+			for (const key of flowsLoadedForModule) {
+				if (flowsLoadedForModule.size <= LOADED_LATCH_CAP) break;
+				flowsLoadedForModule.delete(key);
+			}
+		}
 		void invoke('log_pipeline_diag', { message: `[TRACE] director loader calling listFlows ${sid}` }).catch(() => {});
 		void (async () => {
 			try {
