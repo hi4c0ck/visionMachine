@@ -32,6 +32,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { resetStallMeter } from '$lib/stallWatch';
 	import { pipeEvent, tripEffect } from '$lib/pipelineDiag';
+	import { setDashExtra } from '$lib/dashStore';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
@@ -1022,6 +1023,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						addedAt: new Date(f.added_at).getTime()
 					}));
 					userProjectsFiles = { ...userProjectsFiles, [proj.id]: files };
+					// Live dashboard: report the two workspace-local Map sizes
+					// truthfully (they persist for the app lifetime).
+					setDashExtra(lastPreviewPipeBySession.size, Object.keys(userProjectsFiles).length);
 				} catch (e) {
 					console.error(`[Workspace] Failed to load files for project ${proj.id}:`, e);
 				}
@@ -2525,7 +2529,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// Remember which pipe the user opened for THIS session, so a
 		// session switch away + back restores the same preview.
 		const sid = selectedSessionId;
-		if (sid) { lastPreviewPipeBySession.set(sid, pipe.id); evictOldLastPreview(); }
+		if (sid) { lastPreviewPipeBySession.set(sid, pipe.id); evictOldLastPreview(); setDashExtra(lastPreviewPipeBySession.size, Object.keys(userProjectsFiles).length); }
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.

@@ -167,6 +167,31 @@ pub struct GenerationGroupView {
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DashboardGroupPipe {
+    pub pipe_id: String,
+    pub task_id: Option<String>,
+    pub status: String,
+    pub progress: f32,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardGroup {
+    pub group_id: String,
+    pub session_id: String,
+    pub status: String,
+    pub live: bool,
+    pub queue_len: usize,
+    pub current: Option<String>,
+    pub compose_state: Option<String>,
+    pub compose_error: Option<String>,
+    pub session_video_path: Option<String>,
+    pub pipes: Vec<DashboardGroupPipe>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GroupEvent {
     pub group_id: String,
     pub kind: String,
@@ -1658,6 +1683,36 @@ impl GroupCoordinator {
             },
             started_at: r.started_at,
         })
+    }
+    /// All currently-LIVE group runs (finished groups are removed from
+    /// memory by `finish_group`, so this list is bounded by concurrent runs,
+    /// not history — the count itself is a dashboard signal).
+    pub fn live_groups(&self) -> Vec<DashboardGroup> {
+        let m = resilient_lock(&self.state);
+        m.iter()
+            .map(|(gid, run)| DashboardGroup {
+                group_id: gid.clone(),
+                session_id: run.session_id.clone(),
+                status: "running".to_string(),
+                live: true,
+                queue_len: run.queue.len(),
+                current: run.current.clone(),
+                compose_state: run.compose_state.clone(),
+                compose_error: run.compose_error.clone(),
+                session_video_path: run.session_video_path.clone(),
+                pipes: run
+                    .pipes
+                    .iter()
+                    .map(|p| DashboardGroupPipe {
+                        pipe_id: p.0.clone(),
+                        task_id: p.1.clone(),
+                        status: p.2.clone(),
+                        progress: p.3,
+                        error: p.4.clone(),
+                    })
+                    .collect(),
+            })
+            .collect()
     }
     pub fn has_task(&self, tid: &str) -> bool {
         resilient_lock(&self.index).contains_key(tid)

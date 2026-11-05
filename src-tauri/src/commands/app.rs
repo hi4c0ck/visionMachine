@@ -44,6 +44,77 @@ pub fn js_error_log(message: String) {
     );
 }
 
+/// In-app main-thread-stall report. The renderer's stall watchdog
+/// (src/lib/stallWatch.ts) persists freeze records to localStorage and
+/// flushes them here on the next healthy moment, so a frozen run is
+/// diagnosable from VisionMachine.log without devtools or external
+/// tooling. The stack is the recovery stack (the call chain that owned
+/// the event loop when it finally freed up) plus the longtask stats.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StallReportInput {
+    /// Unix ms the freeze started (worker-observed).
+    pub started_at: u64,
+    /// Unix ms the freeze ended, 0 = the app was force-closed mid-freeze.
+    pub ended_at: u64,
+    /// Main-thread recovery stack (empty when never recovered).
+    pub recovery_stack: String,
+    /// Longtask counts in the window that overlapped the freeze.
+    pub longtask_count: u32,
+    /// Worst longtask duration, ms.
+    pub longtask_max_ms: u64,
+    /// The session id the user was selecting when the freeze window started
+    /// (empty = unknown / not a session-select window).
+    pub context: String,
+}
+
+/// Renderer-side frame-pipeline ledger line (src/lib/pipelineDiag.ts). The
+/// UI flushes a compact, throttled snapshot of the thumbnail/decode pipeline
+/// here so a memory-growth run is diagnosable from VisionMachine.log:
+/// source churn, LRU evictions, in-flight decode depth, and the un-closed
+/// clone bitmap count (the primary renderer texture-leak metric).
+#[tauri::command]
+pub fn log_pipeline_diag(message: String, state: tauri::State<'_, AppState>) {
+    let line = message.chars().take(2000).collect::<String>();
+    log::info!("[UI] pipeline diag: {}", line);
+    state.dashboard.record_log_line(&format!("[UI] pipeline diag: {}", line));
+}
+
+#[tauri::command]
+pub fn log_stall_report(input: StallReportInput, state: tauri::State<'_, AppState>) {
+    let rec = input;
+    let dur_s = if rec.ended_at > 0 {
+        (rec.ended_at.saturating_sub(rec.started_at)) / 1000
+    } else {
+        u64::MAX // sentinel: never recovered (force-closed)
+    };
+    let dur_label = if dur_s == u64::MAX {
+        ">65536 or never recovered".to_string()
+    } else {
+        dur_s.to_string()
+    };
+    let ctx_label = if rec.context.is_empty() {
+        String::new()
+    } else {
+        format!(", while selecting session `{}`", rec.context)
+    };
+    log::warn!(
+        "[UI] stall record: main thread blocked ~{}s{} (started {:#}, ended {:#}), {} longtask(s), max {}ms; recovery stack:\n{}",
+        dur_label,
+        ctx_label,
+        rec.started_at,
+        rec.ended_at,
+        rec.longtask_count,
+        rec.longtask_max_ms,
+        if rec.recovery_stack.is_empty() { "(none — main thread never recovered)".to_string() } else { rec.recovery_stack.chars().take(4000).collect::<String>() }
+    );
+    let dash_line = format!(
+        "[UI] stall record: main thread blocked ~{}s{}",
+        dur_label, ctx_label
+    );
+    state.dashboard.record_log_line(&dash_line);
+}
+
 /// On-demand process memory probe for the in-app RAM monitor chip. The UI
 /// polls it every few seconds (a passive, generation-free read) so a user
 /// can watch backend RSS without running a generation. Pairs with the
@@ -78,4 +149,24 @@ pub fn memory_probe(state: State<'_, AppState>) -> Result<MemoryProbe, String> {
         ring_summary: prof.summary_line(),
         ring_len: prof.snapshot().len(),
     })
+}
+
+/// Renderer pushes its module-level structure sizes + JS heap + pipeline/
+/// stall snapshots to the live dashboard (src/lib/dashReport.ts). This is the
+/// cross-process answer to "which structure is ratcheting": the backend can
+/// read its own tasks/groups/ring directly, but the renderer's Maps live only
+/// in the JS heap, so the renderer reports them and the dashboard merges.
+#[tauri::command]
+pub fn report_renderer_metrics(state: State<'_, AppState>, input: crate::dashboard::RendererMetrics) {
+    state.dashboard.set_renderer_metrics(input);
+}
+
+/// Renderer pushes one stall/freeze/diagnostic line to the dashboard log ring
+/// (in addition to `VisionMachine.log`). Keeps the feed alive even when the
+/// main log file rotates.
+#[tauri::command]
+pub fn log_dashboard_line(state: State<'_, AppState>, message: String) {
+    state
+        .dashboard
+        .record_log_line(&message.chars().take(4000).collect::<String>());
 }

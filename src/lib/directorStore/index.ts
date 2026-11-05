@@ -49,6 +49,13 @@ export function getRunState(sessionId: string): RunState {
 	return r;
 }
 
+/** Dashboard/diagnostic: current entry count of the per-session run-state
+ *  Map. Lets the live dashboard (report_renderer_metrics) show whether this
+ *  module-level Map that outlives the {#key} remount is pinned at its cap. */
+export function runStatesSize(): number {
+	return runStates.size;
+}
+
 export async function runFlow(
 	sessionId: string,
 	text: string,

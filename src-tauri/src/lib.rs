@@ -6,6 +6,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 mod preflight;
 pub use preflight::{run_preflight_checks, PreflightReport};
 mod commands;
+mod dashboard;
 mod models;
 mod storage;
 pub use storage::db::Database;
@@ -32,6 +33,10 @@ pub struct AppState {
     /// startup when the DB mutex is contended). Roots are populated at
     /// startup and refreshed when sessions/projects change.
     pub media_roots_cache: Arc<std::sync::RwLock<Vec<std::path::PathBuf>>>,
+    /// Live dashboard shared state (backend server + renderer-reported
+    /// snapshot + log ring). Read live at request time; the server thread is
+    /// started in `setup` once the registry/group handles exist.
+    pub dashboard: Arc<dashboard::DashboardShared>,
 }
 
 fn now_unix_ms() -> u64 {
@@ -62,6 +67,7 @@ impl AppState {
             close_watchdog_armed: Arc::new(AtomicBool::new(false)),
             last_ui_heartbeat_ms: Arc::new(AtomicU64::new(0)),
             media_roots_cache: Arc::new(std::sync::RwLock::new(Vec::new())),
+            dashboard: Arc::new(dashboard::DashboardShared::new()),
         }
     }
 }
@@ -366,7 +372,7 @@ pub fn run() {
         // webview with HTTP Range support (video seeking). Registered on
         // the Builder because config windows are created before `setup`
         // runs — a plugin registered in `setup` would miss the main window.
-        .register_uri_scheme_protocol("media", generation::media_protocol::handler)
+        .register_asynchronous_uri_scheme_protocol("media", generation::media_protocol::handler)
         .manage(AppState::new(db))
         .on_window_event(|window, event| {
             // Close guard: closing the app while a generation task is live
@@ -455,13 +461,23 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 let cache = state.media_roots_cache.clone();
                 let db = state.db.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     let db_guard = db.lock().await;
                     let roots = generation::media_protocol::collect_media_roots(&db_guard).await;
                     if let Ok(mut c) = cache.write() {
                         *c = roots;
                     }
                 });
+            }
+            // Start the live dashboard server (auto-opens in the OS browser
+            // so a wedged webview can be diagnosed from a separate process).
+            {
+                let st = app.state::<AppState>();
+                let shared = st.dashboard.clone();
+                let gen = st.generation.clone();
+                let group = st.group.clone();
+                let auto_open = std::env::var("VM_DASHBOARD") != Ok("0".into());
+                dashboard::start(gen, group, shared, auto_open);
             }
             // Wire the generation state machine's event sink to the UI window
             // ("backend owns state, frontend renders"): every meaningful
@@ -517,6 +533,10 @@ pub fn run() {
             commands::app::ui_heartbeat,
             commands::app::js_error_log,
             commands::app::memory_probe,
+            commands::app::log_stall_report,
+            commands::app::log_pipeline_diag,
+            commands::app::report_renderer_metrics,
+            commands::app::log_dashboard_line,
             commands::auth::login_user,
             commands::auth::logout_user,
             commands::accounts::list_accounts,

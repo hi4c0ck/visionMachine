@@ -559,6 +559,16 @@ impl TaskRegistry {
             .count()
     }
 
+    /// Every managed task view (live + terminal), for the live dashboard.
+    /// Terminal tasks are only pruned on cancel, so this list is bounded by
+    /// the terminal-task cap; cloning the views is cheap (String + Vec).
+    pub fn managed_tasks(&self) -> Vec<GenerationTaskView> {
+        resilient_lock(&self.tasks)
+            .values()
+            .map(|t| t.view.clone())
+            .collect()
+    }
+
     // ── Runner ───────────────────────────────────────────────────────────────
 
     async fn run_task(&self, task_id: String) {
