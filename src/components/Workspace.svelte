@@ -539,6 +539,17 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	let groupProgress = $state(0);
 	let groupComposePhase = $state<string | null>(null);
 	let restoredGroupSessionId = $state<string | null>(null);
+	// ARCHITECTURE (single-transaction session switch):
+	//   sessionEpoch  — monotonic counter, bumped on every handleSessionSelect.
+	//   sessionSwitching — while true, no other user-initiated async work
+	//                      (generation start, compose, …) may begin.
+	// Every async body that outlives a switch captures `sessionEpoch` at
+	// entry and aborts if it has advanced (cheap, no Svelte reactivity, no
+	// closure capture). This replaces the scattered `isStale()` closures
+	// and per-call `sid !== sessionId` re-checks with ONE serialization point
+	// at the top of the UI tree.
+	let sessionEpoch = 0;
+	let sessionSwitching = $state(false);
 	// Live poll timer: while a group is running the per-pipe task views +
 	// the group progress only move on terminal events, so the modal's bars
 	// would sit at 0% for a whole pipe. A 2 s poll of the authoritative
@@ -1159,10 +1170,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	}
 
 	async function restoreSessionGenerationGroup(sessionId: string) {
-		// Cancellation guard: if user switches sessions mid-flight, the stale
-		// restore must not overwrite the new session's state. Check after
-		// each await — if sessionId changed, abort silently.
-		const isStale = () => selectedSessionId !== sessionId;
+		// Cancellation guard (single-transaction model): this call belongs to
+		// the switch transaction that fired it. `sessionEpoch` advances on
+		// every handleSessionSelect, so an in-flight restore from an
+		// ABANDONED switch detects itself at its next checkpoint via a single
+		// plain-number compare (no per-call closure state). The
+		// `selectedSessionId` half covers the clear path (project select →
+		// no session). Check after each await — if stale, abort silently.
+		const myEpoch = sessionEpoch;
+		const isStale = () => myEpoch !== sessionEpoch || selectedSessionId !== sessionId;
 		const key = `visionmachine:generation-group:${sessionId}`;
 		const groupId = localStorage.getItem(key);
 		// The localStorage key is only set for a run that STARTED in this
@@ -1334,41 +1350,58 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		);
 
 		if (foundProject) {
-			selectedProjectId = foundProject.id;
-			selectedSessionId = sessionId;
-			// Harness tabs: switching sessions always lands on Pipes (design
-			// §1) — a stale Extract/Scoreboard view of the previous session
-			// must not carry over.
-			composerTab = 'pipes';
-			directorRunning = false;
+			// Single-transaction switch: bump the epoch so any in-flight
+			// async work (group restore, in-flight media, pending composer
+			// save) recognizes itself as stale at its next checkpoint.
+			// `sessionSwitching` gates user-initiated generation entry
+			// points for the duration of the load, so a mid-switch click
+			// cannot start a run against a half-updated session.
+			sessionEpoch += 1;
+			const myEpoch = sessionEpoch;
+			sessionSwitching = true;
+			try {
+				selectedProjectId = foundProject.id;
+				selectedSessionId = sessionId;
+				// Harness tabs: switching sessions always lands on Pipes (design
+				// §1) — a stale Extract/Scoreboard view of the previous session
+				// must not carry over.
+				composerTab = 'pipes';
+				directorRunning = false;
 
-			// Load fresh data from backend
-			const loadResult = await loadSession(sessionId);
+				// Load fresh data from backend
+				const loadResult = await loadSession(sessionId);
+				// The effect below (keyed on selectedSessionId) fired already
+				// on the write above; if the user switched AGAIN mid-load,
+				// myEpoch is stale and this tail must not run.
+				if (myEpoch !== sessionEpoch) return;
 
-			if (loadResult.errors.length === 0) {
-				const loadedSession = sessions.get(sessionId);
-				if (loadedSession) {
-					const updatedProjects = (projects || []).map((p: any) => {
-						if (p.id !== foundProject.id) return p;
-						return {
-							...p,
-							sessions: (p.sessions || []).map((s: any) =>
-								s.id === sessionId ? { ...s, ...loadedSession } : s
-							)
-						};
-					});
-					projects = updatedProjects;
-					saveProjects();
+				if (loadResult.errors.length === 0) {
+					const loadedSession = sessions.get(sessionId);
+					if (loadedSession) {
+						const updatedProjects = (projects || []).map((p: any) => {
+							if (p.id !== foundProject.id) return p;
+							return {
+								...p,
+								sessions: (p.sessions || []).map((s: any) =>
+									s.id === sessionId ? { ...s, ...loadedSession } : s
+								)
+							};
+						});
+						projects = updatedProjects;
+						saveProjects();
+					}
+				} else {
+					// Backend load failed (no Tauri backend in browser/E2E mode, or
+					// the composer row doesn't exist yet). Fall back to the local
+					// projects copy so the composer store always has the session's
+					// real data instead of a blank phantom.
+					if (!sessions.get(sessionId)) {
+						const local = foundProject.sessions.find((s: any) => s.id === sessionId);
+						if (local) hydrateSessions([local as any]);
+					}
 				}
-			} else {
-				// Backend load failed (no Tauri backend in browser/E2E mode, or the
-				// composer row doesn't exist yet). Fall back to the local projects
-				// copy so the composer store always has the session's real data
-				// instead of a blank phantom.
-				if (!sessions.get(sessionId)) {
-					const local = foundProject.sessions.find((s: any) => s.id === sessionId);
-					if (local) hydrateSessions([local as any]);
-				}
+			} finally {
+				if (myEpoch === sessionEpoch) sessionSwitching = false;
 			}
 		}
 	}
@@ -1811,6 +1844,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 
 	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null, forceLastFrames: Record<string, boolean> | null, trimBoundary: Record<string, boolean> | null) {
 		if (!selectedSession) return;
+		// Single-transaction gate: a session switch is in flight (loadSession
+		// pending, project not yet settled). Starting a paid generation run
+		// against a half-updated session would race the switch's own writes,
+		// so block until the switch commits.
+		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		if (groupActive) { flashToast('Session generation is already in progress', 'info'); return; }
 		// Read-only (paid) model gate: the session flow's "continue" policy
 		// tolerates per-pipe conflicts, but a paid-only model can never run —
@@ -1918,6 +1956,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 
 	function composeSessionVideo() {
 		if (!selectedSession || composing) return;
+		// Single-transaction gate: don't start a compose against a session
+		// that is still mid-switch (loadSession pending, project unsettled).
+		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		const hasSources = selectedSession.pipes?.some((p: any) => p.lastGeneration?.videoPath);
 		if (!hasSources) {
 			flashToast(APP_CONSTANTS.strings.composeSessionNoSources, 'info');
@@ -1976,6 +2017,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	/** D5 gate: unreachable reference → no task, red-out chips, keep the modal open. */
 	async function confirmGenerate(models: ModelSelection, seed: number | null = null) {
 		if (!generatePipe || !selectedSession) return;
+		// Single-transaction gate: block starting a per-pipe run against a
+		// session that is still mid-switch.
+		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		const pipe = generatePipe;
 		// Pass the video media spec so collectRemoteUrls can skip subjects
 		// when the model is in plain keyframe mode (subjects are inert there).
