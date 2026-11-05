@@ -49,8 +49,12 @@ fn now_unix_ms() -> u64 {
 /// can't hand a reference to its module Maps across the process boundary, so
 /// it pushes a compact size snapshot on each RamMonitor tick; the dashboard
 /// merges it with what the backend can read directly.
+// NOTE: keys are snake_case to match the renderer's DashSnapshot
+// (src/lib/dashStore.ts) EXACTLY — Tauri passes the `input` object's inner
+// keys through unconverted, so a camelCase rename here would silently
+// deserialize every field to its default (the "renderer not reporting" bug).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(default)]
 pub struct RendererMetrics {
     pub timestamp_ms: u64,
     pub sessions_size: u32,
