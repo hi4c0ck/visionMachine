@@ -1098,15 +1098,32 @@ fn evict_old_terminal_tasks(tasks: &mut HashMap<String, ManagedTask>, keep_id: &
     if terminal_count <= MAX_TERMINAL_TASKS {
         return;
     }
-    let mut terminal: Vec<(i64, String)> = tasks
-        .iter()
-        .filter(|(id, t)| id.as_str() != keep_id && t.view.status.is_terminal())
-        .map(|(id, t)| (t.view.started_at, id.clone()))
-        .collect();
-    terminal.sort();
-    let excess = terminal_count - MAX_TERMINAL_TASKS;
-    for (_, id) in terminal.into_iter().take(excess) {
-        tasks.remove(&id);
+    // Drain in a loop, re-counting the full terminal set each pass (including
+    // keep_id, matching the fast-path check above). The first snapshot can
+    // become stale the moment the caller releases this tasks lock — a
+    // concurrent cancel/finish may insert new terminal tasks, so a single
+    // snapshot-based pass can leave the cap overshot by one per burst.
+    // keep_id is excluded from eviction (its DB row still backs
+    // `persist_terminal`/`emit_terminal` on the calling path); re-sorting
+    // each pass keeps "oldest first" ordering correct as entries age out.
+    loop {
+        let total = tasks
+            .values()
+            .filter(|t| t.view.status.is_terminal())
+            .count();
+        if total <= MAX_TERMINAL_TASKS {
+            break;
+        }
+        let mut terminal: Vec<(i64, String)> = tasks
+            .iter()
+            .filter(|(id, t)| id.as_str() != keep_id && t.view.status.is_terminal())
+            .map(|(id, t)| (t.view.started_at, id.clone()))
+            .collect();
+        terminal.sort();
+        let excess = total - MAX_TERMINAL_TASKS;
+        for (_, id) in terminal.into_iter().take(excess) {
+            tasks.remove(&id);
+        }
     }
 }
 
