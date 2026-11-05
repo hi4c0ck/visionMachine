@@ -109,8 +109,13 @@ export function pipeCacheSet(): void {
 }
 
 export function pipeCacheClosed(n: number): void {
+	// The LRU cache owns the RAW decode bitmaps (createImageBitmap of the
+	// decoded frame / the capture canvas) — a DISTINCT population from the
+	// carousel CLONES (cloneImageBitmap). Track it in its own counter so
+	// `clonesOutstanding` (clonesCreated - clonesClosed) measures ONLY the
+	// carousel-owned clones that the leak actually ratchets. Mixing the two
+	// here used to make the counter go negative.
 	state.cacheClosed += n;
-	state.clonesClosed += n; // cache bitmaps ARE closed on evict/dispose
 }
 
 export function pipeLruEvict(): void {
@@ -119,6 +124,15 @@ export function pipeLruEvict(): void {
 
 export function pipeCloneCreated(): void {
 	state.clonesCreated += 1;
+}
+
+/** Record that `n` carousel-owned clone bitmaps were closed (released their
+ *  GPU texture). FrameSource.close() closes its LRU bitmaps via
+ *  `pipeCacheClosed`; the carousel closes ITS OWN clones here. Together they
+ *  keep `clonesOutstanding = clonesCreated - clonesClosed` equal to the TRUE
+ *  number of live unclosed bitmaps (the leak metric the dashboard shows). */
+export function pipeCloneClosed(n: number): void {
+	state.clonesClosed += n;
 }
 
 export function pipeInflight(n: number): void {
