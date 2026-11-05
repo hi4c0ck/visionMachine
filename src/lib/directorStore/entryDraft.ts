@@ -11,14 +11,31 @@
 
 import type { EngineEntryInput } from './engine';
 
-const NS = 'vm-director-g0-entry.v1.';
+// v2: orphans the v1 keys that the pre-guard save-before-reset race
+// contaminated (one session's G0 draft written under ANOTHER session's id).
+// Those v1 blobs carry no owner, so they can't be validated in place — bumping
+// the namespace makes them unread. v2 keys start clean AND every blob now
+// records its owning session (see saveEntryDraft), so any future re-
+// contamination is detected and dropped on load instead of rendered.
+const NS = 'vm-director-g0-entry.v2.';
 
 export function loadEntryDraft(sessionId: string): EngineEntryInput | null {
 	try {
 		const raw = localStorage.getItem(NS + sessionId);
 		if (!raw) return null;
-		const parsed = JSON.parse(raw) as Partial<EngineEntryInput> | null;
+		const parsed = JSON.parse(raw) as Partial<EngineEntryInput> & { _owner?: string } | null;
 		if (!parsed || typeof parsed !== 'object') return null;
+		// OWNER VALIDATION (self-heal): a blob written by the old cross-session
+		// save race carries another session's idea under THIS key. When the
+		// recorded owner doesn't match the key, the draft is foreign data —
+		// drop it (clear the key so the panel falls back to freshEntry)
+		// instead of rendering the other session's prompt "shared" here.
+		// v2 blobs always carry _owner; absent (shouldn't happen in v2) is
+		// treated as foreign to be safe.
+		if (parsed._owner !== sessionId) {
+			localStorage.removeItem(NS + sessionId);
+			return null;
+		}
 		if (typeof parsed.idea !== 'string') return null; // no idea = no draft
 		return {
 			title: typeof parsed.title === 'string' ? parsed.title : '',
@@ -68,7 +85,13 @@ export function saveEntryDraft(sessionId: string, entry: EngineEntryInput): void
 			localStorage.removeItem(NS + sessionId);
 			return;
 		}
-		localStorage.setItem(NS + sessionId, JSON.stringify(entry));
+		// Record the owning session inside the blob. If a future race ever
+		// writes a foreign entry under a wrong key, the load path's owner
+		// check drops it instead of showing it as "shared" content.
+		localStorage.setItem(
+			NS + sessionId,
+			JSON.stringify({ ...entry, _owner: sessionId }),
+		);
 	} catch {
 		// localStorage unavailable (private mode / quota) — in-memory-only.
 	}
