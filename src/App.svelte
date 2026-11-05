@@ -8,6 +8,7 @@
 	import WelcomeDeleteModal from './components/WelcomeDeleteModal.svelte';
 	import WindowControls from './components/WindowControls.svelte';
 	import DesignLab from './design-lab/DesignLab.svelte';
+	import RamMonitor from './components/RamMonitor.svelte';
 	import { APP_CONSTANTS } from '$constants';
 	
 	// State declarations - explicit reactive state
@@ -333,12 +334,32 @@
 					onlayoutChange={handleLayoutChange}
 				/>
 			</div>
+			<!-- The in-app RAM/leak/stall chip. Mounted in the live-app branch
+				 so its 8 s tick runs: it drives reportToDashboard() (feeds the
+				 live dashboard's renderer card) and flushPipelineDiag() (the
+				 backend log ring). It was previously never rendered, so neither
+				 ran — the dashboard's "renderer not reporting" + near-empty
+				 pipeline log were both caused by this missing mount. -->
+			<div class="ram-chip-host">
+				<RamMonitor />
+			</div>
 		{/if}
 </ErrorHandler>
 {/if}
 
 <style>
 	* { margin: 0; padding: 0; box-sizing: border-box; }
+
+	/* The RAM/leak/stall chip lives in the top-right corner of the workspace:
+	   diagnostic, never in the layout flow (position:fixed so it can't
+	   reflow the composer or steal a click). */
+	.ram-chip-host {
+		position: fixed;
+		top: 6px;
+		right: 10px;
+		z-index: 50;
+		opacity: 0.92;
+	}
 
 	.app {
 		display: flex;
