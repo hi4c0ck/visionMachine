@@ -35,6 +35,19 @@ import { backfillGeneratedImages } from '$lib/generatedImageBackfill';
 export const sessions = new Map<string, SessionData>();
 export const unsynced = new Set<string>();
 
+// BOUNDED: sessions swing in and out for the app lifetime, so without a cap
+// this Map is the "module-level asset that outlives the {#key} remount and
+// ratchets up" leak. On insert, evict oldest plain entries past the bound.
+const SESSIONS_CAP = 64;
+
+function evictOldSessions(): void {
+  if (sessions.size <= SESSIONS_CAP) return;
+  for (const key of sessions.keys()) {
+    if (sessions.size <= SESSIONS_CAP) break;
+    sessions.delete(key);
+  }
+}
+
 let onUpdateCallback: ((sessionId: string) => void) | null = null;
 
 // ── Store Implementation ──────────────────────────────────────────────────────
@@ -111,6 +124,7 @@ class ComposerStoreImpl implements ComposerStore {
         totalGeneratedFrames: 0,
       };
       sessions.set(sessionId, session);
+      evictOldSessions();
     }
     return session;
   }
@@ -667,6 +681,7 @@ class ComposerStoreImpl implements ComposerStore {
         // render so the chips show thumbnails on the next app run).
         const backfilled = await backfillGeneratedImages(result.session);
         sessions.set(sessionId, result.session);
+        evictOldSessions();
         if (backfilled) {
           // Recovery filled previewLocalPath/previewRemoteUrl that the DB row
           // doesn't have yet — persist it immediately so a later save (or the
@@ -809,6 +824,7 @@ class ComposerStoreImpl implements ComposerStore {
       // on the render path when the user re-enters the app).
       normalizeSession(session as SessionData);
       sessions.set(session.id, session);
+      evictOldSessions();
     }
   }
 

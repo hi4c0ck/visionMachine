@@ -64,6 +64,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	 *  switch (different userName) forces the id to re-resolve. */
 	let lastLoadedProfile = $state<string | null>(null);
 	let userProjectsFiles = $state<Record<string, ProjectFile[]>>({});
+	const PROJECTS_FILES_CAP = 64;
+	function evictOldUserProjectsFiles(): void {
+		const keys = Object.keys(userProjectsFiles);
+		if (keys.length <= PROJECTS_FILES_CAP) return;
+		const toDelete = keys.slice(0, keys.length - PROJECTS_FILES_CAP);
+		for (const k of toDelete) delete userProjectsFiles[k];
+	}
 
 	// State
 	let projects = $state<ProjectData[]>([]);
@@ -132,7 +139,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// scoped per session so switching away and back returns to the SAME pipe
 	// the user last opened here (lastPreviewPipeBySession), not the first
 	// pipe that happens to have a last-gen video.
+	const LAST_PREVIEW_CAP = 24;
 	let lastPreviewPipeBySession = new Map<string, string>();
+	function evictOldLastPreview(): void {
+		if (lastPreviewPipeBySession.size <= LAST_PREVIEW_CAP) return;
+		for (const key of lastPreviewPipeBySession.keys()) {
+			if (lastPreviewPipeBySession.size <= LAST_PREVIEW_CAP) break;
+			lastPreviewPipeBySession.delete(key);
+		}
+	}
 	// True when the top-panel preview shows the composed session video
 	// (all pipes spliced) instead of a single pipe's last-gen clip. Drives
 	// the frame bounds: a composed video spans the SUM of the pipes.
@@ -2510,7 +2525,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// Remember which pipe the user opened for THIS session, so a
 		// session switch away + back restores the same preview.
 		const sid = selectedSessionId;
-		if (sid) lastPreviewPipeBySession.set(sid, pipe.id);
+		if (sid) { lastPreviewPipeBySession.set(sid, pipe.id); evictOldLastPreview(); }
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.
