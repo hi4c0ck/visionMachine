@@ -4,40 +4,57 @@
 	// flow (FilmSeed → VisualNovel → SceneSpec → ShotSpec → derive → VERIFY)
 	// with the G0–G4 gate strip; Extract + Scoreboard read from the same doc.
 	// Destructive regenerate-pipes stays a sharp edge (I9): rendered disabled.
+	//
+	// Foundation split (milestone P): this component is now the slim PARENT —
+	// it owns ALL shared state + business logic and renders four
+	// presentational children:
+	//   • hot/DirectorHotPath.svelte — ① DIRECTION · ② NOVEL · ③ STEP CHAIN
+	//     (+ the destructive apply row; M1 slot inside for RunLog/TimelinePreview)
+	//   • adv/DirectorAdvanced.svelte — the <details class="advanced"> block
+	//   • ext/ExtractTab.svelte — the concrete editable sections
+	//   • ext/ScoreboardTab.svelte — tag bars, runs ledger, cards, sparkline
+	// The children hold no business logic; cross-tab deriveds (stepChain,
+	// gatesShown, engine, localExtract seeding) stay here.
+
+	import { invoke } from '@tauri-apps/api/core';
 	import { flashToast } from '$lib/flashToast';
-	import { ask } from '@tauri-apps/plugin-dialog';
+	import { ask, save, open } from '@tauri-apps/plugin-dialog';
+	import {
+		toSeedCard,
+		fromSeedCard,
+		parseSeedCard,
+		seedCardToJson,
+	} from '$lib/directorStore/seedCard';
 	import {
 		runFlow,
 		listFlows,
 		loadFlow,
 		applyFlow,
 		applyFlowEdited,
-		type EditedSection,
 		type DirectorTab,
 	} from '$lib/directorStore';
 	import { loadSession } from '$lib/composerStore';
+	import { tripEffect } from '$lib/pipelineDiag';
 	import {
-		tagBars,
 		type FlowDocument,
 		type FlowSummary,
 	} from '$lib/directorStore/types';
-	import { sparklinePoints } from '$lib/directorStore/types';
+	// Module-level latch: survives component remounts (DirectorPanel unmounts
+	// when selectedSession is null during loading). Without this, the loader
+	// effect re-runs on every remount, calling listFlows in a loop.
+	const flowsLoadedForModule = new Set<string>();
 	import {
-		GENRE_PRESETS,
-		RATIOS,
-		VOCAB,
 		concernSummary,
-		foldSlices,
 		specsByScene,
 		timelineRows,
-		FRAME_RATE,
-		expansionLabel,
 		type EngineEntryInput,
 		type EngineRun,
-		type GateState,
 	} from '$lib/directorStore/engine';
 	import { loadEntryDraft, saveEntryDraft } from '$lib/directorStore/entryDraft';
-	import TextBlock from './TextBlock.svelte';
+	import DirectorHotPath from './hot/DirectorHotPath.svelte';
+	import DirectorAdvanced from './adv/DirectorAdvanced.svelte';
+	import ExtractTab from './ext/ExtractTab.svelte';
+	import ScoreboardTab from './ext/ScoreboardTab.svelte';
 
 	let {
 		activeTab,
@@ -80,19 +97,6 @@
 	// On load/run, backfilled from the engine seed so controls reflect the run.
 	// Persisted per session (entryDraft) so leaving the Director tab (panel
 	// unmounts on 'pipes') never loses typed text — a re-mount restores it.
-	// Extract/scene tag word → theme lane color (design-system --tag-* tokens,
-	// which repaint on every theme). This is the panel's strongest per-theme
-	// hook: the same "scene/camera/..." labels read red/yellow/cyan/pink/
-	// orange in steel-dark vs. the muted sets in light.
-	const TAG_LANE_CLASS: Record<string, string> = {
-		scene: 'lane-red',
-		camera: 'lane-yellow',
-		lighting: 'lane-cyan',
-		motion: 'lane-pink',
-		transition: 'lane-orange',
-		effect: 'lane-blue',
-	};
-
 	const defaultEntry: EngineEntryInput = {
 		title: '',
 		idea: '',
@@ -102,15 +106,38 @@
 		scale: { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
 		time_of_day: 'midday',
 		weather: 'clear',
+		// Phase 3: the S0.5 tree's manual-override pins. Always a stable
+		// (possibly empty) object so the StructurePanel's `bind:overrides`
+		// has a valid target; empty = every pin absent = the tree's auto
+		// values win.
+		overrides: {},
 	};
 	// Clone: $state proxies the object it's given, so a shared const would
 	// get mutated through session A's typing and leak into session B.
 	const freshEntry = (): EngineEntryInput => structuredClone(defaultEntry);
-	let entry = $state<EngineEntryInput>(loadEntryDraft(sessionId) ?? freshEntry());
+	// Phase 3: guarantee a stable `overrides` object (the StructurePanel binds
+	// into it). Old / pre-Phase-3 drafts + fresh entries lack the key, so
+	// normalize to `{}` (all pins absent = the tree's auto values win).
+	const normalizeEntry = (e: EngineEntryInput): EngineEntryInput => ({
+		...e,
+		overrides: e.overrides ?? {},
+	});
+	let entry = $state<EngineEntryInput>(normalizeEntry(loadEntryDraft(sessionId) ?? freshEntry()));
 
-	// Save the G0 draft whenever it changes (and on session switch) so a
-	// re-mount after 'Pipes' restores the typed text. Empty idea clears it.
+	// Save the G0 draft whenever it changes so a re-mount after 'Pipes'
+	// restores the typed text. Empty idea clears it.
+	// CROSS-SESSION GUARD: this save effect is declared BEFORE the
+	// session-reset effect, so on a session switch it runs FIRST with the
+	// PREVIOUS session's `entry` still in place: writing the old draft
+	// under the NEW session id, then the reset effect re-seeds `entry`
+	// from that same just-written draft → every session opened in Director
+	// shows the previous session's prompt ("director content shared across
+	// all sessions"). Only save once the current session's reset has run
+	// (`lastSession === sessionId`); reading `lastSession` (a $state) tracks
+	// it, so after the reset flips it the effect re-runs and persists the
+	// CORRECT draft for the new session.
 	$effect(() => {
+		if (lastSession !== sessionId) return;
 		saveEntryDraft(sessionId, entry);
 	});
 
@@ -134,7 +161,8 @@
 	let runDurationMs = $state<number | null>(null);
 
 	// Step-chain values for the Phase-1 hot path (4 rows: expand / structure /
-	// critic / lower). Real values, not placeholders.
+	// critic / lower). Real values, not placeholders. Rendered by the
+	// hot-path child (M1: RunLog + TimelinePreview will replace the list).
 	const stepChain = $derived.by(() => {
 		const e = engine;
 		const d = doc;
@@ -421,6 +449,70 @@
 		);
 	}
 
+	// ── M2 seed card: export the G0 entry (+ novel preview) to a shareable
+	//    one-file `.vmseed.json`; import one back into the G0 controls. The
+	//    file IO is the Rust side (director_save/load_seed_card, 16KB guard);
+	//    the UI owns the shape via seedCard.ts. Export needs a real idea; the
+	//    first novel scene prose (when a run exists) rides along as the preview.
+	let seedWorking = $state(false);
+
+	function safeSeedName(): string {
+		const base = (entry.title.trim() || entry.idea.trim() || 'seed').replace(/[^\w\-]+/g, '_').slice(0, 40) || 'seed';
+		return `${base}.vmseed.json`;
+	}
+
+	async function exportSeedCard() {
+		if (!entry.idea.trim() || seedWorking) return;
+		// The shareable preview: the first novel scene prose (≤280 chars, the
+		// seedCard cap). No run yet → omit the preview (the card is still valid).
+		const preview = doc?.engine?.novel.scenes[0]?.prose;
+		const card = toSeedCard(buildEntry(), preview ?? undefined);
+		const cardJson = seedCardToJson(card);
+		const path = await save({
+			defaultPath: safeSeedName(),
+			filters: [{ name: 'VisionMachine seed', extensions: ['vmseed', 'json'] }],
+		}).catch(() => null);
+		if (!path) return; // user cancelled the picker — silent no-op
+		seedWorking = true;
+		try {
+			const out = await invoke<string>('director_save_seed_card', { path, cardJson });
+			showFeedback(`Seed exported to ${out}`, 'tone-ok');
+		} catch (e) {
+			showFeedback(`Export failed: ${String(e)}`, 'tone-danger');
+			flashToast(String(e));
+		} finally {
+			seedWorking = false;
+		}
+	}
+
+	async function importSeedCard() {
+		if (seedWorking) return;
+		const picked = await open({
+			multiple: false,
+			directory: false,
+			filters: [{ name: 'VisionMachine seed', extensions: ['vmseed', 'json'] }],
+		}).catch(() => null);
+		// `open` resolves to string | string[] | null; single-select → string|null.
+		const path = typeof picked === 'string' ? picked : Array.isArray(picked) ? picked[0] : null;
+		if (!path) return;
+		seedWorking = true;
+		try {
+			const raw = await invoke<string>('director_load_seed_card', { path });
+			const card = parseSeedCard(raw);
+			const next = fromSeedCard(card);
+			// Preserve the user's unsaved draft where the card is silent; the
+			// card wins on every field it carries (mood/preview passthrough).
+			entry = { ...entry, ...next } as EngineEntryInput;
+			runError = null;
+			showFeedback('Seed loaded — hit Run S0→S5 to build the flow', 'tone-ok');
+		} catch (e) {
+			showFeedback(`Import failed: ${String(e)}`, 'tone-danger');
+			flashToast(String(e));
+		} finally {
+			seedWorking = false;
+		}
+	}
+
 	// Destructive apply (I9, design §4): materialize the current flow's
 	// structured plan into composer pipes. Replaces or appends the session's
 	// pipes, then reloads the composer so the Pipes tab shows the result.
@@ -476,29 +568,65 @@
 	// so the .preview-meta row shows it in place of pipe-count. Extract is
 	// "n sections" once fresh structural text exists; Scoreboard is "stale"
 	// when a newer persisted run outdates the doc currently being scored.
+	//
+	// BUGFIX (infinite-loop): the callback prop is an inline arrow in the
+	// parent (a new identity on every parent re-render) and this effect used
+	// to push a FRESH object into the parent's `tabMeta` $state on every run.
+	// That state write re-rendered the parent, which re-created the arrow,
+	// which re-triggered this effect → a re-render feedback loop that keeps
+	// Svelte flushing forever ("runes don't work / infinite loop" after a
+	// generation run). Break it two ways: (a) stop tracking the callback
+	// identity (no `void onMetaChange`), so a churned arrow alone can't
+	// re-run the effect; (b) an idempotence guard keyed on the pushed
+	// payload, so an effect re-run with unchanged values is a no-op and
+	// never writes the parent state.
+	let lastMetaSig = '';
 	$effect(() => {
-		void onMetaChange;
+		tripEffect('director:meta'); // tripwire: should NOT exceed a handful of runs
 		if (!onMetaChange) return;
 		const newest = flows.length ? Math.max(...flows.map((f) => f.flowVersion)) : 0;
 		const stale = !!doc && newest > doc.flowVersion;
+		const n = sections.length;
+		const sig = n + '|' + (stale ? 1 : 0);
+		if (sig === lastMetaSig) return; // unchanged → no parent write → no re-render
+		lastMetaSig = sig;
 		onMetaChange({
-			extractSections: sections.length,
+			extractSections: n,
 			stale,
 		});
 	});
 
 	$effect(() => {
-		if (activeTab === 'scoreboard') void refreshFlows();
+		if (activeTab !== 'scoreboard') return;
+		let cancelled = false;
+		const sid = sessionId;
+		void (async () => {
+			await refreshFlows();
+			if (cancelled || sid !== sessionId) return;
+		})();
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	let lastSession = $state(sessionId);
+	// Once-per-session loader latch: the seed-from-persisted-run effect below
+	// must run AT MOST once per session. A session with 0 persisted flows
+	// never sets `doc`, so a plain `if (doc) return;` guard cannot latch —
+	// any re-trigger (session reset, re-render) re-issued listFlows forever
+	// ("[DIRECTOR] list_flows start/done × N for a 0-flow session" in the
+	// log, then the UI pinned). Cleared on session switch, set after one
+	// settled list (including the 0-flows and error paths).
+	let flowsLoadedFor = $state<string | null>(null); // synced with module-level Set
 	// Per-session isolation: when the session prop changes, reset in-tab state
 	// so a switched session never carries the previous session's run; restore
 	// the new session's G0 draft instead of a stale entry.
 	$effect(() => {
+		tripEffect('director:reset'); // tripwire: ONCE per session switch
 		if (sessionId !== lastSession) {
 			lastSession = sessionId;
 			doc = null;
+			flowsLoadedFor = null;
 			flows = [];
 			activeRun = null;
 			runError = null;
@@ -514,20 +642,36 @@
 	// for a pre-engine doc, pre-fill the idea from the run's entry text so
 	// one click on "Run S0→S5" re-builds the flow.
 	$effect(() => {
-		if (doc) return;
+		// `doc` is NOT a sufficient latch: a session with 0 persisted flows
+		// never sets it, so a plain `if (doc) return;` left this effect
+		// live after the first pass and any re-trigger re-issued
+		// listFlows in a loop (the "[DIRECTOR] list_flows start/done × N"
+		// log storm + pinned UI on 0-flow sessions). The once-per-session
+		// `flowsLoadedFor` latch (read in this sync guard → tracked) makes
+		// the effect terminal after ONE settled list, whatever the result.
+		void invoke('log_pipeline_diag', { message: `[TRACE] director loader effect run ${sessionId} doc:${!!doc} latch:${flowsLoadedFor} module:${flowsLoadedForModule.has(sessionId)}` }).catch(() => {});
+		if (doc || flowsLoadedFor === sessionId || flowsLoadedForModule.has(sessionId)) { void invoke('log_pipeline_diag', { message: '[TRACE] director loader early return' }).catch(() => {}); return; }
+		tripEffect('director:seed'); // tripwire: should fire ONCE per session
+		let cancelled = false;
+		const sid = sessionId;
+		flowsLoadedFor = sid; // latch BEFORE await: prevents re-entry if effect re-runs
+		flowsLoadedForModule.add(sid); // module latch: survives remounts
+		void invoke('log_pipeline_diag', { message: `[TRACE] director loader calling listFlows ${sid}` }).catch(() => {});
 		void (async () => {
 			try {
-				const listed = await listFlows(sessionId);
+				const listed = await listFlows(sid);
+				if (cancelled || sid !== sessionId) return;
 				if (listed.length > 0) {
 					flows = listed;
 					const newest = listed[0];
-					const d = await loadFlow(sessionId, newest.flowVersion);
+					const d = await loadFlow(sid, newest.flowVersion);
+					if (cancelled || sid !== sessionId) return;
 					doc = d;
 					activeRun = newest.flowVersion;
 					// Precedence: an unsaved G0 draft that differs from the
 					// committed doc's seed (post-run edits) wins; otherwise
 					// backfill the controls from the doc.
-					const draft = loadEntryDraft(sessionId);
+					const draft = loadEntryDraft(sid);
 					const docIdea = (d.engine?.seed?.idea ?? d.intent?.entryText ?? '').trim();
 					if (draft && draft.idea.trim() && draft.idea.trim() !== docIdea) {
 						entry = draft;
@@ -539,12 +683,16 @@
 					// draft (the idea may already have been typed, then the
 					// user left the tab / re-ran nothing).
 					flows = [];
-					entry = loadEntryDraft(sessionId) ?? freshEntry();
+					entry = loadEntryDraft(sid) ?? freshEntry();
 				}
 			} catch (e) {
+				if (cancelled || sid !== sessionId) return;
 				console.warn('director load_latest', e);
 			}
 		})();
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	function backfillEntryFromEngine(d: FlowDocument, summary?: FlowSummary) {
@@ -571,13 +719,26 @@
 			},
 			time_of_day: film.time_of_day,
 			weather: film.weather,
+			// M4: the run's EngineRun does not store its mood band (it lives
+			// on the EngineEntry input, and FilmSeed stays byte-stable), so
+			// preserve the user's current slider value (entry.mood) rather
+			// than clobber it — a re-load never silently resets mood.
+			mood: entry.mood ?? 50,
+			// Phase 3: the S0.5 tree's manual-override pins are USER state,
+			// not engine state — a re-run / re-load never clobbers them.
+			// (The tree itself re-derives on the next run; the pins survive.)
+			overrides: entry.overrides ?? {},
 		};
 	}
 
 	async function refreshFlows() {
+		const sid = sessionId;
 		try {
-			flows = await listFlows(sessionId);
+			const listed = await listFlows(sid);
+			if (sid !== sessionId) return;
+			flows = listed;
 		} catch (e) {
+			if (sid !== sessionId) return;
 			console.warn('director list_flows', e);
 			flows = [];
 		}
@@ -592,18 +753,21 @@
 	}
 
 	async function handleRun() {
+		const sid = sessionId;
 		running = true;
 		onRunningChange?.(true);
 		runError = null;
 		const t0 = Date.now();
 		try {
-			const result = await runFlow(sessionId, entry.idea || entry.input_text?.trim() || '', buildEntry());
+			const result = await runFlow(sid, entry.idea || entry.input_text?.trim() || '', buildEntry());
+			if (sid !== sessionId) return;
 			runDurationMs = Date.now() - t0;
 			doc = result;
 			activeRun = result.flowVersion;
 			backfillEntryFromEngine(result);
 			await refreshFlows();
 		} catch (e) {
+			if (sid !== sessionId) return;
 			runError = String(e);
 			flashToast(runError);
 		} finally {
@@ -612,37 +776,25 @@
 		}
 	}
 
-	// ── Small format helpers ───────────────────────────────────────────────
-	function fmtScore(n: number): string {
-		return n.toFixed(2);
-	}
-	function scoreTone(n: number): string {
-		if (n < 0.25) return 'tone-danger';
-		if (n < 0.4) return 'tone-warn';
-		return 'tone-neutral';
-	}
-	function gateGlyph(g: GateState): string {
-		switch (g.status) {
-			case 'confirmed':
-				return '●';
-			case 'pending':
-				return '◐';
-			default:
-				return '◇';
-		}
-	}
-	function gateTone(g: GateState): string {
-		if (g.status === 'confirmed') return 'tone-ok';
-		if (g.status === 'pending') return 'tone-warn';
-		return 'tone-muted';
-	}
-
 	function copyExtract() {
 		if (!doc) return;
-		const lines = (doc.structured.pipes[0]?.sections ?? []).map((s) => {
-			const src = s.from.length ? s.from.join(' · ') : '—';
-			return `--- ${s.tag} ${s.frameStart}–${s.frameEnd} ---\n${s.prompt}\nsource: ${src}`;
-		});
+		let lines: string[];
+		if (localExtract.length) {
+			// Copy the user's LIVE sections (post-edit), with dirty flags.
+			// Pre-engine docs have no localExtract — fall back to the
+			// structured plan below.
+			lines = localExtract.map((s) => {
+				const dirty = isEdited(s) ? ' [edited]' : '';
+				const src = s.source.trim() !== s.prompt.trim() ? s.source : '—';
+				return `--- pipe ${String(s.pipeIndex).padStart(2, '0')} ${s.tag}${dirty} ${s.range} ---\n${s.prompt}${src !== '—' ? `\nsource: ${src}` : ''}`;
+			});
+		} else {
+			// Pre-engine doc: copy the original structured sections.
+			lines = (doc.structured.pipes[0]?.sections ?? []).map((s) => {
+				const src = s.from.length ? s.from.join(' · ') : '—';
+				return `--- ${s.tag} ${s.frameStart}–${s.frameEnd} ---\n${s.prompt}\nsource: ${src}`;
+			});
+		}
 		void navigator.clipboard
 			.writeText(lines.join('\n\n'))
 			.then(() => flashToast('Structural text copied', 'success'))
@@ -680,552 +832,66 @@
 			.then(() => flashToast('Engine sheet copied', 'success'))
 			.catch(() => flashToast('Copy failed'));
 	}
-
-	// Q4 sparkline: overall score across persisted runs (oldest → newest).
-	const sparkPoints = $derived(sparklinePoints([...flows].reverse().map((f) => f.overall)));
 </script>
 
 <div class="director-root" data-tab={activeTab}>
 	{#if activeTab === 'director'}
-		<!-- ── Phase 1 hot path: ① DIRECTION · ② NOVEL · ③ STEP CHAIN ──
-		     The creator's primary control flow is three blocks. All the
-		     expert-level detail (gate strip, G0 grid, S2/S3/S4, timeline, S5)
-		     is demoted into the Advanced disclosure at the bottom of this tab
-		     so the hot path never shows it. -->
-
-		<!-- ① DIRECTION — the single primary control: type the idea, run. -->
-		<section class="stage hot">
-			<h3 class="block-heading">① DIRECTION <span class="muted">· S0 entry</span></h3>
-			<TextBlock
-				label="Idea"
-				bind:value={entry.idea}
-				generating={running}
-				locked={running}
-				onRun={handleRun}
+		<!-- Phase-1 hot path child; the Advanced disclosure is injected via
+		     its slot so the DOM order matches the former monolith
+		     (① → ② → ③ → <details class="advanced"> → actions). -->
+		<DirectorHotPath
+			{engine}
+			{doc}
+			{running}
+			bind:entry
+			{stepChain}
+			{runDurationMs}
+			{runError}
+			{pipeCount}
+			{applyWorking}
+			{feedback}
+			seedWorking={seedWorking}
+			canExportSeed={entry.idea.trim().length > 0}
+			onRun={handleRun}
+			onAnnotate={annotateRun}
+			onApply={applyPipes}
+			onExportSeed={exportSeedCard}
+			onImportSeed={importSeedCard}
+		>
+			<DirectorAdvanced
+				{engine}
+				{gatesShown}
+				bind:entry
+				{openShot}
+				onToggleShot={(id) => (openShot = id)}
 			/>
-		</section>
-
-		<!-- ② NOVEL — read-only collapsed rows (the S1 visual novel state). -->
-		{#if engine}
-			<section class="stage hot">
-				<h3 class="block-heading">
-					② NOVEL
-					<span class="muted chip {engine.expansion === 'llm' ? 'chip-llm' : 'chip-fallback'}"
-						title={engine.expansion_note ?? ''}>
-						{expansionLabel(engine)}
-					</span>
-				</h3>
-				<ul class="novel-rows">
-					<li>
-						<code class="nr-id">primary</code>
-						<span class="nr-text">{engine.novel.scenes.map((s) => s.prose).join(' · ')}</span>
-					</li>
-					<li>
-						<code class="nr-id">secondary</code>
-						<span class="nr-text">
-							{engine.novel.scenes.map((s) => s.shots.map((sh) => sh.prose).join(' · ')).join(' · ')}
-						</span>
-					</li>
-					<li>
-						<code class="nr-id">ambient</code>
-						<span class="nr-text">{engine.novel.film.logline}</span>
-					</li>
-				</ul>
-			</section>
-
-			<!-- ③ STEP CHAIN — the 4 rows + the single Run button. -->
-			<section class="stage hot">
-				<h3 class="block-heading">③ STEP CHAIN <span class="muted">· {doc?.flowVersion ?? '—'}</span></h3>
-				<ul class="step-chain">
-					{#if stepChain}
-						{#each stepChain as row}
-							<li class="step {row.stateClass} {runError ? 'step-fail' : ''}">
-								<code class="step-name">{row.name}</code>
-								<code class="step-ver">{row.ver}</code>
-								<span class="step-src">{row.src}</span>
-								<span class="step-state">{row.state}</span>
-							</li>
-						{/each}
-					{:else}
-						<li class="hint">No run yet — type an idea and press Run.</li>
-					{/if}
-				</ul>
-				{#if runError}
-					<p class="flow-error" role="alert">{runError}</p>
-				{/if}
-				<div class="step-actions">
-					<button
-						class="btn primary"
-						disabled={running || !entry.idea.trim()}
-						title={!entry.idea.trim() ? 'Write the idea first' : undefined}
-						onclick={handleRun}>
-						{running ? 'Running…' : 'Run S0→S5'}
-					</button>
-					{#if doc}
-						<button class="btn" onclick={() => void annotateRun('accept')}>Accept</button>
-						<button class="btn" onclick={() => void annotateRun('reject')}>Reject</button>
-					{/if}
-				</div>
-			</section>
-
-			<!-- ── Advanced disclosure: gate strip + G0 grid + S2/S3/S4/timeline/S5 ── -->
-			<details class="advanced">
-				<summary class="advanced-summary">Advanced view <span class="muted">· gates · S2–S5 · timeline · verify</span></summary>
-
-				<!-- Gate strip (G0–G4) — the flow's confirmation spine. -->
-				<div class="gate-strip" role="list" aria-label="Pipeline gates">
-					{#each gatesShown as g (g.gate)}
-						<span class="gate {gateTone(g)}" role="listitem" title={g.confirm}>
-							<code class="gate-id">{g.gate}</code>
-							<span class="gate-glyph" aria-hidden="true">{gateGlyph(g)}</span>
-							<span class="gate-note">
-								{#if g.backtrack.length}bt:{g.backtrack.join('|')}{/if}
-							</span>
-						</span>
-					{/each}
-				</div>
-
-				<!-- G0 grid — all 8 fields, demoted from the hot path. -->
-				<section class="stage">
-					<h3 class="block-heading">G0 · Entry parameters <span class="muted">· S0 seed</span></h3>
-					<div class="g0-grid">
-						<label class="field grow">
-							<span class="field-label">title</span>
-							<input bind:value={entry.title} placeholder="optional film title (defaults from the idea)" />
-						</label>
-						<label class="field">
-							<span class="field-label">genre</span>
-							<select bind:value={entry.genre.name}>
-								{#each GENRE_PRESETS as g}<option value={g.name}>{g.name}</option>{/each}
-							</select>
-						</label>
-						<label class="field grow">
-							<span class="field-label">style</span>
-							<input bind:value={entry.genre.style} placeholder="visual style string" />
-						</label>
-						<label class="field">
-							<span class="field-label">ratio</span>
-							<select bind:value={entry.ratio}>
-								{#each RATIOS as r}<option value={r}>{r}</option>{/each}
-							</select>
-						</label>
-						<label class="field">
-							<span class="field-label">scenes</span>
-							<input type="number" min="1" max="24" bind:value={entry.scale.scenes} />
-						</label>
-						<label class="field">
-							<span class="field-label">shots/scene</span>
-							<input type="number" min="1" max="5" bind:value={entry.scale.shots_per_scene} />
-						</label>
-						<label class="field">
-							<span class="field-label">clip_s</span>
-							<span class="clip-range">
-								<input type="number" min="4" max="12" bind:value={entry.scale.clip_s[0]} />–
-								<input type="number" min="4" max="12" bind:value={entry.scale.clip_s[1]} />
-							</span>
-						</label>
-						<label class="field">
-							<span class="field-label">time of day</span>
-							<select bind:value={entry.time_of_day}>
-								{#each VOCAB.time_of_day as t}<option value={t}>{t}</option>{/each}
-							</select>
-						</label>
-						<label class="field grow">
-							<span class="field-label">weather</span>
-							<input bind:value={entry.weather} placeholder="clear, brief clouds, …" />
-						</label>
-					</div>
-				</section>
-
-				<!-- S1 · Visual Novel — full scene/shot tree. -->
-				<section class="stage">
-					<h3 class="block-heading">S1 · Visual Novel <span class="muted">· G1</span></h3>
-					<div class="novel-film" title={engine.novel.film.logline}>
-						<code class="nf-title">{engine.novel.film.title}</code>
-						<span class="nf-meta">
-							{engine.novel.film.time_of_day} · {engine.novel.film.weather} ·
-							{engine.novel.film.palette}
-						</span>
-						<p class="nf-logline">{engine.novel.film.logline}</p>
-					</div>
-					{#each engine.novel.scenes as sc, si}
-						<details class="novel-scene" open={si === 0}>
-							<summary>
-								<span class="nc-title">{sc.title}</span>
-								<span class="nc-meta">{sc.shots.length} shots</span>
-							</summary>
-							<p class="nc-prose">{sc.prose}</p>
-							<ul class="nc-shots">
-								{#each sc.shots as sh, ki}
-									<li>
-										<code class="nc-shotno">scene_{si + 1}.shot_{ki + 1}</code>
-										<span class="nc-shotprose">{sh.prose}</span>
-										<span class="nc-beats">{sh.beats.length} beats</span>
-									</li>
-								{/each}
-							</ul>
-						</details>
-					{/each}
-				</section>
-
-				<!-- S2 · Scene base look. -->
-				<section class="stage">
-					<h3 class="block-heading">S2 · Scene base look <span class="muted">· {engine.scenes.length} spec(s)</span></h3>
-					<ul class="scene-rows">
-						{#each engine.scenes as sc}
-							<li>
-								<code class="sr-id">{sc.scene_id}</code>
-								<span class="sr-meta">
-									{sc.time_of_day} · {sc.weather} · {sc.light.key}/{sc.light.contrast}
-									{sc.light.color_temp_K}K · {sc.grade.film_stock} · {sc.tempo}
-								</span>
-								{#if sc.effects_base.length}<span class="sr-fx">fx:{sc.effects_base.join(',')}</span>{/if}
-							</li>
-						{/each}
-					</ul>
-				</section>
-
-				<!-- S3 · Shot sheets. -->
-				<section class="stage">
-					<h3 class="block-heading">S3 · Shot sheets <span class="muted">· {engine.specs.length} · G2</span></h3>
-					{#each specsByScene(engine) as grp}
-						<div class="shot-scene">
-							<code class="ss-scene">{grp.scene.scene_id} · {grp.scene.time_of_day}</code>
-							{#each grp.specs as sp}
-								{@const slices = foldSlices(sp)}
-								<article class="shot-sheet" class:open={openShot === sp.shot_id}>
-									<header class="ss-head" role="button" tabindex="0"
-										onclick={() => (openShot = openShot === sp.shot_id ? null : sp.shot_id)}
-										onkeydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openShot = openShot === sp.shot_id ? null : sp.shot_id; } }}>
-										<code class="ss-id">{sp.shot_id}</code>
-										<span class="ss-meta">
-											{sp.clip_s}s · {sp.transition_in}→{sp.transition_out} · {concernSummary(sp.concerns)}
-										</span>
-										<span class="ss-tick">{openShot === sp.shot_id ? '▾' : '▸'}</span>
-									</header>
-									{#if openShot === sp.shot_id}
-										<div class="ss-body">
-											<p class="ss-prose">{sp.content.prose}</p>
-											{#if sp.content.beats.length}
-												<ul class="ss-beats">
-													{#each sp.content.beats as b}<li>{b}</li>{/each}
-												</ul>
-											{/if}
-											{#if slices.length}
-												<div class="ss-slices">
-													{#each slices as sl}
-														<div class="slice">
-															<code class="slice-range">{sl.from_s}–{sl.to_s}s</code>
-															<span class="slice-note">{sl.note}</span>
-															<ul class="slice-deltas">
-																{#each sl.deltas as d}<li><code>{d}</code></li>{/each}
-															</ul>
-														</div>
-													{/each}
-												</div>
-											{/if}
-										</div>
-									{/if}
-								</article>
-							{/each}
-						</div>
-					{/each}
-				</section>
-
-				<!-- S4 · Prompt build (deterministic media prompts, not generated media). -->
-				<section class="stage">
-					<h3 class="block-heading">S4 · Prompt build
-						<span class="muted">· deterministic media prompts · not generated media · {FRAME_RATE}fps</span>
-					</h3>
-					<p class="hint s4-note">
-						Each shot's <b>image</b>/<b>video</b> text is what you feed a media model
-						(base scene look + the shot's composition/lens/motion + identity-lock). It is
-						derived, not generated — there are no images or clips here yet.
-					</p>
-					{#each engine.molecules as m}
-						<details class="prompt-block">
-							<summary>
-								<code class="pb-id">{m.inherit}</code>
-								<span class="pb-meta">{m.clip_s}s · {m.transition_in}→{m.transition_out}</span>
-							</summary>
-							<div class="pb-rows">
-								<div class="pb-row">
-									<code class="pb-kind">image</code>
-									<p>{m.prompts.image}</p>
-								</div>
-								<div class="pb-row">
-									<code class="pb-kind">video</code>
-									<p>{m.prompts.video}</p>
-								</div>
-							</div>
-						</details>
-					{/each}
-				</section>
-
-				<!-- Timeline. -->
-				<section class="stage">
-					<h3 class="block-heading">Timeline <span class="muted">· verified · {engine.verify.total_frames}f</span></h3>
-					<div class="tl-strip">
-						{#each timelineRows(engine) as r}
-							<span class="tl-cell" title={r.subject}>
-								<code class="tl-id">{r.shot_id}</code>
-								<span class="tl-subject">{r.subject}</span>
-								<span class="tl-concern">{r.concern}</span>
-								<span class="tl-frames">[{r.from_s}s–{r.to_s}s] · {r.frames}f · {r.transition_out}</span>
-							</span>
-						{/each}
-					</div>
-				</section>
-
-				<!-- S5 · Verify. -->
-				<section class="stage">
-					<h3 class="block-heading">S5 · Verify</h3>
-					{#if engine.verify.verified}
-						<p class="verify ok">
-							✓ ALL PASS — schema · tag-closure · counts · frame floor · invariants
-						</p>
-					{:else}
-						<ul class="verify issues">
-							{#each engine.verify.issues as iss}<li><code>{iss}</code></li>{/each}
-						</ul>
-					{/if}
-				</section>
-			</details>
-		{:else if doc}
-			<div class="phase0-notice">
-				<span class="muted">This run predates the engine — rebuild it below with one click to see the S0→S5 flow.</span>
-			</div>
-		{/if}
-
-		<!-- Destructive apply (I9, design §4): materialize the flow's
-		     structured plan into composer pipes via save_composer.
-		     replace vs append, gated by a confirm dialog. -->
-		{#if doc}
-			<section class="stage actions">
-				<button class="btn danger" disabled={applyWorking} onclick={() => void applyPipes(true)}>
-					Regenerate pipes
-					<span class="btn-note">replace · no fallback · replay v{doc.regen.version.flowVersion}</span>
-				</button>
-				<button class="btn danger" disabled={applyWorking} onclick={() => void applyPipes(false)}>
-					<span class="btn-note">append</span>
-				</button>
-			</section>
-		{/if}
-
-		{#if feedback}
-			<p class="action-feedback {feedback.tone}" role="status">{feedback.text}</p>
-		{/if}
-	{/if}
-
-	{#if activeTab === 'extract'}
-		{#if doc}
-			<div class="extract-head">
-				<span class="muted">
-					{sessionName} · v{doc.flowVersion}
-					{#if localExtract.length}
-						· {localExtract.length} concrete section(s) across {extractPipeCount} shot pipe(s)
-					{:else}
-						· no engine structure yet
-					{/if}
-					· {dirtyCount} edited · {pipeCount} pipes in composer
-				</span>
-				<div class="extract-head-btns">
-					<button class="btn" onclick={copyExtract}>Copy sections</button>
-					{#if engine}
-						<button class="btn" onclick={copyEngineSheet}>Copy engine sheet</button>
-					{/if}
-					<!-- Phase 2: the single destructive control — regenerate from
-					     the edited concrete sections (replace only; no append). -->
-					<button class="btn danger" disabled={applyWorking || !doc} onclick={() => void regeneratePipes()}>
-						{applyWorking ? 'Applying…' : 'Regenerate pipes'}
-						<span class="btn-note">
-							{applyWorking
-								? 'materializing the concrete plan into composer pipes'
-								: `replace ${pipeCount} pipes · ${dirtyCount} edited · replay v${doc.regen.version.flowVersion}`}
-						</span>
-					</button>
-					{#if feedback}
-						<p class="action-feedback {feedback.tone}" role="status">{feedback.text}</p>
-					{/if}
-				</div>
-			</div>
-
-			<!-- The concrete, editable structure (mirror of Rust plan_from_engine):
-			     one group per shot pipe. Story arcs tile the shot; the whole-shot
-			     meta conditions (camera/motion/lighting/transition/effect) span
-			     and overlap it. -->
-			{#if localExtract.length}
-				{#if engine}
-					<p class="hint extract-film-ctx">
-						Film context (all pipes): <b>{engine.novel.film.logline}</b>
-						· {engine.novel.film.world} · {engine.novel.film.palette}
-					</p>
-				{/if}
-				{#each localExtract as s, i}
-					{@const edited = isEdited(s)}
-					<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
-						<header class="extract-meta">
-							<code class="extract-pipe">pipe {String(s.pipeIndex).padStart(2, '0')}</code>
-							<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
-							<code class="range">{s.range}</code>
-							{#if edited}
-								<span class="dirty-mark" title="edited">●</span>
-							{/if}
-						</header>
-						<!-- Editable concrete prompt. -->
-						<textarea
-							class="extract-prompt-edit"
-							rows="2"
-							bind:value={s.prompt}
-						></textarea>
-					</article>
-				{/each}
-			{:else}
-				{#each sections as s, i}
-					<article class="extract-block">
-						<header class="extract-meta">
-							<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}</span>
-							<code class="range">{String(s.frameStart).padStart(2, '0')}–{s.frameEnd}</code>
-							<span class="provenance" class:active={s.from.length > 0}>
-								{#if s.from.length > 0}
-									source: {s.from.join(' · ')}
-								{:else}
-									source: —
-								{/if}
-							</span>
-						</header>
-						<p class="extract-prompt">{s.prompt || '—'}</p>
-					</article>
-				{/each}
-			{/if}
-			<p class="hint">
-				Concrete sections carry only their concern's text — edit any, mark ●, then
-				Regenerate pipes materializes the edits into the composer (no fallback).
-			</p>
-		{:else}
-			<p class="hint">Run the Director tab first — the final structural text appears here.</p>
-		{/if}
-	{/if}
-
-	{#if activeTab === 'scoreboard'}
-		{#if doc}
-			<h3 class="block-heading">
-				Weak spots · {sessionName} run v{doc.flowVersion} · {tagBars(doc).length} tags used
-			</h3>
-			<ul class="tag-bars">
-				{#each tagBars(doc) as b}
-					<li>
-						<button
-							class="bar-row"
-							onclick={() => (openTag = openTag === b.tag ? null : b.tag)}
-						>
-							<span class="bar-label">{b.tag}</span>
-							<span class="bar">
-								<span
-									class="bar-fill {scoreTone(b.avg)}"
-									style="width: {Math.round(b.avg * 100)}%"
-								></span>
-							</span>
-							<code class="bar-score {scoreTone(b.avg)}">{fmtScore(b.avg)}</code>
-						</button>
-						{#if openTag === b.tag}
-							<ul class="culprits">
-								{#each b.sections as cs}
-									<li>
-										<code>{cs.frameStart}–{cs.frameEnd}</code> {cs.prompt}
-										<em class="score {scoreTone(cs.score)}">{fmtScore(cs.score)}</em>
-									</li>
-								{/each}
-							</ul>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{/if}
-
-		<!-- Q2 · runs ledger (S5 verified chip + per-run annotation) -->
-		<section class="score-card">
-			<h3 class="block-heading">Runs · S5 verified</h3>
-			{#if flows.length === 0}
-				<p class="hint">No runs yet.</p>
-			{:else}
-				<ul class="run-rows">
-					{#each flows as f}
-						<li class:current={f.flowVersion === doc?.flowVersion}>
-							<code class="run-v">v{f.flowVersion}</code>
-							<span class="run-overall {scoreTone(f.overall)}">{fmtScore(f.overall)}</span>
-							<span class:run-chip={f.verified ? 'chip-ok' : 'chip-mut'}>
-								{f.verified ? 'verified' : 'unverified'}
-							</span>
-							<span class="run-src">{f.sectionCount}s · {f.entryText.slice(0, 24)}…</span>
-							<span class="run-anno">
-								<button class="mini" onclick={() => void onLogSignal('accept', 'run-' + f.flowVersion, 'annotated accept')}>
-									✓
-								</button>
-								<button class="mini" onclick={() => void onLogSignal('reject', 'run-' + f.flowVersion, 'annotated reject')}>
-									✗
-								</button>
-							</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</section>
-
-		<section class="score-card">
-			<h3 class="block-heading">Golden set</h3>
-			<p class="hint">
-				{#if flows.length === 0}
-					No runs yet.
-				{:else}
-					No runs flagged as golden yet — golden-set schema pending.
-				{/if}
-			</p>
-		</section>
-
-		<section class="score-card">
-			<h3 class="block-heading">Critic A/B</h3>
-			<p class="hint">
-				Flag ≥2 golden runs across two critic head versions to compare.
-				{#if doc}
-					Currently v{doc.regen.version.criticModelVersion}
-					{doc.criticModel?.untrained ? ' (stub)' : ''}.
-				{/if}
-			</p>
-		</section>
-
-		<section class="score-card">
-			<h3 class="block-heading">Learning strip</h3>
-			<div class="learning-row">
-				<p class="hint">
-					{flows.length} run{flows.length === 1 ? '' : 's'} recorded · critic
-					{#if doc?.criticModel?.untrained}
-						untrained (stub)
-					{:else}
-						v{(doc?.regen.version.criticModelVersion) ?? 0}
-					{/if} · signals wired
-				</p>
-				{#if sparkPoints}
-					<svg
-						class="sparkline"
-						viewBox="0 0 120 24"
-						width="120"
-						height="24"
-						role="img"
-						aria-label="Overall score across runs"
-					>
-						<!-- gridline at 0.5 (the stub-critic neutral line) -->
-						<line x1="0" y1="12.5" x2="120" y2="12.5" class="spark-grid" />
-						<polyline
-							points={sparkPoints}
-							fill="none"
-							stroke="var(--accent-color)"
-							stroke-width="1.5"
-						/>
-					</svg>
-				{/if}
-			</div>
-		</section>
+		</DirectorHotPath>
+	{:else if activeTab === 'extract'}
+		<ExtractTab
+			{doc}
+			{engine}
+			{sessionId}
+			{sessionName}
+			{pipeCount}
+			{localExtract}
+			{dirtyCount}
+			{extractPipeCount}
+			{applyWorking}
+			{feedback}
+			onCopyExtract={copyExtract}
+			onCopyEngineSheet={copyEngineSheet}
+			onRegenerate={regeneratePipes}
+			onApplied={onApplied}
+		/>
+	{:else if activeTab === 'scoreboard'}
+		<ScoreboardTab
+			{doc}
+			{flows}
+			{sessionName}
+			{openTag}
+			onToggleTag={(tag) => (openTag = tag)}
+			{onLogSignal}
+		/>
 	{/if}
 </div>
 
@@ -1244,1122 +910,5 @@
 	   so we must NOT hardcode it here (that would pin light-theme selects to
 	   the dark OS control). */
 		font-synthesis: none;
-	}
-
-	.phase0-notice {
-		padding: 8px 10px;
-		border: 1px dashed var(--border-color);
-		font-size: 12px;
-	}
-
-	/* Section heading: quiet hairline text + the theme's accent tick, so a
-	   theme switch is visible at the panel level (steel's orange vs
-	   jetbrains' blue accent shows up here first). */
-	.block-heading {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		font-size: 12px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
-		color: var(--text-secondary);
-		margin: 4px 0 2px;
-	}
-	.block-heading::before {
-		content: '';
-		flex-shrink: 0;
-		width: 3px;
-		height: 12px;
-		border-radius: 2px;
-		background: var(--gradient-accent, var(--accent-color));
-	}
-	.block-heading .muted {
-		font-weight: 400;
-	}
-	.block-heading .muted {
-		color: var(--text-muted);
-		font-weight: 400;
-	}
-	.muted {
-		color: var(--text-muted);
-		font-weight: 400;
-	}
-
-	/* S1 expansion-source chip: LLM (green tint) vs template fallback
-		(neutral). Design: quiet template-a, hairline, no new color families. */
-	.block-heading .chip {
-		display: inline-block;
-		margin-left: 0.35rem;
-		padding: 0.12rem 0.5rem;
-		border: 1px solid var(--border-color);
-		border-radius: 999px;
-		font-size: 0.7rem;
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		max-width: 24rem;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		vertical-align: baseline;
-		background: var(--bg-tertiary);
-	}
-	.chip-llm {
-		color: var(--success-color, var(--text-secondary));
-		border-color: color-mix(in srgb, var(--success-color, #4ade80) 45%, transparent);
-		background: color-mix(in srgb, var(--success-color, #4ade80) 10%, transparent);
-	}
-	.chip-fallback {
-		color: var(--text-muted);
-	}
-
-	.flow-error {
-		color: var(--danger-color);
-		background: var(--danger-bg);
-		padding: 8px 10px;
-		font-size: 12px;
-		border-left: 2px solid var(--danger-color);
-	}
-
-	/* Transient action feedback (confirm / accept / reject / apply) so a
-		click is never silent. Quiet template-a: hairline left border, tone. */
-	.action-feedback {
-		font-size: 12px;
-		padding: 6px 10px;
-		border-left: 2px solid var(--border-color);
-		color: var(--text-secondary);
-	}
-	.action-feedback.tone-ok {
-		color: var(--text-primary);
-		border-left-color: var(--success-color, var(--accent-color));
-	}
-	.action-feedback.tone-warn {
-		color: var(--text-primary);
-		border-left-color: var(--warning-color, #e0a34e);
-	}
-	.action-feedback.tone-danger {
-		color: var(--danger-color);
-		border-left-color: var(--danger-color);
-	}
-	.action-feedback.tone-neutral {
-		color: var(--text-muted);
-	}
-
-	/* S4 "what is this" note (the prompts are deterministic text, not media). */
-	.s4-note {
-		font-size: 11px;
-		color: var(--text-muted);
-		margin: 0;
-	}
-
-	/* ── Stages ── */
-	.stage {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		border-top: 1px solid var(--border-color);
-		padding-top: 12px;
-	}
-	.stage:first-of-type {
-		border-top: none;
-		padding-top: 0;
-	}
-
-	/* ── Phase-1 hot path (① DIRECTION · ② NOVEL · ③ STEP CHAIN) ──
-	   The primary control flow is elevated into a card surface, so it reads
-	   as "the thing you do first" and stays visually distinct from the
-	   demoted Advanced hairline rows below it. */
-	.stage.hot {
-		border-top: none;
-		padding-top: 0;
-		margin: 0;
-		gap: 10px;
-		background: var(--bg-secondary);
-		border: 1px solid var(--border-color);
-		border-radius: 10px;
-		padding: 14px 16px;
-		box-shadow: var(--shadow-sm, none);
-	}
-	.stage.hot + .stage.hot {
-		/* keep the three hot blocks flowing as one card stack with a quiet
-		   gap between them, not a hard hairline each */
-		margin-top: 12px;
-	}
-	.stage.hot .block-heading {
-		margin: 0;
-	}
-	.stage.hot .block-heading .muted {
-		letter-spacing: 0.04em;
-	}
-
-	.novel-rows {
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.novel-rows li {
-		display: flex;
-		gap: 8px;
-		align-items: baseline;
-		padding: 4px 6px;
-		border: 1px solid var(--border-color);
-		border-radius: 4px;
-		background: var(--bg-elevated);
-		cursor: default;
-	}
-	.nr-id {
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
-		color: var(--text-secondary);
-		min-width: 72px;
-	}
-	.nr-text {
-		font-size: 12px;
-		line-height: 1.5;
-		color: var(--text-primary);
-	}
-
-	.step-chain {
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.step {
-		display: grid;
-		grid-template-columns: 72px 44px 1fr auto;
-		gap: 8px;
-		align-items: center;
-		padding: 6px 8px;
-		border: 1px solid var(--border-color);
-		border-radius: 4px;
-	}
-	.step-name, .step-ver, .step-src, .step-state {
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
-	}
-	.step-ver { color: var(--text-secondary); }
-	.step-src { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.step-name, .step-state { color: var(--text-primary); }
-	.step-ok { border-left: 3px solid var(--success-color, #22c55e); }
-	.step-mut { border-left: 3px solid var(--border-color); }
-	.step-fail { border-left: 3px solid var(--danger-color, #ef4444); }
-
-	.step-actions {
-		display: flex;
-		gap: 8px;
-		margin-top: 4px;
-	}
-
-	/* ── Advanced disclosure (gates + G0 grid + S2–S5) ── */
-	.advanced {
-		margin-top: 8px;
-		border: 1px solid var(--border-color);
-		border-radius: 8px;
-		overflow: hidden;
-	}
-	.advanced-summary {
-		position: relative;
-		padding: 9px 34px 9px 12px;
-		cursor: pointer;
-		font-weight: 600;
-		font-size: 12px;
-		letter-spacing: 0.02em;
-		user-select: none;
-		background: var(--bg-tertiary);
-		transition: background var(--transition-fast, 0.15s ease);
-	}
-	.advanced-summary:hover {
-		background: var(--bg-hover);
-	}
-	.advanced-summary::after {
-		content: '▸';
-		position: absolute;
-		right: 12px;
-		top: 50%;
-		transform: translateY(-50%);
-		font-family: var(--font-mono);
-		color: var(--text-muted);
-		transition: transform var(--transition-sin, 0.4s);
-	}
-	.advanced[open] .advanced-summary::after {
-		transform: translateY(-50%) rotate(90deg);
-	}
-	.advanced-summary .muted {
-		font-weight: 400;
-		margin-left: 8px;
-		letter-spacing: 0.02em;
-	}
-	.advanced[open] .advanced-summary {
-		border-bottom: 1px solid var(--border-color);
-	}
-
-	/* ── Extract: concrete editable sections ──
-	   (the block / prompt-edit / dirty styles now live in the later
-	    "Extract: plain structural text" section; only the film-context line
-	    and pipe-label utilities are unique here.) */
-	.extract-film-ctx {
-		margin: 0 0 6px;
-		font-size: 11px;
-		color: var(--text-secondary);
-		line-height: 1.5;
-	}
-	.extract-pipe {
-		font-family: var(--font-mono, monospace);
-		font-size: 10px;
-		color: var(--text-muted, var(--text-secondary));
-	}
-	.stage-head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
-	}
-	.stage-head .block-heading {
-		margin: 0;
-	}
-
-	/* ── Gate strip ── */
-	.gate-strip {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		padding: 8px 0 2px;
-	}
-	.gate {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 3px 8px;
-		border: 1px solid var(--border-color);
-		background: var(--bg-tertiary);
-	}
-	.gate-id {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-secondary);
-	}
-	.gate-glyph {
-		font-size: 10px;
-	}
-	.gate-note {
-		font-family: var(--font-mono);
-		font-size: 9px;
-		color: var(--text-muted);
-	}
-	.gate.tone-ok .gate-glyph {
-		color: var(--success-color, var(--text-secondary));
-	}
-	.gate.tone-warn .gate-glyph {
-		color: var(--warning-color);
-	}
-	.gate.tone-muted .gate-glyph {
-		color: var(--text-muted);
-	}
-
-	/* ── G0 entry grid ── */
-	.g0-grid {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		gap: 8px 10px;
-	}
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		min-width: 0;
-	}
-	.field.grow {
-		grid-column: span 2;
-	}
-	.field-label {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-	}
-	.field select,
-	.field input {
-		font: inherit;
-		font-size: 12px;
-		color: var(--text-primary);
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 5px;
-		padding: 4px 6px;
-		width: 100%;
-		box-sizing: border-box;
-		transition: border-color var(--transition-fast, 0.15s ease),
-			box-shadow var(--transition-fast, 0.15s ease);
-	}
-	.field select:hover,
-	.field input:hover {
-		border-color: var(--border-light, var(--border-color));
-	}
-	.field select:focus,
-	.field input:focus {
-		outline: none;
-		border-color: var(--accent-color);
-		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.2));
-	}
-	.field select {
-		appearance: none;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23808080' stroke-width='1.2'/%3E%3C/svg%3E");
-		background-repeat: no-repeat;
-		background-position: right 7px center;
-		padding-right: 24px;
-		cursor: pointer;
-	}
-	.field input[type='number'] {
-		width: 62px;
-	}
-	.clip-range {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-	}
-	.clip-range span {
-		color: var(--text-muted);
-	}
-
-	/* ── S1 novel ── */
-	.novel-film {
-		padding: 8px 10px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-	}
-	.nf-title {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-primary);
-	}
-	.nf-meta {
-		font-size: 11px;
-		color: var(--text-muted);
-	}
-	.nf-logline {
-		font-size: 12px;
-		color: var(--text-secondary);
-		margin: 2px 0 0;
-	}
-	.novel-scene {
-		border: 1px solid var(--border-color);
-	}
-	.novel-scene summary {
-		display: flex;
-		justify-content: space-between;
-		gap: 10px;
-		padding: 5px 9px;
-		cursor: pointer;
-		font-size: 12px;
-		color: var(--text-primary);
-		list-style: none;
-	}
-	.novel-scene summary::-webkit-details-marker {
-		display: none;
-	}
-	.nc-meta {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-	}
-	.nc-prose {
-		font-size: 12px;
-		color: var(--text-secondary);
-		padding: 0 9px 6px;
-		margin: 0;
-	}
-	.nc-shots {
-		list-style: none;
-		margin: 0 0 8px;
-		padding: 0 9px;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.nc-shots li {
-		display: flex;
-		gap: 8px;
-		align-items: baseline;
-		font-size: 11px;
-	}
-	.nc-shotno {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-		flex-shrink: 0;
-	}
-	.nc-shotprose {
-		color: var(--text-secondary);
-		flex: 1;
-	}
-	.nc-beats {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-	}
-
-	/* ── S2 scene rows ── */
-	.scene-rows {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.scene-rows li {
-		display: flex;
-		align-items: baseline;
-		gap: 10px;
-		font-size: 12px;
-		padding: 4px 8px;
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-	}
-	.sr-id {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-primary);
-	}
-	.sr-meta {
-		color: var(--text-secondary);
-		font-size: 11px;
-		flex: 1;
-	}
-	.sr-fx {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--warning-color);
-	}
-
-	/* ── S3 shot sheets ── */
-	.shot-scene {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.ss-scene {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-		padding: 2px 0;
-	}
-	.shot-sheet {
-		border: 1px solid var(--border-color);
-	}
-	.ss-head {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 6px 9px;
-		cursor: pointer;
-	}
-	.ss-head:hover {
-		background: var(--bg-hover);
-	}
-	.ss-id {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-primary);
-	}
-	.ss-meta {
-		font-size: 11px;
-		color: var(--text-secondary);
-		flex: 1;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.ss-tick {
-		font-family: var(--font-mono);
-		color: var(--text-muted);
-	}
-	.ss-body {
-		padding: 0 9px 9px;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-	.ss-prose {
-		font-size: 12px;
-		color: var(--text-secondary);
-		margin: 0;
-	}
-	.ss-beats {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.ss-beats li {
-		font-size: 11px;
-		color: var(--text-muted);
-		padding-left: 10px;
-		position: relative;
-	}
-	.ss-beats li::before {
-		content: '·';
-		position: absolute;
-		left: 2px;
-		color: var(--text-muted);
-	}
-	.ss-slices {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		margin-top: 4px;
-	}
-	.slice {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 5px 8px;
-		background: var(--bg-tertiary);
-		border-left: 2px solid var(--border-color);
-	}
-	.slice-range {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--accent-color);
-	}
-	.slice-note {
-		font-size: 11px;
-		color: var(--text-secondary);
-	}
-	.slice-deltas {
-		list-style: none;
-		margin: 2px 0 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-	}
-	.slice-deltas li code {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-	}
-
-	/* ── S4 prompts ── */
-	.prompt-block {
-		border: 1px solid var(--border-color);
-	}
-	.prompt-block summary {
-		display: flex;
-		justify-content: space-between;
-		gap: 10px;
-		padding: 5px 9px;
-		cursor: pointer;
-		font-size: 12px;
-		color: var(--text-primary);
-		list-style: none;
-	}
-	.prompt-block summary::-webkit-details-marker {
-		display: none;
-	}
-	.pb-id {
-		font-family: var(--font-mono);
-		font-size: 11px;
-	}
-	.pb-meta {
-		font-size: 11px;
-		color: var(--text-muted);
-	}
-	.pb-rows {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		padding: 0 9px 9px;
-	}
-	.pb-row {
-		display: flex;
-		gap: 8px;
-		align-items: flex-start;
-	}
-	.pb-kind {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--accent-color);
-		min-width: 44px;
-	}
-	.pb-row p {
-		font-size: 11px;
-		color: var(--text-secondary);
-		margin: 0;
-		flex: 1;
-		white-space: pre-wrap;
-	}
-
-	/* ── Timeline strip ── */
-	.tl-strip {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.tl-cell {
-		display: inline-flex;
-		flex-direction: column;
-		gap: 1px;
-		padding: 4px 8px;
-		border: 1px solid var(--border-color);
-		background: var(--bg-tertiary);
-	}
-	.tl-cell code {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-primary);
-	}
-	.tl-subject {
-		font-size: 10px;
-		color: var(--text-primary);
-		max-width: 140px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.tl-concern {
-		font-size: 9px;
-		color: var(--text-muted);
-		max-width: 140px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.tl-frames {
-		font-family: var(--font-mono);
-		font-size: 9px;
-		color: var(--text-muted);
-	}
-
-	/* ── S5 verify ── */
-	.verify {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		padding: 6px 8px;
-	}
-	.verify.ok {
-		color: var(--success-color, var(--text-secondary));
-		border-left: 2px solid var(--success-color, var(--accent-color));
-	}
-	.verify.issues {
-		list-style: none;
-		margin: 0;
-		padding: 6px 8px;
-		border-left: 2px solid var(--danger-color);
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.verify.issues li code {
-		font-size: 10px;
-		color: var(--danger-color);
-	}
-
-	/* ── Run + destructive apply ── */
-	.actions {
-		flex-direction: row;
-		gap: 8px;
-		align-items: center;
-		flex-wrap: wrap;
-	}
-	.btn {
-		font: inherit;
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--text-primary);
-		background: var(--bg-elevated);
-		border: 1px solid var(--border-color);
-		border-radius: 6px;
-		padding: 6px 12px;
-		cursor: pointer;
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		transition: border-color var(--transition-fast, 0.15s ease),
-			background var(--transition-fast, 0.15s ease),
-			box-shadow var(--transition-fast, 0.15s ease);
-	}
-	.btn:hover:not(:disabled) {
-		border-color: var(--accent-color);
-	}
-	.btn:focus-visible {
-		outline: none;
-		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
-	}
-	.btn:disabled {
-		opacity: 0.45;
-		cursor: not-allowed;
-	}
-	.btn.primary {
-		background: var(--gradient-btn, var(--accent-color));
-		color: var(--text-inverse);
-		border-color: transparent;
-		box-shadow: 0 2px 10px var(--accent-glow, var(--shadow-sm, none));
-	}
-	.btn.primary:hover:not(:disabled) {
-		background: var(--gradient-btn-hover, var(--accent-hover, var(--accent-color)));
-		border-color: transparent;
-		box-shadow: 0 3px 14px var(--accent-glow, var(--shadow-sm, none));
-	}
-	.btn.danger {
-		color: var(--danger-color);
-		border-color: color-mix(in srgb, var(--danger-color) 50%, var(--border-color));
-		background: var(--danger-bg, transparent);
-	}
-	.btn.danger:hover:not(:disabled) {
-		border-color: var(--danger-color);
-		background: var(--danger-bg, var(--bg-hover));
-	}
-	.btn-note {
-		font-size: 10px;
-		font-weight: 400;
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-		letter-spacing: 0.01em;
-	}
-	.btn.primary .btn-note {
-		color: color-mix(in srgb, var(--text-inverse) 70%, transparent);
-	}
-	.stage-actions {
-		display: flex;
-		gap: 6px;
-	}
-	.mini {
-		font: inherit;
-		font-size: 10px;
-		font-family: var(--font-mono);
-		color: var(--text-secondary);
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		padding: 2px 8px;
-		cursor: pointer;
-		transition: border-color var(--transition-sin, 0.3s);
-	}
-	.mini:hover {
-		border-color: var(--accent-color);
-		color: var(--text-primary);
-	}
-
-	/* ── Extract: plain structural text (design §4) ── */
-	.extract-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 12px;
-	}
-	.extract-head-btns {
-		display: flex;
-		gap: 6px;
-	}
-	.extract-block {
-		border: 1px solid var(--border-color);
-		border-radius: 8px;
-		padding: 10px 12px;
-		margin-top: 8px;
-		background: var(--bg-secondary);
-		transition: border-color var(--transition-fast, 0.15s ease);
-	}
-	.extract-block.dirty {
-		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 55%, var(--border-color));
-		background: color-mix(in srgb, var(--warning-color, #fbbf24) 6%, var(--bg-secondary));
-	}
-	.extract-meta {
-		display: flex;
-		align-items: baseline;
-		gap: 10px;
-		margin-bottom: 6px;
-		flex-wrap: wrap;
-	}
-	.tag-word {
-		color: var(--text-secondary);
-		font-size: 12px;
-		font-weight: 600;
-		letter-spacing: 0.02em;
-	}
-	/* Theme lane colors: the design system ships per-theme --tag-* tokens
-	   (steel-dark's orange/red/cyan vs light's muted sets). Mapping each
-	   Extract tag word to its lane makes the panel visibly adopt the active
-	   theme instead of reading as flat gray. A colored 6px tick + tinted
-	   label = the "theme shows up here" hook. */
-	.tag-word::before {
-		content: '';
-		display: inline-block;
-		width: 6px;
-		height: 6px;
-		margin-right: 6px;
-		border-radius: 2px;
-		vertical-align: baseline;
-		background: var(--lane-color, var(--text-muted));
-	}
-	.tag-word.lane-red { --lane-color: var(--tag-red); color: color-mix(in srgb, var(--tag-red) 72%, var(--text-secondary)); }
-	.tag-word.lane-yellow { --lane-color: var(--tag-yellow); color: color-mix(in srgb, var(--tag-yellow) 78%, var(--text-secondary)); }
-	.tag-word.lane-cyan { --lane-color: var(--tag-cyan); color: color-mix(in srgb, var(--tag-cyan) 72%, var(--text-secondary)); }
-	.tag-word.lane-blue { --lane-color: var(--tag-blue); color: color-mix(in srgb, var(--tag-blue) 72%, var(--text-secondary)); }
-	.tag-word.lane-pink { --lane-color: var(--tag-pink); color: color-mix(in srgb, var(--tag-pink) 72%, var(--text-secondary)); }
-	.tag-word.lane-orange { --lane-color: var(--tag-orange); color: color-mix(in srgb, var(--tag-orange) 72%, var(--text-secondary)); }
-	.tag-word.lane-muted { --lane-color: var(--text-muted); }
-	/* On the dirty (warning-tinted) block, keep the tag readable but dim the
-	   lane tick so the edited-state border stays the primary signal. */
-	.extract-block.dirty .tag-word::before {
-		opacity: 0.6;
-	}
-	.range {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-primary);
-	}
-	.provenance {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-	}
-	.provenance.active {
-		color: var(--text-secondary);
-	}
-	.dirty-mark {
-		margin-left: auto;
-		color: var(--warning-color, var(--text-muted));
-		font-size: 11px;
-	}
-	.extract-prompt-edit {
-		width: 100%;
-		box-sizing: border-box;
-		margin-top: 4px;
-		padding: 6px 8px;
-		font-family: var(--font-mono, monospace);
-		font-size: 11px;
-		line-height: 1.5;
-		border: 1px solid var(--border-color);
-		border-radius: 5px;
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-		resize: vertical;
-		min-height: 40px;
-		transition: border-color var(--transition-fast, 0.15s ease),
-			box-shadow var(--transition-fast, 0.15s ease);
-	}
-	.extract-prompt-edit:focus {
-		outline: none;
-		border-color: var(--accent-color);
-		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.2));
-	}
-	.extract-block.dirty .extract-prompt-edit {
-		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 60%, var(--border-color));
-	}
-	.extract-prompt {
-		font-size: 13px;
-		color: var(--text-primary);
-		white-space: pre-wrap;
-	}
-	.hint {
-		color: var(--text-muted);
-		font-size: 11px;
-	}
-
-	/* ── Scoreboard Q1: tag bars, neutral fill, threshold colors only ── */
-	.tag-bars {
-		list-style: none;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		margin: 0;
-	}
-	.bar-row {
-		width: 100%;
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		background: none;
-		border: none;
-		padding: 4px 6px;
-		cursor: pointer;
-		color: var(--text-primary);
-		font: inherit;
-	}
-	.bar-row:hover {
-		background: var(--bg-hover);
-	}
-	.bar-label {
-		width: 84px;
-		font-size: 12px;
-		color: var(--text-secondary);
-		flex-shrink: 0;
-	}
-	.bar {
-		flex: 1;
-		height: 6px;
-		background: var(--bg-elevated);
-		overflow: hidden;
-	}
-	.bar-fill {
-		display: block;
-		height: 100%;
-		background: var(--accent-color);
-		transition: width var(--transition-sin, 0.5s);
-	}
-	.bar-fill.tone-warn {
-		background: var(--warning-color);
-	}
-	.bar-fill.tone-danger {
-		background: var(--danger-color);
-	}
-	.bar-score {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		width: 44px;
-		text-align: right;
-		color: var(--text-secondary);
-	}
-	.bar-score.tone-warn {
-		color: var(--warning-color);
-	}
-	.bar-score.tone-danger {
-		color: var(--danger-color);
-	}
-	.culprits {
-		list-style: none;
-		margin: 4px 0 6px 12px;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.culprits li {
-		font-size: 11px;
-		color: var(--text-secondary);
-		display: flex;
-		gap: 8px;
-		align-items: baseline;
-	}
-	.culprits code {
-		font-family: var(--font-mono);
-		color: var(--text-muted);
-	}
-	.score {
-		font-family: var(--font-mono);
-	}
-	.score.tone-warn {
-		color: var(--warning-color);
-	}
-	.score.tone-danger {
-		color: var(--danger-color);
-	}
-
-	.score-card {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		border-top: 1px solid var(--border-color);
-		padding-top: 10px;
-	}
-
-	/* ── Runs ledger ── */
-	.run-rows {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.run-rows li {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 5px 8px;
-		border: 1px solid var(--border-color);
-		font-size: 12px;
-	}
-	.run-rows li.current {
-		border-color: var(--accent-color);
-	}
-	.run-v {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: var(--text-primary);
-	}
-	.run-overall {
-		font-family: var(--font-mono);
-	}
-	.run-overall.tone-warn {
-		color: var(--warning-color);
-	}
-	.run-overall.tone-danger {
-		color: var(--danger-color);
-	}
-	.run-chip {
-		font-family: var(--font-mono);
-		font-size: 9px;
-		padding: 1px 6px;
-		border: 1px solid var(--border-color);
-	}
-	.chip-ok {
-		color: var(--success-color, var(--text-secondary));
-	}
-	.chip-mut {
-		color: var(--text-muted);
-	}
-	.run-src {
-		flex: 1;
-		font-size: 11px;
-		color: var(--text-muted);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.run-anno {
-		display: inline-flex;
-		gap: 4px;
-	}
-
-	/* ── Q4 learning strip + the tab's single sparkline ── */
-	.learning-row {
-		display: flex;
-		align-items: center;
-		gap: 14px;
-	}
-	.learning-row .hint {
-		flex: 1;
-	}
-	.sparkline {
-		flex-shrink: 0;
-		opacity: 0.9;
-	}
-	.spark-grid {
-		stroke: var(--text-muted);
-		stroke-width: 0.5;
-		stroke-dasharray: 2 2;
-		opacity: 0.5;
-	}
-
-	/* ── Keyboard focus: one quiet accent ring across every interactive
-	   affordance (buttons already have it via :focus-visible; cover the
-	   summaries, gates, bars, and mini toggles here). ── */
-	.mini:focus-visible,
-	.bar-row:focus-visible,
-	.ss-head:focus-visible,
-	.gate:focus-visible,
-	.tb-collapsed:focus-visible,
-	.advanced-summary:focus-visible {
-		outline: none;
-		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
-		border-radius: 4px;
-	}
-
-	/* Respect the user's motion preference: drop the sine tweens, keep the
-	   state changes instant (design doc §6 motion is additive, not load-bearing). */
-	@media (prefers-reduced-motion: reduce) {
-		* {
-			transition-duration: 0.001ms !important;
-			transition-timing-function: linear !important;
-		}
 	}
 </style>

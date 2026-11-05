@@ -339,6 +339,12 @@ pub fn default_engine_entry(
         scale: SeedScale { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
         time_of_day: "midday".into(),
         weather: "clear".into(),
+        // M4: default to the "balanced" band so legacy callers (and old
+        // persisted entries deserialized via `#[serde(default)]`) behave
+        // exactly as the pre-M4 template path did.
+        mood: 50,
+        // Structural-tree override pins: none by default (all auto).
+        overrides: Default::default(),
     }
 }
 

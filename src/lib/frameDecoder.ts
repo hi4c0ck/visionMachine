@@ -21,6 +21,8 @@
 // feels heavy at the session fps, the perf lever is to sub-sample the step
 // (e.g. 4 instead of 8) — same API, one constant flip in the carousel.
 
+import * as pd from './pipelineDiag';
+
 /** Carousel step in frames (the composer 8n grid). */
 export const CAROUSEL_STEP = 8;
 
@@ -124,7 +126,9 @@ interface LRUEntry {
 async function cloneImageBitmap(bitmap: ImageBitmap | null): Promise<ImageBitmap | null> {
   if (!bitmap) return null;
   try {
-    return await createImageBitmap(bitmap);
+    const c = await createImageBitmap(bitmap);
+    pd.pipeCloneCreated();
+    return c;
   } catch {
     return null;
   }
@@ -173,6 +177,10 @@ export class FrameSource {
   private readonly outputQueue: VideoFrame[] = [];
   private outputQueueNotifier: (() => void) | null = null;
   private closed = false;
+  /** Ledger id (pipelineDiag): tracks active-vs-created FrameSource count,
+   *  the prime "churn" metric — >1 active while one video is shown means
+   *  an undisposed source survived a session switch. */
+  private readonly sourceId = pd.pipeSourceCreated();
 
   /**
    * @param url  A loadable media URL (blob: / https: / asset:).
@@ -201,6 +209,13 @@ export class FrameSource {
    */
   get diag(): FrameDiag {
     return this.diagState;
+  }
+
+  /** True once dispose() has been called (decoder + capture video + LRU
+   *  released). The carousel's polling effect checks this to stop re-
+   *  scheduling itself against a source that can never load. */
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   /**
@@ -242,9 +257,11 @@ export class FrameSource {
    */
   frame(index: number): Promise<ImageBitmap | null> {
     if (index < 0 || this.closed) return Promise.resolve(null);
+    pd.pipeFrameCall();
     const cached = this.cache.get(index);
     if (cached) {
       cached.t = ++this.lruCounter; // promote to most-recently-used
+      pd.pipeFrameHit();
       // The cache owns this bitmap and may close it during LRU eviction.
       // Never hand the same resource to Svelte's canvas action: it can then
       // receive a detached ImageBitmap on the next update and throw.
@@ -252,11 +269,13 @@ export class FrameSource {
     }
     const pending = this.inflight.get(index);
     if (pending) return pending;
+    pd.pipeFrameMiss();
     const raw = this.resolveFrame(index).finally(() => this.inflight.delete(index));
     // The resolved bitmap is cached by FrameSource and can be closed later;
     // expose an independent clone to every Svelte action instead.
     const p = raw.then(cloneImageBitmap);
     this.inflight.set(index, p);
+    pd.pipeInflight(this.inflight.size);
     return p;
   }
 
@@ -280,6 +299,7 @@ export class FrameSource {
       if (webcodecs) {
         this.diagState = { thumb: 'ok' };
         this.cache.set(index, { bitmap: webcodecs, t: ++this.lruCounter });
+        pd.pipeCacheSet();
         this.evictLru();
         return webcodecs;
       }
@@ -299,6 +319,7 @@ export class FrameSource {
     if (captured) {
       this.diagState = { thumb: 'ok' };
       this.cache.set(index, { bitmap: captured, t: ++this.lruCounter });
+      pd.pipeCacheSet();
       this.evictLru();
     } else {
       // captureFrame set the specific reason; surface it.
@@ -461,6 +482,7 @@ export class FrameSource {
   /** Close the decoder, release the thumbnail cache, and stop the capture video. */
   dispose(): void {
     this.closed = true;
+    pd.pipeSourceDisposed(this.sourceId);
     try {
       this.decoder?.close();
     } catch {
@@ -483,6 +505,7 @@ export class FrameSource {
     this.decodeBroken = false;
     this.diagState = { thumb: 'pending' };
     for (const e of this.cache.values()) e.bitmap?.close();
+    pd.pipeCacheClosed(this.cache.size);
     this.cache.clear();
   }
 
@@ -542,6 +565,7 @@ export class FrameSource {
   private onDecoderOutput(frame: VideoFrame): void {
     if (this.outputQueueNotifier) {
       this.outputQueue.push(frame);
+      pd.pipeOutputQueue(this.outputQueue.length);
       const n = this.outputQueueNotifier;
       this.outputQueueNotifier = null;
       n();
@@ -673,6 +697,7 @@ export class FrameSource {
     if (oldestKey !== null) {
       this.cache.get(oldestKey)?.bitmap?.close();
       this.cache.delete(oldestKey);
+      pd.pipeLruEvict();
     }
   }
 }

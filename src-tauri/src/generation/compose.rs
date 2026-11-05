@@ -221,15 +221,17 @@ fn same_aspect(sw: u32, sh: u32, tw: u32, th: u32) -> bool {
 /// letterboxes instead of cover-cropping, so the content is never stretched
 /// or its height eaten — the seam the user saw.
 fn normalize_filter(clip_w: u32, clip_h: u32, crop_mode: &str, w: u32, h: u32) -> String {
-    let mode = if crop_mode == "none" { "center" } else { crop_mode };
+    let mode = if crop_mode == "none" {
+        "center"
+    } else {
+        crop_mode
+    };
     match mode {
         "fit" => letterbox(w, h),
-        "top" => format!(
-            "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:0"
-        ),
-        "bottom" => format!(
-            "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:ih-{h}"
-        ),
+        "top" => format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:0"),
+        "bottom" => {
+            format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:0:ih-{h}")
+        }
         "exact" => format!("scale={w}:{h}"),
         // "center" and any unknown value: preserve the content's aspect.
         _ => {
@@ -290,7 +292,8 @@ pub fn filter_args(
             // Per-clip VIDEO chain.
             let mut v_parts: Vec<String> = Vec::new();
             if normalize {
-                let clip_mode = s.crop_mode
+                let clip_mode = s
+                    .crop_mode
                     .as_deref()
                     .filter(|m| !m.is_empty())
                     .unwrap_or(crop_mode);
@@ -335,16 +338,28 @@ pub fn filter_args(
     // Final concat chain (interleaved v+a when audio is preserved).
     if has_audio {
         let concat_inputs: String = if labeled {
-            (0..n).map(|i| format!("[v{i}][a{i}]")).collect::<Vec<_>>().join("")
+            (0..n)
+                .map(|i| format!("[v{i}][a{i}]"))
+                .collect::<Vec<_>>()
+                .join("")
         } else {
-            (0..n).map(|i| format!("[{i}:v][{i}:a]")).collect::<Vec<_>>().join("")
+            (0..n)
+                .map(|i| format!("[{i}:v][{i}:a]"))
+                .collect::<Vec<_>>()
+                .join("")
         };
         chains.push(format!("{concat_inputs}concat=n={n}:v=1:a=1[v][a]"));
     } else {
         let concat_inputs: String = if labeled {
-            (0..n).map(|i| format!("[v{i}]")).collect::<Vec<_>>().join("")
+            (0..n)
+                .map(|i| format!("[v{i}]"))
+                .collect::<Vec<_>>()
+                .join("")
         } else {
-            (0..n).map(|i| format!("[{i}:v]")).collect::<Vec<_>>().join("")
+            (0..n)
+                .map(|i| format!("[{i}:v]"))
+                .collect::<Vec<_>>()
+                .join("")
         };
         chains.push(format!("{concat_inputs}concat=n={n}:v=1:a=0[v]"));
     }
@@ -440,6 +455,75 @@ fn run_ffmpeg(
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
             Err(e) => return (-1, format!("wait failed: {e}"), false, false),
         }
+    }
+}
+
+/// Generate a 240p proxy for a successfully composed session video
+/// (non-fatal). Uses the already-resolved ffmpeg availability; skips
+/// silently (debug) when no ffmpeg is available. The encode runs on the
+/// blocking pool (`spawn_blocking`); a worker failure logs and continues —
+/// the frontend falls back to the original.
+async fn generate_session_proxy(ffmpeg: &FfmpegAvailability, out_path: &Path) {
+    if ffmpeg.source == "none" {
+        log::debug!(
+            "[Compose] no ffmpeg available, skipping session proxy for {}",
+            out_path.display()
+        );
+        return;
+    }
+    let ffmpeg_path = ffmpeg.path.clone();
+    let out_owned = out_path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        let proxy = crate::generation::media::proxy_path(&out_owned);
+        let result = Command::new(&ffmpeg_path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &out_owned.to_string_lossy(),
+                "-vf",
+                "scale=-2:240",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-an",
+                "-y",
+                &proxy.to_string_lossy(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                log::info!("[Compose] session proxy written -> {}", proxy.display());
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                log::warn!(
+                    "[Compose] session proxy failed for {} ({stderr})",
+                    out_owned.display()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Compose] session proxy spawn failed for {}: {e}",
+                    out_owned.display()
+                );
+            }
+        }
+    })
+    .await;
+    if let Err(e) = result {
+        log::warn!(
+            "[Compose] session proxy worker failed for {}: {e}",
+            out_path.display()
+        );
     }
 }
 
@@ -575,7 +659,9 @@ pub fn parse_ffprobe_video(json: &str) -> Result<VideoMetadata, String> {
     // re-encode path can preserve audio instead of dropping it).
     let has_audio = streams.iter().any(|s| {
         s.get("codec_type").and_then(Value::as_str) == Some("audio")
-            && s.get("codec_name").and_then(Value::as_str).is_some_and(|c| !c.is_empty())
+            && s.get("codec_name")
+                .and_then(Value::as_str)
+                .is_some_and(|c| !c.is_empty())
     });
     // Effective clip timeline: the container (format) duration, which is the
     // longest stream's duration by definition, plus a per-stream sweep in
@@ -676,8 +762,16 @@ pub fn plan_filter_metadata(
     // 0012: when a session target is set the re-encode normalizes every clip
     // to the target dims (scale/crop/pad all emit exactly W x H), so the
     // output is the target, not the first source's dims.
-    let out_w = if target_set(target_w, target_h) { target_w } else { first.width };
-    let out_h = if target_set(target_w, target_h) { target_h } else { first.height };
+    let out_w = if target_set(target_w, target_h) {
+        target_w
+    } else {
+        first.width
+    };
+    let out_h = if target_set(target_w, target_h) {
+        target_h
+    } else {
+        first.height
+    };
     Ok(ExpectedMetadata {
         codec: "h264".into(),
         width: out_w,
@@ -1060,20 +1154,16 @@ pub fn compose_session_video(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let total_trim: u32 = sources.iter().map(|s| s.trim_frames).sum();
-    let filter_expected = plan_filter_metadata(
-        &source_metadata,
-        total_trim,
-        target_w,
-        target_h,
-    )
-    .map_err(ComposeError::OutputInvalid)?;
+    let filter_expected = plan_filter_metadata(&source_metadata, total_trim, target_w, target_h)
+        .map_err(ComposeError::OutputInvalid)?;
 
     // 0012 lossless gate: a lossless `-c copy` is safe only when NO clip is
     // trimmed AND either no session target is set OR every clip already
     // renders at the target dims. If a target is set but some clip differs,
     // the re-encode path must run to normalize it (scale/crop/pad to W x H).
-    let lossless_ok =
-        total_trim == 0 && (!target_set(target_w, target_h) || all_clips_match_target(&source_metadata, target_w, target_h));
+    let lossless_ok = total_trim == 0
+        && (!target_set(target_w, target_h)
+            || all_clips_match_target(&source_metadata, target_w, target_h));
 
     // 1) Lossless copy — only when the gate above holds. The concat demuxer
     // can't re-time a clip (head-trim requires re-encoding) nor rescale it,
@@ -1097,6 +1187,15 @@ pub fn compose_session_video(
         }
         if code == 0 && out_path.is_file() {
             validate_output(ffmpeg, out_path, &copy_expected, cancel)?;
+            // 240p proxy for the 180px top panel (non-fatal). The proxy
+            // helper is async (its encode runs via `spawn_blocking`); this
+            // sync function always executes on a blocking-pool thread (both
+            // production callers wrap `compose_session_video` in
+            // `spawn_blocking`), so drive it with `block_in_place`.
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(generate_session_proxy(ffmpeg, out_path));
+            });
             return Ok(ComposeResult {
                 output_path: out_path.to_string_lossy().into_owned(),
                 ffmpeg_source: ffmpeg.source.clone(),
@@ -1120,17 +1219,31 @@ pub fn compose_session_video(
     }
 
     // 2) Re-encode fallback (and the ONLY path when trim/normalize is active).
-    let (code2, filter_tail, filter_timeout, filter_cancelled) =
-        run_ffmpeg(
-            ffmpeg,
-            &filter_args(sources, &source_metadata, out_path, target_w, target_h, crop_mode),
-            cancel,
-        );
+    let (code2, filter_tail, filter_timeout, filter_cancelled) = run_ffmpeg(
+        ffmpeg,
+        &filter_args(
+            sources,
+            &source_metadata,
+            out_path,
+            target_w,
+            target_h,
+            crop_mode,
+        ),
+        cancel,
+    );
     if filter_cancelled {
         return Err(ComposeError::Cancelled);
     }
     if code2 == 0 && out_path.is_file() {
         validate_output(ffmpeg, out_path, &filter_expected, cancel)?;
+        // 240p proxy for the 180px top panel (non-fatal). The proxy
+        // helper is async (its encode runs via `spawn_blocking`); this
+        // sync function always executes on a blocking-pool thread (both
+        // production callers wrap `compose_session_video` in
+        // `spawn_blocking`), so drive it with `block_in_place`.
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(generate_session_proxy(ffmpeg, out_path));
+        });
         return Ok(ComposeResult {
             output_path: out_path.to_string_lossy().into_owned(),
             ffmpeg_source: ffmpeg.source.clone(),
@@ -1175,8 +1288,7 @@ mod tests {
     fn normalize_filter_center_mismatched_aspect_letterboxes() {
         let f = normalize_filter(1260, 720, "center", 1280, 720);
         assert!(
-            f.contains("force_original_aspect_ratio=decrease")
-                && f.contains("pad=1280:720"),
+            f.contains("force_original_aspect_ratio=decrease") && f.contains("pad=1280:720"),
             "mismatched-aspect center must letterbox, got: {f}"
         );
         assert!(
@@ -1197,7 +1309,10 @@ mod tests {
     // exact is the only mode that stretches.
     #[test]
     fn normalize_filter_exact_stretches() {
-        assert_eq!(normalize_filter(1260, 720, "exact", 1280, 720), "scale=1280:720");
+        assert_eq!(
+            normalize_filter(1260, 720, "exact", 1280, 720),
+            "scale=1280:720"
+        );
     }
 
     fn srcs() -> Vec<SourceVideo> {
@@ -1381,8 +1496,7 @@ mod tests {
         // Two chains: the normalize chain and the (n=1) concat chain.
         // Source metas (720x1280) match the target (720x1280) -> plain scale.
         assert_eq!(
-            fc,
-            "[0:v]scale=720:1280[v0];[v0]concat=n=1:v=1:a=0[v]",
+            fc, "[0:v]scale=720:1280[v0];[v0]concat=n=1:v=1:a=0[v]",
             "single-clip normalize graph must be ;-separated. fc: {fc}"
         );
     }
@@ -1405,7 +1519,10 @@ mod tests {
         );
         // The sibling same-aspect clip (720x1280 -> not 16:9 either, still
         // letterbox) — the point is NO clip uses increase+crop in center.
-        assert!(!fc.contains("force_original_aspect_ratio=increase"), "center must never cover-crop. fc: {fc}");
+        assert!(
+            !fc.contains("force_original_aspect_ratio=increase"),
+            "center must never cover-crop. fc: {fc}"
+        );
     }
 
     #[test]
@@ -1414,7 +1531,7 @@ mod tests {
         // mode; a sibling with none falls back to the session crop mode.
         let mut srcs = srcs();
         srcs[0].crop_mode = Some("fit".into()); // pipe 0 overrides to fit
-        // srcs[1] has crop_mode: None -> uses the session "top" mode.
+                                                // srcs[1] has crop_mode: None -> uses the session "top" mode.
         let a = filter_args(&srcs, &metas(), Path::new("out.mp4"), 1280, 720, "top");
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = &s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
@@ -1425,7 +1542,9 @@ mod tests {
             "pipe 0 should use its own fit override. fc: {fc}"
         );
         assert!(
-            fc.contains("[1:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720:0:0[v1]"),
+            fc.contains(
+                "[1:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720:0:0[v1]"
+            ),
             "pipe 1 should fall back to the session top crop. fc: {fc}"
         );
     }
@@ -1468,7 +1587,14 @@ mod tests {
     fn filter_args_preserves_audio_when_sources_have_audio() {
         // No target, no trim, but BOTH clips carry audio -> the classic raw
         // path must now concat a=1 and map [a] with an aac codec.
-        let a = filter_args(&srcs(), &metas_audio(), Path::new("out.mp4"), 0, 0, "center");
+        let a = filter_args(
+            &srcs(),
+            &metas_audio(),
+            Path::new("out.mp4"),
+            0,
+            0,
+            "center",
+        );
         let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
         let fc = s[s.iter().position(|x| *x == "-filter_complex").unwrap() + 1];
         assert_eq!(fc, "[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[v][a]");
@@ -1492,7 +1618,10 @@ mod tests {
         // Video trim on the trimmed clip.
         assert!(fc.contains("trim=start_frame=8"), "fc: {fc}");
         // Matching audio atrim + reset (8/24 = 0.3333s).
-        assert!(fc.contains("[1:a]atrim=start=0.3333,asetpts=N/SR/TB[a1]"), "fc: {fc}");
+        assert!(
+            fc.contains("[1:a]atrim=start=0.3333,asetpts=N/SR/TB[a1]"),
+            "fc: {fc}"
+        );
         // Un-trimmed clip's audio is a no-op pad.
         assert!(fc.contains("[0:a]anull[a0]"), "fc: {fc}");
         // Concat carries audio.
@@ -1588,8 +1717,7 @@ mod tests {
         let full = plan_filter_metadata(&sources, 0, 0, 0).unwrap();
         assert_eq!(full.frame_count, 72);
         // Trim 8 frames across the run: the expected output is shorter.
-        let trimmed =
-            plan_filter_metadata(&sources, BOUNDARY_TRIM_FRAMES, 0, 0).unwrap();
+        let trimmed = plan_filter_metadata(&sources, BOUNDARY_TRIM_FRAMES, 0, 0).unwrap();
         assert_eq!(trimmed.frame_count, 72 - BOUNDARY_TRIM_FRAMES as u64);
         // A trimmed run scales duration down by the fraction of frames kept.
         assert!(trimmed.duration_seconds < full.duration_seconds);
@@ -1773,7 +1901,16 @@ mod tests {
     fn compose_refuses_with_no_ffmpeg() {
         let none = FfmpegAvailability::none();
         let cancel = Arc::new(AtomicBool::new(false));
-        let r = compose_session_video(&none, &srcs(), Path::new("o.mp4"), Path::new("."), &cancel, 0, 0, "center");
+        let r = compose_session_video(
+            &none,
+            &srcs(),
+            Path::new("o.mp4"),
+            Path::new("."),
+            &cancel,
+            0,
+            0,
+            "center",
+        );
         assert!(matches!(r, Err(ComposeError::NoFfmpeg)));
     }
 
@@ -1794,7 +1931,16 @@ mod tests {
             crop_mode: None,
         }];
         let cancel = Arc::new(AtomicBool::new(false));
-        let r = compose_session_video(&fake, &missing, Path::new("o.mp4"), Path::new("."), &cancel, 0, 0, "center");
+        let r = compose_session_video(
+            &fake,
+            &missing,
+            Path::new("o.mp4"),
+            Path::new("."),
+            &cancel,
+            0,
+            0,
+            "center",
+        );
         assert!(matches!(r, Err(ComposeError::SourceMissing(_))));
     }
 

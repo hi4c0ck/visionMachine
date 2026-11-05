@@ -305,7 +305,7 @@
 	});
 	const compiledLines = $derived(compiledOutput ? compiledOutput.split('\n').length : 0);
 
-	// Last-gen preview (D9): served through read_media_file (Phase E).
+	// Last-gen preview (D9): served through the media:// protocol.
 	let lastVideoUrl = $state<string | null>(null);
 	// True while lastVideoUrl is in flight — the <video> is then hidden so a
 	// stale/failed 0:00 shell can't sit in the panel.
@@ -320,7 +320,7 @@
 		}
 		lastVideoUrl = null;
 		lastVideoLoading = true;
-		toMediaUrl(path).then((url) => {
+		toMediaUrl(path, { variant: 'preview' }).then((url) => {
 			if (cancelled) return;
 			lastVideoUrl = url;
 			lastVideoLoading = false;

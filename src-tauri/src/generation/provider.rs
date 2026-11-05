@@ -20,7 +20,9 @@ use crate::commands::settings::{normalize_settings, ProviderSlot};
 use crate::generation::engine::{
     BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration, StageOutput,
 };
-use crate::generation::media::{append_jsonl, append_request_log, pipe_media_dirs, write_json};
+use crate::generation::media::{
+    append_jsonl, append_request_log, pipe_media_dirs, proxy_path, thumb_path, write_json,
+};
 use crate::generation::shaper::StageContext;
 use crate::generation::shaper::{shape_request, substitute_poll_template};
 use crate::generation::specs::ModelSpecWire;
@@ -47,6 +49,138 @@ async fn cancel_watcher(cancel: &AtomicBool) {
             return;
         }
         sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Generate a 240p proxy for a finalized video original (non-fatal).
+/// Uses the existing ffmpeg locator; skips silently (debug) when no ffmpeg
+/// is available. The probe + encode run on the blocking pool
+/// (`spawn_blocking`) so the async worker is never stalled; a
+/// `spawn_blocking` failure logs and continues — the frontend falls back
+/// to the original.
+async fn generate_video_proxy(original: &std::path::Path) {
+    let original_owned = original.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        let ffmpeg = crate::generation::ffmpeg::resolve_ffmpeg();
+        if ffmpeg.source == "none" {
+            log::debug!(
+                "[Generation] no ffmpeg available, skipping video proxy for {}",
+                original_owned.display()
+            );
+            return;
+        }
+        let proxy = proxy_path(&original_owned);
+        let result = std::process::Command::new(&ffmpeg.path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=-2:240",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-an",
+                "-y",
+                &proxy.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                log::info!("[Generation] video proxy written -> {}", proxy.display());
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                log::warn!(
+                    "[Generation] video proxy failed for {} ({stderr})",
+                    original_owned.display()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Generation] video proxy spawn failed for {}: {e}",
+                    original_owned.display()
+                );
+            }
+        }
+    })
+    .await;
+    if let Err(e) = result {
+        log::warn!(
+            "[Generation] video proxy worker failed for {}: {e}",
+            original.display()
+        );
+    }
+}
+
+/// Generate a 320px-wide JPEG thumb for a finalized PNG original
+/// (non-fatal). Same skip/warn policy as the video proxy; the probe +
+/// encode run on the blocking pool (`spawn_blocking`).
+async fn generate_image_thumb(original: &std::path::Path) {
+    let original_owned = original.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        let ffmpeg = crate::generation::ffmpeg::resolve_ffmpeg();
+        if ffmpeg.source == "none" {
+            log::debug!(
+                "[Generation] no ffmpeg available, skipping image thumb for {}",
+                original_owned.display()
+            );
+            return;
+        }
+        let thumb = thumb_path(&original_owned);
+        let result = std::process::Command::new(&ffmpeg.path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=320:-2",
+                "-q:v",
+                "2",
+                "-y",
+                &thumb.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                log::info!("[Generation] image thumb written -> {}", thumb.display());
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                log::warn!(
+                    "[Generation] image thumb failed for {} ({stderr})",
+                    original_owned.display()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Generation] image thumb spawn failed for {}: {e}",
+                    original_owned.display()
+                );
+            }
+        }
+    })
+    .await;
+    if let Err(e) = result {
+        log::warn!(
+            "[Generation] image thumb worker failed for {}: {e}",
+            original.display()
+        );
     }
 }
 
@@ -437,7 +571,11 @@ impl ProviderEngine {
                 backoff_idx += 1;
                 on_event(&format!(
                     "retrying after {} — in {} s",
-                    if st == 429 { "rate-limited (429)" } else { "unavailable (503)" },
+                    if st == 429 {
+                        "rate-limited (429)"
+                    } else {
+                        "unavailable (503)"
+                    },
                     delay
                 ));
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
@@ -450,7 +588,8 @@ impl ProviderEngine {
             let body = resp.get("error").cloned().unwrap_or(resp);
             return Err(EngineError::Failure(format!(
                 "piece image generation HTTP {status} ({}): {}",
-                spec.id, body.to_string()
+                spec.id,
+                body.to_string()
             )));
         }
         let data0 = resp
@@ -459,7 +598,10 @@ impl ProviderEngine {
             .cloned()
             .ok_or_else(|| EngineError::Failure("piece image response missing data[0]".into()))?;
         let remote_url = data0.get("url").and_then(|u| u.as_str()).map(String::from);
-        let b64 = data0.get("b64_json").and_then(|b| b.as_str()).map(String::from);
+        let b64 = data0
+            .get("b64_json")
+            .and_then(|b| b.as_str())
+            .map(String::from);
 
         // Best-effort redacted request/response line to the piece log.
         if let Some(log_path) = &req.request_log {
@@ -488,15 +630,18 @@ impl ProviderEngine {
                     })?;
             }
             None => {
-                let b64 = b64.ok_or_else(|| EngineError::Failure(
-                    "piece image response carried neither url nor b64_json".into(),
-                ))?;
+                let b64 = b64.ok_or_else(|| {
+                    EngineError::Failure(
+                        "piece image response carried neither url nor b64_json".into(),
+                    )
+                })?;
                 use base64::Engine as _;
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(b64)
                     .map_err(|e| EngineError::Failure(format!("piece b64 decode: {e}")))?;
-                std::fs::write(&req.dest, bytes)
-                    .map_err(|e| EngineError::Failure(format!("write {}: {e}", req.dest.display())))?;
+                std::fs::write(&req.dest, bytes).map_err(|e| {
+                    EngineError::Failure(format!("write {}: {e}", req.dest.display()))
+                })?;
             }
         }
         on_progress(1.0);
@@ -970,6 +1115,8 @@ impl ProviderEngine {
                     .map_err(|e| EngineError::Failure(format!("write {}: {e}", dest.display())))?;
             }
         }
+        // 320px JPEG thumb for fast preview (non-fatal; blocking pool).
+        generate_image_thumb(&dest).await;
         Ok(dest.to_string_lossy().into_owned())
     }
 
@@ -1439,7 +1586,11 @@ impl ProviderEngine {
                     pipe_media_dirs(root, pipe_dir, &input.task_id)
                         .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                match self.http.download(&video_url, &dest, slot.api_key.trim()).await {
+                match self
+                    .http
+                    .download(&video_url, &dest, slot.api_key.trim())
+                    .await
+                {
                     Ok(()) => {
                         self.log_entry(
                             input,
@@ -1474,6 +1625,8 @@ impl ProviderEngine {
                         )));
                     }
                 }
+                // 240p proxy for the 180px top panel (non-fatal; blocking pool).
+                generate_video_proxy(&dest).await;
                 let out = json!({
                     "videoPath": dest.to_string_lossy(),
                     "videoUrl": video_url,

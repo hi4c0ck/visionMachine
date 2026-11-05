@@ -229,6 +229,29 @@ export async function cancelSessionGeneration(groupId: string): Promise<void> {
 }
 export function subscribeGroupEvent(groupId: string, cb: (event: GroupEvent) => void): Promise<UnlistenFn> {
   if (!isTauri()) return Promise.resolve(() => {});
-  return listen<any>('group-event', (e) => { if (e.payload?.groupId === groupId) cb(e.payload as GroupEvent); });
+  // Async-settle race guard (same class as runProgress.ts / generationEvents.ts):
+  // `listen` resolves later than a synchronous teardown, so a late-resolving
+  // listener leaks — it holds the closure + component tree AND fires on every
+  // `group-event`. Repeated session visits = unbounded renderer RAM.
+  let disposed = false;
+  let unlisten: UnlistenFn | null = null;
+  listen<any>('group-event', (e) => {
+    if (e.payload?.groupId === groupId) cb(e.payload as GroupEvent);
+  })
+    .then((u) => {
+      if (disposed) {
+        u();
+        return;
+      }
+      unlisten = u;
+    })
+    .catch(() => {});
+  return Promise.resolve(() => {
+    disposed = true;
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+  });
 }
 export function groupEventIsTerminal(event: GroupEvent): boolean { return event.kind === 'group-terminal'; }

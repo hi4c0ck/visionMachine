@@ -5,7 +5,7 @@
 //! Pure + std only — testable without a DB or HTTP.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Resolution order for the session media root (E3 / O6):
 /// 1. the session's own `directoryPath` when set (`<projectDir>\session_<ts>`),
@@ -260,6 +260,43 @@ pub fn safe_dir_name(id: &str) -> String {
     }
 }
 
+// ── Proxy / thumb path helpers ──────────────────────────────────────────────
+
+/// Proxy path for a video original: `video.mp4` -> `video.proxy.mp4`,
+/// `session.mp4` -> `session.proxy.mp4` (same dir). The frontend loads the
+/// 240p proxy in the 180px top panel instead of the full 720p/1080p file
+/// via blob URL (RAM leak). Generated synchronously at write time.
+pub fn proxy_path(original: &Path) -> PathBuf {
+    let parent = original
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
+    let ext = original.extension().and_then(|s| s.to_str());
+    let name = match ext {
+        Some(e) if !e.is_empty() => format!("{stem}.proxy.{e}"),
+        _ => format!("{stem}.proxy"),
+    };
+    parent.join(name)
+}
+
+/// Thumb path for an image original: `ref.png` -> `ref.thumb.jpg` (same dir).
+/// 320px-wide JPEG generated synchronously at write time for fast preview.
+pub fn thumb_path(original: &Path) -> PathBuf {
+    let parent = original
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ref");
+    parent.join(format!("{stem}.thumb.jpg"))
+}
+
 // ── Redaction (P6 / E1) ─────────────────────────────────────────────────────
 
 /// Mask the given secrets everywhere they appear in `s` (E1: request/response
@@ -457,6 +494,46 @@ mod tests {
         assert!(!content.contains(key));
         assert!(content.contains("[API_KEY]"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proxy_path_video_mp4() {
+        assert_eq!(
+            proxy_path(Path::new("video.mp4")),
+            PathBuf::from("video.proxy.mp4")
+        );
+    }
+
+    #[test]
+    fn proxy_path_session_mp4() {
+        assert_eq!(
+            proxy_path(Path::new("session.mp4")),
+            PathBuf::from("session.proxy.mp4")
+        );
+    }
+
+    #[test]
+    fn proxy_path_preserves_dir() {
+        assert_eq!(
+            proxy_path(Path::new("/a/b/video.mp4")),
+            PathBuf::from("/a/b/video.proxy.mp4")
+        );
+    }
+
+    #[test]
+    fn thumb_path_ref_png() {
+        assert_eq!(
+            thumb_path(Path::new("ref.png")),
+            PathBuf::from("ref.thumb.jpg")
+        );
+    }
+
+    #[test]
+    fn thumb_path_preserves_dir() {
+        assert_eq!(
+            thumb_path(Path::new("/a/b/ref.png")),
+            PathBuf::from("/a/b/ref.thumb.jpg")
+        );
     }
 
     #[test]

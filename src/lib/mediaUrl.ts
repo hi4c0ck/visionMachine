@@ -1,8 +1,8 @@
 // Media URL helper — converts an on-disk media path to a WebView-loadable URL.
-// Browser (dev): renders nothing. Tauri: fetches the bytes through the
-// read_media_file command (per-project media roots can't be a static
-// asset-protocol scope, so the command validates the path against a known
-// media root) and hands back an object URL.
+// Tauri: returns a `media://localhost/<url-encoded-absolute-path>` URL served
+// by the Rust custom protocol (Range support, Content-Type set by the
+// protocol). No IPC, no blob, no cache — the browser handles HTTP caching.
+// Browser (dev): renders nothing (returns null).
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
 
@@ -18,79 +18,70 @@ export async function readMediaBytes(path: string): Promise<Uint8Array> {
   return Array.isArray(raw) ? Uint8Array.from(raw) : (raw as Uint8Array);
 }
 
-// In-flight dedup: the entry stays in the map after settling so a concurrent
-// call in the microtask window after resolve still reuses the result rather
-// than re-fetching. The map is bounded by the number of distinct media files
-// shown per session — small; entries are cheap (a string + a blob URL).
-// A failure does NOT settle to `null`: it removes the entry and re-throws,
-// so a later call (e.g. after a freshly-generated artifact lands at the same
-// path, or after a transient IPC hiccup) retries instead of caching the miss
-// for the whole app session.
-const urlCache = new Map<string, Promise<string | null>>();
-
-function mediaMime(path: string): string {
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  switch (ext) {
-    case 'mp4':
-      return 'video/mp4';
-    case 'png':
-      return 'image/png';
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    case 'webp':
-      return 'image/webp';
-    case 'gif':
-      return 'image/gif';
-    case 'json':
-      return 'application/json';
-    default:
-      return 'application/octet-stream';
+/**
+ * Proxy sibling for preview loads: a small derivative next to the original so
+ * thumbnails/previews don't pull full-resolution bytes into the WebView. The
+ * sibling lives in the same directory, so the existing media-root guard in
+ * `read_media_file` already covers it — no new IPC surface. Returns null for
+ * non-media extensions (no proxy exists; callers fall back to the original).
+ */
+function previewSiblingPath(path: string): string | null {
+  const dot = path.lastIndexOf('.');
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  if (dot <= slash) return null;
+  const base = path.slice(0, dot);
+  const ext = path.slice(dot + 1).toLowerCase();
+  if (ext === 'mp4' || ext === 'mov' || ext === 'webm' || ext === 'mkv' || ext === 'avi') {
+    return `${base}.proxy.mp4`;
   }
+  if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'webp' || ext === 'gif' || ext === 'bmp') {
+    return `${base}.thumb.jpg`;
+  }
+  return null;
 }
 
 /**
- * Drop any cached blob URL for a path so the next `toMediaUrl` re-reads the
- * current on-disk bytes. Needed for files that are OVERWRITTEN IN PLACE at a
- * stable path — the group auto-compose rewrites the same
- * `session-video/session.mp4` every run, so a path-keyed cache would otherwise
- * hand back the PREVIOUS run's blob (the "I see the previous one" symptom).
- * No-op for unknown paths.
+ * No-op: the `media://` protocol serves current on-disk bytes on every load
+ * and the browser handles HTTP caching, so there is no blob cache to
+ * invalidate. Kept for backward compat with call sites that still invoke it.
  */
-export function invalidateMediaUrlCache(path: string | null | undefined): void {
-  if (path) urlCache.delete(path);
+export function invalidateMediaUrlCache(_path: string | null | undefined): void {
+  // No-op — see above.
 }
 
-export async function toMediaUrl(path: string | null | undefined): Promise<string | null> {
+/**
+ * No-op: `media://` URLs hold no JS-heap bytes (unlike the old blob URLs that
+ * pinned entire files until revoked), so there is nothing to release. Kept
+ * for backward compat with call sites that still invoke it.
+ */
+export function releaseMediaUrl(_path: string | null | undefined): void {
+  // No-op — see above.
+}
+
+/**
+ * No-op cache stats for backward compat. The `media://` protocol has no
+ * client-side cache, so there is nothing to report.
+ */
+export function getCacheStats(): { entries: number; totalBytes: number; capBytes: number } {
+  return { entries: 0, totalBytes: 0, capBytes: 0 };
+}
+
+/**
+ * Resolve a media path to a WebView-loadable `media://` URL. With
+ * `variant: 'preview'` the small proxy sibling is used when one exists for
+ * the extension (video `foo.mp4` → `foo.proxy.mp4`, image `foo.png` →
+ * `foo.thumb.jpg`) so thumbnails and previews don't pull full-resolution
+ * bytes; otherwise the original path is used. No IPC, no blob, no cache.
+ * Returns null for empty paths or outside Tauri (browser dev renders nothing).
+ */
+export async function toMediaUrl(
+  path: string | null | undefined,
+  opts?: { variant?: 'preview' },
+): Promise<string | null> {
   if (!path) return null;
   if (!isTauri()) return null;
-  const existing = urlCache.get(path);
-  if (existing) return existing;
-  const p = readMediaBytes(path)
-    .then((bytes) => {
-      // The Blob constructor wants an exact ArrayBuffer / ArrayBuffer
-      // view, not a bare Uint8Array (TS 7 typed-array generics reject
-      // it as BlobPart) — hand it the underlying buffer, copying only
-      // when the view is offset.
-      const part: ArrayBuffer =
-        bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
-          ? (bytes.buffer as ArrayBuffer)
-          : (bytes.buffer.slice(
-              bytes.byteOffset,
-              bytes.byteOffset + bytes.byteLength,
-            ) as ArrayBuffer);
-      const blob = new Blob([part], { type: mediaMime(path) });
-      return URL.createObjectURL(blob);
-    })
-    .catch(() => {
-      // Drop the entry so a later attempt (a freshly-generated artifact at
-      // the same path, or a transient IPC hiccup) re-fetches instead of
-      // inheriting this miss; callers still observe the null result.
-      urlCache.delete(path);
-      return null;
-    });
-  urlCache.set(path, p);
-  return p;
+  const effective = opts?.variant === 'preview' ? (previewSiblingPath(path) ?? path) : path;
+  return `media://localhost/${encodeURIComponent(effective)}`;
 }
 
 /**
@@ -101,7 +92,7 @@ export async function toMediaUrl(path: string | null | undefined): Promise<strin
  * extracted last frame) is ALSO in-memory and renders directly in the
  * WebView — it must NOT be routed through the media-tree IPC, which only
  * knows media-root paths. The WebView can only load local media paths
- * through the `read_media_file` media command.
+ * through the `media://` protocol.
  */
 export function isLocalPath(value: string): boolean {
   return !/^(https?:|data:)/i.test(value.trim());

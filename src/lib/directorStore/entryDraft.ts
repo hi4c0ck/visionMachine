@@ -41,6 +41,19 @@ export function loadEntryDraft(sessionId: string): EngineEntryInput | null {
 			},
 			time_of_day: typeof parsed.time_of_day === 'string' ? parsed.time_of_day : 'midday',
 			weather: typeof parsed.weather === 'string' ? parsed.weather : 'clear',
+			// M4: mood is optional on the wire; absent (pre-M4 drafts) defaults
+			// to 50 ("balanced" band, the pre-M4 pinned structure).
+			mood: typeof parsed.mood === 'number' && Number.isFinite(parsed.mood) ? parsed.mood : 50,
+			// Phase 3: the S0.5 tree's manual-override pins survive a
+			// re-mount (absent / pre-Phase-3 drafts load as no-pins, so the
+			// tree's auto values win). MUST be a stable object — never
+			// `undefined`: the StructurePanel binds into it and a missing
+			// object crashes the panel's deriveds (`undefined.driver`) into
+			// a Svelte re-render loop.
+			overrides:
+				parsed.overrides && typeof parsed.overrides === 'object'
+					? (parsed.overrides as import('./engine').TreeOverrides)
+					: {},
 		};
 	} catch {
 		return null;

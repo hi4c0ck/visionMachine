@@ -7,8 +7,8 @@ use sqlx::Row;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::generation::{
-    BOUNDARY_TRIM_FRAMES, ComposeError, EngineInput, FfmpegAvailability, GenerationStageView,
-    GenerationTaskView, ModelSpecWire, PieceGeneration, StageContext, SourceVideo, TaskStatus,
+    ComposeError, EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView,
+    ModelSpecWire, PieceGeneration, SourceVideo, StageContext, TaskStatus, BOUNDARY_TRIM_FRAMES,
 };
 use crate::AppState;
 
@@ -682,7 +682,10 @@ fn next_piece_dest(dir: &std::path::Path) -> Result<std::path::PathBuf, String> 
         }
         seq += 1;
         if seq > 10_000 {
-            return Err(format!("no free piece-history name under {}", dir.display()));
+            return Err(format!(
+                "no free piece-history name under {}",
+                dir.display()
+            ));
         }
     }
 }
@@ -723,8 +726,7 @@ pub async fn generate_piece_image(
 
     // Session root for the tree = <mediaRoot>/<session-name>/ (mirror the
     // task flow, so pieces/ sits beside the pipe's images/ + task dirs).
-    let session_root = std::path::Path::new(&media_root)
-        .join(safe_session_name(&composer.name));
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
     let kind = if input.kind.eq_ignore_ascii_case("subject") {
         "subjects"
     } else {
@@ -750,10 +752,20 @@ pub async fn generate_piece_image(
         image_size: None,
         image_ratio: None,
         video_ratio: None,
-        c_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.c_value).unwrap_or(0.0),
-        q_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.q_value).unwrap_or(0),
+        c_value: composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .map(|p| p.c_value)
+            .unwrap_or(0.0),
+        q_value: composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .map(|p| p.q_value)
+            .unwrap_or(0),
         seed: input.seed,
-        source_kind: kind.to_string(),  // "keyframes" | "subjects"
+        source_kind: kind.to_string(), // "keyframes" | "subjects"
         source_id: input.ref_id.clone(),
         image_type: input.image_type.clone(),
         reference_url: input.reference_url.clone(),
@@ -847,25 +859,19 @@ pub async fn list_piece_history(
     } else {
         "keyframes"
     };
-    let session_root = std::path::Path::new(&media_root)
-        .join(safe_session_name(&composer.name));
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
     let (_piece_dir, manifest) =
-        crate::generation::piece_history_dirs(
-            &session_root,
-            &pipe_name,
-            kind_dir,
-            &input.ref_id,
-        )
-        .ok()
-        .unwrap_or_else(|| {
-            let fallback = session_root
-                .join(crate::generation::safe_dir_name(&pipe_name))
-                .join("pieces")
-                .join(kind_dir)
-                .join(crate::generation::safe_dir_name(&input.ref_id));
-            let _ = std::fs::create_dir_all(&fallback);
-            (fallback.clone(), fallback.join("history.jsonl"))
-        });
+        crate::generation::piece_history_dirs(&session_root, &pipe_name, kind_dir, &input.ref_id)
+            .ok()
+            .unwrap_or_else(|| {
+                let fallback = session_root
+                    .join(crate::generation::safe_dir_name(&pipe_name))
+                    .join("pieces")
+                    .join(kind_dir)
+                    .join(crate::generation::safe_dir_name(&input.ref_id));
+                let _ = std::fs::create_dir_all(&fallback);
+                (fallback.clone(), fallback.join("history.jsonl"))
+            });
     let text = match std::fs::read_to_string(&manifest) {
         Ok(t) => t,
         Err(_) => return Ok(Vec::new()),
@@ -978,7 +984,11 @@ pub fn collect_session_images(
             .or_insert((p.name.clone(), p.id.clone()));
         for (i, kf) in p.keyframes.iter().enumerate() {
             let refd = crate::generation::safe_dir_name(&kf.id);
-            let kind = if kf.kind.is_empty() { "url" } else { kf.kind.as_str() };
+            let kind = if kf.kind.is_empty() {
+                "url"
+            } else {
+                kf.kind.as_str()
+            };
             piece_labels.insert(
                 format!("{dir}/pieces/keyframes/{refd}"),
                 format!("Keyframe slot {} · frame {} · {kind}", i + 1, kf.frame),
@@ -986,9 +996,15 @@ pub fn collect_session_images(
         }
         for (i, sr) in p.subject_references.iter().enumerate() {
             let refd = crate::generation::safe_dir_name(&sr.id);
-            let kind = if sr.kind.is_empty() { "url" } else { sr.kind.as_str() };
-            piece_labels
-                .insert(format!("{dir}/pieces/subjects/{refd}"), format!("Subject {} · {kind}", i + 1));
+            let kind = if sr.kind.is_empty() {
+                "url"
+            } else {
+                sr.kind.as_str()
+            };
+            piece_labels.insert(
+                format!("{dir}/pieces/subjects/{refd}"),
+                format!("Subject {} · {kind}", i + 1),
+            );
         }
     }
 
@@ -996,7 +1012,11 @@ pub fn collect_session_images(
     // sorting happens at the end).
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     fn is_image(p: &std::path::Path) -> bool {
-        match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+        match p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+        {
             Some(ext) => matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp"),
             None => false,
         }
@@ -1029,7 +1049,11 @@ pub fn collect_session_images(
     let mut piece_files_by_dir: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for f in &files {
-        let rel = f.strip_prefix(session_root).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        let rel = f
+            .strip_prefix(session_root)
+            .unwrap_or(f)
+            .to_string_lossy()
+            .replace('\\', "/");
         let segs: Vec<&str> = rel.split('/').collect();
         if segs.len() >= 4 && segs[1] == "pieces" {
             let key = format!("{}/{}/{}/{}", segs[0], segs[1], segs[2], segs[3]);
@@ -1062,32 +1086,38 @@ pub fn collect_session_images(
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
             // Relative-to-session-root path, forward-slashed for matching.
-            let rel = path.strip_prefix(session_root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(session_root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
             let segs: Vec<&str> = rel.split('/').collect();
             // segs[0] = pipe dir; the remainder shapes the classification.
             let pipe_dir = segs[0];
             let (pipe_name, pipe_id) = pipe_dir_to_pipe.get(pipe_dir).cloned().unwrap_or_default();
 
-            let (source_kind, label, generation_no): (&str, String, u32) = if segs.len() >= 4
-                && segs[1] == "pieces"
-            {
-                // <pipe>/pieces/<kind>/<ref>/<file>
-                let key = format!("{pipe_dir}/pieces/{}/{}", segs[2], segs[3]);
-                let file_name = segs[4];
-                let gen = gen_no.get(&format!("{key}/{file_name}")).copied().unwrap_or(0);
-                let label = piece_labels
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| format!("piece · {}", segs[3]));
-                ("piece", label, gen)
-            } else if segs.len() >= 2 && segs[1] == "user-images" {
-                ("user", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
-            } else if segs.len() >= 3 && segs[2] == "images" {
-                // <pipe>/<taskId>/images/<file> → task-scoped output.
-                ("task", format!("generation · task {}", segs[1]), 0)
-            } else {
-                ("other", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
-            };
+            let (source_kind, label, generation_no): (&str, String, u32) =
+                if segs.len() >= 4 && segs[1] == "pieces" {
+                    // <pipe>/pieces/<kind>/<ref>/<file>
+                    let key = format!("{pipe_dir}/pieces/{}/{}", segs[2], segs[3]);
+                    let file_name = segs[4];
+                    let gen = gen_no
+                        .get(&format!("{key}/{file_name}"))
+                        .copied()
+                        .unwrap_or(0);
+                    let label = piece_labels
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| format!("piece · {}", segs[3]));
+                    ("piece", label, gen)
+                } else if segs.len() >= 2 && segs[1] == "user-images" {
+                    ("user", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
+                } else if segs.len() >= 3 && segs[2] == "images" {
+                    // <pipe>/<taskId>/images/<file> → task-scoped output.
+                    ("task", format!("generation · task {}", segs[1]), 0)
+                } else {
+                    ("other", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
+                };
 
             Some(SessionImageEntry {
                 local_path: path.to_string_lossy().into_owned(),
@@ -1146,8 +1176,8 @@ pub async fn read_user_image(
     if src.as_os_str().is_empty() {
         return Err("no file selected".to_string());
     }
-    let meta = std::fs::metadata(&src)
-        .map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    let meta =
+        std::fs::metadata(&src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
     if !meta.is_file() {
         return Err(format!("not a file: {}", src.display()));
     }
@@ -1156,8 +1186,7 @@ pub async fn read_user_image(
     }
 
     let mime = mime_from_ext(src.extension().and_then(|e| e.to_str()));
-    let bytes = std::fs::read(&src)
-        .map_err(|e| format!("read {}: {e}", src.display()))?;
+    let bytes = std::fs::read(&src).map_err(|e| format!("read {}: {e}", src.display()))?;
 
     // 0012 D4: preemptive downscale — the API's documented input cap
     // (MAX_INPUT_IMAGE_PX per dim) is enforced BEFORE the request ever
@@ -1201,7 +1230,14 @@ pub async fn read_user_image(
         let db = &state.db.lock().await;
         let media_root = match resolve_media_root(db, &input.session_id).await {
             Some(r) if !r.trim().is_empty() => r,
-            _ => return Ok(result_with_notification(&data_uri, &mime, None, &notification)),
+            _ => {
+                return Ok(result_with_notification(
+                    &data_uri,
+                    &mime,
+                    None,
+                    &notification,
+                ))
+            }
         };
         let composer = db
             .get_composer(&input.session_id)
@@ -1213,18 +1249,31 @@ pub async fn read_user_image(
             .find(|p| p.id == input.pipe_id)
             .map(|p| p.name.clone())
             .unwrap_or(input.pipe_id.clone());
-        let session_root = std::path::Path::new(&media_root)
-            .join(safe_session_name(&composer.name));
+        let session_root =
+            std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
         match crate::generation::user_image_dir(&session_root, &pipe_name) {
             Ok(d) => d,
-            Err(_) => return Ok(result_with_notification(&data_uri, &mime, None, &notification)),
+            Err(_) => {
+                return Ok(result_with_notification(
+                    &data_uri,
+                    &mime,
+                    None,
+                    &notification,
+                ))
+            }
         }
     };
-    let local_path: Option<std::path::PathBuf> = persist_user_image(&user_dir, &input.ref_id, src.extension())
-        .ok()
-        .and_then(|p| std::fs::write(&p, &persist_bytes).ok().map(|_| p));
+    let local_path: Option<std::path::PathBuf> =
+        persist_user_image(&user_dir, &input.ref_id, src.extension())
+            .ok()
+            .and_then(|p| std::fs::write(&p, &persist_bytes).ok().map(|_| p));
 
-    Ok(result_with_notification(&data_uri, &mime, local_path.as_ref(), &notification))
+    Ok(result_with_notification(
+        &data_uri,
+        &mime,
+        local_path.as_ref(),
+        &notification,
+    ))
 }
 
 /// 0012 D4: assemble the read_user_image result, always carrying the
@@ -1257,9 +1306,18 @@ fn persist_user_image(
 ) -> Result<std::path::PathBuf, String> {
     let ext = ext
         .and_then(|e| e.to_str())
-        .filter(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
+        .filter(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp"
+            )
+        })
         .unwrap_or("png");
-    let name = format!("local-{}-{ms}.{ext}", crate::generation::safe_dir_name(ref_id), ms = now_unix_ms());
+    let name = format!(
+        "local-{}-{ms}.{ext}",
+        crate::generation::safe_dir_name(ref_id),
+        ms = now_unix_ms()
+    );
     Ok(dir.join(name))
 }
 
@@ -1310,11 +1368,7 @@ fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
         }
         if chunk == b"VP8 " {
             // Lossy: start code 0x9D 0x01 0x2A at 16-18; LE16 & 0x3FFF dims.
-            if bytes.len() > 30
-                && bytes[16] == 0x9d
-                && bytes[17] == 0x01
-                && bytes[18] == 0x2a
-            {
+            if bytes.len() > 30 && bytes[16] == 0x9d && bytes[17] == 0x01 && bytes[18] == 0x2a {
                 let w = u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3FFF;
                 let h = u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3FFF;
                 return Some((w, h));
@@ -1382,10 +1436,7 @@ fn downscale_image_to(
 /// `max_px`: scale the larger side to `max_px`, the other side
 /// proportionally, both sides rounded to even (ffmpeg yuv/h264 parity).
 /// `None` when no downscale is needed or the dims are unknown.
-fn downscale_box(
-    dims: Option<(u32, u32)>,
-    max_px: u32,
-) -> Option<(u32, u32)> {
+fn downscale_box(dims: Option<(u32, u32)>, max_px: u32) -> Option<(u32, u32)> {
     let (w, h) = dims?;
     let larger = w.max(h);
     if larger <= max_px {
@@ -1466,10 +1517,7 @@ pub async fn extract_pipe_last_frame(
         }
         let src_video = std::path::Path::new(&video);
         if !src_video.is_file() {
-            return Err(format!(
-                "previous pipe's video not found: {}",
-                video
-            ));
+            return Err(format!("previous pipe's video not found: {}", video));
         }
 
         let media_root = match resolve_media_root(db, &input.session_id).await {
@@ -1478,11 +1526,8 @@ pub async fn extract_pipe_last_frame(
         };
         let session_root =
             std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
-        let user_dir = crate::generation::user_image_dir(
-            &session_root,
-            &prev.name,
-        )
-        .map_err(|e| format!("user-images dir: {e}"))?;
+        let user_dir = crate::generation::user_image_dir(&session_root, &prev.name)
+            .map_err(|e| format!("user-images dir: {e}"))?;
 
         let task_id = prev
             .last_generation
@@ -1532,8 +1577,7 @@ pub async fn extract_pipe_last_frame(
     })?;
 
     // Read back the PNG and base64-encode it into the data URI the modal stores.
-    let bytes = std::fs::read(&out_path)
-        .map_err(|e| format!("read extracted frame: {e}"))?;
+    let bytes = std::fs::read(&out_path).map_err(|e| format!("read extracted frame: {e}"))?;
     let data_uri = to_data_uri(&bytes, "image/png");
 
     Ok(serde_json::json!({
@@ -1700,10 +1744,7 @@ pub async fn compose_session_video(
                         },
                         // 0012 D2: this pipe's per-pipe crop-mode override
                         // (session crop when `None`); blank values -> None.
-                        crop_mode: p
-                            .crop_override
-                            .clone()
-                            .filter(|m| !m.is_empty()),
+                        crop_mode: p.crop_override.clone().filter(|m| !m.is_empty()),
                     })
                 }
             })
@@ -1847,21 +1888,25 @@ pub async fn compose_session_video(
     // Persist the composed artifact AT THE SESSION LEVEL (the composer row),
     // not only in the (optional) generation-group row: re-opening the session
     // re-attaches it in the tool panel even after a restart.
-    {
+    //
+    // NON-FATAL: the video already exists on disk by the time we get here —
+    // a DB hiccough must not reject the command (the frontend would surface
+    // a failure for a compose that actually succeeded, and the progress
+    // badge would be left stranded). Log + continue; re-persistence happens
+    // naturally on the next composer save for that session.
+    match {
         let db = &state.db.lock().await;
-        let composer = db
+        let mut composer = db
             .get_composer(&input.session_id)
             .await
-            .map_err(|e| composition_error("COMPOSITION_PERSIST_FAILED", "Failed to persist session video path", serde_json::json!({ "error": e })))?;
-        let mut composer = composer;
+            .map_err(|e| e.to_string())?;
         composer.session_video_path = Some(result.output_path.clone());
-        db.save_composer(&composer).await.map_err(|e| {
-            composition_error(
-                "COMPOSITION_PERSIST_FAILED",
-                "Failed to persist session video path",
-                serde_json::json!({ "error": e }),
-            )
-        })?;
+        db.save_composer(&composer).await.map_err(|e| e.to_string())
+    } {
+        Ok(()) => {}
+        Err(e) => {
+            log::warn!("compose_session_video: persist session_video_path failed (non-fatal): {e}");
+        }
     }
 
     Ok(serde_json::json!({
@@ -2064,6 +2109,301 @@ pub async fn open_media_in_player(
     }
 }
 
+/// Input for the `backfill_media_proxies` command.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackfillMediaProxiesInput {
+    pub session_id: String,
+}
+
+/// Counts returned by `backfill_media_proxies` (camelCase on the wire).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackfillMediaProxiesResult {
+    pub videos_done: u64,
+    pub images_done: u64,
+    pub skipped: u64,
+    pub errors: u64,
+}
+
+/// Bound on the backfill walk — a session tree is small in practice; this
+/// protects a pathological tree from an unbounded recursive scan (and from
+/// an unbounded number of ffmpeg encodes).
+const BACKFILL_MAX_FILES: usize = 2000;
+
+/// Proxy sibling for a video original (`video.mp4` -> `video.proxy.mp4`).
+/// Mirrors `crate::generation::media::proxy_path` (not re-exported to this
+/// module); kept local so the backfill walk stays self-contained.
+fn backfill_proxy_path(original: &std::path::Path) -> std::path::PathBuf {
+    let parent = original
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
+    let ext = original.extension().and_then(|s| s.to_str());
+    let name = match ext {
+        Some(e) if !e.is_empty() => format!("{stem}.proxy.{e}"),
+        _ => format!("{stem}.proxy"),
+    };
+    parent.join(name)
+}
+
+/// Thumb sibling for an image original (`ref.png` -> `ref.thumb.jpg`).
+/// Mirrors `crate::generation::media::thumb_path` (see `backfill_proxy_path`).
+fn backfill_thumb_path(original: &std::path::Path) -> std::path::PathBuf {
+    let parent = original
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ref");
+    parent.join(format!("{stem}.thumb.jpg"))
+}
+
+/// Collect backfill candidates under `dir`: original `*.mp4` videos and
+/// `*.png|jpg|jpeg` images, excluding the derivatives themselves
+/// (`*.proxy.mp4`, `*.thumb.jpg`). `budget` bounds the total scan.
+fn backfill_collect(
+    dir: &std::path::Path,
+    videos: &mut Vec<std::path::PathBuf>,
+    images: &mut Vec<std::path::PathBuf>,
+    budget: &mut usize,
+) {
+    if *budget == 0 {
+        return;
+    }
+    let iter = match std::fs::read_dir(dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    for entry in iter.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            backfill_collect(&path, videos, images, budget);
+        } else if path.is_file() {
+            *budget -= 1;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .unwrap_or_default();
+            if ext == "mp4" && !name.ends_with(".proxy.mp4") {
+                videos.push(path);
+            } else if matches!(ext.as_str(), "png" | "jpg" | "jpeg")
+                && !name.ends_with(".thumb.jpg")
+            {
+                images.push(path);
+            }
+        }
+    }
+}
+
+/// Encode one 240p video proxy on the blocking pool (same args as the
+/// provider engine's `generate_video_proxy`). `Ok(())` when the proxy was
+/// written; `Err` carries the ffmpeg tail.
+async fn backfill_video_proxy(ffmpeg_path: &str, original: &std::path::Path) -> Result<(), String> {
+    let ffmpeg_path = ffmpeg_path.to_string();
+    let original_owned = original.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let proxy = backfill_proxy_path(&original_owned);
+        let out = std::process::Command::new(&ffmpeg_path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=-2:240",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-an",
+                "-y",
+                &proxy.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("proxy worker: {e}"))?
+}
+
+/// Encode one 320px JPEG thumb on the blocking pool (same args as the
+/// provider engine's `generate_image_thumb`).
+async fn backfill_image_thumb(ffmpeg_path: &str, original: &std::path::Path) -> Result<(), String> {
+    let ffmpeg_path = ffmpeg_path.to_string();
+    let original_owned = original.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let thumb = backfill_thumb_path(&original_owned);
+        let out = std::process::Command::new(&ffmpeg_path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=320:-2",
+                "-q:v",
+                "2",
+                "-y",
+                &thumb.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("proxy worker: {e}"))?
+}
+
+/// Backfill missing proxies/thumbs for a session's existing media (legacy
+/// artifacts written before proxy generation existed). Walks the session
+/// media tree and, for every original `*.mp4` without a `.proxy.mp4`
+/// sibling, encodes a 240p proxy; for every original PNG/JPG without a
+/// `.thumb.jpg` sibling, encodes a 320px thumb. Idempotent: files that
+/// already have their derivative are counted as `skipped` and left alone.
+/// Derivative files themselves (`*.proxy.mp4`, `*.thumb.jpg`) are ignored.
+/// Only files under known media roots are processed (same guard as
+/// `read_media_file`). ffmpeg work runs on the blocking pool; per-file
+/// failures are counted in `errors` and never fail the command.
+#[tauri::command]
+pub async fn backfill_media_proxies(
+    input: BackfillMediaProxiesInput,
+    state: State<'_, AppState>,
+) -> Result<BackfillMediaProxiesResult, String> {
+    // Resolve the session root (same precedence as the other commands:
+    // session directory_path -> project directory_path -> default tree,
+    // then the session-name folder).
+    let (media_root, session_name) = {
+        let db = &state.db.lock().await;
+        let media_root = resolve_media_root(db, &input.session_id).await;
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        (media_root, composer.name)
+    };
+    let media_root = match media_root.filter(|r| !r.trim().is_empty()) {
+        Some(r) => r,
+        None => {
+            return Ok(BackfillMediaProxiesResult {
+                videos_done: 0,
+                images_done: 0,
+                skipped: 0,
+                errors: 0,
+            })
+        }
+    };
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&session_name));
+    // Media-root guard: only process files under known roots.
+    {
+        let db = &state.db.lock().await;
+        let roots = media_roots(db).await;
+        if !roots.iter().any(|root| session_root.starts_with(root)) {
+            return Err(format!(
+                "session media root not inside a known media root: {}",
+                session_root.display()
+            ));
+        }
+    }
+    if !session_root.is_dir() {
+        return Ok(BackfillMediaProxiesResult {
+            videos_done: 0,
+            images_done: 0,
+            skipped: 0,
+            errors: 0,
+        });
+    }
+    // Resolve ffmpeg once (probing is slow; never per file).
+    let ffmpeg = crate::generation::resolve_ffmpeg();
+    if ffmpeg.source == "none" {
+        return Err(
+            "ffmpeg not available - backfill needs a bundled (Full) build, a user path, or a system ffmpeg"
+                .to_string(),
+        );
+    }
+    // Collect candidates (sync walk; the tree is small and bounded).
+    let mut videos: Vec<std::path::PathBuf> = Vec::new();
+    let mut images: Vec<std::path::PathBuf> = Vec::new();
+    let mut budget = BACKFILL_MAX_FILES;
+    backfill_collect(&session_root, &mut videos, &mut images, &mut budget);
+
+    let mut result = BackfillMediaProxiesResult {
+        videos_done: 0,
+        images_done: 0,
+        skipped: 0,
+        errors: 0,
+    };
+    for video in &videos {
+        if backfill_proxy_path(video).is_file() {
+            result.skipped += 1;
+            continue;
+        }
+        match backfill_video_proxy(&ffmpeg.path, video).await {
+            Ok(()) => result.videos_done += 1,
+            Err(e) => {
+                result.errors += 1;
+                log::warn!("[Backfill] video proxy failed for {}: {e}", video.display());
+            }
+        }
+    }
+    for image in &images {
+        if backfill_thumb_path(image).is_file() {
+            result.skipped += 1;
+            continue;
+        }
+        match backfill_image_thumb(&ffmpeg.path, image).await {
+            Ok(()) => result.images_done += 1,
+            Err(e) => {
+                result.errors += 1;
+                log::warn!("[Backfill] image thumb failed for {}: {e}", image.display());
+            }
+        }
+    }
+    log::info!(
+        "[Backfill] session {}: {} video(s), {} image(s), {} skipped, {} error(s)",
+        input.session_id,
+        result.videos_done,
+        result.images_done,
+        result.skipped,
+        result.errors
+    );
+    Ok(result)
+}
+
 /// All known media roots: the session `directory_path` trees (0009 — the
 /// highest-precedence root `resolve_media_root` uses, and where a session's
 /// composed video + generated artifacts land when the user picked a session
@@ -2177,8 +2517,14 @@ mod tests {
         let _ = fs::create_dir_all(&root);
 
         // Piece history (one generation each).
-        write_file(&root, &format!("Pipe A/pieces/keyframes/{kf}/1111111111.png"));
-        write_file(&root, &format!("Pipe A/pieces/subjects/{sr}/2222222222.png"));
+        write_file(
+            &root,
+            &format!("Pipe A/pieces/keyframes/{kf}/1111111111.png"),
+        );
+        write_file(
+            &root,
+            &format!("Pipe A/pieces/subjects/{sr}/2222222222.png"),
+        );
         // User-picked base.
         write_file(&root, "Pipe A/user-images/local-x.png");
         // Task-scoped output.
@@ -2189,12 +2535,12 @@ mod tests {
         let out = collect_session_images(&root, &pipes);
         let _ = fs::remove_dir_all(&root);
 
-        let by_kind: std::collections::HashMap<&str, usize> = out
-            .iter()
-            .fold(std::collections::HashMap::new(), |mut m, e| {
-                *m.entry(e.source_kind.as_str()).or_insert(0) += 1;
-                m
-            });
+        let by_kind: std::collections::HashMap<&str, usize> =
+            out.iter()
+                .fold(std::collections::HashMap::new(), |mut m, e| {
+                    *m.entry(e.source_kind.as_str()).or_insert(0) += 1;
+                    m
+                });
         assert_eq!(by_kind.get("piece"), Some(&2));
         assert_eq!(by_kind.get("user"), Some(&1));
         assert_eq!(by_kind.get("task"), Some(&1));
@@ -2224,7 +2570,10 @@ mod tests {
         assert!(gens.values().any(|&g| g == 2));
         assert!(gens.values().any(|&g| g == 3));
         // The largest (newest) file is the highest generation.
-        let newest = out.iter().find(|e| e.label.ends_with("300.png") || e.local_path.ends_with("300.png")).unwrap();
+        let newest = out
+            .iter()
+            .find(|e| e.label.ends_with("300.png") || e.local_path.ends_with("300.png"))
+            .unwrap();
         assert_eq!(newest.generation_no, 3);
     }
 
@@ -2363,7 +2712,11 @@ mod tests {
 
         // Traversal in the ref id is neutralized by safe_dir_name.
         let evil = persist_user_image(&dir, "../evil", Some(std::ffi::OsStr::new("png"))).unwrap();
-        assert!(evil.starts_with(&dir), "escape prevented: {}", evil.display());
+        assert!(
+            evil.starts_with(&dir),
+            "escape prevented: {}",
+            evil.display()
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 	import Frame from './Frame.svelte';
+	import ErrorModal from './ErrorModal.svelte';
 	import ProjectsPanel from './ProjectsPanel.svelte';
 	import ComposerPanel from './ComposerPanel.svelte';
 import DirectorPanel from './Director/DirectorPanel.svelte';
@@ -28,7 +29,9 @@ import { logSignal, type DirectorTab } from '$lib/directorStore';
 import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
-	import { toMediaUrl, invalidateMediaUrlCache } from '$lib/mediaUrl';
+	import { toMediaUrl } from '$lib/mediaUrl';
+	import { resetStallMeter } from '$lib/stallWatch';
+	import { pipeEvent, tripEffect } from '$lib/pipelineDiag';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
 	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
@@ -110,15 +113,19 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// Project level = summary only; session = video settings + generation.
 	let focus = $state<ComposerFocus>({ level: 'project' });
 	$effect(() => {
+		// Depend on ID string, not object identity — selectedSession is a new
+		// object on every projects update, causing infinite effect loops.
+		void selectedSessionId;
+		const session = untrack(() => selectedSession);
 		// No active session → project summary view.
-		if (!selectedSession) {
+		if (!session) {
 			focus = { level: 'project' };
 			return;
 		}
 		// With a session, the panel drives session/pipe/tag; on session
 		// change, fall back to the session level until the panel refines it.
-		if (focus.level === 'project' || (focus.level === 'session' && focus.id !== selectedSession.id)) {
-			focus = { level: 'session', id: selectedSession.id };
+		if (focus.level === 'project' || (focus.level === 'session' && focus.id !== session.id)) {
+			focus = { level: 'session', id: session.id };
 		}
 	});
 	// Restore the latest pipe preview after backend hydration. The preview is
@@ -140,7 +147,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		const before = selectedSessionId;
 		// A group run overwrites the SAME session.mp4 in place; force a fresh
 		// read so the top panel shows THIS run, not the previous one's cached blob.
-		invalidateMediaUrlCache(path);
 		const url = await toMediaUrl(path).catch(() => null);
 		if (url && before !== selectedSessionId) {
 			// The user switched sessions mid-flight: only honor the attach when
@@ -271,7 +277,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				: undefined) ??
 			session.pipes.find((p) => p.lastGeneration?.videoPath);
 		if (!pipe?.lastGeneration?.videoPath) return;
-		invalidateMediaUrlCache(pipe.lastGeneration.videoPath);
 		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
 		if (url) {
 			previewVideo = { url, label: pipe.name };
@@ -280,14 +285,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	}
 
 	$effect(() => {
-		// Track the session AND the compose outcome so the preview re-renders
-		// both when a group's auto-compose finishes/persists session_video_path
-		// AND when the user switches to a session that has no composed video
-		// (the clear-branch below must run on the session change itself).
-		const session = selectedSession;
-		void session; // effect dep: re-run when the selected session changes
-		void groupComposeState; // effect dep: re-run when compose outcome changes
-		void groupSessionVideoPath; // effect dep: re-run when the path lands
+		// Depend ONLY on session ID (string, stable). Read session and group
+		// state via untrack to avoid loops from object identity changes or
+		// group state churn. The effect runs once per session selection.
+		void selectedSessionId;
+		const session = untrack(() => selectedSession);
+		const composeState = untrack(() => groupComposeState);
+		const sessionVideoPath = untrack(() => groupSessionVideoPath);
+		// Only restore on session change, not on group state changes.
+		// Group state changes are handled by the group event handlers directly.
 		void restoreSelectedPreview(session);
 	});
 
@@ -538,8 +544,12 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// would sit at 0% for a whole pipe. A 2 s poll of the authoritative
 	// group view (live in-memory, persisted fallback) keeps them accurate.
 	let groupPollTimer: number | null = null;
-	function stopGroupPoll() {
-		if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
+	function stopGroupPoll(reason?: string) {
+		if (groupPollTimer !== null) {
+			window.clearInterval(groupPollTimer);
+			groupPollTimer = null;
+			if (reason) pipeEvent(`group poll disarmed: ${reason}`);
+		}
 	}
 	function startGroupPoll() {
 		stopGroupPoll();
@@ -711,6 +721,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// minimized, the pill flips to done/error so the outcome is visible in the
 	// top panel even without re-opening the modal. Reset on the next task.
 	let pillTerminal = $state<'done' | 'error' | null>(null);
+	// Generation error for ToolsPanel indicator (shown once, cleared on new generation).
+	let generationError = $state<string | null>(null);
+	let showErrorModal = $state(false);
 	// A live group keeps the UI actionable even when the per-task watcher was
 	// closed (modal OK/X mid-run): a null `activeTask` must not read as
 	// "nothing running" while the session group is still in flight.
@@ -1146,6 +1159,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	}
 
 	async function restoreSessionGenerationGroup(sessionId: string) {
+		// Cancellation guard: if user switches sessions mid-flight, the stale
+		// restore must not overwrite the new session's state. Check after
+		// each await — if sessionId changed, abort silently.
+		const isStale = () => selectedSessionId !== sessionId;
 		const key = `visionmachine:generation-group:${sessionId}`;
 		const groupId = localStorage.getItem(key);
 		// The localStorage key is only set for a run that STARTED in this
@@ -1158,6 +1175,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		if (groupId) {
 			try {
 				group = await fetchGenerationGroup(groupId);
+				if (isStale()) return; // session changed mid-flight
 			} catch {
 				localStorage.removeItem(key);
 			}
@@ -1166,6 +1184,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			// Pure-read DB fallback: the session's most recent group row. Null
 			// when the session has never run a group — nothing to restore.
 			group = await fetchLatestGenerationGroupForSession(sessionId).catch(() => null);
+			if (isStale()) return; // session changed mid-flight
 		}
 		if (!group) {
 			// No group run for this session: drop the previous session's group
@@ -1241,6 +1260,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		if (!isLiveGroup && (group.status === 'error' || group.status === 'cancelled')) {
 			pillTerminal = 'error';
 			const detail = group.error ?? group.composeError ?? 'unknown reason';
+			generationError = detail; // Show in ToolsPanel indicator
 			flashToast(
 				`${group.status === 'cancelled' ? 'Generation cancelled' : 'Generation failed'}: ${detail}`,
 				'error',
@@ -1274,6 +1294,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			if (!ok) {
 				flashToast(`Session video unavailable: ${path} (missing file or outside media roots)`, 'error');
 			}
+			// CROSS-SESSION GUARD: this was the LAST await in the function —
+			// a fast A→B switch interleaves here. Without the re-check the
+			// tail below runs with A's stale values while the user is on B:
+			// `showProgressModal` adopts A's group flags, and
+			// `restoredGroupSessionId = A` clobbers B's latch → the trigger
+			// effect re-fires for A → its `stopGroupPoll('session change
+			// disarm')` disarms B's freshly-armed live-group poller (B's
+			// progress UI freezes / Generate no-ops).
+			if (isStale()) return;
 		}
 		stopWatching();
 		// A stale (persisted, no live task) running group re-opens its
@@ -1288,9 +1317,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	$effect(() => {
 		const sessionId = selectedSessionId;
 		if (sessionId && restoredGroupSessionId !== sessionId) {
-			stopGroupPoll();
+			stopGroupPoll('session change disarm');
 			groupProgress = 0;
 			groupComposePhase = null;
+			// Start a fresh stall window for THIS selection so the in-app
+			// monitor attributes any longtask / freeze to the session just
+			// picked (the record carries the session id).
+			resetStallMeter(sessionId);
 			void restoreSessionGenerationGroup(sessionId);
 		}
 	});
@@ -2157,6 +2190,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// A fresh task: clear the previous task's terminal marker + minimize
 		// flag so the pill reads as a new running task, not a stale outcome.
 		pillTerminal = null;
+		generationError = null; // Clear error indicator on new generation
 		progressMinimized = false;
 		// Seed with the authoritative view right now (the machine may already be
 		// ahead of the first event / tick), then follow the live stream.
@@ -2455,7 +2489,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		previewVideo = null;
 		previewIsSessionVideo = false;
 		previewMediaPath = null;
-		invalidateMediaUrlCache(pipe.lastGeneration?.videoPath ?? null);
 		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
 			.then((url) => {
 				if (url) {
@@ -2684,6 +2717,19 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		</div>
 
 		<div class="composer-area">
+			<!-- PHASE 2 (session-scoped isolation): key the composer/director
+			     subtree on the session so switching sessions DESTROYS and
+			     RECREATES it. Every session-scoped $state (DirectorPanel
+			     entry/doc/flows/lastSession, ComposerPanel local ref
+			     state, per-pipe UI) re-initializes instead of surviving
+			     the switch and leaking into the new session. The
+			     persistent generation/preview machinery — the top
+			     <Frame> panel, groupTaskViews/activeTask, the progress
+			     modal, restoreSessionGenerationGroup — lives OUTSIDE
+			     this boundary, so a live generation run survives a
+			     session switch and the "I switch away mid-run" case
+			     keeps working. -->
+			{#key selectedSessionId}
 		<!-- SAFE: Check session exists AND has project -->
 			{#if selectedSession && selectedProject}
 				{#if composerTab === 'pipes'}
@@ -2733,6 +2779,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					<p>Create a project and add a session to start editing</p>
 				</div>
 			{/if}
+			{/key}
 		</div>
 
 		{#if layoutMode === 'landscape'}
@@ -2764,8 +2811,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onvideoratiochange={handleVideoRatioChange}
 				sessionVideo={toolsSessionVideo}
 				sessionVideoStale={sessionVideoStale}
-				onfocuschange={(f: ComposerFocus) => (focus = f)}
-				/>
+			onfocuschange={(f: ComposerFocus) => (focus = f)}
+			generationError={generationError}
+			onshowerror={() => (showErrorModal = true)}
+		/>
 			{/if}
 
 			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
@@ -2906,6 +2955,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			{/if}
 
 			<SettingsModal bind:open={showSettings} initialTab={settingsTab} />
+
+		<ErrorModal
+			open={showErrorModal}
+			title="Generation Error"
+			message={generationError ?? ''}
+			onclose={() => (showErrorModal = false)}
+		/>
 	</div>
 </div>
 

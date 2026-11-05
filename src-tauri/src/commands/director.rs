@@ -13,33 +13,49 @@
 //   flow.v{N}.json        — versioned FlowDocument (coexist, never overwrite)
 //   flow_signals.jsonl    — append-only SignalRecord log (I7)
 
-use crate::AppState;
+use crate::generation::video_flow::engine::types::Genre;
 use crate::generation::video_flow::{
-    append_signal_jsonl, materialize_pipes, validate_plan, FlowDocument, SignalKind,
-    SignalRecord, StructuredVideoPlan, VideoFlow, VideoTag,
+    append_signal_jsonl, materialize_pipes, validate_plan, FlowDocument, SignalKind, SignalRecord,
+    StructuredVideoPlan, VideoFlow, VideoTag,
 };
-use serde::Serialize;
+use crate::AppState;
+use serde::{Deserialize, Serialize};
+use log::{debug, info};
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+
+/// One run-progress event emitted by `director_run_flow` at each phase
+/// boundary (UI subscribes via `listen("director_run_progress", …)` in
+/// runProgress.ts). Exactly 6 events per run, in this order:
+/// intent → structure → critic → lower → verify (5 phase names; structure
+/// merges the expand+structure steps that happen inside `run_full_with_entry`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunProgress {
+    /// 'intent' | 'structure' | 'critic' | 'lower' | 'verify'
+    pub phase: String,
+    /// Human-readable detail, e.g. "3 scenes × 2 shots = 6 shots".
+    pub detail: String,
+    /// Wall-clock ms since the run started.
+    pub ms: u64,
+}
 
 /// Resolve `<session media root>/<safe-session-name>/flow`, creating it.
 /// Precedence mirrors `resolve_media_root` in generation.rs exactly
 /// (session dir → project dir → user catalog default), so flow artifacts
 /// sit next to the session's other media.
-async fn flow_dir(
-    db: &crate::storage::db::Database,
-    session_id: &str,
-) -> Result<PathBuf, String> {
+async fn flow_dir(db: &crate::storage::db::Database, session_id: &str) -> Result<PathBuf, String> {
     use sqlx::Row;
 
     // 1. session's own directory (0009).
-    let session_dir: Option<String> = sqlx::query("SELECT directory_path FROM sessions WHERE id = ?")
-        .bind(session_id)
-        .fetch_optional(&db.pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
-        .flatten();
+    let session_dir: Option<String> =
+        sqlx::query("SELECT directory_path FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .fetch_optional(&db.pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+            .flatten();
 
     // Also fetch the session name (for the session folder layer).
     let session_name: String = match sqlx::query("SELECT name FROM sessions WHERE id = ?")
@@ -75,10 +91,7 @@ async fn flow_dir(
 }
 
 /// Project-level fallback for the flow dir (generation.rs step 2).
-async fn project_dir(
-    db: &crate::storage::db::Database,
-    session_id: &str,
-) -> String {
+async fn project_dir(db: &crate::storage::db::Database, session_id: &str) -> String {
     use sqlx::Row;
     let row: Option<String> = sqlx::query(
         "SELECT p.directory_path FROM sessions s \
@@ -101,14 +114,22 @@ async fn project_dir(
     // concrete path even for never-generated sessions, so fall back to the
     // app-data media tree the frontend already uses for that case.
     dirs::home_dir()
-        .map(|home| home.join("VisionMachine").join("default").join("Projects").to_string_lossy().into_owned())
+        .map(|home| {
+            home.join("VisionMachine")
+                .join("default")
+                .join("Projects")
+                .to_string_lossy()
+                .into_owned()
+        })
         .unwrap_or_else(|| ".".into())
 }
 
 /// Parse an optional engine S0 entry from JSON. `None`/empty → `None`.
 /// A malformed entry is a named error (the UI's G0 form is well-formed, so
 /// this is a wire guard, not a silent fallback).
-fn parse_entry(entry: &Option<String>) -> Result<Option<crate::generation::video_flow::engine::seed::EngineEntry>, String> {
+fn parse_entry(
+    entry: &Option<String>,
+) -> Result<Option<crate::generation::video_flow::engine::seed::EngineEntry>, String> {
     match entry {
         None => Ok(None),
         Some(s) if s.trim().is_empty() => Ok(None),
@@ -157,13 +178,11 @@ async fn node_a_provider_for_session(
     if base_url.is_empty() || model.is_empty() {
         return None;
     }
-    Some(
-        crate::generation::video_flow::engine::llm::TextProvider {
-            base_url,
-            api_key: slot.api_key,
-            model,
-        },
-    )
+    Some(crate::generation::video_flow::engine::llm::TextProvider {
+        base_url,
+        api_key: slot.api_key,
+        model,
+    })
 }
 
 /// The newest flow version on disk (0 when no flow has been saved yet).
@@ -172,7 +191,10 @@ fn next_flow_version(flow: &PathBuf) -> u32 {
     if let Ok(entries) = std::fs::read_dir(flow) {
         for entry in entries.flatten() {
             if let Some(stem) = entry.file_name().to_str() {
-                if let Some(v) = stem.strip_prefix("flow.v").and_then(|s| s.strip_suffix(".json")) {
+                if let Some(v) = stem
+                    .strip_prefix("flow.v")
+                    .and_then(|s| s.strip_suffix(".json"))
+                {
                     if let Ok(v) = v.parse::<u32>() {
                         best = best.max(v);
                     }
@@ -197,8 +219,31 @@ pub async fn director_run_flow(
     session_id: String,
     text: String,
     entry: Option<String>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    let t0 = std::time::Instant::now();
+
+    // Phase 1: intent — the raw entry text, truncated to 60 chars
+    // (char-based so non-ASCII input can never split a UTF-8 codepoint).
+    let intent_detail: String = {
+        let t = text.trim();
+        if t.chars().count() <= 60 {
+            t.to_string()
+        } else {
+            format!("…{}", t.chars().take(60).collect::<String>())
+        }
+    };
+    app.emit(
+        "director_run_progress",
+        RunProgress {
+            phase: "intent".into(),
+            detail: intent_detail,
+            ms: t0.elapsed().as_millis() as u64,
+        },
+    )
+    .ok();
+
     // Path resolution only needs the DB; keep the lock window small (the
     // flow run below will make LLM network calls in later phases and must
     // not hold the DB lock across them).
@@ -213,6 +258,58 @@ pub async fn director_run_flow(
         .run_full_with_entry(&text, entry.as_ref())
         .map_err(|e| e.to_string())?;
 
+    // Phase 2: expand — run_full_with_entry returned; report the engine
+    // novel scene/shot counts.
+    let structure_detail = match doc.engine.as_ref() {
+        Some(run) => {
+            let scenes = run.novel.scenes.len();
+            let shots: usize = run.novel.scenes.iter().map(|s| s.shots.len()).sum();
+            let per_scene = if scenes > 0 { shots / scenes } else { 0 };
+            // Phase 2: surface the S0.5 structural tree (the "brain" layer) —
+            // the driver + target runtime + per-branch roles — so the run log
+            // shows the shape the film is told in, not just the raw counts.
+            let tree_note = match run.tree.as_ref() {
+                Some(t) => {
+                    let roles: Vec<&str> = t.branches.iter().map(|b| b.role.as_str()).collect();
+                    format!(
+                        " · tree v{} · driver {} · ~{}s · [{}]",
+                        t.v,
+                        t.root.driver.as_str(),
+                        t.root.target_duration_s,
+                        roles.join("/")
+                    )
+                }
+                None => String::new(),
+            };
+            format!(
+                "{} scenes × {} shots = {} shots{tree_note}",
+                scenes, per_scene, shots
+            )
+        }
+        None => "template · no engine run".to_string(),
+    };
+    app.emit(
+        "director_run_progress",
+        RunProgress {
+            phase: "expand".into(),
+            detail: structure_detail.clone(),
+            ms: t0.elapsed().as_millis() as u64,
+        },
+    )
+    .ok();
+    // Phase 3: structure — the structure step happens inside
+    // run_full_with_entry, not separately; merged into one extra event
+    // with the same detail as expand.
+    app.emit(
+        "director_run_progress",
+        RunProgress {
+            phase: "structure".into(),
+            detail: structure_detail,
+            ms: t0.elapsed().as_millis() as u64,
+        },
+    )
+    .ok();
+
     // Node A LLM expansion (Phase 1a, harness llm.json contract). When the
     // session has a usable text provider, the LLM writes the S1 novel and
     // the run is rebuilt around it (S2–S5 stay deterministic from that
@@ -220,56 +317,149 @@ pub async fn director_run_flow(
     // `doc.engine` and names WHY the LLM didn't produce — never a silent
     // fallback. A missing/unconfigured provider simply stays on template
     // (nothing was attempted, so no note).
-    {
+    let critic_detail: String = {
         use crate::generation::video_flow::engine::llm::{self, TextProvider};
-        use crate::generation::video_flow::engine::seed::{ExpansionSource, EngineRun};
+        use crate::generation::video_flow::engine::seed::{EngineRun, ExpansionSource};
 
-        // The effective G0 entry: the UI's when supplied, else the same
-        // deterministic default the template path used — so the LLM and
-        // the fallback seed/counts/look-axes are identical.
         let effective_entry = match entry {
             Some(e) => e,
             None => crate::generation::video_flow::default_engine_entry(&text, &doc.intent),
         };
 
-        // Provider resolution is a short DB window; the LLM network call
-        // itself must NOT hold that lock (the flow_dir comment above).
         let provider: Option<TextProvider> = {
             let db = state.db.lock().await;
             node_a_provider_for_session(&db, &session_id).await
         };
 
-        if let Some(provider) = provider {
-            match llm::expand_node_a(&provider, &effective_entry).await {
-                Ok(novel) => {
-                    let tod = effective_entry.time_of_day.clone();
-                    let weather = effective_entry.weather.clone();
-                    let seed = effective_entry.to_seed();
-                    doc.engine = Some(EngineRun::build_with_novel(
-                        seed,
-                        novel,
-                        &tod,
-                        &weather,
-                        ExpansionSource::Llm,
-                        Some(provider.model.clone()),
-                    ));
-                }
-                Err(reason) => {
-                    if let Some(run) = doc.engine.as_mut() {
-                        run.expansion = ExpansionSource::Template;
-                        run.expansion_note = Some(format!(
-                            "template · LLM ({}) failed: {}",
-                            provider.model, reason
-                        ));
+        match provider {
+            Some(ref prov) => {
+                let t_llm = std::time::Instant::now();
+                // Phase 2: build the S0.5 structural tree BEFORE the LLM call
+                // so its brief (the "brief, not a cage") is injected into the
+                // Node A prompt — the model sees the fixed shape (driver,
+                // energy curve, branch transitions, chained temp arc,
+                // continuity thread, target runtime) and invents the prose /
+                // environment / character / beats within it. The same tree is
+                // then threaded into the S2/S3 production (Phase 1b) and
+                // stored on the run (Phase 1a).
+                let tree = crate::generation::video_flow::engine::tree::build_structural_tree(
+                    &doc.intent,
+                    &effective_entry,
+                    &effective_entry.overrides,
+                );
+                // LLM window: Node A can take up to 2×60s (retry budget).
+                // Emit a live progress line at the start so the run log
+                // never looks frozen ("stuck" perception) while the model
+                // writes the novel.
+                app.emit(
+                    "director_run_progress",
+                    RunProgress {
+                        phase: "expand".into(),
+                        detail: format!("LLM · {} · writing the novel (up to 2 min)…", prov.model),
+                        ms: t_llm.elapsed().as_millis() as u64,
+                    },
+                )
+                .ok();
+                match llm::expand_node_a(prov, &effective_entry, Some(&tree)).await {
+                    Ok(novel) => {
+                        let tod = effective_entry.time_of_day.clone();
+                        let weather = effective_entry.weather.clone();
+                        let seed = effective_entry.to_seed();
+                        // Phase 1b: thread the tree into the S2/S3 production
+                        // (scene color-temperature arc, branch-boundary
+                        // transitions, leaf-resolved base camera/lens/motion).
+                        // Mood stays None here by design — M4 mood shapes the
+                        // Node A PROMPT, not this bridge's S2/S3 structure.
+                        let mut llm_run = EngineRun::build_with_novel_mood(
+                            seed,
+                            novel,
+                            &tod,
+                            &weather,
+                            ExpansionSource::Llm,
+                            Some(prov.model.clone()),
+                            None,
+                            Some(&tree),
+                        );
+                        // The low-level builder leaves the run's tree field
+                        // None; the caller stores it (Phase 1a).
+                        llm_run.tree = Some(tree);
+                        doc.engine = Some(llm_run);
+                        format!("LLM · {} · {}ms", prov.model, t_llm.elapsed().as_millis())
+                    }
+                    Err(reason) => {
+                        if let Some(run) = doc.engine.as_mut() {
+                            run.expansion = ExpansionSource::Template;
+                            run.expansion_note = Some(format!(
+                                "template · LLM ({}) failed: {}",
+                                prov.model, reason
+                            ));
+                        }
+                        format!(
+                            "LLM · {} failed · {}ms",
+                            prov.model,
+                            t_llm.elapsed().as_millis()
+                        )
                     }
                 }
             }
+            None => "template · LLM skipped".to_string(),
         }
-    }
+    };
+    // Phase 4: critic — after the LLM Node A block.
+    app.emit(
+        "director_run_progress",
+        RunProgress {
+            phase: "critic".into(),
+            detail: critic_detail,
+            ms: t0.elapsed().as_millis() as u64,
+        },
+    )
+    .ok();
 
     let version = next_flow_version(&dir).saturating_add(1);
     let path = dir.join(FlowDocument::default_filename(version));
     doc.save(&path).map_err(|e| e.to_string())?;
+
+    // Phase 5: lower — total frames from the engine verify report.
+    let total_frames: u32 = doc
+        .engine
+        .as_ref()
+        .map(|e| e.verify.total_frames)
+        .unwrap_or(0);
+    app.emit(
+        "director_run_progress",
+        RunProgress {
+            phase: "lower".into(),
+            detail: format!("{} frames verified", total_frames),
+            ms: t0.elapsed().as_millis() as u64,
+        },
+    )
+    .ok();
+
+    // Phase 6: verify — at the very end, after saving to disk.
+    let verify_detail = match doc.engine.as_ref() {
+        Some(run) => {
+            if run.verify.verified {
+                format!("saved as flow.v{}.json · verified", version)
+            } else {
+                format!(
+                    "saved as flow.v{}.json · {} issue(s)",
+                    version,
+                    run.verify.issues.len()
+                )
+            }
+        }
+        None => format!("saved as flow.v{}.json · no engine run", version),
+    };
+    app.emit(
+        "director_run_progress",
+        RunProgress {
+            phase: "verify".into(),
+            detail: verify_detail,
+            ms: t0.elapsed().as_millis() as u64,
+        },
+    )
+    .ok();
 
     Ok(serde_json::json!({
         "document": serde_json::to_value(&doc).map_err(|e| e.to_string())?,
@@ -296,29 +486,45 @@ pub async fn director_list_flows(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<FlowSummary>, String> {
+    // Persisted (was eprintln → stderr, invisible in VisionMachine.log): a
+    // session-select freeze shows up here as repeated `list_flows start/done`
+    // for the SAME session id. Info-level so a loop is unmissable in the log.
+    info!("[DIRECTOR] list_flows start: {}", session_id);
     let dir = {
         let db = &state.db.lock().await;
         flow_dir(db, &session_id).await?
     };
 
     let mut out: Vec<FlowSummary> = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some((_, v_str)) = name.strip_prefix("flow.v").zip(name.strip_suffix(".json")) else {
             continue;
         };
-        let Ok(version) = v_str.parse::<u32>() else { continue };
-        let Ok(doc) = FlowDocument::load(&entry.path()) else { continue };
+        let Ok(version) = v_str.parse::<u32>() else {
+            continue;
+        };
+        let Ok(doc) = FlowDocument::load(&entry.path()) else {
+            continue;
+        };
         out.push(FlowSummary {
             flow_version: version,
             overall: doc.scoretree.overall(),
             critic_model_version: doc.regen.version.critic_model_version,
             section_count: doc.structured.primary().sections.len(),
             entry_text: doc.intent.entry_text.clone(),
-            verified: doc.engine.as_ref().map(|e| e.verify.verified).unwrap_or(false),
+            verified: doc
+                .engine
+                .as_ref()
+                .map(|e| e.verify.verified)
+                .unwrap_or(false),
         });
     }
     out.sort_by(|a, b| b.flow_version.cmp(&a.flow_version));
+    info!("[DIRECTOR] list_flows done: {} flows", out.len());
     Ok(out)
 }
 
@@ -329,13 +535,21 @@ pub async fn director_load_flow(
     flow_version: u32,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    debug!(
+        "[DIRECTOR] load_flow start: {} v{}",
+        session_id, flow_version
+    );
     let dir = {
         let db = &state.db.lock().await;
         flow_dir(db, &session_id).await?
     };
     let path = dir.join(FlowDocument::default_filename(flow_version));
+    debug!("[DIRECTOR] load_flow reading: {}", path.display());
     let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
-    Ok(serde_json::to_value(&doc).map_err(|e| e.to_string())?)
+    debug!("[DIRECTOR] load_flow loaded, serializing");
+    let val = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
+    info!("[DIRECTOR] load_flow done: {} v{}", session_id, flow_version);
+    Ok(val)
 }
 
 /// Append one preference signal (I7, append-only). `kind` must be one of
@@ -539,7 +753,9 @@ async fn merge_and_save_composer(
         }
         c
     };
-    db.save_composer(&composer).await.map_err(|e| format!("save composer: {e}"))?;
+    db.save_composer(&composer)
+        .await
+        .map_err(|e| format!("save composer: {e}"))?;
     Ok(composer.pipes.len() as u32)
 }
 
@@ -585,6 +801,235 @@ pub async fn director_apply_flow_edited(
     Ok(count)
 }
 
+// ── M3: scoped apply (in-place replace of the first N session pipes) ─────
+
+/// Pure splice core of the scoped merge: the first `n` session pipes are
+/// replaced in-place by the `pipes` plan's first `n` pipes; session pipes
+/// at index `n` and beyond are kept untouched. Empty existing pipes is a
+/// named error (a scoped apply is meaningless without a prior full apply).
+fn splice_scoped_pipes(
+    existing: &mut crate::models::ComposerConfig,
+    pipes: &[crate::models::composer::Pipe],
+) -> Result<u32, String> {
+    if existing.pipes.is_empty() {
+        return Err("session has no composer pipes — run a full apply first".to_string());
+    }
+    let n = pipes.len();
+    let mut new_pipes = pipes.to_vec();
+    // Pipes at index n and beyond in the session's composer stay untouched.
+    if existing.pipes.len() > n {
+        new_pipes.extend(existing.pipes[n..].iter().cloned());
+    }
+    existing.pipes = new_pipes;
+    Ok(n as u32)
+}
+
+/// Splice the materialized scoped plan into the session's composer: replace
+/// the first `pipes.len()` session pipes in-place; pipes at index N and
+/// beyond remain untouched. Returns the number of replaced pipes.
+async fn merge_scoped_composer(
+    state: &crate::AppState,
+    session_id: &str,
+    pipes: &[crate::models::composer::Pipe],
+) -> Result<u32, String> {
+    let db = &state.db.lock().await;
+    let mut existing = db
+        .get_composer(session_id)
+        .await
+        .map_err(|e| format!("load composer: {e}"))?;
+
+    let n = splice_scoped_pipes(&mut existing, pipes)?;
+
+    db.save_composer(&existing)
+        .await
+        .map_err(|e| format!("save composer: {e}"))?;
+    Ok(n)
+}
+
+/// Apply a persisted flow's plan with in-memory section-prompt overrides,
+/// then splice the result into the session's composer as a **scoped**
+/// in-place replace: the first N session pipes are replaced by the
+/// materialized plan's N pipes; all remaining session pipes are untouched.
+///
+/// `pipe_scope`: the UI's `pipeScope` array (0-based indices into the
+/// materialized plan). Every index must be < `pipes.len()`; any
+/// out-of-range index is a hard error.
+///
+/// `edited`: optional concrete section-prompt overrides (same shape as
+/// `director_apply_flow_edited`). When empty the behaviour is a plain
+/// scoped apply.
+///
+/// Returns the number of replaced pipes (== `pipes.len()`).
+#[tauri::command]
+pub async fn director_apply_flow_scoped(
+    session_id: String,
+    flow_version: u32,
+    pipe_scope: Vec<u32>,
+    edited: Vec<EditedSection>,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let path = dir.join(FlowDocument::default_filename(flow_version));
+    let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
+
+    let mut plan = build_apply_plan(&doc, flow_version);
+    apply_section_edits(&mut plan, &edited);
+
+    let cfg = crate::generation::video_flow::FlowConfig::default_flow();
+    validate_plan(&plan, &cfg.structure).map_err(|e| e.to_string())?;
+    let pipes = materialize_pipes(&plan, &cfg.materialize).map_err(|e| e.to_string())?;
+    if pipes.is_empty() {
+        return Err("plan carries no materializable pipes".into());
+    }
+
+    // Guard: every pipe_scope index must be a valid index into the
+    // materialized plan's pipe vector.
+    for &i in &pipe_scope {
+        if i >= pipes.len() as u32 {
+            return Err(format!(
+                "pipe_scope index {} out of range ({} pipes in plan)",
+                i,
+                pipes.len()
+            ));
+        }
+    }
+
+    let count = merge_scoped_composer(&state, &session_id, &pipes).await?;
+    Ok(count)
+}
+
+// ── M2: seed card (shareable one-file film-plan snapshot) ──────────────────
+
+/// The card's expansion scale (mirror of the G0 grid: scenes 1..24,
+/// shots/scene 1..5, clip seconds 4..12).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeedCardScale {
+    pub scenes: u32,
+    pub shots_per_scene: u32,
+    /// [min, max] clip seconds (schema: exactly 2, each 4..=12).
+    pub clip_s: [u32; 2],
+}
+
+/// One shareable G0 film-plan snapshot (mirror of the TS `SeedCard` in
+/// src/lib/directorStore/seedCard.ts; field-for-field, camelCase wire).
+/// No session keying, no versioning — the fixed `v: 1` discriminator only.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SeedCard {
+    /// Fixed wire discriminator (v1).
+    pub v: u32,
+    pub title: String,
+    /// The creative idea the LLM reads (required — a card without it is
+    /// useless, and the TS side rejects missing `idea`).
+    pub idea: String,
+    /// The G0 look axes (S1/S2 seeding).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mood: Option<u8>,
+    pub genre: Genre,
+    pub ratio: String,
+    pub scale: SeedCardScale,
+    pub time_of_day: String,
+    pub weather: String,
+    /// First novel scene prose (<= 280 chars), when the UI supplied one.
+    #[serde(default)]
+    pub preview: Option<String>,
+}
+
+/// `SeedCard` reuses the engine's closed genre shape (name + style).
+/// Absent optionals (`mood`, `preview`) are OMITTED from the wire JSON
+/// (`skip_serializing_if`), mirroring the TS card which drops them when
+/// unset — a shareable file stays minimal; deserialization `#[default]`
+/// restores them to `None`.
+
+/// Cap on a loadable seed card file — the card is a small JSON snapshot,
+/// never a blob, so the read path bounds its size up front.
+const SEED_CARD_MAX_BYTES: usize = 16 * 1024;
+
+/// Shared path guard for seed-card files: non-empty, no NUL byte, and no
+/// `..` traversal component. Tauri's dialog picker always yields absolute
+/// paths, so an absolute-ish check is sufficient here (the storage
+/// validator is base-dir bound and does not fit a free-choice dialog path).
+fn validate_seed_card_path(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::PathBuf::from(path);
+    if path.trim().is_empty() {
+        return Err("seed card path is empty".to_string());
+    }
+    if path.contains('\0') {
+        return Err("seed card path contains a NUL byte".to_string());
+    }
+    for component in p.components() {
+        if let std::path::Component::ParentDir = component {
+            return Err("seed card path contains '..' traversal".to_string());
+        }
+    }
+    Ok(p)
+}
+
+/// Pure write half: validate + parse the card JSON (shape check), then
+/// write it PRETTY to `path`. Factored so the round-trip test needs no
+/// `AppState` (the async command is a thin wrapper over this).
+pub fn write_seed_card(path: &str, card_json: &str) -> Result<String, String> {
+    let target = validate_seed_card_path(path)?;
+    // Shape-validate before touching the disk: a card that can't be parsed
+    // must never be written even half-file.
+    let card: SeedCard =
+        serde_json::from_str(card_json).map_err(|e| format!("seed card: invalid JSON ({e})"))?;
+    // Ensure the parent dir exists (a dialog path points at a fresh file).
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // Pretty-print for shareability (one file humans can diff/read).
+    let pretty = serde_json::to_string_pretty(&card).map_err(|e| e.to_string())?;
+    std::fs::write(&target, pretty).map_err(|e| e.to_string())?;
+    Ok(path.to_string())
+}
+
+/// Pure read half: size-guard (16 KB), then shape-validate via
+/// `serde_json::from_str::<SeedCard>` and return the RAW JSON string — the
+/// UI owns parsing through `parseSeedCard` (Rust never re-serializes).
+pub fn read_seed_card(path: &str) -> Result<String, String> {
+    let target = validate_seed_card_path(path)?;
+    let bytes = std::fs::read(&target).map_err(|e| e.to_string())?;
+    if bytes.len() > SEED_CARD_MAX_BYTES {
+        return Err(format!(
+            "seed card too large ({} bytes > {})",
+            bytes.len(),
+            SEED_CARD_MAX_BYTES
+        ));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| "seed card is not valid UTF-8".to_string())?;
+    // Shape check: must parse into the card struct (field-presence/shape
+    // guard; the UI re-parses the same raw text via parseSeedCard).
+    let _card: SeedCard =
+        serde_json::from_str(&text).map_err(|e| format!("seed card: invalid JSON ({e})"))?;
+    Ok(text)
+}
+
+/// Save a seed-card JSON string to a user-picked path (path-in dialog).
+/// Writes PRETTY JSON; returns the path string echoed back.
+#[tauri::command]
+pub async fn director_save_seed_card(
+    path: String,
+    card_json: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    // `state` is accepted for the uniform command signature (the save is
+    // path-driven, not session-keyed — no DB window needed at all).
+    let _ = state;
+    write_seed_card(&path, &card_json)
+}
+
+/// Load a seed card from a user-picked path (path-out dialog) and return
+/// the RAW JSON string so the UI owns parsing via `parseSeedCard`.
+#[tauri::command]
+pub async fn director_load_seed_card(path: String) -> Result<String, String> {
+    read_seed_card(&path)
+}
+
 // ── Unit tests (pure helpers, no DB access) ───────────────────────────────
 
 #[cfg(test)]
@@ -593,10 +1038,9 @@ mod tests {
     use crate::generation::video_flow::engine::seed::EngineEntry;
     use crate::generation::video_flow::engine::types::{Genre, SeedScale};
     use crate::generation::video_flow::{
-        Critic, CriticInput, CriticSectionView, DefaultCritic, FlowConfig,
-        IntentSnapshot, LayeredExpander, ModelResolver, ModelRole,
-        PassthroughLayeredExpander, RegenerationContract, StubModelResolver,
-        lower_to_elements, structure_plan, VersionTriple,
+        lower_to_elements, structure_plan, Critic, CriticInput, CriticSectionView, DefaultCritic,
+        FlowConfig, IntentSnapshot, LayeredExpander, ModelResolver, ModelRole,
+        PassthroughLayeredExpander, RegenerationContract, StubModelResolver, VersionTriple,
     };
 
     fn test_entry() -> EngineEntry {
@@ -612,6 +1056,8 @@ mod tests {
             scale: SeedScale { scenes: 1, shots_per_scene: 2, clip_s: [8, 10] },
             time_of_day: "midday".into(),
             weather: "clear".into(),
+            mood: 50,
+            overrides: Default::default(),
         }
     }
 
@@ -624,7 +1070,9 @@ mod tests {
                      long slow reflections while the wind moves the dry grass and the whole \
                      valley settles into quiet evening";
         let intent = IntentSnapshot::new(long);
-        let novel = PassthroughLayeredExpander.expand(&intent, &cfg.expand).unwrap();
+        let novel = PassthroughLayeredExpander
+            .expand(&intent, &cfg.expand)
+            .unwrap();
         let marker_text = format!(
             "# A fox at dusk\n@@ cinematic, warm golden hour\n\
              @camera:0-24\nwide tracking shot across the meadow\n\
@@ -655,11 +1103,8 @@ mod tests {
             critic_model_version: 0,
         };
         let regen = RegenerationContract::new(triple, &lowered);
-        let critic_model = StubModelResolver.resolve(
-            ModelRole::Critic,
-            0,
-            cfg.learn.model_root.as_deref(),
-        );
+        let critic_model =
+            StubModelResolver.resolve(ModelRole::Critic, 0, cfg.learn.model_root.as_deref());
         let engine = if with_engine {
             Some(test_entry().build_run())
         } else {
@@ -719,8 +1164,7 @@ mod tests {
                 prompt: "MY OVERRIDE".into(),
             }],
         );
-        let edited_scene = plan
-            .pipes[0]
+        let edited_scene = plan.pipes[0]
             .sections
             .iter()
             .find(|s| s.tag.keyword() == scene_tag.as_str())
@@ -731,20 +1175,33 @@ mod tests {
         apply_section_edits(
             &mut plan,
             &[
-                EditedSection { pipe_index: 0, tag: "nope".into(), occurrence: None, prompt: "x".into() },
-                EditedSection { pipe_index: 99, tag: scene_tag.clone(), occurrence: None, prompt: "y".into() },
+                EditedSection {
+                    pipe_index: 0,
+                    tag: "nope".into(),
+                    occurrence: None,
+                    prompt: "x".into(),
+                },
+                EditedSection {
+                    pipe_index: 99,
+                    tag: scene_tag.clone(),
+                    occurrence: None,
+                    prompt: "y".into(),
+                },
             ],
         );
         // The scene section still holds the override; no unknown-tag section
         // was created, no other section changed.
-        let still_edited = plan
-            .pipes[0]
+        let still_edited = plan.pipes[0]
             .sections
             .iter()
             .find(|s| s.tag.keyword() == scene_tag.as_str())
             .expect("scene section still present");
         assert_eq!(still_edited.prompt, "MY OVERRIDE");
-        assert_eq!(plan.pipes.len(), original.pipes.len(), "no pipes added/removed");
+        assert_eq!(
+            plan.pipes.len(),
+            original.pipes.len(),
+            "no pipes added/removed"
+        );
     }
 
     // (c) empty `edited` vec leaves the plan byte-identical to
@@ -786,8 +1243,7 @@ mod tests {
             .expect("camera section present in the concrete plan");
         assert_eq!(hit.prompt, "CAMERA OVERRIDDEN");
         // A non-camera section of pipe 0 is untouched.
-        let other = plan
-            .pipes[0]
+        let other = plan.pipes[0]
             .sections
             .iter()
             .find(|s| s.tag.keyword() != camera_tag.as_str())
@@ -831,11 +1287,7 @@ mod tests {
             .filter(|s| s.tag == VideoTag::Scene)
             .collect();
         assert_eq!(scenes[1].prompt, "MIDDLE ARC OVERRIDDEN");
-        assert_ne!(
-            scenes[0].prompt,
-            "MIDDLE ARC OVERRIDDEN",
-            "arc 0 untouched"
-        );
+        assert_ne!(scenes[0].prompt, "MIDDLE ARC OVERRIDDEN", "arc 0 untouched");
         // `occurrence: None` applies to EVERY arc of the tag.
         apply_section_edits(
             &mut plan,
@@ -852,7 +1304,10 @@ mod tests {
             .filter(|s| s.tag == VideoTag::Scene)
             .map(|s| s.prompt.as_str())
             .collect();
-        assert!(all.iter().all(|p| *p == "ALL ARCS"), "None occurrence hits every arc");
+        assert!(
+            all.iter().all(|p| *p == "ALL ARCS"),
+            "None occurrence hits every arc"
+        );
         // An out-of-range occurrence is ignored (never panics, no change).
         let before = plan.clone();
         apply_section_edits(
@@ -865,5 +1320,133 @@ mod tests {
             }],
         );
         assert_eq!(plan, before, "out-of-range occurrence is a no-op");
+    }
+
+    // (f) M2 seed card: a shareable one-file film-plan snapshot round-trips
+    //     through write_seed_card / read_seed_card in a temp dir, and the
+    //     16 KB load guard rejects an oversized file. Pure helpers — no DB.
+    #[test]
+    fn seed_card_round_trips_and_rejects_oversized() {
+        use super::{read_seed_card, write_seed_card, SeedCard, SeedCardScale};
+
+        let dir = std::env::temp_dir().join(format!("seed-card-{}", uuid::Uuid::new_v4()));
+        let file = dir.join("card.json");
+
+        let card = SeedCard {
+            v: 1,
+            title: "Untitled".into(),
+            idea: "a red fox darts through the tall pine forest at dusk".into(),
+            mood: Some(72),
+            genre: crate::generation::video_flow::engine::types::Genre {
+                name: "Cinematic".into(),
+                style: "cinematic natural light".into(),
+            },
+            ratio: "16:9".into(),
+            scale: SeedCardScale {
+                scenes: 2,
+                shots_per_scene: 3,
+                clip_s: [8, 10],
+            },
+            time_of_day: "midday".into(),
+            weather: "clear".into(),
+            preview: Some("The fox darts through the pines as golden light spills...".into()),
+        };
+        let json = serde_json::to_string(&card).unwrap();
+
+        // Write (path echo returned) → the file holds PRETTY json of the card.
+        let echoed = write_seed_card(file.to_str().unwrap(), &json).unwrap();
+        assert_eq!(echoed, file.to_str().unwrap());
+        let on_disk = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SeedCard>(&on_disk).unwrap(),
+            card,
+            "written card must round-trip field-for-field"
+        );
+
+        // Read → the raw JSON string is returned (UI owns parseSeedCard),
+        // and it re-parses to the same struct.
+        let raw = read_seed_card(file.to_str().unwrap()).unwrap();
+        assert_eq!(serde_json::from_str::<SeedCard>(&raw).unwrap(), card);
+
+        // A card without mood/preview also parses (the Option fields default).
+        let bare = SeedCard {
+            mood: None,
+            preview: None,
+            ..card.clone()
+        };
+        let bare_json = serde_json::to_string(&bare).unwrap();
+        assert!(bare_json.contains("\"idea\""), "idea must serialize");
+        assert!(
+            !bare_json.contains("\"mood\""),
+            "absent mood must be dropped"
+        );
+        let bare_path = dir.join("bare.json");
+        write_seed_card(bare_path.to_str().unwrap(), &bare_json).unwrap();
+        let bare_raw = read_seed_card(bare_path.to_str().unwrap()).unwrap();
+        assert_eq!(serde_json::from_str::<SeedCard>(&bare_raw).unwrap(), bare);
+
+        // The 16 KB guard: an oversized file is rejected on read.
+        let big = dir.join("big.json");
+        std::fs::write(&big, "0".repeat(SEED_CARD_MAX_BYTES + 1)).unwrap();
+        let err = read_seed_card(big.to_str().unwrap()).unwrap_err();
+        assert!(
+            err.contains("seed card too large"),
+            "oversized file must be rejected, got: {err}"
+        );
+
+        // A non-JSON / oversized-but-valid-JSON file fails the shape check.
+        let bad = dir.join("bad.json");
+        std::fs::write(&bad, "not json at all".as_bytes()).unwrap();
+        assert!(read_seed_card(bad.to_str().unwrap()).is_err());
+
+        // Best-effort cleanup (temp dir may be shared across test runs).
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // (g) M3 scoped splice: replacing the first n session pipes in place
+    //     leaves the trailing pipes untouched; an empty composer is a named
+    //     error (the UI's `pipeCount === 0` guard, server-side).
+    #[test]
+    fn splice_scoped_pipes_replaces_first_n_in_place() {
+        use crate::models::composer::{ComposerConfig, Pipe};
+
+        let mut pipe_named = |name: &str, frames: u32| {
+            let mut p = Pipe::new(name, frames);
+            p.id = name.to_string();
+            p
+        };
+
+        let mut cfg = ComposerConfig::new("sess", "c");
+        cfg.pipes = (0..4)
+            .map(|i| pipe_named(&format!("old-{i}"), 24))
+            .collect();
+
+        // n < existing count: the first 2 session pipes are replaced in
+        // place; pipes at index 2 and beyond stay untouched.
+        let new_pipes: Vec<Pipe> = (0..2)
+            .map(|i| pipe_named(&format!("new-{i}"), 48))
+            .collect();
+        let replaced = splice_scoped_pipes(&mut cfg, &new_pipes).unwrap();
+        assert_eq!(replaced, 2);
+        assert_eq!(cfg.pipes.len(), 4, "the two trailing pipes are kept");
+        assert_eq!(cfg.pipes[0].name, "new-0");
+        assert_eq!(cfg.pipes[1].name, "new-1");
+        assert_eq!(cfg.pipes[2].name, "old-2", "trailing pipes untouched");
+        assert_eq!(cfg.pipes[3].name, "old-3");
+
+        // n >= existing count: every session pipe is replaced.
+        let all: Vec<Pipe> = (0..5)
+            .map(|i| pipe_named(&format!("full-{i}"), 24))
+            .collect();
+        let replaced = splice_scoped_pipes(&mut cfg, &all).unwrap();
+        assert_eq!(replaced, 5);
+        assert_eq!(cfg.pipes.len(), 5);
+        assert_eq!(cfg.pipes[4].name, "full-4");
+
+        // An empty existing composer is a named error, not a silent no-op.
+        let mut empty = ComposerConfig::new("s", "e");
+        empty.pipes.clear();
+        let err = splice_scoped_pipes(&mut empty, &new_pipes).unwrap_err();
+        assert!(err.contains("run a full apply first"), "{err}");
     }
 }

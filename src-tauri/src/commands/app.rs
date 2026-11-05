@@ -43,3 +43,39 @@ pub fn js_error_log(message: String) {
         message.chars().take(4000).collect::<String>()
     );
 }
+
+/// On-demand process memory probe for the in-app RAM monitor chip. The UI
+/// polls it every few seconds (a passive, generation-free read) so a user
+/// can watch backend RSS without running a generation. Pairs with the
+/// renderer's `performance.memory` snapshot for a two-process view.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryProbe {
+    /// Backend process (vision-machine.exe) resident-set bytes.
+    pub process_rss_bytes: u64,
+    /// System total memory bytes.
+    pub total_memory_bytes: u64,
+    /// System available memory bytes.
+    pub free_memory_bytes: u64,
+    /// Generation tasks currently active.
+    pub active_tasks: u32,
+    /// The per-stage ring-buffer summary line (first → peak + peak stage),
+    /// or an empty string when no generation has sampled yet.
+    pub ring_summary: String,
+    /// How many stage-attributed samples are in the ring buffer.
+    pub ring_len: usize,
+}
+
+#[tauri::command]
+pub fn memory_probe(state: State<'_, AppState>) -> Result<MemoryProbe, String> {
+    let prof = state.generation.registry.memory_profiler();
+    let (rss, total, free) = crate::generation::memory_profile::MemoryProfiler::probe();
+    Ok(MemoryProbe {
+        process_rss_bytes: rss,
+        total_memory_bytes: total,
+        free_memory_bytes: free,
+        active_tasks: state.generation.registry.active_task_count() as u32,
+        ring_summary: prof.summary_line(),
+        ring_len: prof.snapshot().len(),
+    })
+}

@@ -32,6 +32,7 @@ use crate::generation::video_flow::engine::types::{
     SceneTimeline, SeedScale, ShotContent, ShotMolecule, ShotSpec, SubSlice, TimelineScene,
     TimelineShot, VisualNovel,
 };
+use crate::generation::video_flow::engine::tree::{leaf_to_concerns, StructuralTree};
 use serde::{Deserialize, Serialize};
 
 /// S0 → S4 deterministic build result, one per run.
@@ -65,6 +66,11 @@ pub struct EngineRun {
     /// LLM path was not attempted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expansion_note: Option<String>,
+    /// S0.5 structural tree (the "brain" layer). Present on every NEW run
+    /// (template or LLM); old docs load `None` via the serde default below,
+    /// and their S2/S3 keep the legacy per-shot cycling tables (byte-stable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<crate::generation::video_flow::engine::tree::StructuralTree>,
 }
 
 /// One gate's in-run state. Absorbed shape of `harness/out/session.json`
@@ -336,6 +342,9 @@ impl EngineRun {
         // S1: deterministic template novel (the always-available LLM-free
         // producer). The LLM path (build_with_novel) swaps only this layer.
         let novel = build_novel(&seed, tod, weather);
+        // The plain seed build keeps the pre-M4 pinned structure (no mood
+        // post-processing): mood rides the UI template path (build_run) +
+        // the Node A prompt line, not the LLM/director bridge.
         Self::build_with_novel(
             seed,
             novel,
@@ -349,7 +358,9 @@ impl EngineRun {
     /// S2–S5 build from an ALREADY-PRODUCED S1 novel (the LLM Node A
     /// output) + expansion provenance. S2/S3/S4/S5 stay deterministic from
     /// the novel — only the S1 layer may be LLM-written; the G0 look axes
-    /// still drive S2/S4 regardless of what the LLM claimed.
+    /// still drive S2/S4 regardless of what the LLM claimed. Structurally
+    /// intact (no mood post-processing) — M4 mood shapes the PROMPT, not
+    /// this bridge's structure.
     pub fn build_with_novel(
         seed_in: FilmSeed,
         novel: VisualNovel,
@@ -357,6 +368,50 @@ impl EngineRun {
         weather: &str,
         expansion: ExpansionSource,
         expansion_note: Option<String>,
+    ) -> Self {
+        Self::build_with_novel_mood(
+            seed_in,
+            novel,
+            tod,
+            weather,
+            expansion,
+            expansion_note,
+            None,
+            None,
+        )
+    }
+
+    /// M4: the mood-aware build. Same deterministic S2–S5 bridge as
+    /// `build_with_novel`, but when `mood_profile` is `Some` the mood band
+    /// post-processes the seeded S2 scenes + S3 specs + S2 division BEFORE
+    /// S4 derive + S5 verify: clip length (the band's `clip_range` min,
+    /// clamped to the 4..10 engine cap), transition_in/out (the band's
+    /// `transitions`), base shot move/speed (the band's `motion`/`speed`,
+    /// with `camera_move` standing in when the band is static), the scene's
+    /// `effects_base` (the first `effect_count` closed-vocab effect tags),
+    /// and the scene light + grade `contrast`. `None` = the pre-M4 path,
+    /// byte-identical to `build_with_novel`.
+    ///
+    /// Phase 1b: when `tree` is `Some`, the S0.5 structural tree drives the
+    /// S2/S3 production on top of the mood band — the scene's color
+    /// temperature comes from the owning branch's chained open/close K pair
+    /// (the #3 fix promoted per-branch), the scene-boundary transition intent
+    /// comes from the branch's energy-driven `transition_in`/`out`, and each
+    /// shot's base camera/lens concerns come from its leaf via
+    /// `leaf_to_concerns` (closed vocab, so S5 stays clean). The mood band
+    /// still owns the S3 clip + scene contrast + effects_base and stamps the
+    /// base motion (the leaf's motion is structural intent, not the mood
+    /// band's). `None` keeps the legacy per-shot cycling tables, so old docs
+    /// stay byte-stable; the tree is additive.
+    pub fn build_with_novel_mood(
+        seed_in: FilmSeed,
+        novel: VisualNovel,
+        tod: &str,
+        weather: &str,
+        expansion: ExpansionSource,
+        expansion_note: Option<String>,
+        mood_profile: Option<&MoodProfile>,
+        tree: Option<&StructuralTree>,
     ) -> Self {
         let seed = normalize_seed(seed_in);
         let mut novel = novel;
@@ -366,19 +421,40 @@ impl EngineRun {
         novel.film.weather = weather.to_string();
 
         // S2: scene specs - one per novel scene, look seeded from the novel film.
-        let scenes: Vec<SceneSpec> =
-            novel
-                .scenes
-                .iter()
-                .enumerate()
-                .map(|(i, sc)| build_scene_spec(i, sc, &novel, &seed.genre.name))
-                .collect();
+        // M4: when a mood band is active it OVERRIDES the scene light + grade
+        // contrast and seeds the scene's `effects_base` (the first
+        // `effect_count` closed-vocab effect tags), so the whole run reads
+        // "subtle" or "cinematic" before any shot-level delta lands.
+        // Phase 1b: when a tree is present the scene's color temperature is
+        // set from the owning branch's open/close K pair instead of the
+        // hardcoded 5000K default (the chained temp arc, no cut flicker).
+        let mood_effects: Vec<String> = match mood_profile {
+            Some(p) => p.effects_base(),
+            None => Vec::new(),
+        };
+        let scenes: Vec<SceneSpec> = novel
+            .scenes
+            .iter()
+            .enumerate()
+            .map(|(i, sc)| {
+                let mut sp = build_scene_spec(i, sc, &novel, &seed.genre.name, tree);
+                if let Some(p) = mood_profile {
+                    sp.light.contrast = p.contrast.to_string();
+                    sp.grade.contrast = p.contrast.to_string();
+                    sp.effects_base = mood_effects.clone();
+                }
+                sp
+            })
+            .collect();
 
         // S3: shot specs - one per novel shot, concern-grouped closed defaults.
         // content-driven sub-slices activate ONLY on the LLM path (rich Node A
         // beats); the deterministic template keeps its pinned cycling journey.
+        // Phase 1b: the tree's leaves drive the base shot concerns + the
+        // branch-boundary transition intent when present.
         let content_driven = expansion == ExpansionSource::Llm;
-        let (specs, timeline) = build_specs_and_timeline(&seed, &novel, &scenes, content_driven);
+        let (specs, timeline) =
+            build_specs_and_timeline(&seed, &novel, &scenes, content_driven, mood_profile, tree);
 
         // S3'/S4: molecules - derived from (scene, spec pair), prompts filled.
         // Specs are laid out scene-major (si, ki); the owning scene index is
@@ -417,6 +493,12 @@ impl EngineRun {
             gates: Vec::new(),
             expansion,
             expansion_note,
+            // Phase 1a: the run's structural tree is attached by the callers
+            // that have the full `EngineEntry` (`EngineEntry::build_run` for
+            // the template path, `director_run_flow` for the LLM path). This
+            // low-level builder leaves it `None` so the legacy / golden
+            // structure pins stay byte-stable; the tree is additive.
+            tree: None,
         };
         run.verify = verify(&run);
         run.gates = Self::gate_states();
@@ -964,12 +1046,23 @@ fn idea_units(idea: &str, n: usize) -> Vec<String> {
             })
             .collect()
     };
-    // Trim to exactly `n` entries (pad with the last fragment if short).
-    while parts.len() < n {
-        let last = parts.last().cloned().unwrap_or_else(|| "the moment deepens".into());
-        parts.push(last);
+    // Fill to exactly `n` entries. When the author's idea is thinner than the
+    // shot count, SPREAD the real content round-robin (never tail-repeat one
+    // fragment across half the run) and drop empty slots so no shot is left
+    // with blank prose. This is what stops "every pipe says the same thing."
+    let pool: Vec<String> = parts
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    parts.clear();
+    for i in 0..n {
+        parts.push(if pool.is_empty() {
+            "the moment deepens".to_string()
+        } else {
+            pool[i % pool.len()].clone()
+        });
     }
-    parts.truncate(n);
     parts
 }
 
@@ -1199,7 +1292,35 @@ fn title_from_idea(idea: &str) -> String {
 
 
 /// S2 Node A′ — per-scene base look. Seeded from the novel film + scene title.
-fn build_scene_spec(index: usize, _sc: &NovelScene, novel: &VisualNovel, genre: &str) -> SceneSpec {
+/// Phase 1b: when a tree is present the scene's color temperature is set from
+/// the owning branch's chained open/close K pair (the #3 fix promoted
+/// per-branch — open[i] == close[i-1] exactly, so a cut in a continuous
+/// scene never flickers warm↔cool); the hardcoded 5000K default is the
+/// tree:None legacy fallback (byte-stable for old docs).
+fn build_scene_spec(
+    index: usize,
+    _sc: &NovelScene,
+    novel: &VisualNovel,
+    genre: &str,
+    tree: Option<&StructuralTree>,
+) -> SceneSpec {
+    // The branch owning this scene: the tree's branches are index-aligned
+    // with the novel's scenes (both track the entry's scale.scenes). A scene
+    // past the tree's branch count (the LLM's shot-count stretch) rides the
+    // last branch's close K — the arc doesn't invent new branches.
+    let scene_temp_k: u32 = match tree {
+        Some(t) => t
+            .branches
+            .get(index)
+            .map(|b| b.temp_open_k)
+            .unwrap_or_else(|| {
+                t.branches
+                    .last()
+                    .map(|b| b.temp_close_k)
+                    .unwrap_or(5000)
+            }),
+        None => 5000,
+    };
     SceneSpec {
         scene_id: format!("scene_{:02}", index + 1),
         time_of_day: novel.film.time_of_day.clone(),
@@ -1207,7 +1328,7 @@ fn build_scene_spec(index: usize, _sc: &NovelScene, novel: &VisualNovel, genre: 
         light: LightingConcern {
             key: "soft".into(),
             contrast: "medium".into(),
-            color_temp_k: 5000,
+            color_temp_k: scene_temp_k,
             pattern: Some("ambient".into()),
         },
         grade: GradeConcern {
@@ -1271,6 +1392,23 @@ fn shot_lens(g: usize) -> LensConcern {
     }
 }
 
+/// Phase 1b: the base focal length a tree LEAF's camera role implies, chosen
+/// from the closed `TagVocabulary::lens_focal()` set so a leaf-driven spec
+/// stays S5-verifiable. The leaf's `camera_role` is the structural intent;
+/// this maps it to a concrete focal — wide establishing = wide lens, intimate
+/// close = long lens, dynamic track / holding medium = mid lens. `None`
+/// (a leaf past the branch's leaf count, the LLM shot-count stretch) keeps
+/// the caller's cycling fallback.
+fn focal_for_role(camera_role: &str) -> u32 {
+    match camera_role {
+        "establishing_wide" => 24,
+        "intimate_close" => 85,
+        "dynamic_track" => 50,
+        // "holding_medium" + unknown/legacy → the neutral mid focal.
+        _ => 35,
+    }
+}
+
 fn shot_motion(g: usize) -> MotionConcern {
     let moves = ["static", "pan", "track", "dolly", "static"];
     let speeds = ["normal", "slow", "normal", "slow", "normal"];
@@ -1324,9 +1462,10 @@ fn shot_sub_slices(
     beats: &[String],
     base: &Concerns,
     content_driven: bool,
+    tree_temps: Option<(u32, u32)>,
 ) -> Vec<SubSlice> {
     if !content_driven {
-        return shot_sub_slices_cycling(g, clip, shot_ref);
+        return shot_sub_slices_cycling(g, clip, shot_ref, tree_temps);
     }
     let vocab = TagVocabulary::new();
     let profiles = beat_profiles::beat_profiles();
@@ -1334,9 +1473,11 @@ fn shot_sub_slices(
         beats.iter().map(|b| beat_profiles::parse_beat_size(b, &vocab)).collect();
 
     // Activation gate: content drives the structure only when at least one
-    // beat names a closed-vocab shot size. Otherwise → the cycling journey.
+    // beat names a closed-vocab shot size. Otherwise → the cycling journey
+    // (still tree-temp-driven for the light arc — the #3 fix is the point,
+    // even on the LLM path with unparseable beats).
     if !sizes.iter().any(Option::is_some) {
-        return shot_sub_slices_cycling(g, clip, shot_ref);
+        return shot_sub_slices_cycling(g, clip, shot_ref, tree_temps);
     }
 
     // One slice per beat (S3 cap is 4). The table's pacing weight sets each
@@ -1418,8 +1559,18 @@ fn collapse_no_op_slices(slices: &mut Vec<SubSlice>, base: &Concerns) {
 
 /// The pre-existing per-shot **cycling** journey — the guaranteed structure
 /// when beats carry no parseable shot-size prefixes (and the sibling-variety
-/// source). Unchanged from the original S3 sub-slice builder.
-fn shot_sub_slices_cycling(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice> {
+/// source). Unchanged from the original S3 sub-slice builder, EXCEPT the
+/// light-temperature arc: when `tree_temps` is `Some((open_k, close_k))` the
+/// sub-slice's cool-open / warm-close states ride the OWNING BRANCH's chained
+/// temp pair (the #3 fix promoted to the sub-slice level — no within-branch
+/// flicker), instead of the `g % 6` cycling temp table. `None` = the
+/// pre-tree cycling temps (byte-stable legacy / golden path).
+fn shot_sub_slices_cycling(
+    g: usize,
+    clip: u32,
+    shot_ref: &str,
+    tree_temps: Option<(u32, u32)>,
+) -> Vec<SubSlice> {
     // Camera size journey (start → mid → end).
     let cam = [
         ["close-up", "medium", "wide"],
@@ -1454,13 +1605,39 @@ fn shot_sub_slices_cycling(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice>
         [50, 135, 35],
     ][g % 6];
     // Light-temperature arc (open K, close K) + its pattern words.
-    let (open_k, close_k, open_p, close_p) = match g % 6 {
-        0 => (4500, 5500, "cool", "warm"),
-        1 => (5500, 4500, "warm", "cool"),
-        2 => (3200, 6500, "firelight", "moonlight"),
-        3 => (4500, 6500, "dawn", "overcast"),
-        4 => (5000, 3000, "gold", "blue"),
-        _ => (6500, 4500, "tungsten", "daylight"),
+    //
+    // Phase 1b: when the run carries a structural tree, the open/close K
+    // ride the OWNING BRANCH's chained temp pair (tree_temps) — the #3 fix
+    // promoted to the sub-slice level, so a cut between two shots in a
+    // continuous branch never flickers warm↔cool. The sub-slice camera /
+    // focal / motion journeys still cycle on `g` (sibling variety), only
+    // the temp arc is tree-driven. When `tree_temps` is `None` the
+    // legacy `g % 6` cycling temp table is used unchanged (byte-stable).
+    let (cycling_open, cycling_close, cycling_open_p, cycling_close_p): (u32, u32, &str, &str) =
+        match g % 6 {
+            0 => (4500, 5500, "cool", "warm"),
+            1 => (5300, 4500, "warm", "cool"),
+            2 => (4200, 5200, "cool", "warm"),
+            3 => (4700, 5500, "soft", "warm"),
+            4 => (5300, 4400, "warm", "cool"),
+            _ => (5000, 5500, "neutral", "cool"),
+        };
+    // Tree temps win; the cycling table is the fallback. The temp PATTERN
+    // words are derived from the temp RELATIONSHIP (warm close vs cool
+    // close) so the closed-vocab V2 check stays clean.
+    let (open_k, close_k) = match tree_temps {
+        Some((o, c)) => (o, c),
+        None => (cycling_open, cycling_close),
+    };
+    let temp_cooler_than_open = close_k < open_k;
+    let (open_p, close_p) = if tree_temps.is_some() {
+        if temp_cooler_than_open {
+            ("warm", "cool")
+        } else {
+            ("cool", "warm")
+        }
+    } else {
+        (cycling_open_p, cycling_close_p)
     };
     // Motion events, keyed per slice (None = no motion delta there).
     let m0: Option<(&str, &str)> = if g % 6 == 2 { Some(("push", "slow")) } else { None };
@@ -1552,18 +1729,66 @@ fn shot_sub_slices_cycling(g: usize, clip: u32, shot_ref: &str) -> Vec<SubSlice>
 
 /// S3 Node B + S2 division — concern-grouped shot specs (closed vocab defaults)
 /// and the shot timeline at transition points.
+///
+/// Phase 1b: when `tree` is `Some`, the S0.5 structural tree drives the S3
+/// production — each shot's base camera/lens comes from its branch's leaf via
+/// `leaf_to_concerns` (the "brief" the leaf is: closed-vocab structural
+/// intent, no prose), scene-entry shots carry the branch's energy-driven
+/// `transition_in`, and a scene's last shot closes with the branch's
+/// `transition_out`. The mood band layers ON TOP: it still owns the clip,
+/// effects_base, contrast, and stamps the base motion. `tree == None` keeps
+/// the legacy per-shot `g % N` cycling tables byte-exactly (old docs).
 fn build_specs_and_timeline(
     seed: &FilmSeed,
     novel: &VisualNovel,
     scenes: &[SceneSpec],
     content_driven: bool,
+    mood: Option<&MoodProfile>,
+    tree: Option<&StructuralTree>,
 ) -> (Vec<ShotSpec>, SceneTimeline) {
-    let clip = seed.scale.clip_s[0].clamp(4, 10);
+    // M4: the mood band drives the S3 clip (its `clip_range` min, clamped to
+    // the 4..10 engine cap) — the sub-slice journeys + S2 division all scale
+    // off this same value, so the run stays V6-consistent. `None` = the
+    // pre-M4 seed-scale clip.
+    let clip = match mood {
+        Some(p) => p.clip_range[0].clamp(4, 10),
+        None => seed.scale.clip_s[0].clamp(4, 10),
+    };
+    // M4: transitions from the band's closed pair — [0] = the first shot's
+    // in, [1] = every other in + every out. `None` = the pre-M4 defaults
+    // (first hard_cut, rest crossfade, out crossfade).
+    let (first_in, default_in, out) = match mood {
+        Some(p) => (
+            p.transitions[0].clone(),
+            p.transitions[1].clone(),
+            p.transitions[1].clone(),
+        ),
+        None => ("hard_cut".into(), "crossfade".into(), "crossfade".into()),
+    };
+    // Phase 1b: the tree's branch-level transition intents (index-aligned
+    // with the novel's scenes; a scene past the tree's branch count — the
+    // LLM's shot-count stretch — falls back to the band values).
+    let branch_in_all: Vec<String> = tree
+        .map(|t| t.branches.iter().map(|b| b.transition_in.clone()).collect())
+        .unwrap_or_default();
+    let branch_out_all: Vec<String> = tree
+        .map(|t| t.branches.iter().map(|b| b.transition_out.clone()).collect())
+        .unwrap_or_default();
     let mut specs: Vec<ShotSpec> = Vec::new();
     let mut tl_scenes: Vec<TimelineScene> = Vec::new();
 
     for (si, sc) in novel.scenes.iter().enumerate() {
         let scene = &scenes[si];
+        // Phase 1b: the branch owning this scene (its entry/exit intent).
+        let branch_in = branch_in_all
+            .get(si)
+            .cloned()
+            .unwrap_or(if si == 0 {
+                first_in.clone()
+            } else {
+                default_in.clone()
+            });
+        let branch_out = branch_out_all.get(si).cloned().unwrap_or(out.clone());
         let mut tl_shots: Vec<TimelineShot> = Vec::new();
         for (ki, kshot) in sc.shots.iter().enumerate() {
             let shot_num = ki + 1;
@@ -1572,10 +1797,24 @@ fn build_specs_and_timeline(
 
             // S3 — ShotSpec: concern-grouped, closed defaults.
             let g = si * sc.shots.len() + ki;
-            let concerns = Concerns {
-                camera: shot_camera(g),
-                lens: shot_lens(g),
-                motion: shot_motion(g),
+            // Phase 1b: the leaf driving this shot's base camera/lens/motion
+            // (closed vocab via leaf_to_concerns). The branch's leaf count is
+            // the AUTO shots-per-scene; an LLM stretch (more shots) or a
+            // missing branch falls back to the cycling tables (legacy shape).
+            let leaf = tree
+                .and_then(|t| t.branches.get(si))
+                .and_then(|b| b.leaves.get(ki));
+            let (camera, lens, motion_base) = match leaf {
+                Some(l) => {
+                    let (c, ln, m) = leaf_to_concerns(l, focal_for_role(&l.camera_role));
+                    (c, ln, m)
+                }
+                None => (shot_camera(g), shot_lens(g), shot_motion(g)),
+            };
+            let mut concerns = Concerns {
+                camera,
+                lens,
+                motion: motion_base,
                 lighting: scene.light.clone(),
                 grade: scene.grade.clone(),
                 effects: Vec::new(),
@@ -1586,12 +1825,49 @@ fn build_specs_and_timeline(
                     silence: false,
                 },
             };
+            // M4: the mood band OVERRIDES the deterministic defaults — the
+            // shot's base move/speed come from the band (with the band's
+            // `camera_move` standing in when its base motion is static, so a
+            // static band still carries a closed camera move), and the shot
+            // effects start as the scene's mood-scaled `effects_base`.
+            if let Some(p) = mood {
+                let move_ = if p.motion == "static" { p.camera_move } else { p.motion };
+                concerns.motion = MotionConcern {
+                    r#move: move_.to_string(),
+                    zoom: "static".into(),
+                    speed: p.speed.to_string(),
+                };
+                // Shots inherit the scene's effects_base as their own
+                // effects (the delta form stays empty; the S4 merge
+                // de-dupes scene-base ∪ shot-delta, so this is clean).
+                concerns.effects = scene.effects_base.clone();
+            }
             // Sub-timeline: content-driven when this is an LLM novel (the
             // beat shot-size prefixes set the journey + pacing via the
             // editable beat_profiles table); the per-shot cycling journey is
             // the guaranteed fallback (template path, or unparseable beats).
+            // Phase 1b: when a tree is present, the sub-slice's temp arc
+            // rides the OWNING BRANCH's chained open/close K (the #3 fix at
+            // the sub-slice level) instead of the legacy g%6 cycling temps;
+            // the camera / focal / motion journeys still cycle on `g`.
+            let tree_temps: Option<(u32, u32)> = tree
+                .and_then(|t| t.branches.get(si))
+                .map(|b| (b.temp_open_k, b.temp_close_k));
             let beats = kshot.beats.clone();
-            let sub = shot_sub_slices(g, clip, &shot_ref, &beats, &concerns, content_driven);
+            let sub =
+                shot_sub_slices(g, clip, &shot_ref, &beats, &concerns, content_driven, tree_temps);
+            // Phase 1b: the scene's ENTRY shot carries the branch's
+            // energy-driven transition_in; interior shots keep the band's
+            // within-scene default (the tree models cuts at the branch level,
+            // not per shot).
+            let trans_in = if ki == 0 { branch_in.clone() } else { default_in.clone() };
+            // Phase 1b: the scene's LAST shot closes with the branch's
+            // transition_out; interior shots keep the band's out.
+            let shot_out = if ki + 1 == sc.shots.len() {
+                branch_out.clone()
+            } else {
+                out.clone()
+            };
             specs.push(ShotSpec {
                 shot_id: shot_id.clone(),
                 novel_ref: shot_ref.clone(),
@@ -1600,8 +1876,8 @@ fn build_specs_and_timeline(
                     beats: kshot.beats.clone(),
                 },
                 clip_s: clip,
-                transition_in: if si == 0 && ki == 0 { "hard_cut".into() } else { "crossfade".into() },
-                transition_out: "crossfade".into(),
+                transition_in: trans_in,
+                transition_out: shot_out.clone(),
                 concerns,
                 sub_timeline: sub,
             });
@@ -1611,14 +1887,14 @@ fn build_specs_and_timeline(
                 shot_id: shot_id.clone(),
                 novel_ref: shot_ref.clone(),
                 clip_s: clip,
-                transition_out: "crossfade".into(),
+                transition_out: shot_out,
                 transition_note: format!("cut to next in scene {}", si + 1),
             });
         }
         tl_scenes.push(TimelineScene {
             scene_id: format!("scene_{:02}", si + 1),
             title: sc.title.clone(),
-            transition_in: if si == 0 { "hard_cut".into() } else { "crossfade".into() },
+            transition_in: branch_in,
             transition_note: "scene entry".into(),
             time_of_day: novel.film.time_of_day.clone(),
             weather: novel.film.weather.clone(),
@@ -1670,7 +1946,7 @@ fn make_molecule(sp: &ShotSpec, scene: &SceneSpec) -> ShotMolecule {
 /// (`time_of_day`, `weather`) that the UI lets the user tune at G0.
 ///
 /// Serialized as `snake_case` to match the harness wire schema (film_seed).
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct EngineEntry {
     pub title: String,
@@ -1688,11 +1964,154 @@ pub struct EngineEntry {
     pub time_of_day: String,
     #[serde(default = "default_weather")]
     pub weather: String,
+    /// M4 — the 0..100 "Subtle ↔ Cinematic" mood slider. An ENTRY-level
+    /// control: `MoodProfile::for_mood` maps the band onto the deterministic
+    /// S2/S3 seeding (clip length, transitions, base motion, effects,
+    /// contrast, default camera move) + the one Node A prompt line (llm.rs).
+    /// It is deliberately NOT on `FilmSeed` (byte-stable) and never lands in
+    /// the persisted seed. Old persisted docs / seed cards without the key
+    /// parse as 50 (balanced) via the serde default below.
+    #[serde(default = "default_mood")]
+    pub mood: u8,
+    /// Manual-override pins for the S0.5 structural tree (the "always give
+    /// the user a manual opportunity" rule). Absent on old entries / seed
+    /// cards → parses as no-pins via the serde default below; the tree's
+    /// auto values win wherever a pin is missing.
+    #[serde(default)]
+    pub overrides: crate::generation::video_flow::engine::tree::TreeOverrides,
 }
 
 fn default_ratio() -> String { "16:9".into() }
 fn default_tod() -> String { "midday".into() }
 fn default_weather() -> String { "clear".into() }
+/// M4 default: 50 = the "balanced" band.
+fn default_mood() -> u8 { 50 }
+
+impl Default for EngineEntry {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            idea: String::new(),
+            input_text: None,
+            genre: Genre::default(),
+            ratio: default_ratio(),
+            scale: SeedScale::default(),
+            time_of_day: default_tod(),
+            weather: default_weather(),
+            mood: default_mood(),
+            overrides: Default::default(),
+        }
+    }
+}
+
+/// M4: the "Subtle ↔ Cinematic" mood slider (0..100) mapped onto the
+/// deterministic S2/S3 engine parameters. Every tag value is a member of the
+/// closed `TagVocabulary`:
+/// - `transitions` / `motion` / `camera_move` ∈ transition() / move_set()
+/// - `speed` ∈ speed() · `contrast` ∈ light_contrast() ∩ grade_contrast()
+/// - `clip_range` bounds the S3 clip choice (the spec build clamps to the
+///   engine's 4..10s cap, so the cinematic band's 12s max lands at 10s)
+/// - `effect_count` items are taken from the closed effects() set (stable
+///   BTreeSet order, skipping the "none" sentinel).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoodProfile {
+    /// [min, max] clip seconds the band draws from (the spec build picks the
+    /// band's min, clamped to the 4..10 engine cap).
+    pub clip_range: [u32; 2],
+    /// [first-shot transition_in, default transition_in] · transition_out is
+    /// always index [1].
+    pub transitions: [String; 2],
+    /// The base shot move (MotionConcern.move) the band stamps on shots.
+    pub motion: &'static str,
+    /// The base shot speed (MotionConcern.speed).
+    pub speed: &'static str,
+    /// How many effects() items the scene's effects_base carries.
+    pub effect_count: u8,
+    /// The scene light + grade contrast.
+    pub contrast: &'static str,
+    /// The default camera move for shots that sit static (motion == "static").
+    pub camera_move: &'static str,
+}
+
+impl MoodProfile {
+    /// The three closed bands:
+    /// - subtle    0..=33   : clip [6,8],   hard_cut/cut_on_action, static move,
+    ///   fast, 0 effects, medium contrast, static default camera move
+    /// - balanced  34..=66  : clip [8,10],  hard_cut/crossfade,     pan move,
+    ///   normal, 1 effect, medium contrast, dolly default camera move
+    /// - cinematic 67..=100 : clip [10,12], match_cut/crossfade,    crane move,
+    ///   slow, 3 effects, high contrast, crane default camera move
+    pub fn for_mood(mood: u8) -> Self {
+        match mood {
+            0..=33 => Self {
+                clip_range: [6, 8],
+                transitions: ["hard_cut".into(), "cut_on_action".into()],
+                motion: "static",
+                speed: "fast",
+                effect_count: 0,
+                contrast: "medium",
+                camera_move: "static",
+            },
+            34..=66 => Self {
+                clip_range: [8, 10],
+                transitions: ["hard_cut".into(), "crossfade".into()],
+                motion: "pan",
+                speed: "normal",
+                effect_count: 1,
+                contrast: "medium",
+                camera_move: "dolly",
+            },
+            _ => Self {
+                clip_range: [10, 12],
+                transitions: ["match_cut".into(), "crossfade".into()],
+                motion: "crane",
+                speed: "slow",
+                effect_count: 3,
+                contrast: "high",
+                camera_move: "crane",
+            },
+        }
+    }
+
+    /// The band name for the Node A mood line (llm.rs).
+    pub fn band(&self) -> &'static str {
+        match self.effect_count {
+            0 => "subtle",
+            1 => "balanced",
+            _ => "cinematic",
+        }
+    }
+
+    /// The scene's mood-scaled `effects_base`: the first `effect_count`
+    /// closed-vocab effect tags (stable BTreeSet order, skipping the "none"
+    /// sentinel). Subtle (0) = empty, balanced (1) = one, cinematic (3) =
+    /// three. This is what the S2 scene spec seeds so the whole run reads
+    /// "subtle" or "cinematic" before any shot-level delta lands.
+    pub fn effects_base(&self) -> Vec<String> {
+        if self.effect_count == 0 {
+            return Vec::new();
+        }
+        let mut tags: Vec<&'static str> = TagVocabulary::new()
+            .effects()
+            .iter()
+            .filter(|e| **e != "none")
+            .map(|e| *e)
+            .collect();
+        tags.truncate(self.effect_count as usize);
+        tags.into_iter().map(|t| t.to_string()).collect()
+    }
+
+    /// A one-line Node A mood directive (llm.rs). Tells the model how the
+    /// film should FEEL so its prose paces toward the band — subtle (quiet,
+    /// sparse) vs cinematic (slow moves, layered light + effects).
+    pub fn directive(&self) -> &'static str {
+        match self.band() {
+            "subtle" => "Mood: subtle — restrained, quiet, sparse effects; let the light and stillness carry it.",
+            "cinematic" => "Mood: cinematic — slow deliberate moves, layered light and effects, high contrast, rich sensory detail.",
+            _ => "Mood: balanced — natural pacing, moderate effects, steady sensory texture.",
+        }
+    }
+}
 
 impl EngineEntry {
     /// Convert to a `FilmSeed`, injecting the G0 look axes into the style.
@@ -1727,14 +2146,49 @@ impl EngineEntry {
     }
 
     /// Build an S0→S5 run, injecting the G0 look axes into the seed-driven novel.
+    /// M4: the entry's `mood` band also drives the deterministic S2/S3 seeding
+    /// (clip, transitions, base motion, effects, contrast) so one slider value
+    /// reshapes the whole run; mood-50 = the pre-M4 pinned structure.
+    ///
+    /// Structural tree (S0.5): this entry-level builder attaches the tree so
+    /// it's present on EVERY template run (Phase 1a — S3 production is
+    /// unchanged; the tree drives S2/S3 from Phase 1b). The intent comes from
+    /// the entry's own idea text, so a template run needs no external
+    /// `IntentSnapshot`.
     pub fn build_run(&self) -> EngineRun {
+        use crate::generation::video_flow::engine::tree::{
+            build_structural_tree, TREE_VERSION,
+        };
+        use crate::generation::video_flow::intent::IntentSnapshot;
         let seed = self.to_seed();
         // The G0 look axes steer S1 (novel world/palette/light) + S2
         // (scene light) directly — they are NOT baked into the style string,
         // which stays the pure G0 genre/style author value (no doubling).
         // S2 specs + S4 prompts inherit the axes from the novel film, so no
         // post-build patch is needed.
-        EngineRun::build(seed, &self.time_of_day, &self.weather)
+        let novel = build_novel(&seed, &self.time_of_day, &self.weather);
+        let profile = MoodProfile::for_mood(self.mood);
+        // Phase 1b: build the structural tree FIRST — from this entry's idea
+        // + the entry's override pins (self-contained: no external
+        // `IntentSnapshot` needed) — then THREAD it into the S2/S3 build so
+        // the tree actually drives the production (scene color-temperature
+        // from the branch arc, branch-boundary transitions, leaf-resolved
+        // base camera/lens/motion), not just ride along on the run.
+        let intent = IntentSnapshot::new(&self.idea);
+        let tree = build_structural_tree(&intent, self, &self.overrides);
+        let _ = TREE_VERSION; // the tree's `v` is set inside build_structural_tree
+        let mut run = EngineRun::build_with_novel_mood(
+            seed,
+            novel,
+            &self.time_of_day,
+            &self.weather,
+            ExpansionSource::Template,
+            None,
+            Some(&profile),
+            Some(&tree),
+        );
+        run.tree = Some(tree);
+        run
     }
 }
 
@@ -1762,6 +2216,8 @@ mod seed_tests {
             },
             time_of_day: "midday".into(),
             weather: "clear".into(),
+            mood: 50,
+            overrides: Default::default(),
         }
     }
 
@@ -1777,6 +2233,73 @@ mod seed_tests {
             "sibling S4 image prompts must differ"
         );
         assert_ne!(mol[0].composition, mol[1].composition, "per-shot camera variety");
+    }
+
+    /// M4 mood-drift guard: the deterministic template path (build_run) must
+    /// respond to the entry's mood band. Same idea, two moods → the run's
+    /// S2/S3 seeding differs (clip, transitions, base motion, effects,
+    /// contrast), proving the mood slider actually reshapes the film rather
+    /// than being a no-op. Also pins that mood-50 (the default / balanced
+    /// band) keeps the pre-M4 pinned structure (byte-stable for old docs).
+    #[test]
+    fn mood_drifts_deterministic_structure() {
+        let base = entry("a red fox darts through the tall pine forest at dusk as golden light spills across the meadow");
+
+        // The band edges (subtle = 0..=33, cinematic = 67..=100) must differ
+        // in at least one of the mood-driven knobs.
+        let subtle = {
+            let mut e = base.clone();
+            e.mood = 10;
+            e.build_run()
+        };
+        let balanced = {
+            let mut e = base.clone();
+            e.mood = 50;
+            e.build_run()
+        };
+        let cinematic = {
+            let mut e = base.clone();
+            e.mood = 90;
+            e.build_run()
+        };
+
+        // Clip length: the mood band's clip_range min is clamped to the
+        // 4..10 engine cap — subtle draws a shorter clip than cinematic.
+        let clip_of = |run: &EngineRun| run.specs.first().expect("at least one spec").clip_s;
+        assert!(
+            clip_of(&subtle) < clip_of(&cinematic),
+            "subtle clip {} must be shorter than cinematic clip {}",
+            clip_of(&subtle),
+            clip_of(&cinematic)
+        );
+
+        // Transitions: the band's transition pair differs across moods.
+        let trans_of = |run: &EngineRun| {
+            let sp = run.specs.first().expect("at least one spec");
+            (sp.transition_in.clone(), sp.transition_out.clone())
+        };
+        assert_ne!(
+            trans_of(&subtle),
+            trans_of(&cinematic),
+            "subtle vs cinematic transitions must differ"
+        );
+
+        // Effects: subtle (0) carries no base effects, cinematic (3) carries
+        // the first three closed-vocab effect tags.
+        assert_eq!(subtle.scenes[0].effects_base.len(), 0, "subtle = 0 base effects");
+        assert_eq!(cinematic.scenes[0].effects_base.len(), 3, "cinematic = 3 base effects");
+        assert!(cinematic.scenes[0].effects_base.iter().all(|e| e != "none"), "no 'none' sentinel leaks into effects_base");
+
+        // Contrast: cinematic bumps the scene light+grade to "high".
+        assert_eq!(cinematic.scenes[0].light.contrast, "high", "cinematic contrast = high");
+        assert_eq!(subtle.scenes[0].light.contrast, "medium", "subtle contrast = medium");
+
+        // The balanced band (mood 50) is the pre-M4 pin: transitions fall
+        // back to hard_cut/crossfade and the run stays verified end-to-end.
+        assert_eq!(balanced.specs[0].transition_in, "hard_cut", "balanced default transition_in");
+        assert_eq!(balanced.specs[0].transition_out, "crossfade", "balanced default transition_out");
+        assert!(balanced.verify.verified, "balanced-band run stays S5 verified");
+        assert_eq!(balanced.scenes[0].effects_base.len(), 1, "balanced = 1 base effect");
     }
 
     /// I9 concrete-pipes proof: the engine plan materializes into composer
@@ -2016,13 +2539,18 @@ mod seed_tests {
             ],
             "camera events ride the 3 sub-slices (size + focal per window)"
         );
-        // Lighting DELTA: only the two slices that change the light —
-        // the cool open (4500K) and the warm close (5500K). Never a slab.
+        // Lighting DELTA: only the two slices that change the light — the
+        // tree-driven branch temp arc (cool open → warm close). Never a slab.
+        // Phase 1b: the entry path (scenes=1, mood 50) rides the tree's
+        // single "resolving" branch; its chained temp arc opens at the
+        // midday base (5600K) and closes 300K warmer (5900K). This is the
+        // tree-v1 re-pin (pre-1b the legacy g%6 cycling table pinned
+        // 4500→5500K here; the `tree:None` legacy pin keeps that value).
         assert_eq!(
             texts_of(&plan.pipes[0], VideoTag::Lighting),
             vec![
-                "soft key light, medium contrast, 4500K, cool",
-                "soft key light, medium contrast, 5500K, warm",
+                "soft key light, medium contrast, 5600K, cool",
+                "soft key light, medium contrast, 5900K, warm",
             ],
             "lighting fires only where the slice changes it (cool→warm)"
         );
@@ -2727,5 +3255,160 @@ mod seed_tests {
                 }
             }
         }
+    }
+
+    /// Phase 1b proof: a MULTI-scene entry run (tree attached, the entry
+    /// builder's default) is TREE-DRIVEN — the S2 scene color temperature
+    /// comes from the branch's chained open-K pair (NOT the legacy hardcoded
+    /// 5000K), scene-entry shots carry the branch's energy-driven
+    /// transition_in, and the branch's final shot closes with its
+    /// transition_out. This is the "the tree actually reshapes S2/S3" pin
+    /// (the single-scene `engine_plan_structure_is_pinned_exactly` pin is
+    /// insensitive to branch boundaries and stays green on either path).
+    #[test]
+    fn tree_drives_s2_s3_on_the_entry_path() {
+        use crate::generation::video_flow::engine::tree::leaf_to_concerns;
+
+        let idea = "a red fox darts through the tall pine forest at dusk as golden light spills across the meadow";
+        let mut e = entry(idea);
+        e.scale = crate::generation::video_flow::engine::types::SeedScale {
+            scenes: 3,
+            shots_per_scene: 2,
+            clip_s: [8, 10],
+        };
+        let run = e.build_run();
+        let tree = run.tree.as_ref().expect("entry runs always carry a tree");
+        assert_eq!(tree.branches.len(), 3, "3 scenes -> 3 branches");
+
+        // S2: the scene's color temperature is the branch's OPEN K (the
+        // chained arc, NOT the legacy hardcoded 5000K default).
+        for (i, sc) in run.scenes.iter().enumerate() {
+            assert_eq!(
+                sc.light.color_temp_k,
+                tree.branches[i].temp_open_k,
+                "scene {i} light temp must be the tree branch's open K"
+            );
+            assert_ne!(
+                sc.light.color_temp_k, 5000,
+                "tree-driven scene {i} temp must differ from the legacy 5000K pin (got {})",
+                sc.light.color_temp_k
+            );
+        }
+        // The #3 fix pinned end-to-end: a cut between two scenes never
+        // flickers — scene i's open K is exactly scene i-1's branch close K.
+        for i in 1..run.scenes.len() {
+            assert_eq!(
+                run.scenes[i].light.color_temp_k,
+                tree.branches[i].temp_open_k,
+            );
+            assert_eq!(
+                tree.branches[i].temp_open_k,
+                tree.branches[i - 1].temp_close_k,
+                "branch open K must equal the previous branch close K (chained arc)"
+            );
+        }
+
+        // S3: scene-entry shots carry the branch's energy-driven transition_in
+        // (branch 0 = hard_cut opener; interior branches are energy-derived,
+        // not a uniform crossfade).
+        assert_eq!(run.specs[0].transition_in, "hard_cut", "scene 0 entry = hard_cut opener");
+        let spec_at = |si: usize, ki: usize| {
+            let g = si * run.novel.scenes[si].shots.len() + ki;
+            &run.specs[g]
+        };
+        assert_eq!(
+            spec_at(1, 0).transition_in,
+            tree.branches[1].transition_in,
+            "scene 1 entry shot carries the branch's transition_in"
+        );
+        assert_eq!(
+            spec_at(2, 0).transition_in,
+            tree.branches[2].transition_in,
+            "scene 2 entry shot carries the branch's transition_in"
+        );
+        // The #4 fix: the three scene-entry transitions are NOT a uniform
+        // "all crossfade" — the energy curve picks distinct intents.
+        assert_eq!(tree.branches[2].transition_in, "hard_cut", "energy drop turn->resolving picks hard_cut");
+
+        // The branch's LAST shot closes with its transition_out.
+        assert_eq!(
+            spec_at(0, 1).transition_out,
+            tree.branches[0].transition_out,
+            "branch 0 final shot closes with its transition_out"
+        );
+
+        // The leaf-resolved base camera (tree, not the g%N cycling table):
+        // the branch-0 shots ride the establishing_wide leaf's closed-vocab
+        // resolution (wide / deep / rule_of_thirds), the mood band still
+        // stamps the base motion on top of the leaf's motion intent.
+        let leaf0 = &tree.branches[0].leaves[0];
+        let (cam, _lens, _mot) = leaf_to_concerns(leaf0, 35);
+        assert_eq!(
+            run.specs[0].concerns.camera.size, cam.size,
+            "shot 0 base camera size must be the leaf's establishing_wide resolution"
+        );
+        assert_eq!(
+            run.specs[0].concerns.camera.framing, cam.framing,
+            "shot 0 base framing must be the leaf's resolution"
+        );
+        // Run stays S5-verified end-to-end on the tree-driven path.
+        assert!(
+            run.verify.verified,
+            "tree-driven 3-scene run must stay verified: {:?}",
+            run.verify.issues
+        );
+    }
+
+    /// Phase 1b legacy pin: a run WITHOUT a tree (old docs; the plain
+    /// `build_with_novel` bridge, `tree = None`) keeps the byte-stable
+    /// pre-tree S2/S3 structure — the hardcoded 5000K scene temp, the
+    /// per-shot `g % N` cycling camera table, and the uniform band
+    /// transitions (no branch-boundary overrides). This is the
+    /// `tree:None` fallback the tree docs' serde default relies on.
+    #[test]
+    fn legacy_no_tree_structure_is_pinned_exactly() {
+        let e = entry("a girl follows the river road north at dusk");
+        let seed = e.to_seed();
+        // The module-private template novel (seed_tests may reach `build_novel`
+        // through `super::*`): the legacy S1 shape at the entry's scale.
+        let novel = build_novel(&seed, &e.time_of_day, &e.weather);
+        let run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Template,
+            None,
+        );
+        assert!(run.tree.is_none(), "legacy bridge leaves tree:None");
+        // Legacy S2: the hardcoded 5000K scene temp (the pre-tree pin).
+        assert_eq!(
+            run.scenes[0].light.color_temp_k, 5000,
+            "tree:None keeps the 5000K legacy scene temp"
+        );
+        // Legacy S3: shot 0 enters on the pre-mood hard_cut and closes on the
+        // uniform crossfade — no branch-boundary override (no tree).
+        let sp = &run.specs[0];
+        assert_eq!(sp.transition_in, "hard_cut", "legacy shot 0 entry = hard_cut");
+        assert_eq!(sp.transition_out, "crossfade", "legacy shot 0 out = crossfade");
+        // Legacy S3 base camera: the per-shot cycling table by REFERENCE
+        // (shot g=0 → the cycling establishing values), NOT the leaf's
+        // role-resolved camera.
+        assert_eq!(
+            run.specs[0].concerns.camera,
+            shot_camera(0),
+            "tree:None shot 0 base camera must be the cycling table value"
+        );
+        assert_eq!(
+            run.specs[1].concerns.camera,
+            shot_camera(1),
+            "tree:None shot 1 base camera must be the cycling table value"
+        );
+        // Run stays S5-verified on the legacy path.
+        assert!(
+            run.verify.verified,
+            "tree:None legacy run must stay verified: {:?}",
+            run.verify.issues
+        );
     }
 }

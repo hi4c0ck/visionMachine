@@ -152,3 +152,28 @@ export async function applyFlowEdited(
 	});
 	return out;
 }
+
+/**
+ * M3 surgical apply: materialize a persisted flow into the composer, but
+ * scoped to a SET OF PIPES instead of the whole session. `pipeScope` is the
+ * 0-based pipe ordinal list to re-materialize (e.g. `[3]` = shot 4 only,
+ * leaving every other composer pipe untouched). `edited` carries that
+ * scope's per-section prompt overrides — empty means "replace these pipes
+ * with their pristine engine plan". Returns the resulting composer pipe
+ * count. The backend command (`director_apply_flow_scoped`) lands in a
+ * later Rust wave; this store function is the TS surface the UI calls.
+ */
+export async function applyFlowScoped(
+	sessionId: string,
+	flowVersion: number,
+	pipeScope: number[],
+	edited: EditedSection[]
+): Promise<number> {
+	const out = await invoke<number>('director_apply_flow_scoped', {
+		sessionId,
+		flowVersion,
+		pipeScope,
+		edited,
+	});
+	return out;
+}

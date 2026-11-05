@@ -30,6 +30,7 @@ pub mod gates;
 pub mod llm;
 pub mod seed;
 pub mod tag_vocabulary;
+pub mod tree;
 pub mod types;
 
 #[cfg(test)]

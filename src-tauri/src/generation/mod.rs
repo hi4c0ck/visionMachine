@@ -9,60 +9,105 @@ mod engine;
 mod ffmpeg;
 pub mod group;
 mod media;
+pub mod media_protocol;
+pub mod memory_profile;
 mod provider;
 mod registry;
 mod shaper;
 mod specs;
-pub mod video_flow;
 mod types;
+pub mod video_flow;
 
 pub use compose::{
-    compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeCancel, ComposeError, ComposeRegistry,
-    ComposeResult, ComposeStartError, SourceVideo, VideoMetadata,
+    compose_session_video, ComposeCancel, ComposeError, ComposeRegistry, ComposeResult,
+    ComposeStartError, SourceVideo, VideoMetadata, BOUNDARY_TRIM_FRAMES,
 };
 pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration};
 pub use ffmpeg::{extract_last_frame, resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
     append_jsonl, append_request_log, archive_previous_session_video,
     clear_session_compose_artifacts, clear_staged_session_clips, is_staged_session_clip,
-    piece_history_dirs,
-    pipe_media_dirs, redact, redact_authorization, safe_dir_name, session_generation_dirs,
-    session_media_root, user_image_dir, write_json, STAGED_CLIP_PREFIX,
+    piece_history_dirs, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
+    session_generation_dirs, session_media_root, user_image_dir, write_json, STAGED_CLIP_PREFIX,
 };
 pub use provider::ProviderEngine;
 pub use registry::{MediaRootResolver, TaskRegistry};
 pub use shaper::{
     clamp_to_range, format_seconds, guard_supported, pick_image_size, pick_ratio, shape_request,
-    StageContext, substitute_poll_template, UpstreamOutput,
+    substitute_poll_template, StageContext, UpstreamOutput,
 };
 pub use specs::{ModelSpecLimits, ModelSpecMedia, ModelSpecWire};
 pub use types::*;
 pub use video_flow::{
+    append_signal_jsonl,
+    decompose_clauses,
+    // Phase-0 backward-compat deterministic steps (off-mission, kept for callers)
+    expand_raw_text,
+    lower_to_elements,
+    materialize_pipes,
+    signal_line,
+    structure_plan,
+    validate_novel,
+    validate_plan,
+    AdditiveHead,
+    Ambient,
+    AssetRef,
+    Clause,
+    ClauseId,
+    Critic,
+    CriticInput,
+    CriticSectionView,
+    DefaultCritic,
+    ElementTrace,
+    ExpandResult,
     // orchestrator + config
-    FlowConfig, VideoFlow, VFlow,
-    // error / result
-    FlowError, FlowResult,
-    // intent + provenance
-    IntentSnapshot, SpanId, Clause, ClauseId, AssetRef, decompose_clauses,
-    // layered narrative
-    Novel, Layer, Ambient, LayerKind, LayeredExpander, PassthroughLayeredExpander,
-    // structured plan
-    StructuredVideoPlan, PlanPipe, PlanSection, VideoTag,
-    // critic (descendable score tree)
-    ScoreTree, ScoreNode, NodeKind, Critic, CriticInput, CriticSectionView, DefaultCritic,
-    // learned-model tiny build spec + resolver
-    ModelBuildSpec, ModelBase, AdditiveHead, ModelRole, ModelResolver, ModelHandle,
-    StubModelResolver,
-    // preference signals
-    SignalRecord, SignalKind, SignalLog, signal_line, append_signal_jsonl,
-    // regeneration contract + lowering
-    FlowElement, Lowered, ElementTrace, RegenerationContract, VersionTriple, lower_to_elements,
+    FlowConfig,
     // session-space artifact
     FlowDocument,
-    // Phase-0 backward-compat deterministic steps (off-mission, kept for callers)
-    expand_raw_text, materialize_pipes, structure_plan, validate_novel, validate_plan,
-    MarkerStructurer, PassthroughExpander, TextExpander, TextStructurer,
-    ExpandResult, StructureResult,
+    // regeneration contract + lowering
+    FlowElement,
+    // error / result
+    FlowError,
+    FlowResult,
+    // intent + provenance
+    IntentSnapshot,
+    Layer,
+    LayerKind,
+    LayeredExpander,
+    Lowered,
+    MarkerStructurer,
+    ModelBase,
+    // learned-model tiny build spec + resolver
+    ModelBuildSpec,
+    ModelHandle,
+    ModelResolver,
+    ModelRole,
+    NodeKind,
+    // layered narrative
+    Novel,
+    PassthroughExpander,
+    PassthroughLayeredExpander,
+    PlanPipe,
+    PlanSection,
+    RegenerationContract,
+    ScoreNode,
+    // critic (descendable score tree)
+    ScoreTree,
+    SignalKind,
+    SignalLog,
+    // preference signals
+    SignalRecord,
+    SpanId,
+    StructureResult,
+    // structured plan
+    StructuredVideoPlan,
+    StubModelResolver,
+    TextExpander,
+    TextStructurer,
+    VFlow,
+    VersionTriple,
+    VideoFlow,
+    VideoTag,
 };
 
 use crate::storage::db::Database;

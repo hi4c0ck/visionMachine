@@ -39,6 +39,12 @@ export interface EngineEntryInput {
 	/** G0 look axes (feed S1/S2 seeding). */
 	time_of_day?: string;
 	weather?: string;
+	/** M4 mood slider (0..100, default 50 = "balanced" band). */
+	mood?: number;
+	/** Manual-override pins for the S0.5 structural tree (the "always give
+	 * the user a manual opportunity" rule). Absent = the tree's auto values
+	 * win. Old entries / seed cards parse as no-pins. */
+	overrides?: TreeOverrides;
 }
 
 // ── S1 visual novel ────────────────────────────────────────────────────────
@@ -237,6 +243,107 @@ export interface GateState {
 /** Where the S1 novel came from (mirror of Rust `ExpansionSource`). */
 export type ExpansionSource = 'template' | 'llm';
 
+// ── S0.5 structural tree (mirror of Rust `engine::tree`, camelCase wire) ──
+
+/** The main narrative driver (mirror of Rust `Driver`). */
+export type Driver = 'action' | 'atmosphere' | 'character' | 'exploration' | 'neutral';
+
+/** One leaf (a shot slot): structural intent only, never novel prose. */
+export interface TreeLeaf {
+	intent: string;
+	/** "establishing_wide" | "holding_medium" | "intimate_close" | "dynamic_track". */
+	camera_role: string;
+	/** "slow_push" | "drift" | "static_hold" | "fast_whip". */
+	motion_intent: string;
+	beat_hints: string[];
+}
+
+/** One branch (a scene/act) of the tree. */
+export interface TreeBranch {
+	/** "establishing" | "developing" | "turn" | "resolving". */
+	role: string;
+	shots: number;
+	narrative: string;
+	transition_in: string;
+	transition_out: string;
+	leaves: TreeLeaf[];
+	temp_open_k: number;
+	temp_close_k: number;
+	/** 0..=1 — drives the transition choice + within-branch temp sweep. */
+	energy: number;
+}
+
+/** The tree root: thesis + driver + target duration + energy + temp arc. */
+export interface TreeRoot {
+	thesis: string;
+	driver: Driver;
+	target_duration_s: number;
+	/** Per-branch energy, index-aligned with `branches`. */
+	energy: number[];
+	/** Per-branch [open_K, close_K], index-aligned with `branches`. */
+	temp_arc: [number, number][];
+	continuity_thread: string;
+}
+
+/** The full structural skeleton (mirror of Rust `StructuralTree`). */
+export interface StructuralTree {
+	v: number;
+	root: TreeRoot;
+	branches: TreeBranch[];
+	/** The richness-derived auto scale (pre-override), shown as the "auto N×M" hint. */
+	auto_scale?: SeedScale;
+}
+
+/** The manual-override pins for the tree (mirror of Rust `TreeOverrides`). */
+export interface TreeOverrides {
+	scenes?: number | null;
+	shots_per_scene?: number | null;
+	target_duration_s?: number | null;
+	/** Closed driver override: "action" | "atmosphere" | "character" | "exploration" | "neutral". */
+	driver?: string | null;
+	/** Per-branch transition pins (index-aligned; `null` slot = auto).
+	 * Mirror of Rust `Vec<Option<String>>`. */
+	transitions?: (string | null)[];
+	/** Per-branch temp pins ([open_K, close_K]; absent slot = auto).
+	 * Mirror of Rust `Vec<Option<[u32; 2]>>`. */
+	temp_arc?: ([number, number] | null)[];
+}
+
+/** A compact human-readable structure line for run logs / chips. */
+export function treeSummary(tree: StructuralTree | null | undefined): string {
+	if (!tree) return 'no tree';
+	const roles = tree.branches.map((b) => b.role).join('/');
+	return `tree v${tree.v} · ${tree.root.driver} · ~${tree.root.target_duration_s}s · [${roles}]`;
+}
+
+// ── Phase 2.5: the branch's soft NARRATIVE HINT (mirror of Rust
+//    `tree::branch_narrative_hint`). The cue is role-based, read through the
+//    driver's lens, and DELIBERATELY advisory — it steers story direction,
+//    never overrides the user's idea, and the LLM may freely adapt it. The
+//    UI renders the same string as a quiet "hint:" line (never written into
+//    the idea field or any input).
+const ROLE_HINTS: Record<string, string> = {
+	establishing: 'establish the world and the principal before the story moves',
+	developing: 'let the story build: develop one relationship or change one variable at a time',
+	turn: 'bend what the audience expected: a reversal, a reveal, or an escalation',
+	resolving: 'land the ending: release the tension without inventing new problems',
+};
+const DRIVER_HINTS: Record<Driver, string> = {
+	neutral: "follow the principal's thread",
+	action: 'keep the principal moving; momentum carries the cut',
+	atmosphere: 'let mood and texture carry it; the stillness is the story',
+	character: "keep the principal's interior state central",
+	exploration: 'let the space reveal itself; the traversal is the story',
+};
+
+/** The advisory narrative hint for one branch (role + driver). Pure —
+ * mirrors the Rust builder 1:1 (same strings, same composition). */
+export function branchNarrativeHint(role: string, driver: Driver): string {
+	const roleCue = ROLE_HINTS[role] ?? 'carry the story forward and hold the thread';
+	const driverCue = DRIVER_HINTS[driver] ?? DRIVER_HINTS.neutral;
+	return `${roleCue} · ${driverCue}`;
+}
+
 export interface VerifyReport {
 	verified: boolean;
 	issues: string[];
@@ -258,6 +365,10 @@ export interface EngineRun {
 	/** LLM model id (when `expansion === 'llm'`) or the named fallback
 	 * "template · LLM ({model}) failed: {reason}". */
 	expansion_note?: string | null;
+	/** S0.5 structural tree (present on every NEW run; old docs load
+	 * `undefined` via the Rust serde default and keep the legacy cycling
+	 * tables byte-stable). */
+	tree?: StructuralTree | null;
 }
 
 /** S1 source chip for the panel: 'LLM · {model}' / 'template' /
@@ -295,6 +406,11 @@ export const VOCAB = {
 } as const;
 
 export const GENRE_PRESETS: Array<{ name: string; style: string }> = [
+	// The engine's default genre (Rust `default_engine_entry` / `EngineEntry`
+	// seed both use "Cinematic" + "cinematic natural light"). It must be a
+	// first-class preset so the G0 select renders the default instead of a
+	// blank option.
+	{ name: 'Cinematic', style: 'cinematic natural light' },
 	{ name: 'Documentary', style: 'warm nature documentary, natural available light, golden hour to dusk' },
 	{ name: 'Thriller', style: 'tense thriller, low-key lighting, cold teal tones' },
 	{ name: 'Horror', style: 'atmospheric horror, deep shadows, desaturated' },

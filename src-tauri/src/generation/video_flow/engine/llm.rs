@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::generation::video_flow::engine::seed::EngineEntry;
+use crate::generation::video_flow::engine::tree::{brief_block, StructuralTree};
 use crate::generation::video_flow::engine::types::VisualNovel;
 
 /// The app's text provider slot (Settings → Providers → Text):
@@ -105,7 +106,37 @@ const NODE_A_SYSTEM: &str = "You are the film director. From the FilmSeed, write
 /// (seed JSON, genre style, creative profile + sensory axes, hard counts)
 /// and the strict structured-output schema. Deterministic — a pure
 /// builder so tests can pin the wire shape without a network.
-pub fn node_a_request_body(entry: &EngineEntry, model: &str) -> Value {
+///
+/// Phase 2: when `tree` is `Some`, the S0.5 structural brief
+/// (`brief_block`) is injected into the user prompt — the "brief, not a
+/// cage": it fixes the shape (scene count, driver, target duration, per-
+/// scene energy + transition intent + chained temp arc, continuity
+/// thread) and leaves prose / environment / character / beats to the
+/// model. A soft duration-conformance line tells the model the target
+/// total runtime WITHOUT hard-failing (the tree is advisory; S5 repair
+/// still owns the counts). `tree == None` keeps the pre-Phase-2 prompt
+/// byte-stable (the `node_a_body_matches_fixture_contract` pin).
+pub fn node_a_request_body(
+    entry: &EngineEntry,
+    model: &str,
+    tree: Option<&StructuralTree>,
+) -> Value {
+    use crate::generation::video_flow::engine::seed::MoodProfile;
+
+    let mood_line = MoodProfile::for_mood(entry.mood).directive();
+    // Phase 2: the structural brief + soft duration note (only when a tree
+    // is attached; otherwise an empty string so the prompt is unchanged).
+    let (brief, duration_note): (String, String) = match tree {
+        Some(t) => (
+            brief_block(t),
+            format!(
+                "Target total runtime is ~{}s ({n} scenes); aim your prose to pace toward it, but the scene/shot COUNTS below are hard and the S5 repair will fix any count drift.",
+                t.root.target_duration_s,
+                n = t.branches.len(),
+            ),
+        ),
+        None => (String::new(), String::new()),
+    };
     let user = format!(
         "FilmSeed: {seed}\n\
          genre style: \"{style}\"\n\
@@ -113,6 +144,8 @@ pub fn node_a_request_body(entry: &EngineEntry, model: &str) -> Value {
          Hard counts: scenes.length == {scenes}, scenes[*].shots.length == {shots}.\n\
          G0 look axes (they govern the S2/S4 light: prefer them unless the story clearly moves through the day): \
          time_of_day={tod}, weather={weather}.\n\
+         {mood_line}\n\
+         {brief}{duration_note}\
          Respond with a single JSON object matching the VisualNovel schema only.",
         seed = serde_json::to_value(entry).unwrap_or(json!(entry)),
         style = entry.genre.style,
@@ -120,6 +153,9 @@ pub fn node_a_request_body(entry: &EngineEntry, model: &str) -> Value {
         shots = entry.scale.shots_per_scene,
         tod = entry.time_of_day,
         weather = entry.weather,
+        mood_line = mood_line,
+        brief = brief,
+        duration_note = duration_note,
     );
     json!({
         "model": model,
@@ -211,7 +247,13 @@ pub fn repair_counts(novel: &mut VisualNovel, entry: &EngineEntry) -> Result<(),
 /// (harness `llm.json` retry: attempts=2); on a `response_format`
 /// capability error the retry drops `response_format` and asks for plain
 /// JSON (the fixture's `fallback_mode_on_unsupported`).
-pub async fn expand_node_a(provider: &TextProvider, entry: &EngineEntry) -> Result<VisualNovel, String> {
+/// Phase 2: `tree` is the S0.5 structural brief injected into the prompt
+/// (the "brief, not a cage"); `None` keeps the pre-Phase-2 prompt.
+pub async fn expand_node_a(
+    provider: &TextProvider,
+    entry: &EngineEntry,
+    tree: Option<&StructuralTree>,
+) -> Result<VisualNovel, String> {
     use reqwest::Client;
 
     if provider.base_url.trim().is_empty() {
@@ -225,7 +267,7 @@ pub async fn expand_node_a(provider: &TextProvider, entry: &EngineEntry) -> Resu
 
     let mut last_err = String::new();
     for attempt in 0..2u32 {
-        let mut body = node_a_request_body(entry, &provider.model);
+        let mut body = node_a_request_body(entry, &provider.model, tree);
         if attempt == 1 {
             // Capability fallback (llm.json: response_format unsupported).
             body.as_object_mut().unwrap().remove("response_format");
@@ -308,6 +350,8 @@ mod tests {
             },
             time_of_day: "evening".into(),
             weather: "light drizzle".into(),
+            mood: 50,
+            overrides: Default::default(),
         }
     }
 
@@ -326,7 +370,8 @@ mod tests {
 
     #[test]
     fn node_a_body_matches_fixture_contract() {
-        let body = node_a_request_body(&entry(), "agnes-2.5-flash");
+        let e = entry();
+        let body = node_a_request_body(&e, "agnes-2.5-flash", None);
         assert_eq!(body["model"], "agnes-2.5-flash");
         assert_eq!(body["max_tokens"], 4500);
         assert_eq!(body["response_format"]["json_schema"]["name"], "VisualNovel");
@@ -334,6 +379,48 @@ mod tests {
         let user = body["messages"][1]["content"].as_str().unwrap();
         assert!(user.contains("scenes.length == 2"), "hard counts in the prompt");
         assert!(user.contains("time_of_day=evening"), "G0 look axes in the prompt");
+        // Phase 2 legacy pin: tree=None keeps the pre-Phase-2 prompt
+        // (no structural brief, no duration note).
+        assert!(
+            !user.contains("Structural brief"),
+            "tree:None must NOT carry the structural brief"
+        );
+        assert!(
+            !user.contains("Target total runtime"),
+            "tree:None must NOT carry the duration note"
+        );
+    }
+
+    /// Phase 2 pin: with a tree attached, the S0.5 structural brief + the
+    /// soft duration-conformance line are injected into the Node A user
+    /// prompt (the "brief, not a cage" — the model sees the fixed shape,
+    /// not a per-shot cage), while the hard counts stay the schema's.
+    #[test]
+    fn node_a_body_injects_structural_brief_when_tree_present() {
+        use crate::generation::video_flow::engine::tree::build_structural_tree;
+        use crate::generation::video_flow::intent::IntentSnapshot;
+
+        let e = entry();
+        let intent = IntentSnapshot::new(&e.idea);
+        let tree = build_structural_tree(&intent, &e, &e.overrides);
+        let body = node_a_request_body(&e, "agnes-2.5-flash", Some(&tree));
+        let user = body["messages"][1]["content"].as_str().unwrap();
+        assert!(
+            user.contains("Structural brief"),
+            "the brief block must be injected: {user}"
+        );
+        assert!(
+            user.contains("Target total runtime"),
+            "the soft duration note must be injected: {user}"
+        );
+        // The brief names the driver + thesis (the tree root's fields).
+        assert!(
+            user.contains(&tree.root.driver.as_str()) || !tree.root.thesis.is_empty(),
+            "the brief must carry the tree root's driver/thesis"
+        );
+        // The hard counts still govern the schema (the brief never relaxes
+        // the scene/shot counts).
+        assert!(user.contains("scenes.length == 2"), "hard counts survive the brief injection");
     }
 
     #[test]

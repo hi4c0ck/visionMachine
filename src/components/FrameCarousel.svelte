@@ -493,13 +493,32 @@
 		let cancelled = false;
 		let last = src.diag.thumb; // plain local — NOT the reactive state
 		let lastDur: number | null = null; // plain local — NOT the reactive state
-		let lastSize: { width: number; height: number } | null = null; // plain local
+		let lastSizeKey = ''; // value key for mediaSize (identity churn guard)
+		let ticks = 0; // consecutive pending/loading polls; capped so a
+		const MAX_TICKS = 24; // source that never settles stops re-scheduling
 		const poll = () => {
 			if (cancelled) return;
 			const diag = src.diag.thumb;
 			if (diag !== last) {
 				last = diag;
 				thumbDiag = diag; // same-value write is a no-op, no churn
+			}
+			// GIVE UP on a source that will never load: without a cap this
+			// timer re-schedules FOREVER (each Svelte flush re-runs the
+			// effect), the placeholder stays "loading" indefinitely and the
+			// per-tick work is pure burn — the "preview infinite loading".
+			if (diag === 'pending' || diag === 'loading') {
+				if (src.isClosed) {
+					thumbDiag = 'failed';
+					return;
+				}
+				ticks += 1;
+				if (ticks >= MAX_TICKS) {
+					thumbDiag = 'failed';
+					return;
+				}
+			} else {
+				ticks = 0;
 			}
 			// Keep the measured-duration mirror fresh so the decode effect
 			// re-clamps its pool as soon as the source measures the media.
@@ -508,16 +527,21 @@
 			// depends on the $state it writes, so a value change can't re-run
 			// it into a loop. A same-value write is a no-op anyway.
 			const d = src.mediaDurationFrames;
-			if (d !== null && d !== lastDur) {
+			if (d !== lastDur) {
 				lastDur = d;
 				mediaDurFrames = d;
 			}
 			// Same for the ACTUAL media size — card width tracks it so the
 			// strip sizes to the real video, not the session's preset.
+			// Compare by VALUE (width x height), never by object identity:
+			// the getter allocates a fresh object on every call, so an
+			// identity compare writes the $state every tick and re-triggers
+			// the effect (perpetual poll + re-render burn).
 			const s = src.mediaSize;
-			if (s && s !== lastSize) {
-				lastSize = s;
-				mediaSize = s;
+			const sizeKey = s ? `${s.width}x${s.height}` : '';
+			if (sizeKey !== lastSizeKey) {
+				lastSizeKey = sizeKey;
+				mediaSize = s ? { width: s.width, height: s.height } : null;
 			}
 			// Re-poll only while the source can still transition to 'ok'.
 			if (diag === 'pending' || diag === 'loading') {

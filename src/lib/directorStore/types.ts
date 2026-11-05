@@ -3,7 +3,8 @@
 // #[serde(rename_all = "camelCase")] on the Rust side exactly.
 // Source of truth: src-tauri/src/generation/video_flow/
 
-import type { EngineRun } from './engine';
+import type { EngineRun, ShotSpec } from './engine';
+import { concernSummary } from './engine';
 
 export type VideoTag =
 	| 'scene'
@@ -247,6 +248,109 @@ export function sparklinePoints(
 	return overalls
 		.map((v, i) => `${(i * step).toFixed(1)},${(height - 1 - (v * (height - 2))).toFixed(1)}`)
 		.join(' ');
+}
+
+// ── M6 "Director's cut": diff two persisted runs (pure, no Svelte) ────────
+
+/** One changed cell in the side-by-side shot diff. */
+export interface RunDiffChange {
+	shotIndex: number;
+	field: string;
+	from: string;
+	to: string;
+}
+
+export interface RunDiff {
+	/** The two flow versions compared (a → b). */
+	a: number;
+	b: number;
+	addedScenes: number;
+	removedScenes: number;
+	changed: RunDiffChange[];
+	/** Compact summary, e.g. "+2 scenes · shot_07 lighting 5600K→3200K · shot_03 transition_in hard_cut→crossfade". */
+	summary: string;
+}
+
+/** Display a shot-field value (closed-value names as-is; ∅ when absent). */
+function runDiffVal(v: string | number | null | undefined): string {
+	if (v === null || v === undefined || v === '') return '∅';
+	return String(v);
+}
+
+/**
+ * M6 side-by-side compare of two persisted engine runs (pure).
+ * Diffs the aligned shot sets (scene-major index, up to the max shot count):
+ * - scene count (a.scenes.length vs b.scenes.length) → addedScenes /
+ *   removedScenes as non-negative nets.
+ * - for each shot index present in BOTH runs: compare { clip_s,
+ *   transition_in, transition_out, concerns (flattened via concernSummary),
+ *   content.beats.join('|') }. A `changed` row is recorded ONLY for fields
+ *   that actually differ.
+ * Deterministic + total: never throws; out-of-range indices guarded.
+ * `changed[].shotIndex` is 0-based; the summary renders it 1-based
+ * ("shot_02" = the second shot).
+ */
+export function diffEngineRuns(
+	a: EngineRun,
+	b: EngineRun,
+	aVersion = 0,
+	bVersion = 0
+): RunDiff {
+	// Scene-major shot count (specs are aligned 1:1 by scene-major index,
+	// mirroring specsByScene's layout).
+	const shotCount = (r: EngineRun): number =>
+		r.scenes.reduce((n, _s, i) => n + (r.novel.scenes[i]?.shots.length ?? 0), 0);
+	const sceneDelta = b.scenes.length - a.scenes.length;
+	const addedScenes = sceneDelta > 0 ? sceneDelta : 0;
+	const removedScenes = sceneDelta < 0 ? -sceneDelta : 0;
+
+	const specAt = (r: EngineRun, shotIdx: number): ShotSpec | undefined =>
+		shotIdx >= 0 && shotIdx < r.specs.length ? r.specs[shotIdx] : undefined;
+
+	const changed: RunDiffChange[] = [];
+	const rec = (
+		shotIdx: number,
+		field: string,
+		from: string | number | null | undefined,
+		to: string | number | null | undefined,
+	) => {
+		const f = runDiffVal(from);
+		const t = runDiffVal(to);
+		if (f !== t) changed.push({ shotIndex: shotIdx, field, from: f, to: t });
+	};
+
+	const nShots = Math.max(shotCount(a), shotCount(b));
+	for (let i = 0; i < nShots; i++) {
+		// A `changed` row only when BOTH sides carry the shot (out-of-range
+		// indices are guarded, never thrown).
+		const sa = specAt(a, i);
+		const sb = specAt(b, i);
+		if (!sa || !sb) continue;
+		if (sa.clip_s !== sb.clip_s) rec(i, 'clip_s', sa.clip_s, sb.clip_s);
+		if (sa.transition_in !== sb.transition_in)
+			rec(i, 'transition_in', sa.transition_in, sb.transition_in);
+		if (sa.transition_out !== sb.transition_out)
+			rec(i, 'transition_out', sa.transition_out, sb.transition_out);
+		const ca = concernSummary(sa.concerns);
+		const cb = concernSummary(sb.concerns);
+		if (ca !== cb) rec(i, 'concerns', ca, cb);
+		const ba = sa.content?.beats?.join('|') ?? '';
+		const bb = sb.content?.beats?.join('|') ?? '';
+		if (ba !== bb) rec(i, 'beats', ba, bb);
+	}
+
+	// Compact summary: net scene delta (if any) + up to 3 representative
+	// changed cells, "shot_{NN} {field} {from}→{to}" (NN = 1-based shot
+	// ordinal; closed-value names shown verbatim).
+	const parts: string[] = [];
+	if (addedScenes > 0) parts.push(`+${addedScenes} scene${addedScenes === 1 ? '' : 's'}`);
+	if (removedScenes > 0) parts.push(`-${removedScenes} scene${removedScenes === 1 ? '' : 's'}`);
+	changed.slice(0, 3).forEach((c) =>
+		parts.push(`shot_${String(c.shotIndex + 1).padStart(2, '0')} ${c.field} ${c.from}→${c.to}`),
+	);
+	const summary = parts.length ? parts.join(' · ') : 'identical';
+
+	return { a: aVersion, b: bVersion, addedScenes, removedScenes, changed, summary };
 }
 
 /** The element-id shape regen.rs mints: p{idx}:{tag}:{start}..{end}. */
