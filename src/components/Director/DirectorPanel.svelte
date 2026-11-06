@@ -152,6 +152,7 @@
 		...e,
 		overrides: e.overrides ?? {},
 	});
+	// svelte-ignore state_referenced_locally — intentional: seed draft from sessionId, sync via effect
 	let entry = $state<EngineEntryInput>(normalizeEntry(loadEntryDraft(sessionId) ?? freshEntry()));
 
 	// Save the G0 draft whenever it changes so a re-mount after 'Pipes'
@@ -612,7 +613,12 @@
 	// never writes the parent state.
 	let lastMetaSig = '';
 	$effect(() => {
-		tripEffect('director:meta'); // tripwire: should NOT exceed a handful of runs
+		// Key the tripwire by SESSION, not effect-name: a fast swing through 5
+		// DISTINCT sessions must NOT read as "5 effect runs" (the name-keyed
+		// ledger used to aggregate the swing into a false "runaway loop"
+		// alarm). A genuine loop is the SAME session's effect re-firing, so a
+		// per-session key only trips when one session's meta effect re-runs.
+		tripEffect(`director:meta:${sessionId}`);
 		if (!onMetaChange) return;
 		const newest = flows.length ? Math.max(...flows.map((f) => f.flowVersion)) : 0;
 		const stale = !!doc && newest > doc.flowVersion;
@@ -639,6 +645,7 @@
 		};
 	});
 
+	// svelte-ignore state_referenced_locally — intentional: track session for once-per-session latch
 	let lastSession = $state(sessionId);
 	// Once-per-session loader latch: the seed-from-persisted-run effect below
 	// must run AT MOST once per session. A session with 0 persisted flows
@@ -652,7 +659,10 @@
 	// so a switched session never carries the previous session's run; restore
 	// the new session's G0 draft instead of a stale entry.
 	$effect(() => {
-		tripEffect('director:reset'); // tripwire: ONCE per session switch
+		// Per-session key (see meta tripwire): one session's reset effect
+		// firing 5× is a loop; 5 different sessions resetting once each is
+		// normal navigation and must not alarm.
+		tripEffect(`director:reset:${sessionId}`);
 		if (sessionId !== lastSession) {
 			lastSession = sessionId;
 			doc = null;
@@ -681,7 +691,9 @@
 		// the effect terminal after ONE settled list, whatever the result.
 		void invoke('log_pipeline_diag', { message: `[TRACE] director loader effect run ${sessionId} doc:${!!doc} latch:${flowsLoadedFor} module:${flowsLoadedForModule.has(sessionId)}` }).catch(() => {});
 		if (doc || flowsLoadedFor === sessionId || flowsLoadedForModule.has(sessionId)) { void invoke('log_pipeline_diag', { message: '[TRACE] director loader early return' }).catch(() => {}); return; }
-		tripEffect('director:seed'); // tripwire: should fire ONCE per session
+		// Per-session key: the seed loader should fire ONCE per session; 5
+		// distinct sessions each seeding once is a swing, not a loop.
+		tripEffect(`director:seed:${sessionId}`);
 		let cancelled = false;
 		const sid = sessionId;
 		flowsLoadedFor = sid; // latch BEFORE await: prevents re-entry if effect re-runs
@@ -901,7 +913,7 @@
 				{gatesShown}
 				bind:entry
 				{openShot}
-				onToggleShot={(id) => (openShot = id)}
+				onToggleShot={(id: string | null) => (openShot = id)}
 			/>
 		</DirectorHotPath>
 	{:else if activeTab === 'extract'}
@@ -927,7 +939,7 @@
 			{flows}
 			{sessionName}
 			{openTag}
-			onToggleTag={(tag) => (openTag = tag)}
+			onToggleTag={(tag: string | null) => (openTag = tag)}
 			{onLogSignal}
 		/>
 	{/if}
