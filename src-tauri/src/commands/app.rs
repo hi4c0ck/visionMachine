@@ -66,6 +66,14 @@ pub struct StallReportInput {
     /// The session id the user was selecting when the freeze window started
     /// (empty = unknown / not a session-select window).
     pub context: String,
+    /// The main-thread structure snapshot (DashSnapshot from
+    /// src/lib/dashStore) the freeze-detecting worker held at the freeze
+    /// onset — structure sizes + JS heap + pipeline ledger. `null` when
+    /// the worker never received one (older build or reporter not yet
+    /// mounted). This is the "which structure was big when the UI died"
+    /// reading the main thread can't produce itself.
+    #[serde(default)]
+    pub snapshot: Option<serde_json::Value>,
 }
 
 /// Renderer-side frame-pipeline ledger line (src/lib/pipelineDiag.ts). The
@@ -108,6 +116,16 @@ pub fn log_stall_report(input: StallReportInput, state: tauri::State<'_, AppStat
         rec.longtask_max_ms,
         if rec.recovery_stack.is_empty() { "(none — main thread never recovered)".to_string() } else { rec.recovery_stack.chars().take(4000).collect::<String>() }
     );
+    // The worker-held structure snapshot at freeze onset — the reading the
+    // pinned main thread can never produce itself.
+    if let Some(snap) = &rec.snapshot {
+        if !snap.is_null() {
+            log::warn!(
+                "[UI] structure snapshot at freeze onset: {}",
+                snap.to_string().chars().take(4000).collect::<String>()
+            );
+        }
+    }
     let dash_line = format!(
         "[UI] stall record: main thread blocked ~{}s{}",
         dur_label, ctx_label

@@ -12,7 +12,7 @@
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getPipelineSnapshot } from './pipelineDiag';
-import { getStallSnapshot } from './stallWatch';
+import { getStallSnapshot, updateFreezeSnapshot } from './stallWatch';
 import { sessions, unsynced } from './composerStore';
 import { runStatesSize } from './directorStore';
 
@@ -73,6 +73,12 @@ export function reportToDashboard(): void {
 	if (!isTauri()) return;
 	const snap = buildDashSnapshot();
 	void invoke('report_renderer_metrics', { input: snap }).catch(() => {});
+	// Refresh the freeze-detecting worker's held snapshot with the SAME data.
+	// When a freeze happens the main thread's tick stops — but the worker
+	// persists the LAST snapshot it was given into the freeze record, so the
+	// record answers "which structure was big at the freeze onset" without
+	// the main thread (which is, by definition, pinned).
+	updateFreezeSnapshot(snap);
 	// Also feed the dashboard's log ring with the compact pipeline line so a
 	// hung main thread that stops the 8s tick still leaves its last state
 	// visible in the feed (the backend log file keeps rotating; this does not).

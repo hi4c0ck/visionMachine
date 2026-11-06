@@ -75,6 +75,7 @@
 						longtaskCount: snap.longtask_count,
 						longtaskMaxMs: snap.longtask_max_ms,
 						context: rec.context,
+						snapshot: rec.snapshot ?? null,
 					},
 				})
 					.then(() => markFreezeRecordFlushed())
@@ -188,7 +189,6 @@
 		opacity: 0.75;
 		flex-shrink: 0;
 	}
-	.ram-dot.is-up,
 	.ram-dot-up {
 		background: var(--warning-color, #e0a34e);
 	}
