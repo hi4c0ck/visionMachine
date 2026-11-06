@@ -81,6 +81,10 @@ export interface FreezeRecord {
 	 *  reporter tick). Attached by the worker at freeze onset — the one
 	 *  reading the main thread can never produce itself while pinned. */
 	snapshot?: unknown;
+	/** True for "soft" records: the main thread kept responding but SLOW
+	 *  (rtt > 1 s on ~12 consecutive pings ≈ 6 s of sustained degradation)
+	 *  — the "hangs / eats memory" state that is NOT a hard pin. */
+	soft?: boolean;
 }
 
 interface Meter {
@@ -109,6 +113,7 @@ function readRecord(): FreezeRecord {
 				flushed: r.flushed === true,
 				context: r.context ?? getStallContext(),
 				snapshot: r.snapshot,
+				soft: r.soft === true,
 			};
 		}
 	} catch {
@@ -174,14 +179,17 @@ function buildWorkerSource(): string {
 	return `
 		const PING = ${PING_MS};
 		const FREEZE = ${FREEZE_MS};
+		const DEGRAD_RT = 1000;      // rtt above this = "degraded" main thread
+		const DEGRAD_STREAK = 12;     // 12 consecutive degraded pings (~6s) = sustained pin
 		const LS_KEY = ${JSON.stringify(LS_KEY)};
 		let seq = 0;
 		let lastPingAt = 0;
-		let pending = null;      // the last unanswered ping { t, seq }
+		let pending = null;      // the last unanswered ping { t, seq, t0 }
 		let frozenSince = 0;     // Date.now() when the worker declared a freeze
 		let lastSnap = null;     // the LATEST main-thread structure snapshot
 		// (main thread stops posting during a freeze, but the worker keeps
 		// the last one it saw = the state at the freeze's onset)
+		let degradedStreak = 0;  // consecutive pings with rtt > DEGRAD_RT
 		function readRec() {
 			try {
 				const raw = localStorage.getItem(LS_KEY);
@@ -213,12 +221,36 @@ function buildWorkerSource(): string {
 				rec.snapshot = lastSnap; // state at freeze onset (worker-held)
 				writeRec(rec);
 			}
+			// DEGRADED DETECTION: the main thread is STILL responding, but
+			// slowly (rtt > DEGRAD_RT). A streak of DEGRAD_STREAK consecutive
+			// slow pings (~6 s of sustained slowness) = the "hangs / eats
+			// memory" state that is NOT a hard pin — the hard-freeze detector
+			// above never fires for it. Persist a SOFT record (same snapshot
+			// payload) so the next flush tells us structure sizes during a
+			// degraded run.
+			if (pending && !pending.stalled && now - pending.t >= DEGRAD_RT) {
+				pending.stalled = true;
+				degradedStreak += 1;
+				if (degradedStreak >= DEGRAD_STREAK && !frozenSince) {
+					frozenSince = Date.now() - Math.round(now - pending.t);
+					const rec = readRec() || {};
+					rec.started_at = frozenSince;
+					rec.ended_at = 0;
+					rec.soft = true;
+					rec.flushed = false;
+					rec.snapshot = lastSnap;
+					writeRec(rec);
+				}
+			}
 			setTimeout(tick, PING);
 		}
 		onmessage = (e) => {
 			const m = e.data;
 			if (m.type === 'reply' && pending && m.seq === pending.seq) {
-				// Main answered in time → healthy.
+				const rtt = performance.now() - pending.t;
+				// Main answered → healthy. A FAST reply resets the degraded
+				// streak; only a SLOW one counts toward it.
+				if (rtt <= DEGRAD_RT) degradedStreak = 0;
 				pending = null;
 				if (frozenSince) {
 					// RECOVERED: stamp the end + the recovery stack (captured
@@ -249,6 +281,7 @@ function buildWorkerSource(): string {
 				// local frozen state so the next freeze is recorded fresh.
 				pending = null;
 				frozenSince = 0;
+				degradedStreak = 0;
 			}
 		};
 		tick();
