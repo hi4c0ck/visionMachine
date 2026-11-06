@@ -16,7 +16,7 @@ import { logSignal, type DirectorTab } from '$lib/directorStore';
 	import type { SessionGenerateStats } from './ComposerModals/SessionGenerateModal.svelte';
 	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece, ResolutionPreset, Orientation } from '$types';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece, ResolutionPreset, Orientation, MediaMode } from '$types';
 	import { getMaxFramesForResolution, RESOLUTION_DIMS } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
@@ -425,6 +425,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// hashed profile id, and loadProjects lazily re-resolves it on next
 	// call). The store then recomputes providerStatus + notifies, refreshing
 	// the chip. Skips the initial run (the onMount path already loaded).
+	// svelte-ignore state_referenced_locally — intentional: capture initial userName to detect changes
 	let lastLoadedUserName = $state(userName);
 	$effect(() => {
 		if (userName === lastLoadedUserName) return;
@@ -1103,27 +1104,32 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	const saveTimers = new Map<string, number>();
 	// Re-sync a composer store session back into the projects tree that
 	// `selectedSession` (and thus the Pipes tab) actually renders from.
-	// The store's `sessions` Map and the `projects` tree are two holders;
-	// only store *mutations* fire `setOnUpdate`, but a backend load
-	// (loadSession, e.g. after an I9 apply) writes the store WITHOUT
-	// firing it. This is the one job the apply path still owes: push the
-	// freshly-loaded pipes into the tree so the Pipes tab shows them now,
-	// instead of only after the session is re-opened.
+	//
+	// DEDUP (the "massive data update on fast user moves" fix): the previous
+	// version did `projects = projects.map(...)` on EVERY composer mutation —
+	// i.e. on every prompt keystroke — rebuilding N projects × M sessions of
+	// fresh objects PLUS a `{ ...freshSession }` deep clone of the whole
+	// composer row. That whole-tree churn (and the resulting dual full copy
+	// of the composer data living in both the store and the tree) is the
+	// "massive data update" that churns the renderer heap on a session swing.
+	//
+	// Instead: find the ONE session slot and point it at the store's canonical
+	// object (single source of truth — the store mutates in place, so a shared
+	// reference stays in sync for free). O(containing-lookups), no whole-array
+	// rebuild, no deep clone. The store's `sessions` Map remains the holder;
+	// the tree slot just references it, so there is one copy, not two.
 	function reconcileComposerIntoProjects(sessionId: string) {
-		if (selectedSessionId === sessionId && selectedProject) {
-			const freshSession = sessions.get(sessionId);
-			if (freshSession) {
-				projects = (projects || []).map((p: any) => {
-					if (p.id !== selectedProject.id) return p;
-					return {
-						...p,
-						sessions: (p.sessions || []).map((s: any) =>
-							s.id === sessionId ? { ...freshSession } : s
-						)
-					};
-				});
-			}
-		}
+		if (selectedSessionId !== sessionId) return;
+		const proj = projects.find((p) => p.id === selectedProjectId);
+		const fresh = sessions.get(sessionId);
+		if (!proj || !fresh) return;
+		// Replace ONLY this one slot in the existing tree (in place, through
+		// the $state proxy so `selectedSession` re-runs), with a fresh shallow
+		// copy — NOT the whole `projects = projects.map(...)` rebuild. One
+		// allocation instead of N projects + M sessions per keystroke.
+		const idx = proj.sessions.findIndex((s) => s.id === sessionId);
+		if (idx === -1) proj.sessions.push({ ...fresh });
+		else proj.sessions[idx] = { ...fresh };
 	}
 	setOnUpdate((sessionId) => {
 		// 1) UI re-sync - only for the session the user is currently viewing
@@ -1397,16 +1403,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				if (loadResult.errors.length === 0) {
 					const loadedSession = sessions.get(sessionId);
 					if (loadedSession) {
-						const updatedProjects = (projects || []).map((p: any) => {
-							if (p.id !== foundProject.id) return p;
-							return {
-								...p,
-								sessions: (p.sessions || []).map((s: any) =>
-									s.id === sessionId ? { ...s, ...loadedSession } : s
-								)
-							};
-						});
-						projects = updatedProjects;
+						// DEDUP: update the ONE session slot in place (merge the
+						// loaded composer data onto the tree's metadata shell)
+						// instead of rebuilding the whole projects array.
+						const proj = foundProject;
+						const idx = proj.sessions.findIndex((s: any) => s.id === sessionId);
+						if (idx === -1) proj.sessions.push({ ...loadedSession });
+						else proj.sessions[idx] = { ...proj.sessions[idx], ...loadedSession };
 						saveProjects();
 					}
 				} else {
@@ -2676,8 +2679,8 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		videoAspect={videoAspect}
 		isSessionVideo={previewIsSessionVideo}
 		sessionVideoDetached={sessionVideoDetached}
-		oncarouselSelect={(f) => (selectedFrame = f)}
-		onframeSelect={(f) => (selectedFrame = f)}
+		oncarouselSelect={(f: number) => (selectedFrame = f)}
+		onframeSelect={(f: number) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onplayoutside={handlePlayOutside}
@@ -2802,14 +2805,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						{selectedFrame}
 						bind:activePipeIdx
 						bind:focus
-						onframechange={(f) => selectedFrame = f}
+						onframechange={(f: number) => selectedFrame = f}
 						localFrameForPipe={localFrameForPipe}
 						pipeStartForPipe={pipeStartForPipe}
 						brokenRefs={brokenRefs}
 						workingRefs={workingRefs}
 						onRefSaved={recheckRef}
 						videoModel={videoModelSpec}
-						onmediamodechange={(pipeId, mode) => {
+						onmediamodechange={(pipeId: string, mode: 'keyframes' | 'reference') => {
 							if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
 						}}
 					/>
@@ -2828,11 +2831,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						sessionId={selectedSession.id}
 						sessionName={selectedSession.name}
 						pipeCount={pipes.length}
-						onLogSignal={(kind, targetSpan, note) =>
+						onLogSignal={(kind: 'edit_diff' | 'accept' | 'reject' | 'rate', targetSpan: string, note?: string) =>
 							logSignal(selectedSession.id, kind, targetSpan, note)}
-						onRunningChange={(b) => (directorRunning = b)}
-						onMetaChange={(meta) => (tabMeta = meta)}
-						onApplied={(id) => reconcileComposerIntoProjects(id)}
+						onRunningChange={(b: boolean) => (directorRunning = b)}
+						onMetaChange={(meta: { extractSections: number; stale: boolean }) => (tabMeta = meta)}
+						onApplied={(id: string) => reconcileComposerIntoProjects(id)}
 					/>
 				</div>
 			{:else}
@@ -2890,8 +2893,8 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					onFpsChange={handleFpsChange}
 					onResolutionChange={handleResolutionChange}
 					onOrientationChange={handleOrientationChange}
-					onPipeQChange={(pipeId, q) => handlePipeQValueChange(selectedSession.id, pipeId, q)}
-					onPipeCChange={(pipeId, c) => handlePipeCValueChange(selectedSession.id, pipeId, c)}
+					onPipeQChange={(pipeId: string, q: number) => handlePipeQValueChange(selectedSession.id, pipeId, q)}
+					onPipeCChange={(pipeId: string, c: number) => handlePipeCValueChange(selectedSession.id, pipeId, c)}
 				/>
 			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
@@ -2917,7 +2920,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					groupProgress={groupProgress}
 					composePhase={groupComposePhase}
 					onFetch={fetchGenerationTask}
-					onLoaded={(view) => { groupTaskViews[view.pipeId] = view; }}
+					onLoaded={(view: GenerationTaskView) => { groupTaskViews[view.pipeId] = view; }}
 					onCancel={cancelSessionGenerationGroup}
 					onClose={closeProgressModal}
 					onMinimize={minimizeProgressModal}
