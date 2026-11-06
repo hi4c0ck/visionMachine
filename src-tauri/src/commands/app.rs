@@ -184,7 +184,7 @@ pub fn report_renderer_metrics(state: State<'_, AppState>, input: crate::dashboa
 /// main log file rotates.
 #[tauri::command]
 pub fn log_dashboard_line(state: State<'_, AppState>, message: String) {
-    state
-        .dashboard
-        .record_log_line(&message.chars().take(4000).collect::<String>());
+    let line = message.chars().take(4000).collect::<String>();
+    log::info!("[UI] RENDER: {}", line);
+    state.dashboard.record_log_line(&format!("[UI] RENDER: {}", line));
 }

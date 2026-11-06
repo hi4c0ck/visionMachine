@@ -85,6 +85,14 @@ export interface FreezeRecord {
 	 *  (rtt > 1 s on ~12 consecutive pings ≈ 6 s of sustained degradation)
 	 *  — the "hangs / eats memory" state that is NOT a hard pin. */
 	soft?: boolean;
+	/** Record kind: 'busy' = ≥30 % of a 30 s window spent in slow replies —
+	 *  the distributed churn-loop shape (many medium blocks, no single 3 s
+	 *  pin) that neither the hard-freeze nor the slow-streak detector
+	 *  catches. */
+	mode?: string;
+	/** Fraction (0..1) of the 30 s window the main thread spent busy
+	 *  (set on `mode: 'busy'` records). */
+	busy_fraction?: number;
 }
 
 interface Meter {
@@ -114,6 +122,8 @@ function readRecord(): FreezeRecord {
 				context: r.context ?? getStallContext(),
 				snapshot: r.snapshot,
 				soft: r.soft === true,
+				mode: r.mode,
+				busy_fraction: r.busy_fraction,
 			};
 		}
 	} catch {
@@ -190,6 +200,25 @@ function buildWorkerSource(): string {
 		// (main thread stops posting during a freeze, but the worker keeps
 		// the last one it saw = the state at the freeze's onset)
 		let degradedStreak = 0;  // consecutive pings with rtt > DEGRAD_RT
+		// BUSY-WINDOW DETECTION (the distributed churn shape): many medium
+		// main-thread blocks (each well under the 3 s hard-freeze and never
+		// 12 consecutive >1 s replies) keep the UI feeling dead without
+		// tripping either detector above. Track cumulative main-thread busy
+		// time (sum of reply RTTs) over a rolling 30 s window; ≥30 % busy
+		// persists a soft record tagged mode:'busy'.
+		const BUSY_WIN = 30000;    // rolling window, ms
+		const BUSY_RATIO = 0.30;   // ≥30 % of the window busy = a hang
+		const BUSY_COOLDOWN = 60000; // one record per 60 s while it persists
+		let busyLog = [];          // recent { t, rtt } pings
+		let lastBusyRec = 0;
+		function busyFraction() {
+			const now = performance.now();
+			while (busyLog.length && now - busyLog[0].t > BUSY_WIN) busyLog.shift();
+			if (busyLog.length < 20) return 0; // need ~10 s of data
+			let total = 0;
+			for (const e of busyLog) total += Math.min(e.rtt, BUSY_WIN);
+			return Math.min(1, total / BUSY_WIN);
+		}
 		function readRec() {
 			try {
 				const raw = localStorage.getItem(LS_KEY);
@@ -242,6 +271,27 @@ function buildWorkerSource(): string {
 					writeRec(rec);
 				}
 			}
+			// BUSY DETECTION: a rolling-window cumulative fraction of the main
+			// thread's time spent replying (== blocked) over the last 30 s.
+			// This catches the DISTRIBUTED churn shape: many medium blocks
+			// that each stay under the 3 s hard-freeze and never 12 in a row
+			// exceed 1 s, but whose total pins the UI. Persist a soft record
+			// (mode:'busy') with the same snapshot payload; one per 60 s.
+			if (!frozenSince && performance.now() - lastBusyRec >= BUSY_COOLDOWN) {
+				const frac = busyFraction();
+				if (frac >= BUSY_RATIO) {
+					lastBusyRec = performance.now();
+					const rec = readRec() || {};
+					rec.started_at = rec.started_at || Date.now() - BUSY_WIN;
+					if (!rec.ended_at) rec.ended_at = 0; // still busy
+					rec.soft = true;
+					rec.mode = 'busy';
+					rec.busy_fraction = Math.round(frac * 100) / 100;
+					rec.flushed = false;
+					rec.snapshot = lastSnap;
+					writeRec(rec);
+				}
+			}
 			setTimeout(tick, PING);
 		}
 		onmessage = (e) => {
@@ -251,6 +301,8 @@ function buildWorkerSource(): string {
 				// Main answered → healthy. A FAST reply resets the degraded
 				// streak; only a SLOW one counts toward it.
 				if (rtt <= DEGRAD_RT) degradedStreak = 0;
+				busyLog.push({ t: performance.now(), rtt }); // busy-window feed
+				if (busyLog.length > 400) busyLog.shift();
 				pending = null;
 				if (frozenSince) {
 					// RECOVERED: stamp the end + the recovery stack (captured
@@ -282,6 +334,8 @@ function buildWorkerSource(): string {
 				pending = null;
 				frozenSince = 0;
 				degradedStreak = 0;
+				busyLog = [];
+				lastBusyRec = 0;
 			}
 		};
 		tick();
