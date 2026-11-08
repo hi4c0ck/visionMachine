@@ -80,7 +80,8 @@ pub use plan::{PlanPipe, PlanSection, StructuredVideoPlan, VideoTag};
 
 // ── critic ─────────────────────────────────────────────────────────────
 pub use critic::{
-    Critic, CriticInput, CriticSectionView, DefaultCritic, NodeKind, ScoreNode, ScoreTree,
+    collapse, Critic, CriticInput, CriticSectionView, DefaultCritic, NodeKind, ScoreNode,
+    ScoreTree,
 };
 
 // ── learn ──────────────────────────────────────────────────────────────

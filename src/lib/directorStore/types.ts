@@ -159,6 +159,63 @@ export interface RunFlowResult {
 	flowVersion: number;
 }
 
+// ── Golden set (design §5.2 / §7.3, the additive per-session golden.json) ──
+// A run the user flagged as a quality baseline. It freezes the entry text +
+// per-section scores so a later critic version can be diffed against the same
+// text (Q2 "did the update drift quality?" / Q3 "keep critic head vN?").
+// Mirrors the Rust `GoldenRun` in commands/director.rs (camelCase serde).
+export interface GoldenSectionBaseline {
+	sectionIndex: number;
+	tag: VideoTag;
+	frameStart: number;
+	frameEnd: number;
+	score: number;
+}
+export interface GoldenRun {
+	flowVersion: number;
+	/** The entry text the run was built from (the golden direction, Q2/Q3 key). */
+	entryText: string;
+	/** The overall score at capture time (frozen baseline, I2-derived). */
+	baselineOverall: number;
+	/** Per-section baseline scores, in plan.primary().sections order. */
+	sections: GoldenSectionBaseline[];
+	/** The critic model version that produced the baseline. */
+	criticModelVersion: number;
+	/** Unix-seconds the baseline was flagged. */
+	starredAt: number;
+}
+
+/**
+ * Q2 drift: diff a golden baseline's per-section scores against the SAME
+ * section layout of a current `FlowDocument`. The join key is the section
+ * ordinal (critic leaf `s{i}` ↔ section i, the same 1:1 the `tagBars`
+ * helper uses), so a golden captured on an older run lines up against the
+ * current doc by index. Returns, per golden, the overall delta (current −
+ * baseline) + the per-section deltas. `null` when the current doc has no
+ * matching section at an index (layout changed) — rendered as "n/a", never
+ * a fake number. Pure + total: never throws.
+ */
+export function goldenDrift(
+	golden: GoldenRun,
+	doc: FlowDocument,
+): Array<{ sectionIndex: number; tag: VideoTag; baseline: number; current: number | null; delta: number | null }> {
+	const tree = doc.scoretree;
+	const comb = tree.combinator;
+	const leaves = tree.root.children;
+	const currentAt = (i: number): number | null =>
+		leaves[i] !== undefined ? collapse(leaves[i], comb) : null;
+	return golden.sections.map((g) => {
+		const cur = currentAt(g.sectionIndex);
+		return {
+			sectionIndex: g.sectionIndex,
+			tag: g.tag,
+			baseline: g.score,
+			current: cur,
+			delta: cur === null ? null : cur - g.score,
+		};
+	});
+}
+
 // ── Small pure helpers (mirror of critic.rs math + regen.rs id scheme) ─────
 
 const clamp01 = (n: number) => (n < 0 ? 0 : n > 1 ? 1 : n);

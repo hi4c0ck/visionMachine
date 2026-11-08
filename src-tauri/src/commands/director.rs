@@ -601,6 +601,164 @@ pub async fn director_log_signal(
     Ok(record.record_id)
 }
 
+// ── Golden set (design §5.2 / §7.3, the "additive golden.json" data gap) ──
+//
+// The user-facing golden set is NOT the `engine/golden.rs` module (those are
+// deterministic test fixtures pinning `harness/golden/*.json` against the
+// Rust model — a different thing). This is the *quality baseline* the
+// Scoreboard's Golden-set card shows: a run flagged as "golden" freezes its
+// entry text + per-section scores, so a later critic version can be diffed
+// against the same text (Q2 "did the update drift quality?" and Q3 "should I
+// keep critic head vN?"). It is stored as ONE small `golden.json` per session
+// (the same flow dir as `flow.v{N}.json` + `flow_signals.jsonl`), coexisting
+// baselines, never a new field on existing types.
+//
+// One-copy-at-a-time: a golden baseline is keyed by `flow_version`; re-flagging
+// the SAME version REPLACES its entry (no duplicate), so the file holds at
+// most one snapshot per run.
+
+/// One frozen quality baseline (a flagged run).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldenRun {
+    /// The flow version this baseline was captured from (`flow.v{N}.json`).
+    pub flow_version: u32,
+    /// The entry text the run was built from (the golden direction, Q2/Q3 key).
+    pub entry_text: String,
+    /// The overall score at capture time (the frozen baseline, I2-derived).
+    pub baseline_overall: f64,
+    /// Per-section baseline scores, in `plan.primary().sections` order. The
+    /// section ordinal is the join key (critic leaf `s{i}` ↔ section i,
+    /// verified 1:1 in `mod.rs`). `tag` + frame range carry the label.
+    pub sections: Vec<GoldenSectionBaseline>,
+    /// The critic model version that produced the baseline (the "which critic
+    /// did this with" tag; Q3 compares differing critic_model_version).
+    pub critic_model_version: u32,
+    /// Unix-seconds the baseline was flagged (0 in tests).
+    #[serde(default)]
+    pub starred_at: u64,
+}
+
+/// One section's frozen baseline label + score.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldenSectionBaseline {
+    pub section_index: u32,
+    pub tag: String,
+    pub frame_start: u32,
+    pub frame_end: u32,
+    pub score: f64,
+}
+
+/// The session's golden set (a JSON array of baselines, coexisting).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldenSet {
+    pub runs: Vec<GoldenRun>,
+}
+
+/// Collapse one section's critic leaf into its baseline score, mirroring the
+/// TS `tagBars` join exactly: leaf `s{i}` = `scoretree.root.children[i]`,
+/// collapsed via the tree's combinator; a missing leaf scores neutral 0.5.
+fn section_leaf_score(doc: &FlowDocument, section_index: usize) -> f64 {
+    use crate::generation::video_flow::collapse;
+    let tree = &doc.scoretree;
+    let leaves = &tree.root.children;
+    let comb = &tree.combinator;
+    match leaves.get(section_index) {
+        Some(leaf) => collapse(leaf, comb),
+        None => 0.5,
+    }
+}
+
+/// Capture the current golden baseline for `flow_version` from the persisted
+/// doc, returning the `GoldenRun` the command upserts.
+fn golden_run_from_doc(doc: &FlowDocument, starred_at: u64) -> GoldenRun {
+    let sections = doc.structured.primary().sections.clone();
+    let section_baselines: Vec<GoldenSectionBaseline> = sections
+        .iter()
+        .enumerate()
+        .map(|(i, s)| GoldenSectionBaseline {
+            section_index: i as u32,
+            tag: s.tag.keyword().to_string(),
+            frame_start: s.frame_start,
+            frame_end: s.frame_end,
+            score: section_leaf_score(doc, i),
+        })
+        .collect();
+    GoldenRun {
+        flow_version: doc.flow_version,
+        entry_text: doc.intent.entry_text.clone(),
+        baseline_overall: doc.scoretree.overall(),
+        sections: section_baselines,
+        critic_model_version: doc.regen.version.critic_model_version,
+        starred_at,
+    }
+}
+
+fn golden_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("golden.json")
+}
+
+/// Read the session's golden set (empty when the file is absent or corrupt —
+/// a missing baseline is a legitimate state, never an error).
+fn load_golden_set(dir: &std::path::Path) -> GoldenSet {
+    let p = golden_path(dir);
+    std::fs::read_to_string(&p)
+        .ok()
+        .and_then(|s| serde_json::from_str::<GoldenSet>(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Flag the current `flow_version` as a quality baseline. Upsert by version:
+/// re-flagging the same run REPLACES its baseline (one-copy-at-a-time), a
+/// different version is appended. Returns the stored baseline count.
+#[tauri::command]
+pub async fn director_flag_golden(
+    session_id: String,
+    flow_version: u32,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let path = dir.join(FlowDocument::default_filename(flow_version));
+    let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let run = golden_run_from_doc(&doc, ts);
+    let mut set = load_golden_set(&dir);
+    // One baseline per flow_version: replace if present, else append.
+    if let Some(slot) = set.runs.iter_mut().find(|r| r.flow_version == flow_version) {
+        *slot = run;
+    } else {
+        set.runs.push(run);
+    }
+    let pretty = serde_json::to_string_pretty(&set).map_err(|e| e.to_string())?;
+    std::fs::write(golden_path(&dir), pretty).map_err(|e| e.to_string())?;
+    Ok(set.runs.len() as u32)
+}
+
+/// List the session's golden baselines (oldest → newest), the Scoreboard's
+/// Golden-set card data source. Empty when none flagged.
+#[tauri::command]
+pub async fn director_list_golden(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<GoldenRun>, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let set = load_golden_set(&dir);
+    let mut runs = set.runs;
+    runs.sort_by_key(|r| r.flow_version);
+    Ok(runs)
+}
+
 /// Destructive apply (I9): materialize the persisted flow's structured plan
 /// into composer pipes and save it to the session's composer. This is the
 /// "Regenerate pipes" action — it replaces/appends real composer pipes, so

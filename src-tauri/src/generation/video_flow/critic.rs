@@ -90,7 +90,12 @@ impl ScoreTree {
 }
 
 /// Recursively collapse a node's subtree to a single score using `comb`.
-fn collapse(node: &ScoreNode, comb: &ScoreCombinator) -> f64 {
+///
+/// Public: the UI's Scoreboard / golden-baseline capture mirrors this exact
+/// math (see `src/lib/directorStore/types.ts::collapse`), and the golden-set
+/// command (`director_flag_golden`) collapses each section's critic leaf
+/// into its baseline score through it. Keeping one source of truth.
+pub fn collapse(node: &ScoreNode, comb: &ScoreCombinator) -> f64 {
     if node.children.is_empty() {
         return clamp01(node.score);
     }

@@ -11,7 +11,7 @@
 // flow data + per-session run state.
 
 import { invoke } from '@tauri-apps/api/core';
-import type { FlowDocument, FlowSummary, RunFlowResult } from './types';
+import type { FlowDocument, FlowSummary, RunFlowResult, GoldenRun } from './types';
 import type { EngineEntryInput } from './engine';
 
 export type DirectorTab = 'pipes' | 'director' | 'extract' | 'scoreboard';
@@ -198,4 +198,28 @@ export async function applyFlowScoped(
 		edited,
 	});
 	return out;
+}
+
+// ── Golden set (design §5.2 / §7.3) ────────────────────────────────────────
+// Flag a run as a quality baseline (upserts by flow_version, one-copy-at-a-
+// time) + list the session's golden baselines for the Scoreboard's Golden-set
+// card. The Rust side stores one small `golden.json` per session flow dir.
+export async function flagGolden(
+	sessionId: string,
+	flowVersion: number
+): Promise<number> {
+	const out = await invoke<number>('director_flag_golden', {
+		sessionId,
+		flowVersion,
+	});
+	return out;
+}
+
+export async function listGolden(
+	sessionId: string
+): Promise<import('./types').GoldenRun[]> {
+	const out = await invoke<import('./types').GoldenRun[]>('director_list_golden', {
+		sessionId,
+	});
+	return out ?? [];
 }

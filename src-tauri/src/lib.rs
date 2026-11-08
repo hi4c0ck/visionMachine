@@ -563,6 +563,8 @@ pub fn run() {
             commands::director::director_apply_flow_scoped,
             commands::director::director_save_seed_card,
             commands::director::director_load_seed_card,
+            commands::director::director_flag_golden,
+            commands::director::director_list_golden,
             commands::generation::start_generation,
             commands::generation::start_session_generation,
             commands::generation::get_generation_group,

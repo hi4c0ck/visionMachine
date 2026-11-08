@@ -9,12 +9,16 @@
 		tagBars,
 		sparklinePoints,
 		diffEngineRuns,
+		goldenDrift,
+		overall,
 		type FlowDocument,
 		type FlowSummary,
+		type GoldenRun,
 	} from '$lib/directorStore/types';
-	import { loadFlow } from '$lib/directorStore';
+	import { loadFlow, flagGolden, listGolden } from '$lib/directorStore';
 	import { sessions } from '$lib/composerStore';
 	import { concernSummary, type EngineRun } from '$lib/directorStore/engine';
+	import { flashToast } from '$lib/flashToast';
 
 	let {
 		doc,
@@ -175,6 +179,23 @@
 	// Computed in the child's own scope where it is used.
 	const bars = $derived(doc ? tagBars(doc) : []);
 
+	// Golden-set card data: the flagged baselines, and — when a run is open —
+	// the LIVE drift of the active doc against its matching baseline (the Q2
+	// "did the update drift quality?" number). Drift is section-index-joined
+	// (the same ordinal join tagBars uses), so it stays honest when the
+	// critic version changes but the section layout does not.
+	const goldenByRun = $derived.by(() => {
+		const m = new Map<number, GoldenRun>();
+		for (const g of golden) m.set(g.flowVersion, g);
+		return m;
+	});
+	const activeGoldenDrift = $derived.by(() => {
+		if (!doc || !goldenLoaded) return null;
+		const g = goldenByRun.get(doc.flowVersion);
+		if (!g) return null;
+		return { golden: g, deltas: goldenDrift(g, doc) };
+	});
+
 	// Q4 sparkline: overall score across persisted runs (oldest → newest).
 	const sparkPoints = $derived(sparklinePoints([...flows].reverse().map((f) => f.overall)));
 
@@ -185,6 +206,65 @@
 		if (n < 0.25) return 'tone-danger';
 		if (n < 0.4) return 'tone-warn';
 		return 'tone-neutral';
+	}
+
+	// ── Golden set (Q2 quality baseline) ───────────────────────────────────
+	// The session's flagged baselines (frozen per-section scores + entry text).
+	// Populated on mount + after a flag, from the backend's per-session
+	// golden.json. `goldenBusy` guards the in-flight flag (prevents double
+	// upserts from a fast double-click). The current drift is derived: each
+	// golden is diffed against the active doc's section scores (the Q2
+	// "did the update drift quality?" number), so a re-run of the same text
+	// with a newer critic shows its delta against the frozen baseline.
+	let golden = $state<GoldenRun[]>([]);
+	let goldenLoaded = $state(false);
+	let goldenBusy = $state(false);
+
+	// Resolve the session id for the flag/list invokes (the slim parent owns
+	// the flows ledger; this child gets sessionName, so find the id via the
+	// in-memory composer sessions map — first name match wins).
+	function sessionIdFor(): string | null {
+		for (const [id, s] of sessions) if (s.name === sessionName) return id;
+		return null;
+	}
+
+	// Load the golden set once per session (on mount + when sessionName flips).
+	$effect(() => {
+		const sid = sessionIdFor();
+		golden = [];
+		goldenLoaded = false;
+		if (!sid) {
+			goldenLoaded = true;
+			return;
+		}
+		void listGolden(sid)
+			.then((g) => {
+				golden = g;
+				goldenLoaded = true;
+			})
+			.catch(() => {
+				golden = [];
+				goldenLoaded = true;
+			});
+	});
+
+	function isGolden(flowVersion: number): boolean {
+		return golden.some((g) => g.flowVersion === flowVersion);
+	}
+
+	async function toggleGolden(flowVersion: number) {
+		const sid = sessionIdFor();
+		if (!sid || goldenBusy) return;
+		goldenBusy = true;
+		try {
+			await flagGolden(sid, flowVersion);
+			const g = await listGolden(sid);
+			golden = g;
+		} catch (e) {
+			flashToast(`Flag golden failed: ${String(e)}`, 'error');
+		} finally {
+			goldenBusy = false;
+		}
 	}
 </script>
 
@@ -253,6 +333,14 @@
 					</span>
 					<span class="run-src">{f.sectionCount}s · {f.entryText.slice(0, 24)}…</span>
 					<span class="run-anno">
+						<button
+							class="mini gold-star"
+							class:gold-on={isGolden(f.flowVersion)}
+							disabled={!f.verified || goldenBusy}
+							title={isGolden(f.flowVersion) ? 'Flagged as quality baseline' : 'Flag this run as a quality baseline'}
+							onclick={() => void toggleGolden(f.flowVersion)}>
+							★
+						</button>
 						<button class="mini" onclick={() => void onLogSignal('accept', 'run-' + f.flowVersion, 'annotated accept')}>
 							✓
 						</button>
@@ -317,14 +405,43 @@
 </section>
 
 <section class="score-card">
-	<h3 class="block-heading">Golden set</h3>
-	<p class="hint">
-		{#if flows.length === 0}
-			No runs yet.
-		{:else}
-			No runs flagged as golden yet — golden-set schema pending.
-		{/if}
-	</p>
+	<h3 class="block-heading">Golden set <span class="muted">· quality baselines</span></h3>
+	{#if !goldenLoaded}
+		<p class="hint">Loading baselines…</p>
+	{:else if golden.length === 0}
+		<p class="hint">
+			{#if flows.length === 0}
+				No runs yet.
+			{:else}
+				No runs flagged as golden yet — tap the ★ on a run to freeze it as a
+				quality baseline.
+			{/if}
+		</p>
+	{:else}
+		<ul class="golden-list">
+			{#each golden as g (g.flowVersion)}
+				<li class="golden-row">
+					<code class="golden-v">v{g.flowVersion}</code>
+					<span class="golden-base">base {fmtScore(g.baselineOverall)}</span>
+					<span class="golden-src" title={g.entryText}>
+						{g.entryText.slice(0, 22)}{g.entryText.length > 22 ? '…' : ''}
+					</span>
+					<span class="golden-critic">critic v{g.criticModelVersion}</span>
+					{#if activeGoldenDrift && activeGoldenDrift.golden.flowVersion === g.flowVersion}
+						{@const d = activeGoldenDrift.deltas}
+						<span class="golden-drift">
+							{#if d.length}
+								now {fmtScore(overall(doc!))} ·
+								{d.filter((x) => x.delta !== null && Math.abs(x.delta) > 0.001).length} section(s) moved
+							{:else}
+								no layout change
+							{/if}
+						</span>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	{/if}
 </section>
 
 <section class="score-card">
@@ -333,7 +450,11 @@
 		Flag ≥2 golden runs across two critic head versions to compare.
 		{#if doc}
 			Currently v{doc.regen.version.criticModelVersion}
-			{doc.criticModel?.untrained ? ' (stub)' : ''}.
+			{doc.criticModel?.untrained ? ' (stub — real critic lands in Phase 2)' : ''}.
+		{/if}
+		{#if golden.length}
+			{golden.length} golden baseline(s) on file — a trained critic will diff
+			them here.
 		{/if}
 	</p>
 </section>
@@ -571,6 +692,70 @@
 	.mini:hover {
 		border-color: var(--accent-color);
 		color: var(--text-primary);
+	}
+
+	/* Golden ★ flag (Q2 quality baseline): a quiet star toggle on the run row.
+	   On = accent-filled star (flagged); off = muted outline. Design: no new
+	   color family, just the accent + the muted/primary states already in use. */
+	.mini.gold-star {
+		color: var(--text-muted);
+	}
+	.mini.gold-star:hover:not(:disabled) {
+		border-color: var(--warning-color, var(--accent-color));
+		color: var(--text-primary);
+	}
+	.mini.gold-star.gold-on {
+		color: var(--warning-color, var(--accent-color));
+		border-color: color-mix(in srgb, var(--warning-color, var(--accent-color)) 50%, var(--border-color));
+		background: color-mix(in srgb, var(--warning-color, var(--accent-color)) 10%, var(--bg-tertiary));
+	}
+
+	/* Golden-set card rows: a frozen baseline with its live drift readout. */
+	.golden-list {
+		list-style: none;
+		margin: 4px 0 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.golden-row {
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		padding: 4px 8px;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		font-size: 11px;
+	}
+	.golden-v {
+		font-family: var(--font-mono);
+		color: var(--text-primary);
+	}
+	.golden-base {
+		font-family: var(--font-mono);
+		color: var(--text-secondary);
+	}
+	.golden-src {
+		flex: 1;
+		color: var(--text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.golden-critic {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--text-muted);
+	}
+	.golden-drift {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--accent-color);
+	}
+	.block-heading .muted {
+		color: var(--text-muted);
+		font-weight: 400;
 	}
 
 	/* ── M6 side-by-side compare (additive block under the runs ledger) ── */
