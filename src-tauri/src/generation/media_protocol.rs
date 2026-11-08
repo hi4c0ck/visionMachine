@@ -89,6 +89,25 @@ pub fn handler<R: Runtime>(
 fn serve(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let is_head = *request.method() == Method::HEAD;
 
+    // 0. CORS preflight. The app's webview origin differs from the
+    //    `media.localhost` host, and the carousel's side-frame decode uses
+    //    cross-origin paths (WebCodecs `EncodedVideoFileSource` issues a
+    //    ranged fetch; the capture `<video crossorigin=anonymous>`). A
+    //    request carrying a non-safelisted `Range` header triggers a
+    //    preflight, so answer it here. A media-file server needs no
+    //    credentials, so a wildcard origin is correct (see respond()).
+    if *request.method() == Method::OPTIONS {
+        return respond(
+            StatusCode::NO_CONTENT,
+            &[
+                ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS".to_string()),
+                ("Access-Control-Allow-Headers", "Range, Content-Type".to_string()),
+                ("Access-Control-Max-Age", "86400".to_string()),
+            ],
+            Vec::new(),
+        );
+    }
+
     // 1. Extract + percent-decode the filesystem path from the URI path
     //    (strip the single leading `/` that separates host from path).
     let raw_path = request.uri().path();
@@ -387,7 +406,12 @@ fn respond(status: StatusCode, headers: &[(&str, String)], body: Vec<u8>) -> Res
     builder = builder
         .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
         .header("Pragma", "no-cache")
-        .header("Expires", "0");
+        .header("Expires", "0")
+        // CORS: the app origin differs from the `media.localhost` host and the
+        // carousel's side-frame decode is cross-origin (WebCodecs ranged fetch
+        // + capture `<video crossorigin=anonymous>`). A media-file server
+        // needs no credentials, so a wildcard origin is correct.
+        .header("Access-Control-Allow-Origin", "*");
     builder.body(body).unwrap_or_else(|_| {
         Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
