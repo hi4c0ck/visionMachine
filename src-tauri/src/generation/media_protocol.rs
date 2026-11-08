@@ -102,9 +102,31 @@ fn serve(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     if decoded.split(['/', '\\']).any(|c| c == "..") {
         return error_response(StatusCode::BAD_REQUEST, "path traversal rejected", is_head);
     }
-    let requested = PathBuf::from(&decoded);
+    let mut requested = PathBuf::from(&decoded);
     if !requested.is_absolute() {
         return error_response(StatusCode::BAD_REQUEST, "path must be absolute", is_head);
+    }
+
+    // 2b. Preview-sibling fallback (Session-8 black-frame regression): the
+    //     frontend routes thumbnails/previews to a small on-disk sibling
+    //     (`foo.mp4` -> `foo.proxy.mp4`, `foo.png` -> `foo.thumb.jpg`) so the
+    //     GPU decode buffer stays bounded. Those siblings are created by
+    //     backfill and are NOT present for most legacy artifacts, so a
+    //     requested sibling can 404 even though the original exists right
+    //     next to it -> black <img>/<video> (and, because the carousel decodes
+    //     its side-card thumbnails from the top-panel video source, black
+    //     side-card placeholders too). When the requested file is a preview
+    //     sibling that is missing on disk, fall back to the ORIGINAL in the
+    //     same directory. The original is inside the same media root (the
+    //     sibling and original share a directory), so the root guard below
+    //     still applies and no new IPC surface is opened. A non-sibling path
+    //     (the normal case) is left untouched.
+    if !requested.is_file() {
+        if let Some(original) =
+            preview_sibling_original(&requested).or_else(|| thumb_sibling_original(&requested))
+        {
+            requested = original;
+        }
     }
 
     // 3. Media-root guard (same check as `read_media_file`): the path must
@@ -212,6 +234,48 @@ fn serve(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         ],
         body,
     )
+}
+
+/// Reconstruct the ORIGINAL media path from a preview-sibling path, or None
+/// when `path` is not a preview sibling.
+///
+/// Mirrors the frontend's `previewSiblingPath` in `$lib/mediaUrl.ts` EXACTLY:
+///   - video  `foo.mp4` -> `foo.proxy.mp4`   (so this maps back to `foo.mp4`)
+///   - image  `foo.png` -> `foo.thumb.jpg`    (so this maps back to `foo.png`)
+/// The sibling and original share a directory, so the original is always
+/// inside the same media root as the requested sibling — the root guard in
+/// `serve` still applies. Used only when the requested sibling is missing on
+/// disk (legacy artifacts that backfill has not generated yet), so a black
+/// 404 is replaced by the original instead.
+fn preview_sibling_original(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    let dir = path.parent()?.to_path_buf();
+    if file_name.ends_with(".proxy.mp4") {
+        // foo.proxy.mp4 -> foo.mp4
+        let original = format!("{}.mp4", file_name.strip_suffix(".proxy.mp4")?);
+        return Some(dir.join(original));
+    }
+    // `.thumb.jpg` siblings are handled by `thumb_sibling_original`
+    // (the original image extension is not known from the sibling name).
+    None
+}
+
+/// For a missing `.thumb.jpg` sibling, return the first existing original
+/// image in the same directory that the sibling was derived from. The
+/// sibling name is `<base>.thumb.jpg` where `<base>` is the original minus
+/// its extension, so `<base>.png` / `<base>.jpg` / `<base>.webp` are the
+/// candidates. Returns the first that exists, or None.
+fn thumb_sibling_original(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?.to_str()?;
+    let base = file_name.strip_suffix(".thumb.jpg")?;
+    let dir = path.parent()?.to_path_buf();
+    for ext in ["png", "jpg", "jpeg", "webp"] {
+        let candidate = dir.join(format!("{}.{}", base, ext));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Content-Type for a media file, by (case-insensitive) extension.
@@ -488,5 +552,30 @@ mod tests {
         assert_eq!(percent_decode("%zz"), None);
         assert_eq!(percent_decode("%2"), None);
         assert_eq!(percent_decode("%"), None);
+    }
+
+    #[test]
+    fn preview_sibling_original_video() {
+        // foo.proxy.mp4 -> foo.mp4
+        let p = PathBuf::from(r"C:\media\foo.proxy.mp4");
+        assert_eq!(
+            preview_sibling_original(&p),
+            Some(PathBuf::from(r"C:\media\foo.mp4"))
+        );
+        // a non-sibling path is left alone
+        let q = PathBuf::from(r"C:\media\foo.mp4");
+        assert_eq!(preview_sibling_original(&q), None);
+    }
+
+    #[test]
+    fn preview_sibling_original_video_bare() {
+        // A bare "x.proxy.mp4" has an empty parent; it still maps to "x.mp4".
+        // (Real requests are absolute paths, guarded upstream in serve().)
+        assert_eq!(
+            preview_sibling_original(Path::new("x.proxy.mp4")),
+            Some(PathBuf::from("x.mp4"))
+        );
+        // A plain non-sibling name has no mapping.
+        assert_eq!(preview_sibling_original(Path::new("x.mp4")), None);
     }
 }
