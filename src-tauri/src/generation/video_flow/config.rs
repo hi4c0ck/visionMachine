@@ -46,11 +46,16 @@ impl FlowConfig {
             },
             structure: StructureParams {
                 step_version: 1,
-                // The concrete engine plan emits 2*N story sections (Scene +
-                // Camera ride the N sub-slice windows) + up to 4 whole-shot
-                // meta (Motion/Lighting/Transition/Effect). With the schema
-                // cap N<=4 that's <= 12, so the guardrail is 12.
-                max_sections_per_pipe: 12,
+                // The concrete engine plan emits, per shot:
+                //   N sub-slices × (scene + camera + [lighting + motion + effect])
+                //   + 2 transitions (in + out, windowed)
+                // The LLM/beat-driven path (beat_profiles.rs) is DATA-DEPENDENT:
+                // 3-4 beats → 3-4 sub-slices → up to ~22 sections for a rich
+                // shot. The deterministic cycling template is N≤4 → ≤12.
+                // The cap guards against runaway LLM blow-up; 32 accommodates
+                // the engine path (5 sections × 4 sub-slices + 2 transitions = 22,
+                // headroom to 32) while still bounding unbounded generation.
+                max_sections_per_pipe: 32,
                 max_tags_per_section: 24,
                 default_section_frames: 24,
             },
