@@ -168,8 +168,8 @@
 	// Workspace. These select the frame EXACTLY (no snap) via onframeSelect,
 	// so in playback mode the <video> can park on any frame, not just 8n.
 	const CAROUSEL_FRAME_STEP = 8;
-	const canStepPrev = totalFrames !== null && (carouselFrame ?? 0) >= CAROUSEL_FRAME_STEP;
-	const canStepNext = totalFrames !== null && (carouselFrame ?? 0) < (totalFrames - 1);
+	const canStepPrev = $derived(totalFrames !== null && (carouselFrame ?? 0) >= CAROUSEL_FRAME_STEP);
+	const canStepNext = $derived(totalFrames !== null && (carouselFrame ?? 0) < (totalFrames - 1));
 
 	function stepFrames(delta: number) {
 		if (totalFrames === null) return;
@@ -442,7 +442,7 @@
 					frame={carouselFrame}
 					videoAspect={videoAspect}
 					stripH={stripH}
-					onframeSelect={(f) => oncarouselSelect?.(f)}
+					onframeSelect={(f: number) => oncarouselSelect?.(f)}
 					onexit={toggleMode}
 				/>
 				<!-- Play outside + the 2f restore pill float over the carousel:

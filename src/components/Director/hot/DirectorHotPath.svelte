@@ -510,10 +510,6 @@
 		font-family: var(--font-mono);
 		letter-spacing: 0.01em;
 	}
-	.btn.primary .btn-note {
-		color: color-mix(in srgb, var(--text-inverse) 70%, transparent);
-	}
-
 	.hint {
 		color: var(--text-muted);
 		font-size: 11px;

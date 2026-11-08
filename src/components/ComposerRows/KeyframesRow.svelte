@@ -19,11 +19,14 @@
 		containsBroken,
 		containsWorking,
 		onRegenerate,
+		mediaActive = true,
 	} = $props<{
 		pipe: PipeRow;
 		maxKeyframes: number;
 		onEditSlot: (slotIndex: number) => void;
 		onRemoveKeyframe: (kfId: string) => void;
+		/** Lazy-loading gate: false skips toMediaUrl resolution (placeholder). */
+		mediaActive?: boolean;
 		/** Scene aspect ratio ("W / H") — chips size to it so thumbnails
 		 *  preview at the same shape as the generated frame. */
 		aspect?: string;
@@ -72,6 +75,7 @@
 	// placeholder instead of the browser's broken-image glyph.
 	let failedKfSources = $state<Set<string>>(new Set());
 	$effect(() => {
+		if (!mediaActive) return;
 		for (const kf of pipe.keyframes ?? []) {
 			// Resolve the ACTIVE-mode source for each keyframe.
 			const src = kfSourceFor(kf);
@@ -87,7 +91,12 @@
 			// path, but guard anyway so a rejection can't crash the effect
 			// loop. A null result simply leaves the chip on its placeholder.
 			kfAttempted = new Map([...kfAttempted, [kf.id, src]]);
-			toMediaUrl(src)
+			// Preview variant: the keyframe chip shows a small thumbnail (the
+			// 320px `.thumb.jpg` sibling) so a 6-pipe session's composer rows
+			// don't pull full-resolution image bytes into the renderer's GPU
+			// texture pool. Falls back to the original if no thumb sibling
+			// exists (new media before the backfill runs).
+			toMediaUrl(src, { variant: 'preview' })
 				.then((url) => {
 					if (url) {
 						// A fresh URL supersedes any failed mark for this ref.

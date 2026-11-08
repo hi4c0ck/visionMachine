@@ -8,7 +8,7 @@
 	// invoke, so the chip itself adds no meaningful CPU / main-thread load.
 	import { invoke, isTauri } from '@tauri-apps/api/core';
 	import { pollMemoryProbe, type MemoryProbeView } from '$lib/memWatch';
-	import { initStallWatch, getStallSnapshot, consumeFreezeRecord, markFreezeRecordFlushed, type StallSnapshot } from '$lib/stallWatch';
+	import { initStallWatch, getStallSnapshot, consumeFreezeRecord, markFreezeRecordFlushed, readStackRing, type StallSnapshot } from '$lib/stallWatch';
 	import { getPipelineSnapshot, flushPipelineDiag, noteHeapSample, heapTrendMb, type PipelineSnapshot } from '$lib/pipelineDiag';
 	import { reportToDashboard } from '$lib/dashStore';
 

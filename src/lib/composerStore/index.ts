@@ -818,13 +818,14 @@ class ComposerStoreImpl implements ComposerStore {
 
   async hydrateSessions(sessionList: any[]): Promise<void> {
     for (const session of sessionList) {
-      // Normalize session-level fields (fps/resolution/orientation) AND pipes
-      // so legacy/localStorage session shapes are always valid before they
-      // enter the store (prevents empty selects and undefined-field crashes
-      // on the render path when the user re-enters the app).
       normalizeSession(session as SessionData);
-      sessions.set(session.id, session);
-      evictOldSessions();
+      // PHASE 1: only insert sessions NOT already in the store — prevents
+      // tree index shells (pipes: []) from clobbering real composer data
+      // that loadSession / update* / attach* already populated.
+      if (!sessions.has(session.id)) {
+        sessions.set(session.id, session);
+        evictOldSessions();
+      }
     }
   }
 

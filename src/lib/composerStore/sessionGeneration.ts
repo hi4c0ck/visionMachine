@@ -1,6 +1,7 @@
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { GenerationTaskView, ModelSpec } from '$types';
+import { withTimeout, SWITCH_PATH_IPC_TIMEOUT_MS } from '$lib/withTimeout';
 
 export type FailurePolicy = 'stop' | 'continue';
 /** Run-scoped session-stats override (fps/res/orientation). Only fields that
@@ -128,7 +129,11 @@ export async function fetchGenerationGroup(groupId: string): Promise<GenerationG
   // already calls with snake_case keys). The camelCase `{ groupId }` form
   // silently deserializes to an empty string and the command errors — that
   // silent failure is why session-video restore never worked.
-  const raw = await invoke('get_generation_group', { group_id: groupId }) as any;
+  const raw = (await withTimeout(
+    invoke('get_generation_group', { group_id: groupId }),
+    SWITCH_PATH_IPC_TIMEOUT_MS,
+    `get_generation_group ${groupId}`,
+  )) as any;
   return parseGenerationGroup(raw);
 }
 
@@ -142,9 +147,17 @@ export async function fetchLatestGenerationGroupForSession(
   sessionId: string,
 ): Promise<GenerationGroupView | null> {
   // Same snake_case flat-arg convention as get_generation_group above.
-  const raw = (await invoke('get_latest_session_generation_group', {
-    session_id: sessionId,
-  })) as any;
+  // BOUND WITH a hard deadline (switch-path read): a wedged backend DB lock
+  // must not pin the main UI thread. On timeout this throws → the caller's
+  // `.catch(() => null)` degrades to "no group row", i.e. the no-group
+  // teardown path — exactly the non-blocking fallback the invariant needs.
+  const raw = (await withTimeout(
+    invoke('get_latest_session_generation_group', {
+      session_id: sessionId,
+    }),
+    SWITCH_PATH_IPC_TIMEOUT_MS,
+    `get_latest_session_generation_group ${sessionId}`,
+  )) as any;
   if (!raw || raw === null) return null;
   return parseGenerationGroup(raw);
 }

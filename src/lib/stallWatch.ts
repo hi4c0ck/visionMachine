@@ -21,6 +21,24 @@ const LS_KEY = 'vm-freeze-record';
  *  set by `resetStallMeter(sessionId)` on every session select, so a later
  *  persisted freeze record can be tied to that action. */
 const LS_CONTEXT_KEY = 'vm-freeze-context';
+/** Main-thread STACK RING (v3 gap-closer). The v2 watchdog only captured
+ *  `recovery_stack` when a SINGLE ping's RTT ≥ FREEZE_MS (3 s). The
+ *  cumulative-pin failure mode — many medium main-thread blocks that each
+ *  stay under 3 s but together pin the UI for minutes — NEVER crosses that
+ *  bar per ping, so recovery_stack was always empty and the freeze record
+ *  carried no call chain. The ring fixes this: on every SLOW ping
+ *  (RTT ≥ STACK_SLOW_MS) the main thread captures its current stack into a
+ *  bounded ring and mirrors it to localStorage, so after a force-killed
+ *  freeze the ring on disk still names the exact functions that were
+ *  chewing the thread (the "WHERE" the log can't tell us). */
+const STACK_SLOW_MS = 250; // main-thread block above this = "slow ping" worth a stack sample
+const RING_KEY = 'vm-freeze-ring';
+const RING_CAP = 16; // bounded: ~16 × 1 KB stacks — localStorage-safe, no growth leak
+export interface RingEntry {
+	t: number; // Date.now() the sample was taken
+	rtt: number; // the slow ping RTT that triggered it
+	stack: string; // main-thread call chain at that instant
+}
 
 /** The session id the last session-select targeted (empty = unknown). */
 export function getStallContext(): string {
@@ -138,6 +156,53 @@ function writeRecord(rec: FreezeRecord): void {
 	} catch {
 		/* storage full / unavailable */
 	}
+}
+
+/** Read the on-disk main-thread stack ring (empty when absent). */
+function readRing(): RingEntry[] {
+	try {
+		const raw = localStorage.getItem(RING_KEY);
+		if (raw) {
+			const arr = JSON.parse(raw) as RingEntry[];
+			if (Array.isArray(arr)) return arr;
+		}
+	} catch {
+		/* storage unavailable */
+	}
+	return [];
+}
+
+function writeRing(ring: RingEntry[]): void {
+	try {
+		localStorage.setItem(RING_KEY, JSON.stringify(ring));
+	} catch {
+		/* storage full / unavailable — drop the ring rather than throw */
+	}
+}
+
+/**
+ * Push one slow-ping stack sample onto the bounded ring (keeps the most
+ * recent RING_CAP entries). Called from the main-thread ping reply path on
+ * every RTT ≥ STACK_SLOW_MS, so the ring always holds the call chains of
+ * the slowest moments the thread has seen — exactly the frames to read
+ * after a freeze.
+ */
+export function pushStackRing(rtt: number): void {
+	try {
+		const stack = new Error('[stallWatch ring sample]').stack ?? '';
+		const ring = readRing();
+		ring.push({ t: Date.now(), rtt: Math.round(rtt), stack });
+		while (ring.length > RING_CAP) ring.shift();
+		writeRing(ring);
+	} catch {
+		/* never let instrumentation throw into the app */
+	}
+}
+
+/** Public reader of the persisted main-thread stack ring (for diagnostics /
+ *  off-disk inspection after a force-killed freeze). */
+export function readStackRing(): RingEntry[] {
+	return readRing();
 }
 
 function newMeter(): Meter {
@@ -380,6 +445,13 @@ export function initStallWatch(): void {
 			if (m.type === 'ping') {
 				const rtt = performance.now() - (m.t ?? 0);
 				const snap = getStallSnapshot();
+				// Stack ring (v3): every SLOW ping (rtt ≥ STACK_SLOW_MS)
+				// captures the main-thread call chain into the bounded,
+				// localStorage-mirrored ring. This is the cumulative-pin
+				// signal the v2 ≥3 s gate could never see — the ring keeps
+				// the most recent 16 slow moments, so after a force-killed
+				// freeze the on-disk ring still names the churning frames.
+				if (rtt >= STACK_SLOW_MS) pushStackRing(rtt);
 				// Sample the stack only when the round-trip was long (i.e.
 				// the main thread had been pinned just before this reply);
 				// a healthy <FREEZE_MS reply skips the (relatively) expensive

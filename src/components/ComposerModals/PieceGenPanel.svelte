@@ -490,10 +490,6 @@
 		color: var(--error-color, #f87171);
 	}
 
-	.pg-gen-cue-error svg {
-		color: var(--error-color, #f87171);
-	}
-
 	@keyframes pg-gen-pulse {
 		0%, 100% { opacity: 1; transform: scale(1); }
 		50% { opacity: 0.35; transform: scale(0.8); }

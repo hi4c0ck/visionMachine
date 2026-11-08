@@ -370,6 +370,53 @@ import { flashToast } from '$lib/flashToast';
 		return () => document.removeEventListener('click', handler);
 	});
 
+	// ── LAYER-2: in-place session reset ─────────────────────────────────────
+	// SessionView is now permanently mounted (no {#key} destroy+create). On a
+	// session switch the ComposerPanel survives, so we must clear its
+	// disclosure/modal/menu state and re-anchor the playhead + focus to the new
+	// session. Latch on a plain `let` (NOT $state) so writing the latch does
+	// not re-trigger this effect — only the `session?.id` read is tracked.
+	let lastComposerSession: string | null = session?.id ?? null;
+	$effect(() => {
+		const sid = session?.id ?? null;
+		if (sid === lastComposerSession) return; // same session — no reset
+		const prev = lastComposerSession;
+		lastComposerSession = sid; // plain write: untracked, no re-entry
+		// Reset disclosure / modal / menu state so a switched session never
+		// carries the previous session's open panels or selected segment.
+		showKeyframeModal = false;
+		editingKeyframeSlot = null;
+		showSubjectRefModal = false;
+		editingSubjectRefId = null;
+		showSegmentModal = false;
+		segStart = 0;
+		segEnd = 8;
+		segGaps = [];
+		showPipeLengthModal = false;
+		pendingPipeLength = 0;
+		pendingPipeIdx = 0;
+		showTagPromptModal = false;
+		editingTagId = '';
+		editingSegmentId = '';
+		editingTagType = 'scene';
+		tagPrompt = '';
+		showGlobalPromptModal = false;
+		globalPromptLabel = '';
+		globalPromptText = '';
+		showAddMenu = false;
+		addMenuX = 0;
+		addMenuY = 0;
+		showTagMenu = false;
+		selectedSegmentId = '';
+		tagMenuX = 0;
+		tagMenuY = 0;
+		tagMenuVersion = 0;
+		// Re-anchor the playhead + focus to the new session's default.
+		activePipeIdx = null;
+		focus = { level: 'session', id: sid ?? '' };
+		pipeEls.clear(); // stale element map from the previous session
+	});
+
 	// ── Helpers ─────────────────────────────────────────────────────────────
 	// Keyframe-row display slots come from $lib/keyframeSlots (single source
 	// of truth, shared with KeyframesRow). openKeyframeModal uses it to
@@ -887,6 +934,7 @@ import { flashToast } from '$lib/flashToast';
 					{pipe}
 					maxKeyframes={MAX_KEYFRAMES}
 					aspect={sceneAspect}
+					mediaActive={activePipeIdx === pipeIdx}
 					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
 					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
 					onRegenerate={(kfId) => handleQueueRegen(pipe, 'keyframe', kfId)}
@@ -901,6 +949,7 @@ import { flashToast } from '$lib/flashToast';
 					{pipe}
 					maxSubjectRefs={MAX_SUBJECT_REFS}
 					aspect={sceneAspect}
+					mediaActive={activePipeIdx === pipeIdx}
 					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
 					onAdd={() => openSubjectRefModal(pipeIdx)}
 					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}

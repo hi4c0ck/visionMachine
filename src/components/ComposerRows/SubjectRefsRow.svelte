@@ -19,11 +19,14 @@
 		containsBroken,
 		containsWorking,
 		onRegenerate,
+		mediaActive = true,
 	} = $props<{
 		pipe: PipeRow;
 		maxSubjectRefs: number;
 		onRemove: (refId: string) => void;
 		onAdd: () => void;
+		/** Lazy-loading gate: false skips toMediaUrl resolution (placeholder). */
+		mediaActive?: boolean;
 		/** Open the subject-ref modal in EDIT mode for an existing ref. */
 		onEdit?: (refId: string) => void;
 		/** Scene aspect ratio ("W / H") — chips size to it so thumbnails
@@ -92,13 +95,18 @@
 	// instead of the browser's broken-image glyph.
 	let failedSrSources = $state<Set<string>>(new Set());
 	$effect(() => {
+		if (!mediaActive) return;
 		for (const sr of refs) {
 			const src = srSourceFor(sr);
 			if (!src || !isLocalPath(src)) continue;
 			if (srImageUrlsFor.get(sr.id) === src) continue;
 			if (srAttempted.get(sr.id) === src) continue;
 			srAttempted = new Map([...srAttempted, [sr.id, src]]);
-			toMediaUrl(src).then((url) => {
+			// Preview variant: subject-ref chips show the small `.thumb.jpg`
+			// sibling (320px), not the full-resolution image — the composer
+			// rows for a 6-pipe session must not load GB-scale image bytes
+			// into the GPU texture pool on a session switch.
+			toMediaUrl(src, { variant: 'preview' }).then((url) => {
 				if (url) {
 					failedSrSources = new Set([...failedSrSources].filter((k) => k !== sr.id));
 					srImageUrls = new Map([...srImageUrls, [sr.id, url]]);

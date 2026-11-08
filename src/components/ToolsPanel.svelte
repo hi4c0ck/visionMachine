@@ -38,7 +38,9 @@
 		unsynced = false,
 		sessionVideo = null,
 		onopensessionpreview,
-		onfocuschange
+		onfocuschange,
+		generationError = null,
+		onshowerror,
 	} = $props<{
 		session: SessionData | null;
 		project: ProjectData | null;
@@ -86,6 +88,10 @@
 		onopensessionpreview?: () => void;
 		/** Move the focus up one level (click a breadcrumb ancestor). */
 		onfocuschange?: (focus: ComposerFocus) => void;
+		/** Active generation error (healed/interrupted or transport). Shown once. */
+		generationError?: string | null;
+		/** Show error details modal. */
+		onshowerror?: () => void;
 	}>();
 
 	let showModal = $state(false);
@@ -596,6 +602,11 @@
 		<div class="sec-head">
 			<span class="sec-title">Output</span>
 			{#if session}<span class="out-meta">{session?.pipes?.length ?? 0}p · {stats.frames}f</span>{/if}
+			{#if generationError}
+				<button class="error-indicator" onclick={() => onshowerror?.()} title="View error details">
+				⚠ Error
+			</button>
+			{/if}
 		</div>
 		<div class="out-body">
 			{#if session && sessionVideo}
@@ -1102,6 +1113,20 @@
 		justify-content: space-between;
 		align-items: center;
 		padding: 9px 12px;
+		gap: 8px;
+	}
+	.error-indicator {
+		margin-left: auto;
+		padding: 2px 8px;
+		font-size: 10px;
+		background: rgba(239, 68, 68, 0.15);
+		color: #ef4444;
+		border: 1px solid rgba(239, 68, 68, 0.3);
+		border-radius: 4px;
+		cursor: pointer;
+	}
+	.error-indicator:hover {
+		background: rgba(239, 68, 68, 0.25);
 	}
 	.sec-title {
 		/* Template A: natural-case section headings — hierarchy from

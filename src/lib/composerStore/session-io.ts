@@ -6,12 +6,21 @@ import type { SessionService, ServiceResult } from './interfaces';
 import type { SessionData, PipeRow, ResolutionPreset, Orientation, CropMode } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
 import { normalizePipe } from './validators';
+import { withTimeout, SWITCH_PATH_IPC_TIMEOUT_MS } from '$lib/withTimeout';
 
 export class SessionServiceImpl implements SessionService {
   async load(sessionId: string): Promise<ServiceResult & { session?: SessionData }> {
     try {
-      // get_composer takes session_id directly (Tauri camelCase arg matching)
-      const result = await invoke('get_composer', { sessionId });
+      // get_composer takes session_id directly (Tauri camelCase arg matching).
+      // BOUND WITH a hard deadline: a wedged backend DB lock on this read
+      // must not pin the main UI thread (the "non-blocking UI even under a
+      // blocking operation" invariant). On timeout this throws → loadSession's
+      // catch → errors → handleSessionSelect's local-tree fallback.
+      const result = await withTimeout(
+        invoke('get_composer', { sessionId }),
+        SWITCH_PATH_IPC_TIMEOUT_MS,
+        `get_composer ${sessionId}`,
+      );
       const backendData = result as any;
 
       const rawPipes: PipeRow[] = this.mapBackendPipes(backendData.pipes || []);

@@ -271,3 +271,18 @@ export function flushPipelineDiag(extra = '', force = false): void {
 	const tail = s.events.length ? ` · recent: ${s.events.join(' | ')}` : '';
 	void invoke('log_pipeline_diag', { message: `${full}${tail}` }).catch(() => {});
 }
+
+/**
+ * Structural mount/destroy endpoint logger. Each isolated component block in
+ * the session tree logs a lifecycle line to the backend (`log_pipeline_diag`)
+ * so VisionMachine.log shows the exact teardown/mount order on a session swing:
+ *   [SV] destroy <id> …  ->  [SV] mount <id> epoch=N  ->  ready
+ * A missing/malformed line in that trace names the level that leaked. Lines
+ * are emitted verbatim (no throttling) — they are rare (per-session) and cheap.
+ * `note(...)` also records them in the pipeline ledger so a freeze-onset
+ * structure snapshot can include the most recent endpoint transition.
+ */
+export function logComponentEndpoint(msg: string): void {
+	note(msg);
+	if (isTauri()) void invoke('log_pipeline_diag', { message: msg }).catch(() => {});
+}

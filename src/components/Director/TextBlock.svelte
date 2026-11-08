@@ -34,8 +34,10 @@
 	let nearIcon = $state(false);
 	let readOnlyExpanded = $state(false); // user expanded a locked block
 	let manuallyUnlocked = $state(false); // user re-activated editing
+	// svelte-ignore state_referenced_locally — intentional: seed expanded from locked/value
 	let expanded = $state(!locked || value.length > 0);
 
+	// svelte-ignore state_referenced_locally — intentional: track locked changes
 	let prevLocked = $state(locked);
 
 	// Word count (live) + below-floor flag.

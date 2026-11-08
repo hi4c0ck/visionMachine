@@ -673,6 +673,15 @@
 			openTag = null;
 			openShot = null;
 			entry = loadEntryDraft(sessionId) ?? freshEntry();
+			// LAYER-2: permanently mounted — also clear transient run UI state
+			// so a switched session never shows the previous session's
+			// progress spinner, feedback banner, or stale localExtract.
+			confirmedGates = new Set();
+			feedback = null;
+			applyWorking = false;
+			runDurationMs = null;
+			localExtract = [];
+			seedWorking = false;
 		}
 	});
 
@@ -689,8 +698,13 @@
 		// log storm + pinned UI on 0-flow sessions). The once-per-session
 		// `flowsLoadedFor` latch (read in this sync guard → tracked) makes
 		// the effect terminal after ONE settled list, whatever the result.
-		void invoke('log_pipeline_diag', { message: `[TRACE] director loader effect run ${sessionId} doc:${!!doc} latch:${flowsLoadedFor} module:${flowsLoadedForModule.has(sessionId)}` }).catch(() => {});
-		if (doc || flowsLoadedFor === sessionId || flowsLoadedForModule.has(sessionId)) { void invoke('log_pipeline_diag', { message: '[TRACE] director loader early return' }).catch(() => {}); return; }
+		// Terminal guard: settle exactly once per session (doc OR the
+		// per-session latches). Re-runs with the latch set are a no-op —
+		// no IPC, no listFlows — so a fast swing never re-storms the 0-flow
+		// loader or hammers the backend.
+		if (doc || flowsLoadedFor === sessionId || flowsLoadedForModule.has(sessionId)) {
+			return;
+		}
 		// Per-session key: the seed loader should fire ONCE per session; 5
 		// distinct sessions each seeding once is a swing, not a loop.
 		tripEffect(`director:seed:${sessionId}`);
@@ -706,7 +720,6 @@
 				flowsLoadedForModule.delete(key);
 			}
 		}
-		void invoke('log_pipeline_diag', { message: `[TRACE] director loader calling listFlows ${sid}` }).catch(() => {});
 		void (async () => {
 			try {
 				const listed = await listFlows(sid);

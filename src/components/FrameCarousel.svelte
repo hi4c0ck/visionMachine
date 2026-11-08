@@ -24,6 +24,8 @@
 	import { APP_CONSTANTS } from '$constants';
 	import {
 		FrameSource,
+		holdFrameSourceWarm,
+		reclaimFrameSource,
 		CAROUSEL_STEP,
 		carouselCardScaleF,
 		carouselCardX,
@@ -473,15 +475,22 @@
 	// while the old one's in-flight work is still writing into `thumbs`.
 
 	// (Re)build the decoder source when the media or fps changes. The cleanup
-	// disposes the old FrameSource (closes the WebCodecs decoder + capture
-	// video + LRU bitmaps) BEFORE the reset effect below clears Svelte state,
-	// so no in-flight capture from the previous video races the new one.
+	// HOLDS the old source warm (40s) instead of hard-disposing it, so a quick
+	// exit-and-return to the same video re-attaches the already-decoded
+	// pipeline. The constructor's claimSourceSlot enforces the "one decoder
+	// at a time" cap: a new clip flushes the previous clip's warm source, so
+	// GPU textures never overlap. Reclaim a still-warm source for this exact
+	// video before paying for a fresh FrameSource.
 	$effect(() => {
 		const url = video.url;
-		const s = new FrameSource(url, fps);
+		const warm = reclaimFrameSource(url, fps);
+		const s = warm ?? new FrameSource(url, fps);
 		source = s;
 		return () => {
-			s.dispose();
+			// 40s warm hold + lazy unload: keep the decoded source alive for a
+			// quick re-entry, but stop it occupying the global decode slot so a
+			// different video can claim it immediately.
+			holdFrameSourceWarm(s, url, fps);
 			if (source === s) source = null;
 		};
 	});

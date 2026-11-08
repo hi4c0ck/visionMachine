@@ -26,6 +26,7 @@
 		updateGlobalRange as updateGlobalRangeAction,
 		updateSoundRange as updateSoundRangeAction,
 	} from '$lib/composerStore';
+	import { logComponentEndpoint } from '$lib/pipelineDiag';
 
 	// Timeline area: one frame coordinate canvas (ruler + global lanes +
 	// timeline lane + [+]) for a single pipe. Owns its geometry (the
@@ -98,6 +99,30 @@
 	let rulerElement = $state<HTMLElement | null>(null);
 	let rulerGeometry = $state<FrameGeometry | null>(null);
 
+	// ── Hard write-bound (Session-8 freeze): make the loop TERMINATE ─────
+	// The ResizeObserver callback + totalFrames effect both land in
+	// updateRulerGeometry and both WRITE rulerGeometry. When all 11 pipes'
+	// rulers re-compute at once (fed session: totalFrames flips 241 → 2651
+	// as the session video attaches), the 11 writes re-render 11 rulers →
+	// 11 layout shifts → 11 ResizeObserver callbacks → 11 more writes →
+	// an unbounded layout-feedback ping-pong that pins the main thread
+	// (the Svelte-scheduler `Fy` stall the stack ring captured). The
+	// value-compare guard below stops a NO-OP write, but it does NOT stop
+	// a write that shifts the box by a different px each pass. So we add
+	// a hard bound: count writes per totalFrames value; after 4 real
+	// writes for the SAME frame count in one "epoch" the write is capped —
+	// the loop physically cannot continue and the main thread cannot pin
+	// on this element. If the cap trips we log [TL] ruler-loop so the log
+	// either CONFIRMS this site (11-pipe session) or clears it (0 trips).
+	// The bound is per totalFrames value; switching to a new session's
+	// frame count resets the counter, so normal multi-session swings never
+	// trip it.
+	let rulerWriteCount = 0;
+	let rulerWriteEpochTotalFrames = -1;
+	// svelte-ignore state_referenced_locally — plain log-once latch, not reactive
+	let rulerCapLogged = false;
+	const RULER_WRITE_CAP = 4;
+
 	function updateRulerGeometry() {
 		if (!rulerElement) {
 			rulerGeometry = null;
@@ -108,6 +133,40 @@
 			rulerGeometry = null;
 			return;
 		}
+		// Reset the write counter whenever the frame space itself changes —
+		// a new totalFrames is a legitimate single recompute, not a loop.
+		if (rulerWriteEpochTotalFrames !== totalFrames) {
+			rulerWriteEpochTotalFrames = totalFrames;
+			rulerWriteCount = 0;
+			rulerCapLogged = false; // re-arm the log-once latch for the new epoch
+		}
+		// Value-compare guard (Session-8 freeze class): only write when the
+		// inputs actually changed (same width + same totalFrames → no-op).
+		if (
+			rulerGeometry &&
+			rulerGeometry.totalFrames === totalFrames &&
+			rulerGeometry.width === rect.width
+		) {
+			return;
+		}
+		// HARD BOUND: cap writes per totalFrames epoch. A layout-feedback
+		// ping-pong that keeps shifting the box is NOT the geometry
+		// converging — it is the runaway loop that pins the thread. Once
+		// we've written 4 times for this frame count we stop: keep the
+		// last geometry (the ruler is already positioned), so the UI still
+		// renders and the main thread yields. Log ONCE per visit so the
+		// VisionMachine.log either CONFIRMS this site (fed 11-pipe) or
+		// clears it (0 markers) without spamming every iteration.
+		if (rulerWriteCount >= RULER_WRITE_CAP) {
+			if (!rulerCapLogged) {
+				rulerCapLogged = true;
+				logComponentEndpoint(
+					`[TL] ruler-loop pipe=${pipe.id} totalFrames=${totalFrames} width=${Math.round(rect.width)} capped after ${rulerWriteCount} writes`
+				);
+			}
+			return;
+		}
+		rulerWriteCount += 1;
 		rulerGeometry = createFrameGeometry(totalFrames, rect.width);
 	}
 
@@ -205,7 +264,18 @@
 	// Types whose lane has ever been shown on THIS pipe stay on their line
 	// (rendered faded when empty) — rows only grow, never shrink or shift.
 	// Reset when the pipe changes so lanes are per-pipe, not session-wide.
-	let seenLanes = $state<Set<string>>(new Set());
+	//
+	// FIX (Session-8 freeze): `seenLanes` was a reactive $state Set that
+	// getTagLanes BOTH read (lanes.has || seenLanes.has) and wrote
+	// (seenLanes.add) while being called from a $derived (legend) AND a
+	// {#each} render expression. Writing a tracked Set that the same render
+	// pass reads = the busy main-thread freeze class (re-evaluates forever;
+	// each tick is cheap so watchdogs miss it) — and it fires ONCE PER PIPE,
+	// so Session 8 (6 pipes) pinned the thread while 0-pipe sessions were fine.
+	// Making it a PLAIN (non-reactive) Set means getTagLanes' reads/writes are
+	// just data, never a reactivity trigger — the loop cannot form.
+	let seenLanes = new Set<string>();
+	// svelte-ignore state_referenced_locally — intentional: reset lanes when pipe changes
 	let seenPipeId = $state<string>('');
 	if (pipe?.id !== seenPipeId) {
 		seenPipeId = pipe?.id ?? '';
@@ -232,8 +302,13 @@
 				lane.entries.push({ tag, seg });
 			}
 		}
-		// Persist ever-seen lanes on the same line (faded when empty).
-		for (const type of lanes.keys()) seenLanes.add(type);
+			// PURE: `getTagLanes` is called from a $derived (legend) AND the
+		// {#each} below, so it must have NO $state writes. Persisting seen
+		// lane types is a side effect on the seenLanes $state Set; doing it
+		// here (during a derived/render pass) re-triggers the reactivity
+		// flush every pass → the per-pipe main-thread runaway that pins
+		// Session 8 (6 pipes = 6 parallel loops). The persist moved to the
+		// $effect just below (runs after render, so it cannot re-trigger).
 		// Lane order = canonical tag-type order (issue 8): never first-seen
 		// order, so lanes stay in a stable, predictable sequence.
 		const types: string[] = LANE_TYPE_ORDER.filter((t) => lanes.has(t) || seenLanes.has(t));
@@ -266,6 +341,19 @@
 		return p.elements.find((e: any) => e.tag === 'sound') ?? null;
 	}
 
+	// Persist ever-seen lane types AFTER render (not inside getTagLanes, which
+	// is called from a $derived + {#each} and must stay pure). This effect
+	// runs post-flush so writing seenLanes cannot re-trigger the derived.
+	$effect(() => {
+		const tl = getTimeline(pipe);
+		if (!tl) return;
+		for (const seg of (tl.segments ?? []) as Segment[]) {
+			for (const tag of seg.tags) {
+				seenLanes.add(tag.tag);
+			}
+		}
+	});
+
 	// ── Ruler legend: color key for the lane system (zone/global + tag types
 	//    present in THIS pipe's timeline). Rendered inside the frame-ruler
 	//    space so it aligns with the shared coordinate canvas. ─────────────
@@ -286,6 +374,7 @@
 	//    slider rows + tag lanes, leaving a compact summary header. Per-pipe
 	//    (not session-wide) so each section owns its own disclosure state.
 	let timelineCollapsed = $state(false);
+	// svelte-ignore state_referenced_locally — intentional: reset collapse when pipe changes
 	let collapsedPipeId = $state('');
 	if (pipe?.id !== collapsedPipeId) {
 		collapsedPipeId = pipe?.id ?? '';

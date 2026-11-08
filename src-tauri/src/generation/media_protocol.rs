@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use sqlx::Row;
 use tauri::http::{header, Method, Request, Response, StatusCode};
-use tauri::{App, Manager, Runtime, UriSchemeContext};
+use tauri::{App, Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 
 use crate::AppState;
 
@@ -37,19 +37,56 @@ use crate::AppState;
 /// setup. Both registrations point at the same handler.
 pub fn register<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
     let plugin = tauri::plugin::Builder::<R>::new("media")
-        .register_uri_scheme_protocol("media", handler)
+        .register_asynchronous_uri_scheme_protocol("media", handler)
         .build();
     app.handle().plugin(plugin)
 }
 
-/// Serve a media-tree file for `media://localhost/<encoded-path>` requests.
+/// Serve a media-tree file for a `media://localhost/<encoded-path>` request
+/// (Windows/WebView2 requests it as `http://media.localhost/<encoded-path>`;
+/// wry reverts that to the canonical URI before calling this handler).
 ///
-/// Never panics: every failure (bad encoding, traversal, outside the media
-/// roots, missing file, unreadable range) becomes an HTTP error response.
+/// Non-blocking by contract: the file I/O runs on a dedicated worker thread so
+/// the WebView2 UI thread is never pinned by disk reads. The sync
+/// `register_uri_scheme_protocol` variant would run this handler *inline on
+/// the UI thread*, and a burst of thumbnails + a `<video>`'s hundreds of
+/// Range reads for a rich session then starves the renderer's event loop
+/// (the "session select freezes, backend healthy, heartbeat stale" symptom).
+/// `responder.respond` is called from the worker; wry posts it back to the UI
+/// thread. Never panics: every failure becomes an HTTP error response.
 pub fn handler<R: Runtime>(
     ctx: UriSchemeContext<'_, R>,
     request: Request<Vec<u8>>,
-) -> Response<Vec<u8>> {
+    responder: UriSchemeResponder,
+) {
+    let app_handle = ctx.app_handle().clone();
+    std::thread::spawn(move || {
+        let response = match app_handle.try_state::<AppState>() {
+            Some(state) => {
+                // Gated to keep the hot media path quiet in production.
+                if std::env::var("VM_DEBUG_MEDIA").is_ok() {
+                    eprintln!(
+                        "[MEDIA] handler (worker): {} {}",
+                        request.method(),
+                        request.uri()
+                    );
+                }
+                serve(&state, request)
+            }
+            None => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "app state unavailable",
+                false,
+            ),
+        };
+        responder.respond(response);
+    });
+}
+
+/// The actual request handling (pure, no UI-thread work). Factored out of
+/// `handler` so the worker thread can own it without the `UriSchemeContext`
+/// borrow crossing the thread boundary.
+fn serve(state: &AppState, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let is_head = *request.method() == Method::HEAD;
 
     // 1. Extract + percent-decode the filesystem path from the URI path
@@ -71,21 +108,12 @@ pub fn handler<R: Runtime>(
     }
 
     // 3. Media-root guard (same check as `read_media_file`): the path must
-    //    live under a known session/project/app-data media root.
-    let app_handle = ctx.app_handle();
-    let state = match app_handle.try_state::<AppState>() {
-        Some(s) => s,
-        None => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "app state unavailable",
-                is_head,
-            )
-        }
-    };
-    // Read from the synchronous cache — never block_on an async DB lock
-    // here (deadlock at startup when the DB mutex is contended). The cache
-    // is populated at startup and refreshed when sessions/projects change.
+    //    live under a known session/project/app-data media root. `state` is
+    //    passed in by `handler` (already resolved on the worker thread), so
+    //    this thread never touches a UI-thread borrow.
+    // Read from the synchronous cache — a blocking `RwLock::read` is safe
+    // here because `handler` runs the worker thread, not the WebView2 UI
+    // thread. Never `block_on` an async DB lock in the handler.
     let inside_root = state
         .media_roots_cache
         .read()
@@ -277,11 +305,25 @@ fn percent_decode(input: &str) -> Option<String> {
 
 /// Build a response without ever panicking (header values here are static or
 /// numeric, so the builder cannot fail; the fallback is belt-and-braces).
+///
+/// Media protocol no-store policy: every response — 200, 206, 416, errors —
+/// carries `Cache-Control: no-store` + `Pragma: no-cache` + `Expires: 0`
+/// so Chromium's WebView2 native HTTP cache NEVER stores the bytes. The
+/// protocol hands out fresh on-disk bytes on every request (Range-aware
+/// so a video seek still re-fetches the slice it needs); caching in the
+/// renderer's native buffer pool is pure waste and it is the direct cause
+/// of the 2-5 GB unbounded `msedgewebview2.exe` balloon observed on a fast
+/// multi-session swing (each composed session video ~30-300 MB accumulates
+/// per visit, never evicted, across 7+ switches).
 fn respond(status: StatusCode, headers: &[(&str, String)], body: Vec<u8>) -> Response<Vec<u8>> {
     let mut builder = Response::builder().status(status);
     for (name, value) in headers {
         builder = builder.header(*name, value);
     }
+    builder = builder
+        .header(header::CACHE_CONTROL, "no-store, no-cache, must-revalidate, max-age=0")
+        .header("Pragma", "no-cache")
+        .header("Expires", "0");
     builder.body(body).unwrap_or_else(|_| {
         Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)

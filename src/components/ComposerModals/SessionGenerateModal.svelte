@@ -75,8 +75,11 @@
 
 	// ── Run-local stats (seeded from the open session; NEVER written back
 	//    until Confirm with applyToSession ticked) ──
+	// svelte-ignore state_referenced_locally — intentional: seed from session, sync via effect
 	let fps = $state(session.fps);
+	// svelte-ignore state_referenced_locally — intentional: seed from session, sync via effect
 	let resolution = $state<ResolutionPreset>(session.resolution);
+	// svelte-ignore state_referenced_locally — intentional: seed from session, sync via effect
 	let orientation = $state<Orientation>(session.orientation);
 	$effect(() => {
 		if (!open) return;

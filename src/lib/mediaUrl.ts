@@ -74,6 +74,22 @@ export function getCacheStats(): { entries: number; totalBytes: number; capBytes
  * bytes; otherwise the original path is used. No IPC, no blob, no cache.
  * Returns null for empty paths or outside Tauri (browser dev renders nothing).
  */
+/**
+ * WebView2 (Windows/Android) only intercepts a custom scheme through the
+ * `http://<scheme>.localhost` resource-request workaround — a bare
+ * `media://` URL is an unknown scheme there and never reaches the Rust
+ * handler, so media silently 404s. WebKit (macOS/Linux) registers the real
+ * scheme, so it uses the canonical `media://localhost` form. wry reverts the
+ * workaround URI back to the canonical one before calling the handler, so the
+ * handler only ever sees `media://localhost/<path>` — the path component is
+ * identical on every platform and is the only part we encode.
+ */
+function mediaUrlPrefix(): string {
+  // WebView2 = the desktop targets that need the http://<scheme>.localhost form.
+  const win = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+  return win ? 'http://media.localhost' : 'media://localhost';
+}
+
 export async function toMediaUrl(
   path: string | null | undefined,
   opts?: { variant?: 'preview' },
@@ -81,7 +97,7 @@ export async function toMediaUrl(
   if (!path) return null;
   if (!isTauri()) return null;
   const effective = opts?.variant === 'preview' ? (previewSiblingPath(path) ?? path) : path;
-  return `media://localhost/${encodeURIComponent(effective)}`;
+  return `${mediaUrlPrefix()}/${encodeURIComponent(effective)}`;
 }
 
 /**

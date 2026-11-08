@@ -31,14 +31,14 @@ export const AGNES_PRESET: PresetSpec = {
                 // Provisional tier mapping (Q2): session res → tier, orientation → ratio.
                 sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
-      supportsSeed: false },
+      supportsSeed: false, guidance: 'guidance_scale' },
     { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
       limits: { resolutions: ['1K', '2K', '3K', '4K'],
                 ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'],
                 sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
-      supportsSeed: false,
+      supportsSeed: false, guidance: 'guidance_scale',
       obsolete: true },
     // VIDEO — 2.5-flash first = default (free tier, 720P only, seconds 4–12).
     { id: 'agnes-video-2.5-flash', kind: 'video', label: 'Agnes Video 2.5 Flash (free)',
@@ -51,6 +51,9 @@ export const AGNES_PRESET: PresetSpec = {
                 // every session resolution maps to it.
                 sizeMap: { '480p': '720P', '720p': '720P', '1080p': '720P' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
+      // LIVE REJECT (2026-11-06): the video route 400s on
+      // "guidance_scale is not an allowed request field" — the param is
+      // image-route only; video stays guidance-less (server defaults).
       supportsSeed: true,
       media: { modes: ['keyframes', 'reference'],
                maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
