@@ -759,6 +759,70 @@ pub async fn director_list_golden(
     Ok(runs)
 }
 
+// ── Director scratch persistence (G0 entry draft + unapplied extract edits) ──
+//
+// The two in-memory-only pieces of the Director flow — the in-progress G0
+// entry (idea + look params) and the unapplied Extract-tab section edits —
+// must survive an app restart AND a session switch, not just a tab remount.
+// The committed flow runs / signals / golden set are already on disk; this
+// closes the last gap so the WHOLE dataset is durable. It is stored as one
+// small `director_scratch.json` in the session flow dir (lazy: written on
+// change, read on tab open — no hot path, so parse-time is fine). The
+// frontend owns the JSON shape; Rust persists an opaque string, so a shape
+// change never needs a Rust migration.
+
+fn scratch_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("director_scratch.json")
+}
+
+/// Persist the session's Director scratch (opaque JSON the UI built). Empty
+/// string = clear the file. One small lazy write.
+#[tauri::command]
+pub async fn director_save_scratch(
+    session_id: String,
+    scratch_json: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let p = scratch_path(&dir);
+    if scratch_json.trim().is_empty() {
+        // Clear: delete so a stale draft never resurfaces.
+        if p.exists() {
+            std::fs::remove_file(&p).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    } else {
+        // Validate it is a well-formed JSON object/array before writing —
+        // we never persist corrupt scratch that a later load would choke on.
+        serde_json::from_str::<serde_json::Value>(&scratch_json)
+            .map_err(|e| format!("scratch: invalid JSON ({e})"))?;
+        std::fs::write(&p, &scratch_json).map_err(|e| e.to_string())
+    }
+}
+
+/// Load the session's Director scratch. Empty string = nothing persisted yet
+/// (a fresh session), which the UI treats as "fall back to defaults."
+#[tauri::command]
+pub async fn director_load_scratch(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let p = scratch_path(&dir);
+    match std::fs::read_to_string(&p) {
+        Ok(s) if !s.trim().is_empty() => Ok(s),
+        Ok(_) => Ok(String::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Destructive apply (I9): materialize the persisted flow's structured plan
 /// into composer pipes and save it to the session's composer. This is the
 /// "Regenerate pipes" action — it replaces/appends real composer pipes, so

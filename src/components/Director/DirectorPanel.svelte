@@ -31,7 +31,10 @@
 		loadFlow,
 		applyFlow,
 		applyFlowEdited,
+		saveScratch,
+		loadScratch,
 		type DirectorTab,
+		type EditedSection,
 	} from '$lib/directorStore';
 	import { loadSession } from '$lib/composerStore';
 	import { tripEffect } from '$lib/pipelineDiag';
@@ -420,6 +423,13 @@
 			}
 		}
 		localExtract = out;
+		// Durable scratch: load the session's on-disk G0 entry + unapplied
+		// extract edits once (cache short-circuits re-runs), then re-apply
+		// the stored edits onto this fresh seed. Idempotent — setting a prompt
+		// to its stored value is a no-op, and the persist effect below folds
+		// it back to disk without a change.
+		void hydrateScratch(sessionId);
+		applyScratchEdits(sessionId);
 	});
 
 	const isEdited = (s: LocalSection) => s.prompt.trim() !== s.source.trim();
@@ -429,6 +439,107 @@
 			.filter((s) => isEdited(s))
 			.map((s) => ({ pipeIndex: s.pipeIndex, tag: s.tag, occurrence: s.occurrence, prompt: s.prompt }));
 	}
+
+	// ── Durable scratch (the whole Director dataset on disk) ──────────────
+	// The committed flow runs / signals / golden set are already persisted
+	// (flow.v{N}.json + flow_signals.jsonl + golden.json). The two pieces
+	// that were in-memory-only — the in-progress G0 entry draft and the
+	// unapplied Extract-tab section edits — now ride one small
+	// `director_scratch.json` in the session flow dir (lazy: debounced
+	// write on change, read on session open). Frontend owns the JSON shape;
+	// the backend stores an opaque string. Module-level cache (bounded) so a
+	// fast session swing never re-invokes the backend load.
+	const scratchCache = new Map<string, { entry?: EngineEntryInput | null; edits: EditedSection[] }>();
+	const SCRATCH_CAP = 64;
+
+	function cacheScratch(sessionId: string, v: { entry?: EngineEntryInput | null; edits: EditedSection[] }) {
+		scratchCache.set(sessionId, v);
+		if (scratchCache.size > SCRATCH_CAP) {
+			for (const k of scratchCache.keys()) {
+				if (scratchCache.size <= SCRATCH_CAP) break;
+				scratchCache.delete(k);
+			}
+		}
+	}
+
+	// Re-apply a session's stored unapplied extract edits onto the just-seeded
+	// localExtract (matched by pipeIndex+tag+occurrence). Safe: writes only the
+	// prompts, which the persist effect will fold back to disk idempotently.
+	function applyScratchEdits(sessionId: string) {
+		const c = scratchCache.get(sessionId);
+		if (!c || !c.edits.length) return;
+		for (const e of c.edits) {
+			for (const s of localExtract) {
+				if (s.pipeIndex === e.pipeIndex && s.tag === e.tag && s.occurrence === e.occurrence) {
+					s.prompt = e.prompt;
+				}
+			}
+		}
+	}
+
+	// Restore the session's durable scratch from disk (async, non-blocking).
+	// Disk entry wins only when nothing is in memory yet (empty idea), so it
+	// never fights the committed-doc backfill precedence.
+	async function hydrateScratch(sessionId: string) {
+		if (scratchCache.has(sessionId)) {
+			applyScratchEdits(sessionId);
+			return;
+		}
+		const sid = sessionId;
+		let raw = '';
+		try {
+			raw = await loadScratch(sid);
+		} catch {
+			return; // non-Tauri / backend unavailable → in-memory-only fallback
+		}
+		if (sid !== sessionId) return; // abandoned mid-flight
+		let parsed: { entry?: EngineEntryInput | null; edits: EditedSection[] } | null = null;
+		if (raw && raw.trim()) {
+			try {
+				parsed = JSON.parse(raw);
+			} catch {
+				parsed = null; // corrupt → treat as empty, never crash
+			}
+		}
+		cacheScratch(sid, parsed ?? { entry: null, edits: [] });
+		// Disk entry is authoritative only when the memory draft is empty.
+		if (parsed?.entry?.idea?.trim() && entry.idea.trim() === '') {
+			entry = { ...freshEntry(), ...parsed.entry };
+		}
+		applyScratchEdits(sid);
+	}
+
+	// Debounced durable persist: watch entry + the dirty-edit signature and
+	// write scratch to disk. The effect only READS entry/localExtract and
+	// issues an async invoke — it never writes any $state, so it cannot form
+	// a write-what-you-read loop. 800ms debounce keeps a typing burst to one
+	// lazy write.
+	let scratchSaveTimer: ReturnType<typeof setTimeout> | null = null;
+	$effect(() => {
+		const sid = sessionId;
+		const idea = entry.idea; // track entry (any G0 field) as the object identity changes on write
+		const edits = editedList();
+		const sig =
+			idea + '|' +
+			edits.map((e) => `${e.pipeIndex}:${e.tag}:${e.occurrence}:${e.prompt}`).join('§');
+		if (scratchSaveTimer) clearTimeout(scratchSaveTimer);
+		scratchSaveTimer = setTimeout(() => {
+			if (sid !== sessionId) return; // session moved on → drop the write
+			const hasEdits = edits.length > 0;
+			const hasEntry = idea.trim().length > 0;
+			if (!hasEdits && !hasEntry) {
+				// Nothing worth keeping → clear the file so a stale draft
+				// never resurfaces on the next open.
+				void saveScratch(sid, '').catch(() => {});
+				return;
+			}
+			const payload = JSON.stringify({
+				entry: hasEntry ? entry : null,
+				edits: hasEdits ? edits : [],
+			});
+			void saveScratch(sid, payload).catch(() => {});
+		}, 800);
+	});
 
 	// Destructive regenerate from the EDITED sections (Phase 3).
 	async function regeneratePipes() {

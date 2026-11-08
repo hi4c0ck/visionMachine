@@ -223,3 +223,16 @@ export async function listGolden(
 	});
 	return out ?? [];
 }
+
+// ── Director scratch (G0 entry draft + unapplied extract edits) ──────────────
+// Durable on disk (the session flow dir's director_scratch.json), so the whole
+// Director dataset survives a restart AND a session switch — not just a tab
+// remount. The frontend owns the JSON shape; the backend stores an opaque
+// string. Empty string = clear. Safe in non-Tauri / tests (returns '' / no-op).
+export async function saveScratch(sessionId: string, scratchJson: string): Promise<void> {
+	await invoke<void>('director_save_scratch', { sessionId, scratchJson });
+}
+export async function loadScratch(sessionId: string): Promise<string> {
+	const out = await invoke<string>('director_load_scratch', { sessionId });
+	return out ?? '';
+}
