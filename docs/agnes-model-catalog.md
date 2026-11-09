@@ -354,6 +354,28 @@ enforced by the compose step, not the provider.
 - TTL: user says ~2 weeks, hermes saw 1 h cache-control → VERIFY in
   Phase 6; the local copy is the resilience path (re-host later).
 - Base64 inputs (V2.5 accepts Data-URIs) = explicitly FUTURE.
+- **CDN client-egress gate (live-verified 2026-11-09):** the desktop
+  client cannot DOWNLOAD `platform-outputs.agnes-ai.space` URLs — fresh
+  AND stale objects 403 for plain GET, Bearer GET, and Chrome/reqwest/
+  curl UAs (an IP-gate on OUR egress; the provider's own video backend
+  fetches the same URLs server-side fine). Consequences locked in code:
+  1. image stage requests `response_format: "url"` (the fluent chain:
+     CDN URL → `UpstreamOutput.primary` → video `first_frame`);
+  2. local materialization is BEST-EFFORT — a 403 download degrades the
+     preview cache, never the task (architectural idempotency);
+  3. a failure-only **b64 rescue** re-issues the same prompt in
+     `b64_json` mode and writes in-band bytes to the same dest, keeping
+     previews alive;
+  4. `data:`-URI inlining of local media (last-resort) remains as the
+     documented path for local-only pieces (the catch-prev-last-frame
+     flow already ships `data:image/png;base64` as `image_src` /
+     `first_frame`, catalog "bytes VERBATIM").
+- **url XOR b64_json (live-verified 2026-11-09):** the image API returns
+  exactly one of the two fields in every request shape we can build
+  (`response_format=url` → url only, `b64_json:""`; `=b64_json` → b64
+  only, `url:""`; top-level `return_base64` does not stack with either).
+  A single response can never carry both — hence the rescue is a second
+  call, not a dual-field read.
 
 ## Q4 fact flag (keep as-is, configure later)
 

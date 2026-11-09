@@ -325,16 +325,26 @@ fn guidance_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<(String, f
 // ── `image-gen` (agnes image 2.5-flash / 2.1-flash) ────────────────────────
 
 fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
-    // Ask for the image IN-BAND as base64 (`b64_json`), not a remote CDN
-    // `url`. The Agnes image CDN (`platform-outputs.agnes-ai.space`) gates
-    // its output objects behind access the plain/Bearer download 403s on
-    // (confirmed: the returned url is not retrievable by the client, even
-    // hours later), so a `url`-format request fails at the download step
-    // after the generation already succeeded. `b64_json` carries the bytes
-    // in the response, so materialize_image writes them straight to disk —
-    // no CDN round-trip, no 403. The parser prefers `url` then `b64_json`,
-    // and only requests what it will actually receive.
-    let mut extra_body = json!({ "response_format": "b64_json" });
+    // Ask for the image as a remote CDN `url` — the FLUENT chain. The image
+    // stage's CDN URL becomes `UpstreamOutput.primary`, so the video stage's
+    // `first_frame`/`last_frame` carry a fetchable URL that the Agnes video
+    // backend retrieves SERVER-SIDE (their infra, un-gated). That is how the
+    // i2v route has always worked.
+    //
+    // The 403 is client-egress-only: our desktop client cannot download the
+    // CDN url (live-verified 2026-11-09 — fresh AND stale urls, plain GET,
+    // Bearer GET, and Chrome/reqwest/curl UAs all 403 from our IP, while the
+    // provider's own video backend fetches it fine server-side). So the
+    // image stage treats the local materialization as BEST-EFFORT: a failed
+    // CDN download degrades the local preview cache, never the task — the
+    // fluent remote chain (url → video API) is what carries the i2v route.
+    //
+    // Live-verified 2026-11-09: the image API returns `url` XOR `b64_json`
+    // per response in every request shape we can build (response_format=url
+    // → url only; =b64_json → b64 only; return_base64 does not stack).
+    // `url` mode keeps `remote_url` populated, which is what the video stage
+    // needs.
+    let mut extra_body = json!({ "response_format": "url" });
     // PITFALL (catalog-locked): response_format lives INSIDE extra_body,
     // never top-level (top-level → HTTP 400).
     // img2img: extra_body.image = [referenceUrl] (public URL; Data-URI
@@ -801,8 +811,10 @@ mod tests {
         });
         let p = shape_request(&s, &ctx(|_| {})).unwrap();
         assert_eq!(p["model"], "agnes-image-2.5-flash");
-        // b64_json: the image arrives in-band (the CDN `url` is 403-gated).
-        assert_eq!(p["extra_body"]["response_format"], "b64_json");
+        // url mode: the CDN url feeds the fluent video chain (first_frame).
+        // (Live-verified 2026-11-09: the image API returns url XOR b64_json;
+        // url mode keeps remote_url populated so the video stage can use it.)
+        assert_eq!(p["extra_body"]["response_format"], "url");
         // PITFALL: response_format is NEVER top-level.
         assert!(p.get("response_format").is_none());
         assert_eq!(p["size"], "1K");
@@ -825,8 +837,8 @@ mod tests {
         let c = ctx(|c| c.reference_url = Some("https://a.com/ref.png".into()));
         let p = shape_request(&s, &c).unwrap();
         assert_eq!(p["extra_body"]["image"][0], "https://a.com/ref.png");
-        // b64_json in-band (the CDN url is 403-gated).
-        assert_eq!(p["extra_body"]["response_format"], "b64_json");
+        // url mode: the CDN url feeds the fluent video chain.
+        assert_eq!(p["extra_body"]["response_format"], "url");
     }
 
     #[test]

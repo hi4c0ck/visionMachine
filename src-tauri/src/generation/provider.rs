@@ -679,10 +679,18 @@ impl ProviderEngine {
             .and_then(|d| d.get(0))
             .cloned()
             .ok_or_else(|| EngineError::Failure("piece image response missing data[0]".into()))?;
-        let remote_url = data0.get("url").and_then(|u| u.as_str()).map(String::from);
+        // The API returns url XOR b64_json; the unselected field is
+        // present-but-empty (live-verified 2026-11-09) - filter empty so
+        // it normalizes to None.
+        let remote_url = data0
+            .get("url")
+            .and_then(|u| u.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
         let b64 = data0
             .get("b64_json")
             .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
             .map(String::from);
 
         // Best-effort redacted request/response line to the piece log.
@@ -703,13 +711,33 @@ impl ProviderEngine {
         let remote_url_ret = remote_url.clone();
         match remote_url {
             Some(u) => {
-                self.http
-                    .download(&u, &req.dest, slot.api_key.trim())
-                    .await
-                    .map_err(|e| {
-                        log::error!("[Piece] download failed {u}: {e}");
-                        EngineError::Failure(format!("piece image download {u}: {e}"))
+                if self.http.download(&u, &req.dest, slot.api_key.trim()).await.is_err() {
+                    // The CDN client-egress gate (live-verified 2026-11-09)
+                    // 403s our download of the just-minted url. The image API
+                    // itself is reachable, so rescue the local artifact from a
+                    // b64_json re-issue (one extra $0 call, failure-only).
+                    // A piece's CDN url is consumed by NOTHING downstream
+                    // (unlike the task stage, where it drives the video
+                    // first_frame), so a failed rescue is a real failure: the
+                    // user's only usable artifact is the local file.
+                    log::warn!(
+                        "[Piece] CDN download of {u} failed (client-egress gate) — b64_json rescue"
+                    );
+                    let bytes = self
+                        .refetch_image_b64_bytes(&payload, &url, &secrets)
+                        .await
+                        .map_err(|e| {
+                            EngineError::Failure(format!(
+                                "piece image materialization failed: CDN download gated and b64 \
+                                 rescue failed ({}) — the image was generated but no local \
+                                 artifact could be stored",
+                                e.message()
+                            ))
+                        })?;
+                    std::fs::write(&req.dest, bytes).map_err(|e| {
+                        EngineError::Failure(format!("write {}: {e}", req.dest.display()))
                     })?;
+                }
             }
             None => {
                 let b64 = b64.ok_or_else(|| {
@@ -725,6 +753,9 @@ impl ProviderEngine {
                     EngineError::Failure(format!("write {}: {e}", req.dest.display()))
                 })?;
             }
+        }
+        if req.dest.exists() {
+            generate_image_thumb(&req.dest).await;
         }
         on_progress(1.0);
         on_event("piece image complete");
@@ -975,24 +1006,42 @@ impl ProviderEngine {
                 "image response missing data[0]".into(),
             ));
         };
-        let remote_url = data0.get("url").and_then(|u| u.as_str()).map(String::from);
+        // The API returns `url` XOR `b64_json` (live-verified 2026-11-09); the
+        // non-selected field is present-but-EMPTY, so filter empty strings to
+        // normalize to `None`. In `url` mode: remote_url=Some, b64=None.
+        let remote_url = data0
+            .get("url")
+            .and_then(|u| u.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
         let remote_url_for_log = remote_url.clone();
         let b64 = data0
             .get("b64_json")
             .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
             .map(String::from);
 
-        // Prefer the IN-BAND base64 bytes over a remote download. We request
-        // `response_format: "b64_json"`, so the bytes arrive right here; the
-        // Agnes image CDN's `url` is 403-gated and not retrievable, so a
-        // `url`-first materialize would re-trigger the download and fail.
-        // Only fall back to the remote URL when no base64 was returned.
+        // `url` mode (fluent chain): the response carries the provider's CDN
+        // URL, which becomes `UpstreamOutput.primary` -> the video stage's
+        // `first_frame`. We request `url` (not `b64_json`) so that remote
+        // source is ALWAYS populated — that is what the i2v route consumes.
+        //
+        // Materializing the LOCAL file is BEST-EFFORT and never fatal when a
+        // remote URL is present: the Agnes image CDN gates its output objects
+        // behind client egress we can't reach (live-verified 2026-11-09 —
+        // fresh + stale urls, plain/Bearer/Chrome UAs all 403 from our
+        // IP, while the provider's own video backend fetches the url
+        // server-side). So a failed local download degrades the preview
+        // cache (black until the CDN gate lifts and a backfill re-materializes)
+        // but does NOT fail the task — the fluent remote chain (url -> video
+        // API) is what carries the i2v route. Task success is decoupled from
+        // the CDN client-download policy (architectural idempotency).
         let materialize_url = if b64.is_some() { None } else { remote_url.clone() };
 
         // Resolve the artifact into the media tree. Keep the provider's remote
         // URL alongside the local path: the registry links both back to the
         // keyframe/subject (previewRemoteUrl / previewLocalPath).
-        let local = self
+        let local = match self
             .materialize_image(
                 materialize_url,
                 b64,
@@ -1003,14 +1052,59 @@ impl ProviderEngine {
                 &secrets,
             )
             .await
-            .map_err(|e| {
+        {
+            Ok(l) => l,
+            Err(dl_err) if remote_url.is_some() && self.media_root_for(input).is_some() => {
+                // Degrade is only meaningful when a media root exists to
+                // persist into. A missing media root is a hard config error
+                // (the next arm), NOT a CDN gate — it must still fail loudly.
+                // The fluent remote chain is intact (remote_url drives the
+                // video stage), so a failed local download must NOT kill the
+                // task. But keep the local preview cache alive: re-issue the
+                // SAME prompt in `b64_json` mode and write the in-band bytes
+                // to the same dest. Failure-only; if the rescue also fails
+                // we degrade to no-local-file (black preview until the CDN
+                // client-gate lifts and a backfill re-materializes).
+                let rescued = self
+                    .rescue_local_via_b64(
+                        &payload,
+                        &url,
+                        &secrets,
+                        &stage,
+                        input,
+                    )
+                    .await;
+                match rescued {
+                    Ok(local) => {
+                        log::info!(
+                            "[Generation] image task {} local CDN download failed ({}) — rescued local preview via b64_json; fluent remote chain still active via {:?}",
+                            input.task_id,
+                            dl_err.message(),
+                            remote_url_for_log
+                        );
+                        local
+                    }
+                    Err(rescue_err) => {
+                        log::warn!(
+                            "[Generation] image task {} local materialize failed (CDN download: {}; b64 rescue: {}) — fluent remote chain active via {:?}; preview cache degraded until backfill",
+                            input.task_id,
+                            dl_err.message(),
+                            rescue_err.message(),
+                            remote_url_for_log
+                        );
+                        String::new()
+                    }
+                }
+            }
+            Err(e) => {
                 log::error!(
                     "[Generation] image task {} materialize failed: {}",
                     input.task_id,
                     e.message()
                 );
-                e
-            })?;
+                return Err(e);
+            }
+        };
 
         // Append the artifact history line. The log stays in the PIPE-level
         // images dir (append-only, shared by all of this pipe's tasks), but
@@ -1109,20 +1203,17 @@ impl ProviderEngine {
         })
     }
 
-    /// Materialize a generated image into the media tree: remote URL or
-    /// in-band base64 -> `<task>/images/<refName>.png`, where the ref name
-    /// is the stage's stable reference id (keyframe id / subject id) so no
-    /// two artifacts ever stack onto one file.
-    async fn materialize_image(
+    /// Resolve the on-disk destination for a generated image artifact:
+    /// `<task>/images/<safeRefName>.png`, where the ref name is the stage's
+    /// stable reference id (keyframe id / subject id) so no two artifacts
+    /// ever stack onto one file. Shared by `materialize_image` and the
+    /// b64-rescue so both write to the identical path.
+    fn image_artifact_dest(
         &self,
-        remote_url: Option<String>,
-        b64: Option<String>,
-        _pipe_id: &str,
         task_id: &str,
         stage: &EngineStage,
         input: &EngineInput,
-        secrets: &[String],
-    ) -> Result<String, EngineError> {
+    ) -> Result<std::path::PathBuf, EngineError> {
         let root = match &input.media_root {
             Some(r) if !r.trim().is_empty() => std::path::PathBuf::from(r.trim()),
             _ => match (self.media_root)() {
@@ -1147,7 +1238,24 @@ impl ProviderEngine {
             .filter(|r| !r.trim().is_empty())
             .unwrap_or_else(|| "latest".into());
         let safe_ref = crate::generation::media::safe_dir_name(&ref_id);
-        let dest = task_images_dir.join(format!("{safe_ref}.png"));
+        Ok(task_images_dir.join(format!("{safe_ref}.png")))
+    }
+
+    /// Materialize a generated image into the media tree: remote URL or
+    /// in-band base64 -> `<task>/images/<refName>.png`, where the ref name
+    /// is the stage's stable reference id (keyframe id / subject id) so no
+    /// two artifacts ever stack onto one file.
+    async fn materialize_image(
+        &self,
+        remote_url: Option<String>,
+        b64: Option<String>,
+        _pipe_id: &str,
+        task_id: &str,
+        stage: &EngineStage,
+        input: &EngineInput,
+        secrets: &[String],
+    ) -> Result<String, EngineError> {
+        let dest = self.image_artifact_dest(task_id, stage, input)?;
         match remote_url {
             Some(url) => {
                 let dest_str = dest.to_string_lossy().into_owned();
@@ -1204,6 +1312,86 @@ impl ProviderEngine {
             }
         }
         // 320px JPEG thumb for fast preview (non-fatal; blocking pool).
+        generate_image_thumb(&dest).await;
+        Ok(dest.to_string_lossy().into_owned())
+    }
+
+    /// Failure-only b64 re-issue: POST the original image request switched to
+    /// `b64_json` mode and return the decoded bytes. The image API returns
+    /// url XOR b64_json (live-verified 2026-11-09), so this is exactly one
+    /// extra $0 image call, taken ONLY when a CDN download failed. The fluent
+    /// remote chain is unaffected; only the local cache is at stake.
+    async fn refetch_image_b64_bytes(
+        &self,
+        payload: &Value,
+        post_url: &str,
+        secrets: &[String],
+    ) -> Result<Vec<u8>, EngineError> {
+        let mut rescue_payload = payload.clone();
+        // Switch the response format to in-band base64 (same prompt/size/ratio
+        // maps; PITFALL-locked: response_format lives inside extra_body).
+        rescue_payload
+            .get_mut("extra_body")
+            .ok_or_else(|| {
+                EngineError::Failure("image payload has no extra_body to rescue".into())
+            })?
+            .as_object_mut()
+            .ok_or_else(|| {
+                EngineError::Failure("image payload extra_body is not an object".into())
+            })?
+            .insert("response_format".to_string(), json!("b64_json"));
+        let key = secrets.first().cloned().unwrap_or_default();
+        let (status, resp) = self
+            .http
+            .post(post_url, &rescue_payload, &key, IMAGE_TIMEOUT)
+            .await
+            .map_err(|e| EngineError::Failure(format!("rescue transport: {e}")))?;
+        if status >= 400 {
+            let body = resp.get("error").cloned().unwrap_or(resp);
+            return Err(EngineError::Failure(format!(
+                "rescue HTTP {status}: {}",
+                body.to_string()
+            )));
+        }
+        let b64 = resp
+            .get("data")
+            .and_then(|d| d.get(0))
+            .and_then(|d0| d0.get("b64_json"))
+            .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Failure("rescue response carried no in-band b64_json".into())
+            })?
+            .to_string();
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| EngineError::Failure(format!("rescue b64 decode: {e}")))
+    }
+
+    /// Failure-only b64 rescue for the task image stage: re-issue the request
+    /// in `b64_json` mode and write the in-band bytes to the SAME dest the
+    /// primary materialize used (the task's `<refName>.png`), so local
+    /// previews stay alive even when the CDN client-egress gate 403s our
+    /// download.
+    async fn rescue_local_via_b64(
+        &self,
+        payload: &Value,
+        post_url: &str,
+        secrets: &[String],
+        stage: &EngineStage,
+        input: &EngineInput,
+    ) -> Result<String, EngineError> {
+        let bytes = self
+            .refetch_image_b64_bytes(payload, post_url, secrets)
+            .await?;
+        let dest = self.image_artifact_dest(&input.task_id, stage, input)?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| EngineError::Failure(format!("create {}: {e}", parent.display())))?;
+        }
+        std::fs::write(&dest, bytes)
+            .map_err(|e| EngineError::Failure(format!("rescue write {}: {e}", dest.display())))?;
         generate_image_thumb(&dest).await;
         Ok(dest.to_string_lossy().into_owned())
     }
@@ -2865,8 +3053,14 @@ mod tests {
 
     // ── Download diagnostics ───────────────────────────────────────────────────
 
+    // A failed CDN download (403 client-egress gate, live-verified
+    // 2026-11-09) must NOT kill the task: the fluent remote chain
+    // (response url -> video stage first_frame) stays active, the b64
+    // rescue runs (and its own miss degrades, never fails), and the
+    // stage completes with an empty local path. The download error is
+    // still logged for replay/diagnosis.
     #[tokio::test]
-    async fn image_download_failure_is_logged_and_fails_stage() {
+    async fn image_download_failure_degrades_not_fails_with_remote_chain() {
         let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
         let http = Arc::new(
             StubHttp::new()
@@ -2880,12 +3074,15 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let input = image_input(&media);
 
-        let err = engine
+        let out = engine
             .run(&input, &cancel, &|_p| {}, &|_line| {})
             .await
-            .unwrap_err();
-        assert!(err.contains("image download"), "got: {err}");
-        assert!(err.contains("HTTP 503"), "status embedded: {err}");
+            .expect("a CDN download failure must degrade, not fail the task");
+        // The fluent remote chain is preserved in the stage output.
+        assert_eq!(out.remote_url.as_deref(), Some("https://cdn.test/k1.png"));
+        // The local artifact is empty (download failed; rescue carried no
+        // in-band b64 in this stub) - previews degrade, task succeeds.
+        assert_eq!(out.local_path, "");
 
         let req_log =
             std::fs::read_to_string(media.join("pipe1").join("task1").join("request.log")).unwrap();
