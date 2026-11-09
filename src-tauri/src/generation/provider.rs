@@ -246,11 +246,15 @@ fn transient_503_label(body: &Value) -> &'static str {
 }
 
 /// Fail fast when the shaped payload carries a non-fetchable media source
-/// (a local file path). That happens when the image stage's provider
-/// returned `b64_json` instead of a URL (ignoring `response_format: "url"`)
-/// and `record_upstream` fell back to the local artifact — the video API
-/// cannot fetch a local path, so sending it would burn a multi-minute
-/// render on a guaranteed failure.
+/// (a local file path). After `inline_local_media_fields` has run, any
+/// local file that exists on disk has been rewritten to a base64 `data:`
+/// URI (the image stage requests `response_format: b64_json` — the Agnes
+/// image CDN URL is 403-gated — so `record_upstream` hands the video stage
+/// the materialized local artifact); this check therefore only sees
+/// values it could not inline: a MISSING / unreadable / oversized local
+/// file, or a bare path that was never a file. The video API cannot fetch
+/// such a path, so sending it would burn a multi-minute render on a
+/// guaranteed failure.
 fn assert_media_fetchable(payload: &Value) -> Result<(), String> {
     let mut urls: Vec<(&str, &str)> = Vec::new();
     for key in ["image", "first_frame", "last_frame"] {
@@ -284,6 +288,84 @@ fn assert_media_fetchable(payload: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Inline a local media file as a base64 `data:` URI. Returns `None` for
+/// values that must pass through untouched (remote URLs, already-`data:`
+/// URIs, empty strings) or when the file is absent / unreadable /
+/// oversized — those stay local and the fetchability precheck reports them
+/// concretely.
+fn local_media_data_uri(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("data:")
+    {
+        return None;
+    }
+    const MAX_INLINE_MEDIA_BYTES: u64 = 32 * 1024 * 1024;
+    let path = std::path::Path::new(trimmed);
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_INLINE_MEDIA_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let lower = trimmed.to_ascii_lowercase();
+    let mime = if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "image/png"
+    };
+    Some(format!("data:{mime};base64,{b64}"))
+}
+
+/// Inline every local media field of a shaped video payload as a base64
+/// `data:` URI, in place. The image stage now asks `response_format:
+/// "b64_json"` (the Agnes image CDN URL is 403-gated), so
+/// `record_upstream` hands the video stage the materialized LOCAL artifact
+/// as `UpstreamOutput.primary` — the exact case the `UpstreamOutput` doc
+/// already anticipates ("the provider engine can base64-encode this [local
+/// path] if the remote primary is unreachable"). The video API accepts
+/// Data-URIs (catalog), so inlining restores the i2v route without
+/// re-introducing a flaky CDN dependency.
+///
+/// Fields covered: `image`, `first_frame`, `last_frame` (scalar) and
+/// `images`, `extra_body.image` (arrays). Idempotent: remote/`data:`
+/// values pass through untouched; a missing local file stays a local path
+/// so `assert_media_fetchable` still produces the concrete error.
+fn inline_local_media_fields(payload: &mut Value) {
+    for key in ["image", "first_frame", "last_frame"] {
+        if let Some(v) = payload.get(key).and_then(|v| v.as_str()) {
+            if let Some(uri) = local_media_data_uri(v) {
+                payload[key] = Value::String(uri);
+            }
+        }
+    }
+    if let Some(arr) = payload.get_mut("images").and_then(|v| v.as_array_mut()) {
+        inline_local_media_array(arr);
+    }
+    if let Some(ef) = payload
+        .get_mut("extra_body")
+        .and_then(|v| v.get_mut("image"))
+        .and_then(|v| v.as_array_mut())
+    {
+        inline_local_media_array(ef);
+    }
+}
+
+fn inline_local_media_array(arr: &mut Vec<Value>) {
+    for slot in arr.iter_mut() {
+        if let Value::String(s) = slot {
+            if let Some(uri) = local_media_data_uri(s) {
+                *slot = Value::String(uri);
+            }
+        }
+    }
 }
 
 /// A concrete engine error carrying the concrete-cause rule (E4).
@@ -1159,7 +1241,7 @@ impl ProviderEngine {
             })?;
 
         let ctx = self.stage_context(input, &stage, &spec)?;
-        let payload = shape_request(&spec, &ctx).map_err(|e| {
+        let mut payload = shape_request(&spec, &ctx).map_err(|e| {
             log::error!(
                 "[Generation] video task {} payload shape failed: {}",
                 input.task_id,
@@ -1167,8 +1249,39 @@ impl ProviderEngine {
             );
             EngineError::Failure(e)
         })?;
+        // The image stage now requests `response_format: b64_json` (the
+        // Agnes image CDN URL is 403-gated), so `record_upstream` hands a
+        // LOCAL materialized artifact to the video stage's media fields.
+        // Inline it as a base64 `data:` URI — the documented load-bearing
+        // path ("the provider engine can base64-encode this") — so the i2v
+        // route works without a CDN dependency.
+        let inlined_fields = {
+            let mut fields: Vec<String> = Vec::new();
+            for key in ["image", "first_frame", "last_frame"] {
+                if let Some(v) = payload.get(key).and_then(|v| v.as_str()) {
+                    if !v.starts_with("http://")
+                        && !v.starts_with("https://")
+                        && !v.starts_with("data:")
+                        && !v.trim().is_empty()
+                    {
+                        fields.push(key.to_string());
+                    }
+                }
+            }
+            fields
+        };
+        inline_local_media_fields(&mut payload);
+        if !inlined_fields.is_empty() {
+            log::info!(
+                "[Generation] video task {} media inlined as data: URIs: {}",
+                input.task_id,
+                inlined_fields.join(", ")
+            );
+        }
         // Fail fast on non-fetchable media (local paths) before burning a
-        // multi-minute render on a guaranteed provider 4xx.
+        // multi-minute render on a guaranteed provider 4xx. A local file
+        // that could NOT be inlined (missing / oversized) still reaches
+        // this check and is reported concretely.
         assert_media_fetchable(&payload).map_err(|e| {
             log::error!(
                 "[Generation] video task {} media precheck failed: {e}",
@@ -3092,5 +3205,101 @@ mod tests {
         assert!(!status_is_retryable(400));
         assert!(!status_is_retryable(403));
         assert!(!status_is_retryable(404));
+    }
+
+    // ── local media inlining (b64_json image stage -> i2v first_frame) ────
+
+    #[test]
+    fn local_media_data_uri_passes_through_remote_and_data_values() {
+        assert_eq!(local_media_data_uri("https://a.com/k.png"), None);
+        assert_eq!(local_media_data_uri("http://a.com/k.png"), None);
+        assert_eq!(local_media_data_uri("data:image/png;base64,AAA"), None);
+        assert_eq!(local_media_data_uri(""), None);
+        assert_eq!(local_media_data_uri("   "), None);
+    }
+
+    #[test]
+    fn local_media_data_uri_encodes_a_local_file_with_mime_from_extension() {
+        let dir = artifact_test_dir("vm-media-inline");
+        let png = dir.join("frame.png");
+        std::fs::write(&png, vec![0u8, 1, 2, 3]).unwrap();
+        let uri = local_media_data_uri(png.to_str().unwrap()).unwrap();
+        assert!(uri.starts_with("data:image/png;base64,"), "got {uri}");
+        use base64::Engine as _;
+        let round = base64::engine::general_purpose::STANDARD
+            .decode(&uri["data:image/png;base64,".len()..])
+            .unwrap();
+        assert_eq!(round, vec![0u8, 1, 2, 3]);
+        assert!(!dir.join("frame.JPG").exists());
+        let jpg = dir.join("frame.JPG");
+        std::fs::write(&jpg, vec![9u8]).unwrap();
+        let uri_j = local_media_data_uri(jpg.to_str().unwrap()).unwrap();
+        assert!(uri_j.starts_with("data:image/jpeg;base64,"), "got {uri_j}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_media_data_uri_rejects_missing_and_directory_paths() {
+        assert_eq!(
+            local_media_data_uri("C:\\vm-inline\\does-not-exist\\x.png"),
+            None
+        );
+        let dir = artifact_test_dir("vm-media-inline-dir");
+        let d = dir.join("sub");
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(local_media_data_uri(d.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inline_local_media_fields_rewrites_scalars_and_arrays_in_place() {
+        let dir = artifact_test_dir("vm-media-inline-payload");
+        let a = dir.join("k1.png");
+        let b = dir.join("k2.jpg");
+        std::fs::write(&a, vec![1u8]).unwrap();
+        std::fs::write(&b, vec![2u8]).unwrap();
+        let mut payload = json!({
+            "model": "m",
+            "first_frame": a.to_string_lossy(),
+            "last_frame": "https://cdn.test/k2.png",
+            "images": [ b.to_string_lossy(), "data:image/png;base64,QQ==" ],
+            "extra_body": { "image": [ a.to_string_lossy() ] },
+            "prompt": "p",
+        });
+        inline_local_media_fields(&mut payload);
+        assert!(payload["first_frame"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        // Remote URL is untouched.
+        assert_eq!(payload["last_frame"], "https://cdn.test/k2.png");
+        let arr = payload["images"].as_array().unwrap();
+        assert!(arr[0].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
+        // Already-inlined data URI is untouched.
+        assert_eq!(arr[1], "data:image/png;base64,QQ==");
+        let ef = payload["extra_body"]["image"].as_array().unwrap();
+        assert!(ef[0].as_str().unwrap().starts_with("data:image/png;base64,"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inline_then_precheck_accepts_inlined_payload_and_still_rejects_missing_file() {
+        let dir = artifact_test_dir("vm-media-inline-precheck");
+        let a = dir.join("k1.png");
+        std::fs::write(&a, vec![1u8, 2u8]).unwrap();
+        // Missing file: stays a bare path -> precheck still fails concretely.
+        let mut payload = json!({
+            "first_frame": dir.join("gone.png").to_string_lossy(),
+        });
+        inline_local_media_fields(&mut payload);
+        assert!(assert_media_fetchable(&payload).is_err());
+
+        let mut payload = json!({
+            "first_frame": a.to_string_lossy(),
+            "last_frame": "https://cdn.test/k2.png",
+        });
+        inline_local_media_fields(&mut payload);
+        assert!(assert_media_fetchable(&payload).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
