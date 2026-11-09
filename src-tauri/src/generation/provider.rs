@@ -900,13 +900,19 @@ impl ProviderEngine {
             .and_then(|b| b.as_str())
             .map(String::from);
 
-        // Resolve + download the artifact into the media tree. Keep the
-        // provider's remote URL alongside the local path: the registry links
-        // both back to the keyframe/subject (previewRemoteUrl / previewLocalPath)
-        // so the next video run can prefer the fetchable remote source.
+        // Prefer the IN-BAND base64 bytes over a remote download. We request
+        // `response_format: "b64_json"`, so the bytes arrive right here; the
+        // Agnes image CDN's `url` is 403-gated and not retrievable, so a
+        // `url`-first materialize would re-trigger the download and fail.
+        // Only fall back to the remote URL when no base64 was returned.
+        let materialize_url = if b64.is_some() { None } else { remote_url.clone() };
+
+        // Resolve the artifact into the media tree. Keep the provider's remote
+        // URL alongside the local path: the registry links both back to the
+        // keyframe/subject (previewRemoteUrl / previewLocalPath).
         let local = self
             .materialize_image(
-                remote_url.clone(),
+                materialize_url,
                 b64,
                 &input.pipe_id,
                 &input.task_id,

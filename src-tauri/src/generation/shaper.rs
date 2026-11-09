@@ -325,7 +325,16 @@ fn guidance_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<(String, f
 // ── `image-gen` (agnes image 2.5-flash / 2.1-flash) ────────────────────────
 
 fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
-    let mut extra_body = json!({ "response_format": "url" });
+    // Ask for the image IN-BAND as base64 (`b64_json`), not a remote CDN
+    // `url`. The Agnes image CDN (`platform-outputs.agnes-ai.space`) gates
+    // its output objects behind access the plain/Bearer download 403s on
+    // (confirmed: the returned url is not retrievable by the client, even
+    // hours later), so a `url`-format request fails at the download step
+    // after the generation already succeeded. `b64_json` carries the bytes
+    // in the response, so materialize_image writes them straight to disk —
+    // no CDN round-trip, no 403. The parser prefers `url` then `b64_json`,
+    // and only requests what it will actually receive.
+    let mut extra_body = json!({ "response_format": "b64_json" });
     // PITFALL (catalog-locked): response_format lives INSIDE extra_body,
     // never top-level (top-level → HTTP 400).
     // img2img: extra_body.image = [referenceUrl] (public URL; Data-URI
@@ -792,7 +801,8 @@ mod tests {
         });
         let p = shape_request(&s, &ctx(|_| {})).unwrap();
         assert_eq!(p["model"], "agnes-image-2.5-flash");
-        assert_eq!(p["extra_body"]["response_format"], "url");
+        // b64_json: the image arrives in-band (the CDN `url` is 403-gated).
+        assert_eq!(p["extra_body"]["response_format"], "b64_json");
         // PITFALL: response_format is NEVER top-level.
         assert!(p.get("response_format").is_none());
         assert_eq!(p["size"], "1K");
@@ -815,7 +825,8 @@ mod tests {
         let c = ctx(|c| c.reference_url = Some("https://a.com/ref.png".into()));
         let p = shape_request(&s, &c).unwrap();
         assert_eq!(p["extra_body"]["image"][0], "https://a.com/ref.png");
-        assert_eq!(p["extra_body"]["response_format"], "url");
+        // b64_json in-band (the CDN url is 403-gated).
+        assert_eq!(p["extra_body"]["response_format"], "b64_json");
     }
 
     #[test]
