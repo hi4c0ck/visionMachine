@@ -252,10 +252,33 @@ pub async fn director_run_flow(
         flow_dir(db, &session_id).await?
     };
 
-    let entry = parse_entry(&entry)?;
+    let parsed_entry = parse_entry(&entry)?;
+    // S0.5 content-aware scale resolution (2026-11-10) — THE single point
+    // where the run's scene/shot numbers are decided. When the G0 scale is
+    // the untouched default (1×2) and unpinned, the run adopts the idea's
+    // own structure (clauses → scenes); a pinned target is a SOFT budget
+    // that trims/grows the shape inside the engine caps. The resolved entry
+    // feeds the template run below AND the LLM path (hard counts +
+    // repair_counts + V3), so every downstream layer sees the same
+    // numbers — one resolution, no divergence.
+    let resolved_entry: Option<crate::generation::video_flow::engine::seed::EngineEntry> =
+        match &parsed_entry {
+            Some(e) => {
+                let intent = crate::generation::video_flow::IntentSnapshot::new(&text);
+                let mut e2 = e.clone();
+                e2.scale = crate::generation::video_flow::engine::tree::resolve_run_scale(
+                    &intent,
+                    e,
+                    &e.overrides,
+                    &crate::generation::video_flow::engine::tree::tree_caps(),
+                );
+                Some(e2)
+            }
+            None => None,
+        };
     let flow = VideoFlow::new();
     let mut doc = flow
-        .run_full_with_entry(&text, entry.as_ref())
+        .run_full_with_entry(&text, resolved_entry.as_ref())
         .map_err(|e| e.to_string())?;
 
     // Phase 2: expand — run_full_with_entry returned; report the engine
@@ -321,9 +344,23 @@ pub async fn director_run_flow(
         use crate::generation::video_flow::engine::llm::{self, TextProvider};
         use crate::generation::video_flow::engine::seed::{EngineRun, ExpansionSource};
 
-        let effective_entry = match entry {
-            Some(e) => e,
-            None => crate::generation::video_flow::default_engine_entry(&text, &doc.intent),
+        // The LLM path uses the SAME resolved scale as the template run
+        // (single resolution — the "one point" rule): the parsed entry
+        // already carries `resolve_run_scale`'s numbers; the default
+        // entry (no G0 text) goes through the resolver too so a rich
+        // prompt never silently collapses back to the 1×2 frozen default.
+        let effective_entry = match &resolved_entry {
+            Some(e) => e.clone(),
+            None => {
+                let mut d = crate::generation::video_flow::default_engine_entry(&text, &doc.intent);
+                d.scale = crate::generation::video_flow::engine::tree::resolve_run_scale(
+                    &doc.intent,
+                    &d,
+                    &d.overrides,
+                    &crate::generation::video_flow::engine::tree::tree_caps(),
+                );
+                d
+            }
         };
 
         let provider: Option<TextProvider> = {

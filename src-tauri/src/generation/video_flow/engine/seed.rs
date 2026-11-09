@@ -32,7 +32,7 @@ use crate::generation::video_flow::engine::types::{
     SceneTimeline, SeedScale, ShotContent, ShotMolecule, ShotSpec, SubSlice, TimelineScene,
     TimelineShot, VisualNovel,
 };
-use crate::generation::video_flow::engine::tree::{leaf_to_concerns, StructuralTree};
+use crate::generation::video_flow::engine::tree::{leaf_to_concerns, role_dwell_weight, StructuralTree};
 use serde::{Deserialize, Serialize};
 
 /// S0 → S4 deterministic build result, one per run.
@@ -1774,6 +1774,16 @@ fn build_specs_and_timeline(
     let branch_out_all: Vec<String> = tree
         .map(|t| t.branches.iter().map(|b| b.transition_out.clone()).collect())
         .unwrap_or_default();
+    // P4 (2026-11-10) NOTE: per-scene dwell (distribute the target budget
+    // across scenes by role weight) is INTENTIONALLY not wired here yet —
+    // it requires the marker-bridge structure step (`plan_from_engine`) to
+    // tile its per-pipe frame ranges off the SAME per-scene clips, else the
+    // S5 V6 invariant ("sum of generated pipe lengths == cumulative S3
+    // frames") drifts. Until that structure-step alignment lands, every shot
+    // keeps the flat band `clip` (byte-stable). The art-director dwell is the
+    // next seam; P1/P2 (content-aware scene/shot COUNT + the soft target
+    // budget in `resolve_run_scale`) already make a rich idea read at the
+    // right length instead of the frozen 1×2.
     let mut specs: Vec<ShotSpec> = Vec::new();
     let mut tl_scenes: Vec<TimelineScene> = Vec::new();
 

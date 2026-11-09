@@ -207,10 +207,11 @@ pub fn build_structural_tree(
     let words = intent.entry_text.split_whitespace().count().max(1);
     let suggested = suggest_scale(words, clauses.len(), &caps);
 
-    // 2) The EFFECTIVE run scale: the G0 entry scale (what the run uses),
-    //    with user pins overriding it. The tree *refines* the entry scale —
-    //    it does not replace it — so branch/shot counts track the run.
-    let effective = effective_scale(entry, overrides, &caps);
+    // 2) The EFFECTIVE run scale: CONTENT-AWARE (the 2026-11-10 seam). An
+    //    explicit pin wins; otherwise the untouched G0 default (1×2) adopts
+    //    the idea's own structure so branch/shot counts track the run. The
+    //    tree *refines* the entry scale — it does not replace it.
+    let effective = resolve_run_scale(intent, entry, overrides, &caps);
 
     // 3) Mood profile (the user's explicit knob; the tree picks *within* caps).
     let mood = MoodProfile::for_mood(entry.mood);
@@ -322,23 +323,113 @@ fn suggest_scale(
     }
 }
 
-/// The EFFECTIVE run scale: the G0 entry scale, with user pins winning over
-/// each field. This is what the tree's branch/shot counts track.
-fn effective_scale(
+/// The engine caps in one place (single source for every scale resolver).
+pub fn tree_caps() -> ((u32, u32), u32, u32) {
+    (
+        (TagVocabulary::CLIP_S.0, TagVocabulary::CLIP_S.1),
+        TagVocabulary::SCENES_MAX,
+        TagVocabulary::SHOTS_PER_SCENE_MAX,
+    )
+}
+
+/// Role-driven dwell weights (the art-director "where the time goes" table).
+/// Establishing and the peak (turn) HOLD; developing moves; resolving exits
+/// short. The weights drive the per-branch clip distribution (seed.rs) so an
+/// episode's duration follows its energy shape, not a flat `band_min`.
+pub fn role_dwell_weight(role: &str) -> f32 {
+    match role {
+        "establishing" => 1.5,
+        "turn" => 1.5,
+        "developing" => 1.0,
+        "resolving" => 0.8,
+        _ => 1.0,
+    }
+}
+
+/// The content-aware run scale — the "real understanding" seam (2026-11-10).
+/// The scene/shot counts are derived from the IDEA's structure (clauses/words
+/// via `suggest_scale`), not from the frozen G0 default. The rule is SOFT —
+/// the target is a budget that steers the shape, never a hard clamp on the
+/// user's content:
+///
+/// 1. An explicit pin (`overrides.scenes` / `overrides.shots_per_scene`)
+///    always wins for its field and is never overridden by the budget.
+/// 2. When the G0 entry scale is the untouched default (1 scene × 2 shots)
+///    and nothing is pinned, the run adopts the content-derived
+///    `suggest_scale` — a rich 4-clause idea reads as ~3 scenes, not 1.
+/// 3. A pinned `target_duration_s` SOFT-FITS the shape to the budget at the
+///    mood band's clip length: needed clips = ceil(target / clip_eff). If the
+///    content scale already exceeds the budget it trims shots-per-scene (down
+///    to 1 — scenes are content and survive); if it is under, it grows
+///    shots-per-scene to the cap, then scenes to the cap. The run lands as
+///    close to the target as the closed engine caps allow.
+pub fn resolve_run_scale(
+    intent: &IntentSnapshot,
     entry: &EngineEntry,
     overrides: &TreeOverrides,
     caps: &((u32, u32), u32, u32),
 ) -> SeedScale {
     let (clip_min, clip_max) = caps.0;
+    let max_scenes = caps.1;
+    let max_spc = caps.2;
+    let clauses = intent
+        .clauses
+        .iter()
+        .filter(|c| !c.text.trim().is_empty())
+        .count();
+    let words = intent.entry_text.split_whitespace().count().max(1);
+    let suggested = suggest_scale(words, clauses, caps);
+
+    // Rule 1 + 2: pin > (content when the entry is the untouched 1×2 default)
+    // > the entry's explicit scale.
+    let entry_is_default = entry.scale.scenes == 1 && entry.scale.shots_per_scene == 2;
+    let scenes_pinned = overrides.scenes.is_some();
+    let spc_pinned = overrides.shots_per_scene.is_some();
+    let mut scenes = match overrides.scenes {
+        Some(p) => p.clamp(1, max_scenes),
+        None if entry_is_default => suggested.scenes.clamp(1, max_scenes),
+        None => entry.scale.scenes.clamp(1, max_scenes),
+    };
+    let mut spc = match overrides.shots_per_scene {
+        Some(p) => p.clamp(1, max_spc),
+        None if entry_is_default => suggested.shots_per_scene.clamp(1, max_spc),
+        None => entry.scale.shots_per_scene.clamp(1, max_spc),
+    };
+
+    // Rule 3: the pinned target soft-fits the shape to the budget. The clip
+    // the run will actually use is the mood band's min (seed.rs
+    // `build_specs_and_timeline`), clamped to the engine cap — so the budget
+    // math matches what the producer builds.
+    if let Some(target) = overrides.target_duration_s {
+        let clip_eff = MoodProfile::for_mood(entry.mood)
+            .clip_range[0]
+            .max(4)
+            .min(10);
+        let clips_needed = target.div_ceil(clip_eff.max(1)).max(1);
+        let current_clips = scenes * spc.max(1);
+        if clips_needed < current_clips && !spc_pinned {
+            // Soft TRIM: fewer shots per scene (scenes are content and keep).
+            spc = clips_needed.div_ceil(scenes.max(1)).clamp(1, max_spc);
+        } else if clips_needed > current_clips {
+            // SOFT GROW: raise the scene count first (a scene carries the
+            // dramatic role — the beats live there), then the intra-scene
+            // cuts. Pinned fields are left alone.
+            if !scenes_pinned {
+                let scenes_want = clips_needed
+                    .div_ceil(spc.max(1))
+                    .max(scenes)
+                    .min(max_scenes);
+                scenes = scenes_want;
+            }
+            if !spc_pinned {
+                spc = spc.max(clips_needed.div_ceil(scenes.max(1)).min(max_spc));
+            }
+        }
+    }
+
     SeedScale {
-        scenes: overrides
-            .scenes
-            .unwrap_or(entry.scale.scenes)
-            .clamp(1, caps.1),
-        shots_per_scene: overrides
-            .shots_per_scene
-            .unwrap_or(entry.scale.shots_per_scene)
-            .clamp(1, caps.2),
+        scenes,
+        shots_per_scene: spc,
         clip_s: [
             entry.scale.clip_s[0].clamp(clip_min, clip_max),
             entry.scale.clip_s[1].clamp(clip_min, clip_max),
@@ -1007,5 +1098,100 @@ mod tests {
             t.branches[1].temp_open_k,
             "balanced tree's temp arc must chain branch 0 close → branch 1 open"
         );
+    }
+
+    // ── P1/P2: the content-aware run scale (the 2026-11-10 seam) ─────────
+
+    fn caps() -> ((u32, u32), u32, u32) {
+        tree_caps()
+    }
+
+    /// A rich 4-clause idea: each sentence is its own clause.
+    const RICH: &str = "I leave home and lock the door, leaving a small light on in the room and the cat asleep on the windowsill. \
+        In the morning, following the track that disappeared in the woods, I saw the machine stepping out of the pine grove. \
+        First, I heard its red optics sweep the clearing, then the whole meadow trembled under its feet. \
+        Panic sent me down into a ravine, and I crouched in the damp grass, holding my breath until the giant shadow passed.";
+
+    fn intent_rich() -> IntentSnapshot {
+        IntentSnapshot::new(RICH)
+    }
+
+    /// The untouched G0 default (1×2) adopts the idea's own structure — a
+    /// 4-clause idea reads as ~3 scenes, not 1.
+    #[test]
+    fn resolve_default_entry_adopts_content_scale() {
+        let intent = intent_rich();
+        let e = entry("x", 50, 1, 2); // the frozen G0 default
+        let s = resolve_run_scale(&intent, &e, &TreeOverrides::default(), &caps());
+        assert!(s.scenes >= 2, "a 4-clause idea must read as more than 1 scene (got {})", s.scenes);
+        assert!(s.shots_per_scene >= 1);
+        assert_eq!(s.clip_s, [8, 10], "clip bounds pass through clamped");
+    }
+
+    /// An explicit G0 scale (not the default) is honored even when content
+    /// would suggest more — the user chose the shape.
+    #[test]
+    fn resolve_explicit_entry_scale_wins_over_content() {
+        let intent = intent_rich();
+        let mut e = entry("x", 50, 1, 2);
+        e.scale = crate::generation::video_flow::engine::types::SeedScale {
+            scenes: 2,
+            shots_per_scene: 3,
+            clip_s: [8, 10],
+        };
+        // Still "default-UNPinned" content-wise, but the entry scale 2×3 is
+        // the user's explicit choice, not the 1×2 default, so it wins.
+        let s = resolve_run_scale(&intent, &e, &TreeOverrides::default(), &caps());
+        assert_eq!(s.scenes, 2, "an explicit entry scale is not overridden by content");
+        assert_eq!(s.shots_per_scene, 3);
+    }
+
+    /// A pin ALWAYS wins for its field, and is never overridden by the
+    /// target budget.
+    #[test]
+    fn resolve_pins_win_and_survive_target() {
+        let intent = intent_rich();
+        let e = entry("x", 50, 1, 2);
+        let mut o = TreeOverrides::default();
+        o.scenes = Some(5);
+        o.shots_per_scene = Some(1);
+        o.target_duration_s = Some(400); // absurd budget — must not override pins
+        let s = resolve_run_scale(&intent, &e, &o, &caps());
+        assert_eq!(s.scenes, 5, "a pinned scene count survives an absurd target");
+        assert_eq!(s.shots_per_scene, 1, "a pinned spc survives an absurd target");
+    }
+
+    /// A pinned target GROWS a 1×2 default so the budget is reachable — but
+    /// never above the closed caps.
+    #[test]
+    fn resolve_target_budget_grows_default_scale() {
+        let intent = intent_rich();
+        let e = entry("x", 50, 1, 2);
+        let mut o = TreeOverrides::default();
+        o.target_duration_s = Some(40);
+        let s = resolve_run_scale(&intent, &e, &o, &caps());
+        // ~40s at the balanced band's 8s clip floor → ~5 clips → more scenes
+        // than the frozen 1×2 (2 clips). Must stay inside the caps.
+        assert!(
+            (s.scenes * s.shots_per_scene) >= 5,
+            "40s target must grow the shape past 2 clips (got {}×{}={} clips)",
+            s.scenes,
+            s.shots_per_scene,
+            s.scenes * s.shots_per_scene
+        );
+        assert!(s.scenes <= caps().1, "scenes stay within SCENES_MAX");
+        assert!(s.shots_per_scene <= caps().2, "spc stays within SHOTS_PER_SCENE_MAX");
+    }
+
+    /// `role_dwell_weight` — the art-director "where the time goes" table.
+    #[test]
+    fn role_dwell_weights_are_ordered() {
+        let establishing = role_dwell_weight("establishing");
+        let turn = role_dwell_weight("turn");
+        let developing = role_dwell_weight("developing");
+        let resolving = role_dwell_weight("resolving");
+        assert!(establishing > developing, "establishing holds longer than developing");
+        assert!(turn >= developing, "the peak holds at least as long as developing");
+        assert!(resolving < developing, "resolving exits shorter than developing");
     }
 }
