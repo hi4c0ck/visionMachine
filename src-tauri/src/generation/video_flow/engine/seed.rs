@@ -1561,7 +1561,73 @@ fn shot_sub_slices(
         .collect();
 
     collapse_no_op_slices(&mut slices, base);
+    // V7 structural guarantee (defense layer): even after the no-op
+    // collapse, the LEADING slice can still fold equal to the shot base
+    // (its state is a subset of the base's already-set values). Give every
+    // still-flat slice a distinct tag-closed motion-speed delta so S5 V7
+    // is structurally unreachable on the content path.
+    guarantee_slices_add_delta(&mut slices, base, &vocab);
     slices
+}
+
+/// V7 STRUCTURAL GUARANTEE (defense layer, 2026-11-10): after the no-op
+/// collapse, a slice can still add NO concern delta against the previous
+/// folded state — the classic case is the LEADING slice, which
+/// `collapse_no_op_slices` always keeps: when its state folds equal to the
+/// shot base (e.g. beat 0 = "wide:" on a shot whose base is already
+/// wide/24mm), V7 would name it ("slice 1 is a no-op").
+///
+/// Every still-flat slice gets a distinct, tag-closed MOTION-SPEED nudge —
+/// the smallest possible closed-vocab delta that makes it add
+/// information. Deterministic (stable BTree-ordered speed set, no
+/// randomness) and a strict no-op on clean slices, so every OTHER path
+/// (cycling template, golden fixtures, legacy structure pins) stays
+/// byte-stable; only the content path is guarded, where the LLM's beats
+/// can actually produce a flat slice.
+fn guarantee_slices_add_delta(slices: &mut Vec<SubSlice>, base: &Concerns, vocab: &TagVocabulary) {
+    if slices.is_empty() {
+        return;
+    }
+    // Walk the slices maintaining the folded effective state (the exact
+    // V7 comparison). A slice that adds nothing over `eff` gets a speed
+    // nudge to the first closed value (stable BTree order) that differs
+    // from the effective speed, so sequential flat slices still rotate
+    // (fast → normal → …) and every nudge stays a real delta.
+    let mut eff = axes::normalize(base, None);
+    for s in slices.iter_mut() {
+        let next = axes::normalize(&eff, s.state.as_ref());
+        if !axes::diff(&eff, &next).is_empty() {
+            // Clean slice: byte-untouched (the golden / cycling invariant).
+            eff = next;
+            continue;
+        }
+        let cur = eff.motion.speed.as_str();
+        let pick = vocab
+            .speed()
+            .iter()
+            .find(|v| **v != cur)
+            .copied()
+            .unwrap_or("fast");
+        let mut m = eff.motion.clone();
+        // Closed fallbacks: an empty move/zoom would fail V2 tag-closure.
+        if m.zoom.is_empty() {
+            m.zoom = "static".into();
+        }
+        if m.r#move.is_empty() {
+            m.r#move = "static".into();
+        }
+        m.speed = pick.to_string();
+        match s.state.as_mut() {
+            Some(pc) => pc.motion = Some(m.clone()),
+            None => {
+                s.state = Some(PartialConcerns {
+                    motion: Some(m.clone()),
+                    ..Default::default()
+                })
+            }
+        }
+        eff = axes::normalize(&eff, s.state.as_ref());
+    }
 }
 
 /// V7 no-op collapse against the shot's REAL base: a slice whose folded
@@ -3171,6 +3237,105 @@ mod seed_tests {
                 "beat '{b}' must be carried by some slice"
             );
         }
+    }
+
+    /// V7 structural guarantee (defense layer): a LEADING slice that folds
+    /// flat against the shot base — the classic "wide:" beat on a shot
+    /// whose base is already the closed "wide" state — would be named by
+    /// S5 V7 ("slice 1 is a no-op"). `guarantee_slices_add_delta` gives it
+    /// a distinct, tag-closed motion-speed delta; clean slices stay
+    /// byte-untouched (the golden / cycling invariant).
+    #[test]
+    fn guarantee_nudges_a_leading_slice_that_folds_flat() {
+        use crate::generation::video_flow::engine::types::{
+            AudioConcern, CameraConcern, Concerns, GradeConcern, LensConcern, LightingConcern,
+            MotionConcern, SubSlice,
+        };
+        let vocab = TagVocabulary::new();
+        let profiles = beat_profiles::beat_profiles();
+        // The shot base is EXACTLY the closed "wide" profile state, so a
+        // beat 0 = "wide:" slice folds flat against it (no concern delta).
+        let wide = beat_profiles::profile_state("wide", &profiles["wide"]);
+        let base = Concerns {
+            camera: CameraConcern {
+                size: "wide".into(),
+                angle: "eye".into(),
+                framing: "rule_of_thirds".into(),
+                dof: "deep".into(),
+            },
+            lens: LensConcern { focal_mm: 24, distortion: None },
+            motion: MotionConcern {
+                zoom: "static".into(),
+                r#move: "static".into(),
+                speed: "slow".into(),
+            },
+            lighting: LightingConcern {
+                key: "soft".into(),
+                contrast: "medium".into(),
+                color_temp_k: 5500,
+                pattern: Some("ambient".into()),
+            },
+            grade: GradeConcern {
+                palette: "neutral".into(),
+                saturation: "neutral".into(),
+                contrast: "medium".into(),
+                film_stock: "kodak_250d".into(),
+            },
+            effects: Vec::new(),
+            audio: AudioConcern::default(),
+        };
+        let close = beat_profiles::profile_state("close-up", &profiles["close-up"]);
+        let mut slices = vec![
+            SubSlice {
+                from_s: 0,
+                to_s: 4,
+                note: "scene_0.shot_1 opens".into(),
+                state: Some(wide),
+                absorbed_beats: vec!["wide: the hall opens - a low ambient hum".to_string()],
+            },
+            SubSlice {
+                from_s: 4,
+                to_s: 8,
+                note: "scene_0.shot_1 closes".into(),
+                state: Some(close.clone()),
+                absorbed_beats: vec!["close-up: the hand grips the podium".to_string()],
+            },
+        ];
+        // PRE: slice 0 folds flat against the base — the V7 no-op shape.
+        let eff0 = axes::normalize(&base, None);
+        let eff1 = axes::normalize(&eff0, slices[0].state.as_ref());
+        assert!(
+            axes::diff(&eff0, &eff1).is_empty(),
+            "test setup: the leading wide slice must fold flat, got {:?}",
+            axes::diff(&eff0, &eff1)
+        );
+        // Run the guarantee.
+        guarantee_slices_add_delta(&mut slices, &base, &vocab);
+        // The flat leading slice got a distinct closed speed delta
+        // (first BTree speed != "slow" = "fast").
+        let nudge = slices[0]
+            .state
+            .as_ref()
+            .and_then(|s| s.motion.as_ref())
+            .expect("the guarantee must set a motion delta");
+        assert_eq!(nudge.speed, "fast", "the speed nudge must differ from base 'slow'");
+        // The clean close-up slice is byte-untouched (golden invariant).
+        assert_eq!(slices[1].state, Some(close), "clean slices must stay untouched");
+        // V7 is now clean on the guarded set, and the state stays tag-closed.
+        let states: Vec<Option<crate::generation::video_flow::engine::types::PartialConcerns>> =
+            slices.iter().map(|s| s.state.clone()).collect();
+        let effs = axes::fold(&base, &states);
+        for i in 0..slices.len() {
+            assert!(
+                !axes::diff(&effs[i], &effs[i + 1]).is_empty(),
+                "slice {i} must add a concern delta after the guarantee"
+            );
+        }
+        assert!(
+            vocab.validate_concerns(&effs[1]).is_empty(),
+            "the nudged state must stay tag-closed, got {:?}",
+            vocab.validate_concerns(&effs[1])
+        );
     }
 
     /// P2 guarantee layer: even a beat prefix that resolves to NEITHER a
