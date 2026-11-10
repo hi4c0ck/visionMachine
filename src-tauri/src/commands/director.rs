@@ -185,19 +185,33 @@ async fn node_a_provider_for_session(
     })
 }
 
+/// Parse the version number out of a `flow.v{N}.json` filename. Returns
+/// `None` for any name that is not a flow doc (`director_scratch.json`,
+/// `flow_signals.jsonl`, `golden.json`, …). This is the SINGLE source for
+/// the `flow.v{N}.json` name grammar, shared by the write side
+/// (`next_flow_version`) and the read side (`director_list_flows` /
+/// `director_load_flow`) so the two can never drift apart.
+///
+/// (Regression 2026-11-10: the read side used a
+/// `strip_prefix("flow.v").zip(strip_suffix(".json"))` chain whose `.zip()`
+/// bound the SECOND element — the still-prefix-attached `"flow.v3"` — so the
+/// `u32` parse failed on every file and `list_flows` silently returned 0
+/// flows forever. `FlowDocument::load` itself was fine; the skip happened in
+/// the filename parse before the load.)
+pub fn flow_version_of(name: &str) -> Option<u32> {
+    name.strip_prefix("flow.v")
+        .and_then(|s| s.strip_suffix(".json"))
+        .and_then(|v| v.parse::<u32>().ok())
+}
+
 /// The newest flow version on disk (0 when no flow has been saved yet).
 fn next_flow_version(flow: &PathBuf) -> u32 {
     let mut best: u32 = 0;
     if let Ok(entries) = std::fs::read_dir(flow) {
         for entry in entries.flatten() {
             if let Some(stem) = entry.file_name().to_str() {
-                if let Some(v) = stem
-                    .strip_prefix("flow.v")
-                    .and_then(|s| s.strip_suffix(".json"))
-                {
-                    if let Ok(v) = v.parse::<u32>() {
-                        best = best.max(v);
-                    }
+                if let Some(v) = flow_version_of(stem) {
+                    best = best.max(v);
                 }
             }
         }
@@ -538,10 +552,13 @@ pub async fn director_list_flows(
         .flatten()
     {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some((_, v_str)) = name.strip_prefix("flow.v").zip(name.strip_suffix(".json")) else {
-            continue;
-        };
-        let Ok(version) = v_str.parse::<u32>() else {
+        // The read side must use the SAME name parser as the write side
+        // (`next_flow_version`), or the two drift apart and the run list
+        // goes empty (the 2026-11-10 "director data not showing after
+        // restart" bug — a `zip()` name-strip that bound the
+        // prefix-attached string). `flow_version_of` returns None for
+        // every non-flow file, so the silent `continue` stays correct.
+        let Some(version) = flow_version_of(&name) else {
             continue;
         };
         let Ok(doc) = FlowDocument::load(&entry.path()) else {
@@ -1380,6 +1397,51 @@ mod tests {
             critic_model: Some(critic_model),
             engine,
         }
+    }
+
+    /// 2026-11-10 regression pin: the `flow.v{N}.json` name parser. The
+    /// read side (`director_list_flows`) used
+    /// `strip_prefix("flow.v").zip(strip_suffix(".json"))`, whose `.zip()`
+    /// bound the SECOND tuple element ("flow.v3") — the prefix was still
+    /// attached, so `u32::from_str` failed and every flow file was silently
+    /// skipped (0 flows forever). `flow_version_of` is the single shared
+    /// parser the write side (`next_flow_version`) and read side both use,
+    /// so they cannot drift apart.
+    #[test]
+    fn flow_version_of_parses_flow_doc_names_and_rejects_the_rest() {
+        assert_eq!(flow_version_of("flow.v3.json"), Some(3));
+        assert_eq!(flow_version_of("flow.v1.json"), Some(1));
+        assert_eq!(flow_version_of("flow.v12.json"), Some(12));
+        // The exact broken shape the old read-side produced: the prefix-
+        // attached string "flow.v3" is NOT a version — it must be None.
+        assert_eq!(flow_version_of("flow.v3"), None);
+        // Non-flow files in the same dir never parse.
+        assert_eq!(flow_version_of("director_scratch.json"), None);
+        assert_eq!(flow_version_of("flow_signals.jsonl"), None);
+        assert_eq!(flow_version_of("golden.json"), None);
+        assert_eq!(flow_version_of("flow.v.json"), None);
+        assert_eq!(flow_version_of("flow.vx.json"), None);
+        assert_eq!(flow_version_of(""), None);
+    }
+
+    /// The read-side scan (the loop body of `director_list_flows`) must
+    /// recover every version number from a mixed dir listing — the
+    /// "director data not showing after restart" repro at the scan level.
+    #[test]
+    fn flow_version_scan_of_mixed_dir_listing_finds_every_flow() {
+        let listing = [
+            "flow.v1.json",
+            "flow.v2.json",
+            "flow.v3.json",
+            "director_scratch.json",
+            "flow_signals.jsonl",
+            "golden.json",
+        ];
+        let found: Vec<u32> = listing
+            .iter()
+            .filter_map(|n| flow_version_of(n))
+            .collect();
+        assert_eq!(found, vec![1, 2, 3], "every flow doc is recovered");
     }
 
     // (a) build_apply_plan picks the engine concrete plan when doc.engine
