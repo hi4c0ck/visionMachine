@@ -14,7 +14,7 @@
 
 use crate::generation::video_flow::engine::tag_vocabulary::TagVocabulary;
 use crate::generation::video_flow::engine::types::{
-    CameraConcern, LightingConcern, MotionConcern, PartialConcerns,
+    CameraConcern, LensConcern, LightingConcern, MotionConcern, PartialConcerns,
 };
 use serde::Deserialize;
 
@@ -89,8 +89,16 @@ pub fn beat_profiles() -> &'static std::collections::BTreeMap<String, BeatProfil
 }
 
 /// Parse a Node A beat's shot-size prefix: `"<size>: rest"` → the size when
-/// it is a closed-vocab camera size, else `None`. THIS is the activation
-/// check — the content signal, not a guess.
+/// it is a closed-vocab camera size, else `None`. THE activation check for
+/// a bare closed-vocab size — the content signal, not a guess.
+///
+/// P1 (2026-11-10): this bare form is kept byte-stable for the golden
+/// fixtures (Order 66 council). The TOTAL grammar (closed-vocab size →
+/// alias table → motion words → P2 synth fallback) is
+/// `resolve_beat_size` + `motion_prefix_delta` + `synth_unknown_beat_state`
+/// below; the LLM's angle/motion language (low angle, tracking shot, …)
+/// used to fall out of this parser and produce empty sub-slice states —
+/// the V7 no-op-slice issues.
 pub fn parse_beat_size(beat: &str, vocab: &TagVocabulary) -> Option<&'static str> {
     let prefix = beat.split(':').next()?.trim().to_lowercase();
     vocab
@@ -98,6 +106,141 @@ pub fn parse_beat_size(beat: &str, vocab: &TagVocabulary) -> Option<&'static str
         .iter()
         .find(|s| **s == prefix)
         .copied()
+}
+
+/// P1 (2026-11-10): the LLM's angle-language beat prefixes, mapped onto a
+/// closed-vocab shot SIZE + a camera ANGLE concern. The closed `size()` set
+/// covers shot SCALE only; Node A gravitates to angle words ("low angle",
+/// "worms-eye view") that have no size entry, so the old parser returned
+/// `None` and the beat became an EMPTY sub-slice state (a V7 no-op). An
+/// alias makes the prefix total: it resolves to a real concern delta, and
+/// the angle intent survives into the prompt instead of being dropped.
+///
+/// Key = the lower-cased beat prefix; value = `(size_key, angle)`.
+/// `size_key` is always a closed-vocab size (feeds the profile table +
+/// pacing weight); `angle` is a closed-vocab camera angle
+/// (`tag_vocabulary::angle()` set).
+const BEAT_PREFIX_ALIASES: [(&str, &str, &str); 4] = [
+    // "low angle: subject" → wide optics + low angle.
+    ("low angle", "wide", "low"),
+    ("high angle", "wide", "high"),
+    ("worms-eye view", "close-up", "low"),
+    ("birds-eye view", "wide", "bird"),
+];
+
+/// P1: motion-language beat prefixes that are NOT shot sizes — the beat
+/// describes CAMERA MOTION, not optics. These resolve to a motion delta
+/// (zoom + move + speed, all closed-vocab) instead of an empty state.
+/// Key = lower-cased prefix; value = `(zoom, move, speed)`.
+const BEAT_MOTION_PREFIXES: [(&str, &str, &str, &str); 6] = [
+    ("tracking shot", "static", "track", "normal"),
+    ("pull-back", "pull", "dolly", "slow"),
+    ("zoom in", "in", "static", "normal"),
+    ("zoom out", "out", "static", "normal"),
+    ("crash zoom", "crash", "static", "fast"),
+    ("handheld", "static", "handheld", "normal"),
+];
+
+/// P1 (parser-side, total grammar): resolve a beat prefix to the shot SIZE
+/// it drives. Order: closed-vocab size → alias table → `None` (the caller
+/// then tries `motion_prefix_delta`, else the P2 synth fallback).
+pub fn resolve_beat_size(prefix: &str, vocab: &TagVocabulary) -> Option<&'static str> {
+    let p = prefix.trim().to_lowercase();
+    if let Some(s) = vocab.size().iter().find(|s| **s == p).copied() {
+        return Some(s);
+    }
+    BEAT_PREFIX_ALIASES
+        .iter()
+        .find(|(k, _, _)| *k == p)
+        .map(|(_, s, _)| *s)
+}
+
+/// P1: the alias's closed-vocab camera ANGLE for a resolved size
+/// (`None` when the prefix is a plain closed-vocab size — the profile's
+/// default `"eye"` angle applies).
+pub fn alias_angle(prefix: &str) -> Option<&'static str> {
+    let p = prefix.trim().to_lowercase();
+    BEAT_PREFIX_ALIASES
+        .iter()
+        .find(|(k, _, _)| *k == p)
+        .map(|(_, _, a)| *a)
+}
+
+/// P1: motion-language prefixes → a closed-vocab motion delta
+/// (`None` when the prefix is not a known motion word).
+pub fn motion_prefix_delta(prefix: &str) -> Option<(String, String, String)> {
+    let p = prefix.trim().to_lowercase();
+    BEAT_MOTION_PREFIXES
+        .iter()
+        .find(|(k, _, _, _)| *k == p)
+        .map(|(_, z, m, s)| (z.to_string(), m.to_string(), s.to_string()))
+}
+
+/// P2 (guarantee layer): the shot prefix of a beat
+/// (`"<prefix>: rest"` → `"<prefix>"`; a beat with no `:` is its own
+/// single-line prefix, lower-cased + trimmed).
+pub fn beat_prefix_of(beat: &str) -> String {
+    beat.split(':')
+        .next()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+}
+
+/// P2 fallback: synthesize a distinct, closed-vocab concern delta for a
+/// beat whose prefix resolved to neither a size nor a known motion word.
+/// `idx` keys the rotation so two unknown beats in one shot are never
+/// identical (V7-clean); every value is bounded to a closed set, so the
+/// slice can never be a no-op because of what the LLM chose to say.
+pub fn synth_unknown_beat_state(
+    prefix: &str,
+    idx: usize,
+    vocab: &TagVocabulary,
+) -> PartialConcerns {
+    // Deterministic small hash over the prefix (FNV-1a) → stable rotation.
+    let h = {
+        let mut acc: u32 = 0x811c_9dc5;
+        for b in prefix.as_bytes() {
+            acc ^= u32::from(*b);
+            acc = acc.wrapping_mul(0x0100_0193);
+        }
+        acc
+    };
+    let sizes = vocab.size();
+    let size: &'static str = sizes
+        .iter()
+        .copied()
+        .nth((h + idx as u32) as usize % 4)
+        .unwrap_or("medium");
+    // A closed focal DEFINITELY distinct from the size's table focal so
+    // the slice always carries a lens delta (table focals: wide→24,
+    // medium→50, close-up→85, over-the-shoulder→50).
+    let focal = match size {
+        "wide" => 135,
+        "medium" | "over-the-shoulder" => 35,
+        _ => 50,
+    };
+    PartialConcerns {
+        camera: Some(CameraConcern {
+            size: size.to_string(),
+            angle: "eye".into(),
+            framing: "centered".into(),
+            dof: match size {
+                "wide" => "deep".into(),
+                "close-up" => "shallow".into(),
+                _ => "medium".into(),
+            },
+        }),
+        lens: Some(LensConcern {
+            focal_mm: focal,
+            distortion: None,
+        }),
+        motion: None,
+        lighting: None,
+        grade: None,
+        effects: None,
+        audio: None,
+    }
 }
 
 /// Closed-vocab validation of one profile (the "this skill is legal" check,

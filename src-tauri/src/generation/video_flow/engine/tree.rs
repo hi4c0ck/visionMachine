@@ -763,9 +763,18 @@ pub fn leaf_to_concerns(leaf: &TreeLeaf, focal_default: u32) -> (CameraConcern, 
         _ => ("medium", "medium", "centered", "eye"),
     };
     // Closed: the move ∈ move_set(), the speed ∈ speed().
+    //
+    // V2 clamp (2026-11-10): `fast_whip` used to map to `"whip_pan"` — a
+    // word from the TRANSITION closed set, not the MOTION `move_set()`
+    // (which is static|pan|tilt|track|dolly|crane|handheld|steadicam|
+    // orbit|drone|zoom). The leak hit S5 verify as "V2 … motion.move=
+    // 'whip_pan' not in vocab" on the "forest show" run. The whip's energy
+    // (a fast, whip-like pan) is preserved by the closed motion
+    // value `pan` + `fast` — a fast pan reads as a whip without leaving the
+    // closed motion vocab.
     let (move_, speed) = match leaf.motion_intent.as_str() {
         "slow_push" => ("dolly", "slow"),
-        "fast_whip" => ("whip_pan", "fast"),
+        "fast_whip" => ("pan", "fast"),
         "drift" => ("track", "normal"),
         // "static_hold" + unknown → static.
         _ => ("static", "normal"),

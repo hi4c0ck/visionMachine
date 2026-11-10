@@ -1469,20 +1469,33 @@ fn shot_sub_slices(
     }
     let vocab = TagVocabulary::new();
     let profiles = beat_profiles::beat_profiles();
-    let sizes: Vec<Option<&str>> =
-        beats.iter().map(|b| beat_profiles::parse_beat_size(b, &vocab)).collect();
+    let prefixes: Vec<String> =
+        beats.iter().map(|b| beat_profiles::beat_prefix_of(b)).collect();
+    // P1 total grammar: a beat's prefix resolves to a closed-vocab SIZE
+    // (bare size or an alias like "low angle" → wide + low angle) or a
+    // MOTION word ("tracking shot" → track delta).
+    let sizes: Vec<Option<&'static str>> = prefixes
+        .iter()
+        .map(|p| beat_profiles::resolve_beat_size(p, &vocab))
+        .collect();
+    let motion_deltas: Vec<Option<(String, String, String)>> =
+        prefixes.iter().map(|p| beat_profiles::motion_prefix_delta(p)).collect();
 
-    // Activation gate: content drives the structure only when at least one
-    // beat names a closed-vocab shot size. Otherwise → the cycling journey
-    // (still tree-temp-driven for the light arc — the #3 fix is the point,
-    // even on the LLM path with unparseable beats).
-    if !sizes.iter().any(Option::is_some) {
+    // Activation gate: content drives the structure when at least one beat
+    // resolves to a closed-vocab size (bare or alias) or a known motion
+    // word. A shot whose beats resolve to NOTHING stays on the cycling
+    // journey (byte-stable legacy — the P2 synth is a per-beat guarantee
+    // inside the content path, not a per-shot activation).
+    let any_resolved = (0..prefixes.len())
+        .any(|i| sizes[i].is_some() || motion_deltas[i].is_some());
+    if !any_resolved {
         return shot_sub_slices_cycling(g, clip, shot_ref, tree_temps);
     }
 
     // One slice per beat (S3 cap is 4). The table's pacing weight sets each
-    // slice's window width; normalized to fill the clip exactly.
-    let n = sizes.len().min(4).max(1);
+    // slice's window width (aliases ride their resolved size's weight;
+    // motion / unknown beats are flat 1.0); normalized to fill the clip.
+    let n = prefixes.len().min(4).max(1);
     let weights: Vec<f32> = (0..n)
         .map(|i| {
             sizes[i]
@@ -1503,11 +1516,36 @@ fn shot_sub_slices(
     let roles = ["opens", "develops", "closes", "closes"];
     let mut slices = (0..n)
         .map(|i| {
-            let size = sizes[i].unwrap_or("medium");
-            let state = sizes[i]
-                .and_then(|s| profiles.get(s))
-                .map(|p| beat_profiles::profile_state(size, p))
-                .unwrap_or_default();
+            let prefix = prefixes.get(i).cloned().unwrap_or_default();
+            let state = if let Some(size) = sizes.get(i).copied().flatten() {
+                // P1: a closed-vocab size OR an alias-resolved angle word.
+                // The alias's closed-vocab angle overrides the profile's
+                // default "eye" so the LLM's angle intent survives.
+                let mut st = beat_profiles::profile_state(size, profiles.get(size).expect("closed size always in the table"));
+                if let Some(angle) = beat_profiles::alias_angle(&prefix) {
+                    if let Some(cam) = st.camera.as_mut() {
+                        cam.angle = angle.to_string();
+                    }
+                }
+                st
+            } else if let Some((zoom, move_, speed)) = &motion_deltas[i] {
+                // P1: a motion word → a closed-vocab motion delta only
+                // (camera / lens / lighting carry forward from the base).
+                PartialConcerns {
+                    motion: Some(MotionConcern {
+                        zoom: zoom.clone(),
+                        r#move: move_.clone(),
+                        speed: speed.clone(),
+                    }),
+                    ..PartialConcerns::default()
+                }
+            } else {
+                // P2 guarantee layer: a prefix that resolved to NEITHER a
+                // size/alias NOR a motion word gets a DISTINCT synthesized
+                // concern delta (idx-rotated, tag-closed) — a sub-slice can
+                // never be a V7 no-op because of what the LLM said.
+                beat_profiles::synth_unknown_beat_state(&prefix, i, &vocab)
+            };
             let role = roles.get(i).copied().unwrap_or("develops");
             let beat_text = beats.get(i).cloned().unwrap_or_default();
             SubSlice {
@@ -3047,6 +3085,159 @@ mod seed_tests {
             Some("close-up"),
             "template path shot 0 slice 0 uses the cycling g=0 camera path (close-up), NOT the beat's 'wide'"
         );
+    }
+
+    /// P3 (2026-11-10): the LLM's ANGLE / MOTION language — the exact
+    /// prefixes from the "forest show" run ("tracking shot", "low angle",
+    /// "pull-back") — must be V7-clean: every slice carries a real
+    /// concern delta, no slice state is empty, the beat texts all survive
+    /// in absorbed_beats, and the leading slice carries a motion delta
+    /// (the old "slice 1 is a no-op" shape cannot recur).
+    #[test]
+    fn angle_and_motion_beat_language_is_v7_clean() {
+        use crate::generation::video_flow::engine::types::VisualNovel;
+
+        let e = entry("a girl follows the river road north at dusk");
+        let seed = e.to_seed();
+        let beats = vec![
+            "tracking shot: feet hit gravel — rhythmic crunch".to_string(),
+            "low angle: a dog looks up — ears twitch at faint engine hum".to_string(),
+            "pull-back: the path curves into trees — shadows lengthen".to_string(),
+        ];
+        let novel = VisualNovel {
+            film: crate::generation::video_flow::engine::types::FilmLook {
+                title: "Forest Chase".into(),
+                logline: "a dog flees through the forest".into(),
+                style: "cinematic natural light".into(),
+                world: "the forest".into(),
+                palette: "green, amber".into(),
+                time_of_day: "midday".into(),
+                weather: "clear".into(),
+            },
+            scenes: vec![
+                crate::generation::video_flow::engine::types::NovelScene {
+                    title: "The Chase".into(),
+                    prose: "the chase through the pines".into(),
+                    shots: vec![
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "feet hit gravel".into(),
+                            beats: beats.clone(),
+                        }
+                    ],
+                }
+            ],
+        };
+        let run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Llm,
+            None,
+        );
+        let spec = &run.specs[0];
+        let slices = &spec.sub_timeline;
+        assert!(
+            slices.len() >= 3,
+            "three beats must yield >= 3 slices, got {}",
+            slices.len()
+        );
+        // Slice 0 (the old "slice 1") must carry a NON-EMPTY state: the
+        // tracking-shot beat lands a closed-vocab motion delta.
+        let s0 = slices[0]
+            .state
+            .as_ref()
+            .expect("slice 0 state present");
+        assert!(
+            s0.motion.as_ref().is_some_and(|m| !m.r#move.is_empty()),
+            "the tracking-shot beat must land a closed-vocab motion delta on slice 0"
+        );
+        // V7 is clean: no no-op slice anywhere in this shot.
+        let v7: Vec<_> = run
+            .verify
+            .issues
+            .iter()
+            .filter(|i| i.starts_with("V7"))
+            .collect();
+        assert!(
+            v7.is_empty(),
+            "angle/motion beat language must be V7-clean, got {v7:?}"
+        );
+        // Beat texts all survive in absorbed_beats.
+        let all: Vec<&String> = slices.iter().flat_map(|s| s.absorbed_beats.iter()).collect();
+        for b in &beats {
+            assert!(
+                all.iter().any(|a| *a == b),
+                "beat '{b}' must be carried by some slice"
+            );
+        }
+    }
+
+    /// P2 guarantee layer: even a beat prefix that resolves to NEITHER a
+    /// closed-vocab size NOR a known alias / motion word gets a DISTINCT
+    /// synthesized concern delta (idx-rotated, tag-closed) — a sub-slice
+    /// can never be a V7 no-op because of what the LLM chose to say.
+    #[test]
+    fn unknown_beat_prefix_gets_a_distinct_synthesized_state() {
+        let vocab = crate::generation::video_flow::engine::tag_vocabulary::TagVocabulary::new();
+        let a = beat_profiles::synth_unknown_beat_state("orbiting drone", 0, &vocab);
+        let b = beat_profiles::synth_unknown_beat_state("orbiting drone", 1, &vocab);
+        let sig = |c: &crate::generation::video_flow::engine::types::CameraConcern,
+                   l: &crate::generation::video_flow::engine::types::LensConcern| {
+            (c.size.clone(), l.focal_mm)
+        };
+        let sa = sig(a.camera.as_ref().unwrap(), a.lens.as_ref().unwrap());
+        let sb = sig(b.camera.as_ref().unwrap(), b.lens.as_ref().unwrap());
+        assert_ne!(
+            sa, sb,
+            "two unknown beats in one shot must differ (idx rotation)"
+        );
+        // Tag-closed: folded over a default base, V2 must be clean.
+        let base = crate::generation::video_flow::engine::types::Concerns::default();
+        let folded = axes::fold(&base, &[Some(a.clone()), Some(b.clone())]);
+        assert!(
+            vocab.validate_concerns(&folded[1]).is_empty(),
+            "synth state must stay tag-closed, got {:?}",
+            vocab.validate_concerns(&folded[1])
+        );
+    }
+
+    /// P1 resolvers: closed-vocab sizes pass through, angle language maps
+    /// to size + a distinct camera angle, motion words map to a
+    /// closed-vocab motion delta, unknown prefixes fall to `None` from
+    /// BOTH resolvers (the P2 synth then catches them).
+    #[test]
+    fn beat_prefix_resolvers_are_total_over_llm_language() {
+        let vocab = crate::generation::video_flow::engine::tag_vocabulary::TagVocabulary::new();
+        assert_eq!(
+            beat_profiles::resolve_beat_size("close-up", &vocab),
+            Some("close-up")
+        );
+        assert_eq!(
+            beat_profiles::resolve_beat_size("wide", &vocab),
+            Some("wide")
+        );
+        assert_eq!(
+            beat_profiles::resolve_beat_size("low angle", &vocab),
+            Some("wide")
+        );
+        assert_eq!(beat_profiles::alias_angle("low angle"), Some("low"));
+        assert_eq!(
+            beat_profiles::resolve_beat_size("worms-eye view", &vocab),
+            Some("close-up")
+        );
+        assert_eq!(beat_profiles::alias_angle("worms-eye view"), Some("low"));
+        // Motion words → closed-vocab motion delta (zoom, move, speed).
+        let m = beat_profiles::motion_prefix_delta("tracking shot").expect("tracking shot");
+        assert_eq!((m.0.as_str(), m.1.as_str(), m.2.as_str()), ("static", "track", "normal"));
+        let z = beat_profiles::motion_prefix_delta("crash zoom").expect("crash zoom");
+        assert_eq!((z.0.as_str(), z.1.as_str(), z.2.as_str()), ("crash", "static", "fast"));
+        // Unknown → None from both (the P2 synth catches it).
+        assert_eq!(
+            beat_profiles::resolve_beat_size("the camera shakes", &vocab),
+            None
+        );
+        assert_eq!(beat_profiles::motion_prefix_delta("the camera shakes"), None);
     }
 
     /// The Order 66 council opening (the beat_profiles grammar source): a
