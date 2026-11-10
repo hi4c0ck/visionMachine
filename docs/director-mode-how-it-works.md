@@ -413,3 +413,43 @@ baseline per `flow_version`, one-copy-at-a-time), `director_scratch.json`
 | "auto 3×3 badge didn't do anything" | `auto_scale` was display-only | the resolver now *is* the consumed source; the badge reflects the same `suggest_scale` |
 | "i2v first_frame not fetchable" | CDN 403 client-egress gate; url XOR b64 | `79be072` restored url chain + best-effort local cache; `data:` inliner as last resort |
 | "S5 V6 drifts 1248f ≠ 1152f" | P4 distributed clips but `plan_from_engine` tiled its own grid | P4 reverted + documented; wire per-pipe frames off per-scene clips next |
+
+---
+
+## 13. Known failure class: illegal filename chars in pipe titles (fix `b6f1a3…`)
+
+**Symptom (from `logs/VisionMachine.log`, 2026-11-10 00:52):**
+
+```
+[Generation] video task 89132e88 job task_GGf2… completed        ← provider job DID finish
+[Generation] task 89132e88 stage Final video failed: create
+  C:\...\forest show\Scene 1: Departure · shot 1\images:
+  Синтаксическая ошибка в имени файла… (os error 123)
+[Generation] task 89132e88 failed at stage 1
+```
+
+**Root cause.** An LLM Node A scene title — `"Scene 1: Departure"` (the natural
+"Scene N: …" pattern) — flows through `plan_from_engine` into the composer pipe
+title (`"{scene} · shot N"`), which becomes a **filesystem dir component** via
+`pipe_media_dirs`. The old `safe_dir_name` only stripped `../` traversal
+(`Path::file_name()`); `:` survived it, but `:` is reserved on NTFS
+(drive letters / alternate data streams), so `create_dir_all` threw
+`ERROR_INVALID_NAME` (os error 123). The provider job was already done — only
+the local artifact write failed. Intermittent by content: a run whose LLM
+scenes were "The Departure" (no colon) created folders fine on disk.
+
+**Architectural fix (data boundary, no UI/LLM-prompt workaround).** One shared
+scrub rule, `media.rs::scrub_file_component`, now defends **both** name→path
+sanitizers (`safe_dir_name` for pipe/task/ref components, `safe_session_name`
+for the session dir) so they cannot drift apart:
+
+- drops every NTFS-illegal character: `< > : " \ / | ? *`
+- drops control chars; trims a trailing run of `.` / ` ` (NTFS strips these
+  on create anyway)
+- suffixes bare reserved device names (`NUL`, `CON`, `COM1`–`COM9`,
+  `LPT1`–`LPT9`) with `_`
+- keeps legal non-ASCII (`·`, Cyrillic, CJK) — readability of LLM-authored
+  titles is preserved: `Scene 1: Departure · shot 1` → `Scene 1 Departure · shot 1`
+
+Pinned by `safe_dir_name_scrubs_windows_illegal_chars` +
+`scrub_file_component_drops_only_illegal_chars` (367/367 lib green).

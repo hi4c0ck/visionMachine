@@ -246,17 +246,76 @@ pub fn user_image_dir(session_root: &std::path::Path, pipe_name: &str) -> Result
     Ok(dir)
 }
 
-/// Reject path-traversal characters in ref/task ids so a crafted id can
-/// never escape the media tree.
+/// Windows-illegal characters in a single filename/directory component.
+/// NTFS also strips a trailing run of dots/spaces from a name, so
+/// `trim_end_matches` on those is applied in `scrub_file_component`.
+///
+/// Rationale (session 2026-11-10): LLM Node A titles like "Scene 1**:**
+/// Departure" flow through `plan_from_engine` into the composer pipe
+/// title, which becomes a filesystem component via `pipe_media_dirs`.
+/// `create_dir_all` then fails with `os error 123` (ERROR_INVALID_NAME)
+/// because `:` is reserved on NTFS. Defense is at this data boundary,
+/// not in the LLM prompt or the UI.
+const ILLEGAL_FILE_CHARS: &[char] = &['<', '>', ':', '"', '\\', '/', '|', '?', '*'];
+
+/// Windows reserved device names. A bare name equal to one of these
+/// (case-insensitive, no extension) is illegal in NTFS even though the
+/// characters are legal — `NUL`, `CON`, `COM1`…, `LPT9`. Guarded in
+/// `scrub_file_component` by appending a `_` suffix so the result is
+/// still creatable.
+const NT_RESERVED: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Drop characters that are illegal in a Windows NTFS filename component,
+/// plus C0/DEL control chars, plus a trailing run of `.` or ` ` (NTFS
+/// silently strips those on create). If the result is a bare reserved
+/// device name, append `_` so the string is a legal component.
+///
+/// Non-ASCII legal characters (e.g. `·` U+00B7, Cyrillic, CJK) are
+/// preserved: they are UTF-16 legal on NTFS and keeping them preserves
+/// readability of LLM-authored titles.
+/// Public so the other name→path sanitizer (`commands::generation::
+/// `safe_session_name`) can share the exact same scrub — one source of the
+/// Windows-illegal rule, so the two cannot drift apart.
+pub fn scrub_file_component(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .filter(|c| !ILLEGAL_FILE_CHARS.contains(c) && !c.is_control())
+        .collect();
+    // Strip a trailing run of `.` / ` ` (NTFS drops these on create).
+    while out.ends_with('.') || out.ends_with(' ') {
+        out.pop();
+    }
+    // A bare reserved device name is illegal even with only legal characters.
+    if NT_RESERVED.iter().any(|r| out.eq_ignore_ascii_case(r)) {
+        out.push('_');
+    }
+    out
+}
+
+/// Reject path-traversal AND Windows-illegal filename characters in a
+/// filesystem component. `id` may be a real name (pipe title, session
+/// name) or an identifier (uuid, ref id); either way the result is a
+/// single, safe NTFS component. Falls back to "unknown" for an empty
+/// result so the caller gets a deterministic, creatable directory name
+/// instead of `create_dir_all("")` erroring.
 pub fn safe_dir_name(id: &str) -> String {
+    // `Path::file_name` strips any `../` traversal the id could carry
+    // (a crafted path like `..\\evil` or `a/b`). On Windows it also
+    // treats `/` as a separator. The colon / other-illegal characters
+    // survive `file_name()`, so we scrub them next.
     let base = std::path::Path::new(id)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    if base.is_empty() {
+    let scrubbed = scrub_file_component(base);
+    if scrubbed.trim().is_empty() {
         "unknown".to_string()
     } else {
-        base.to_string()
+        scrubbed
     }
 }
 
@@ -406,6 +465,64 @@ mod tests {
         assert_eq!(safe_dir_name("..\\evil"), "evil");
         assert_eq!(safe_dir_name("ok"), "ok");
         assert_eq!(safe_dir_name(""), "unknown");
+    }
+
+    /// The 2026-11-10 regression pin: LLM scene titles like
+    /// "Scene 1: Departure · shot 1" carried a `:` (the natural
+    /// "Scene N: …" pattern), which `create_dir_all` rejects on Windows
+    /// (ERROR_INVALID_NAME / os error 123). `safe_dir_name` must scrub it
+    /// so the dir component is legal, while keeping the readable parts.
+    #[test]
+    fn safe_dir_name_scrubs_windows_illegal_chars() {
+        // The exact failure from the log: pipe title built from an LLM scene
+        // "Scene 1: Departure" + " · shot 1". The `:` must go; `·` (U+00B7,
+        // NTFS-legal non-ASCII) and spaces stay.
+        assert_eq!(
+            safe_dir_name("Scene 1: Departure · shot 1"),
+            "Scene 1 Departure · shot 1"
+        );
+        // NTFS-illegal characters in the middle of a string (where `Path::
+        // file_name()` returns the whole thing, not a truncated tail) are
+        // scrubbed by `scrub_file_component`.
+        //
+        // Note: `a:b` at position 0 is parsed by the Windows path parser as
+        // a drive prefix (`a:` + `b`), so `file_name()` already returns just
+        // "b" and the scrub sees a clean component — the interesting case is
+        // a colon **in the middle**, which is what LLM scene titles produce.
+        assert_eq!(safe_dir_name("xab:yc"), "xabyc");
+        assert_eq!(safe_dir_name("a<b"), "ab");
+        assert_eq!(safe_dir_name("a>b"), "ab");
+        assert_eq!(safe_dir_name("a\"b"), "ab");
+        assert_eq!(safe_dir_name("a|b"), "ab");
+        assert_eq!(safe_dir_name("a?b"), "ab");
+        assert_eq!(safe_dir_name("a*b"), "ab");
+        // Path separators: `Path::file_name()` already truncates to the
+        // last component; the scrub then sees a clean string.
+        assert_eq!(safe_dir_name("a/b"), "b");
+        assert_eq!(safe_dir_name("a\\b"), "b");
+        // A colon-only name falls back to the empty-component default
+        // ("unknown"), never an empty dir component.
+        assert_eq!(safe_dir_name(":"), "unknown");
+        // A reserved device name gets a `_` suffix (bare `con`/`NUL` are
+        // illegal even though the characters are legal).
+        assert_eq!(safe_dir_name("CON"), "CON_");
+        assert_eq!(safe_dir_name("NUL"), "NUL_");
+        // Trailing dots/spaces are trimmed (NTFS strips them on create).
+        assert_eq!(safe_dir_name("name..."), "name");
+        assert_eq!(safe_dir_name("name   "), "name");
+        // Legal non-ASCII titles survive intact (readability preserved).
+        assert_eq!(safe_dir_name("The Departure · shot 1"), "The Departure · shot 1");
+    }
+
+    #[test]
+    fn scrub_file_component_drops_only_illegal_chars() {
+        // The shared rule (also used by `safe_session_name`): illegal Windows
+        // chars + control chars out, legal (incl. non-ASCII) chars in.
+        assert_eq!(scrub_file_component("a:b"), "ab");
+        assert_eq!(scrub_file_component("a\x00b"), "ab");
+        assert_eq!(scrub_file_component("a·b"), "a·b");
+        assert_eq!(scrub_file_component("NUL"), "NUL_");
+        assert_eq!(scrub_file_component("x.."), "x");
     }
 
     #[test]

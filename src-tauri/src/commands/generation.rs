@@ -14,17 +14,24 @@ use crate::AppState;
 
 /// Sanitize a human-readable session/pipe name for use as a directory
 /// component (the name-consistent media layout). Rejects path-traversal
-/// characters and empty names; falls back to "unnamed".
+/// characters and Windows-illegal filename characters, and empty names;
+/// falls back to "unnamed".
+///
+/// Shares the exact scrub rule with `media::safe_dir_name` via
+/// `media::scrub_file_component` — one source, so the two name→path
+/// sanitizers cannot drift apart (a session named `My:Session` used to
+/// produce an `ERROR_INVALID_NAME` on `create_dir_all`, the same colon bug
+/// that LLM scene titles like "Scene 1: Departure" hit in `pipe_media_dirs`).
 pub fn safe_session_name(name: &str) -> String {
     let base = std::path::Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let trimmed = base.trim();
-    if trimmed.is_empty() {
+    let scrubbed = crate::generation::scrub_file_component(base);
+    if scrubbed.trim().is_empty() {
         "unnamed".to_string()
     } else {
-        trimmed.to_string()
+        scrubbed
     }
 }
 
