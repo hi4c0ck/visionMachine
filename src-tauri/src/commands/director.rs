@@ -20,7 +20,7 @@ use crate::generation::video_flow::{
 };
 use crate::AppState;
 use serde::{Deserialize, Serialize};
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, State};
 
@@ -562,6 +562,16 @@ pub async fn director_list_flows(
             continue;
         };
         let Ok(doc) = FlowDocument::load(&entry.path()) else {
+            // 2026-11-11: this skip used to be SILENT — a corrupt or
+            // schema-incompatible newest doc made the whole session read as
+            // "0 usable flows" (the UI fell back to the G0 draft = "only the
+            // initial prompt again") with nothing in VisionMachine.log to
+            // explain it. WARN here so the next recurrence is diagnosable.
+            warn!(
+                "[DIRECTOR] list_flows skip: {} failed to load ({} flows still listed)",
+                name,
+                out.len()
+            );
             continue;
         };
         out.push(FlowSummary {
@@ -599,7 +609,13 @@ pub async fn director_load_flow(
     };
     let path = dir.join(FlowDocument::default_filename(flow_version));
     debug!("[DIRECTOR] load_flow reading: {}", path.display());
-    let doc = FlowDocument::load(&path).map_err(|e| e.to_string())?;
+    let doc = FlowDocument::load(&path).map_err(|e| {
+        // 2026-11-11: log the underlying IO/serde failure — a failed load is
+        // the exact point where a session's persisted novel/extract data
+        // "disappears" on restart (the UI then shows only the draft).
+        warn!("[DIRECTOR] load_flow FAILED: {} ({})", path.display(), e);
+        e.to_string()
+    })?;
     debug!("[DIRECTOR] load_flow loaded, serializing");
     let val = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
     info!("[DIRECTOR] load_flow done: {} v{}", session_id, flow_version);

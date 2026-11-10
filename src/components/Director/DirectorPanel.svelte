@@ -878,25 +878,59 @@
 				if (cancelled || sid !== sessionId) return;
 				if (listed.length > 0) {
 					flows = listed;
-					const newest = listed[0];
-					const d = await loadFlow(sid, newest.flowVersion);
-					if (cancelled || sid !== sessionId) return;
-					doc = d;
-					activeRun = newest.flowVersion;
-					// Precedence: an unsaved G0 draft that differs from the
-					// committed doc's seed (post-run edits) wins; otherwise
-					// backfill the controls from the doc.
-					const draft = loadEntryDraft(sid);
-					const docIdea = (d.engine?.seed?.idea ?? d.intent?.entryText ?? '').trim();
-					if (draft && draft.idea.trim() && draft.idea.trim() !== docIdea) {
-						entry = draft;
-					} else {
-						backfillEntryFromEngine(d, newest);
+					// 2026-11-11 "persisted data disappears after restart":
+					// settle on the newest READABLE doc, not blindly the
+					// newest file. A single un-loadable newest file (partial
+					// write, schema bump) used to fail the whole restore and
+					// leave the panel on the G0 draft ("only the initial
+					// prompt again") even though N-1 older docs were fine.
+					// `listFlows` already sorts newest-first, so walk it.
+					let settledDoc: FlowDocument | null = null;
+					let settled: FlowSummary | null = null;
+					for (const cand of listed) {
+						if (cancelled || sid !== sessionId) return;
+						try {
+							settledDoc = await loadFlow(sid, cand.flowVersion);
+							settled = cand;
+							break;
+						} catch (loadErr) {
+							console.warn('director load_flow', cand.flowVersion, loadErr);
+						}
 					}
-					// Remember the settled result (one copy per session,
-					// overwritten in place by the next settlement) so a
-					// revisit / remount re-hydrates without a second list.
-					rememberSettled(sid, { flows: listed, doc: d, activeRun: newest.flowVersion });
+					if (cancelled || sid !== sessionId) return;
+					if (settledDoc && settled) {
+						doc = settledDoc;
+						activeRun = settled.flowVersion;
+						if (settled.flowVersion !== listed[0].flowVersion) {
+							// Degraded restore: the newest file(s) failed to
+							// load — say so instead of silently showing the
+							// older doc as if it were current.
+							flashToast(
+								`Restored flow v${settled.flowVersion} — v${listed[0].flowVersion} failed to load and was skipped`,
+								'info',
+							);
+						}
+						// Precedence: an unsaved G0 draft that differs from the
+						// committed doc's seed (post-run edits) wins; otherwise
+						// backfill the controls from the doc.
+						const draft = loadEntryDraft(sid);
+						const docIdea = (settledDoc.engine?.seed?.idea ?? settledDoc.intent?.entryText ?? '').trim();
+						if (draft && draft.idea.trim() && draft.idea.trim() !== docIdea) {
+							entry = draft;
+						} else {
+							backfillEntryFromEngine(settledDoc, settled);
+						}
+						// Remember the settled result (one copy per session,
+						// overwritten in place by the next settlement) so a
+						// revisit / remount re-hydrates without a second list.
+						rememberSettled(sid, { flows: listed, doc: settledDoc, activeRun: settled.flowVersion });
+					} else {
+						// No doc was readable at all (every listed file
+						// failed to load): restore the in-progress G0 draft,
+						// never crash. Cache the settled EMPTY result too.
+						entry = loadEntryDraft(sid) ?? freshEntry();
+						rememberSettled(sid, { flows: listed, doc: null, activeRun: null });
+					}
 				} else {
 					// No persisted run: restore this session's in-progress G0
 					// draft (the idea may already have been typed, then the

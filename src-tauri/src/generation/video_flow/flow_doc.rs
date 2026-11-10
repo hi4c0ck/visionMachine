@@ -93,6 +93,76 @@ impl FlowDocument {
 mod tests {
     use super::*;
     use crate::generation::video_flow::critic::{Critic, CriticInput, DefaultCritic};
+
+    /// DIAGNOSTIC (local only, `#[ignore]`): run the real `FlowDocument`
+    /// deserializer against the real on-disk `flow.v*.json` files under a
+    /// session flow dir and print the EXACT serde error for any that fail.
+    /// This is the definitive probe for the "generated data disappears after
+    /// restart" bug: if a persisted doc fails to deserialize under the
+    /// current reader, `director_list_flows` skips it (now logged WARN),
+    /// and when EVERY doc in a session fails, the panel falls back to the
+    /// G0 draft ("initial prompt again").
+    ///
+    /// Run locally against your own session dirs:
+    ///   set VM_PROBE_ROOTS=C:\...\Session 3\flow;C:\...\twist sw\flow
+    ///   cargo test probe_real_flow_files -- --ignored --nocapture
+    /// With no env set, the test is a no-op success.
+    #[test]
+    #[ignore]
+    fn probe_real_flow_files() {
+        let roots: Vec<String> = std::env::var("VM_PROBE_ROOTS")
+            .map(|s| s.split(';').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect())
+            .unwrap_or_default();
+        if roots.is_empty() {
+            println!("[probe] VM_PROBE_ROOTS unset — no-op pass");
+            return;
+        }
+        for root in &roots {
+            let dir = std::path::Path::new(root);
+            if !dir.is_dir() {
+                println!("[probe] skip (missing dir): {}", root);
+                continue;
+            }
+            let is_flow = |p: &std::path::Path| -> bool {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map_or(false, |n| {
+                        n.starts_with("flow.v")
+                            && n.ends_with(".json")
+                            && n != "flow.v0.json"
+                    })
+            };
+            let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+                .map(|rd| rd.flatten().map(|e| e.path()).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|p| is_flow(p))
+                .collect();
+            files.sort();
+            println!("[probe] {} → {} flow files", root, files.len());
+            for p in &files {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                match FlowDocument::load(p) {
+                    Ok(doc) => {
+                        println!(
+                            "[probe]   OK   {} (engine={})",
+                            name,
+                            doc.engine.is_some()
+                        );
+                    }
+                    Err(e) => {
+                        let raw = std::fs::read(p).unwrap_or_default();
+                        let err: String = match serde_json::from_slice::<FlowDocument>(&raw) {
+                            Ok(_) => "load io error, not serde".to_string(),
+                            Err(se) => se.to_string(),
+                        };
+                        let _ = e; // the io error is superseded by the exact serde error
+                        println!("[probe]   FAIL {} → {}", name, err);
+                    }
+                }
+            }
+        }
+    }
     use crate::generation::video_flow::config::FlowConfig;
     use crate::generation::video_flow::intent::IntentSnapshot;
     use crate::generation::video_flow::learn::{ModelResolver, StubModelResolver};
