@@ -669,6 +669,19 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// and per-call `sid !== sessionId` re-checks with ONE serialization point
 	// at the top of the UI tree.
 	let sessionEpoch = 0;
+	// generationArmEpoch — a monotonic counter bumped every time a NEW user-
+	// initiated run arms its task watcher (startWatchingTask, both the
+	// per-pipe and the session-group confirm paths). An in-flight
+	// session-restore captures it at entry (via `isStale`, so EVERY
+	// checkpoint inherits the check); a bump mid-restore means a new run
+	// started for this session AFTER the restore began, and the restore's
+	// async tail must NOT clobber that run's live UI (the no-group teardown's
+	// stopWatching / activeTask=null / showProgressModal=false = the "press
+	// Generate on a freshly-switched session → instantly minimized, no
+	// progress bar" symptom). The restore's own re-arm of an EXISTING live
+	// group (subscribeGroupWatcher) does NOT bump — only a new task start
+	// does, so a restore can never invalidate itself.
+	let generationArmEpoch = 0;
 	let sessionSwitching = $state(false);
 	// Live poll timer: while a group is running the per-pipe task views +
 	// the group progress only move on terminal events, so the modal's bars
@@ -1333,7 +1346,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// `selectedSessionId` half covers the clear path (project select →
 		// no session). Check after each await — if stale, abort silently.
 		const myEpoch = sessionEpoch;
-		const isStale = () => myEpoch !== sessionEpoch || selectedSessionId !== sessionId;
+		const myArmEpoch = generationArmEpoch;
+		// `generationArmEpoch` is part of staleness: if a NEW run armed its
+		// task watcher while this restore was in flight (user pressed
+		// Generate on the settled session — the "restore still pending, run
+		// already started" race), every checkpoint below bails instead of
+		// the tail clobbering that run's live progress UI.
+		const isStale = () =>
+			myEpoch !== sessionEpoch ||
+			selectedSessionId !== sessionId ||
+			myArmEpoch !== generationArmEpoch;
 		const key = `visionmachine:generation-group:${sessionId}`;
 		const groupId = localStorage.getItem(key);
 		// The localStorage key is only set for a run that STARTED in this
@@ -2455,6 +2477,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	 *  dropped (webview reloaded, tab backgrounded). Both drive the same
 	 *  `activeTask` view; terminal side-effects apply once via `reconcileTerminal`. */
 	function startWatchingTask(taskId: string, initialView?: GenerationTaskView | null) {
+		// NEW run armed: any in-flight session-restore for this session must
+		// now bail at its next `isStale()` checkpoint instead of clobbering
+		// this run's live progress UI (the "press Generate → instantly
+		// minimized, no progress bar" race). The restore's own re-arm of an
+		// EXISTING live group goes through subscribeGroupWatcher (no bump),
+		// so a restore can never invalidate itself.
+		generationArmEpoch += 1;
 		stopWatching();
 		lastTaskView = initialView ?? null;
 		activeTaskId = taskId;

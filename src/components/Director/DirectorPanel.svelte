@@ -42,16 +42,43 @@
 		type FlowDocument,
 		type FlowSummary,
 	} from '$lib/directorStore/types';
-	// Module-level latch: survives component remounts (DirectorPanel unmounts
-	// when selectedSession is null during loading). Without this, the loader
-	// effect re-runs on every remount, calling listFlows in a loop.
-	const flowsLoadedForModule = new Set<string>();
-	// Bounded: the latch outlives {#key} remounts (module-level), so without a
-	// cap it ratchets up across session swings — the same unbounded module-
-	// asset leak as the composer store's sessions Map. Evict past the bound by
-	// insertion order (oldest settled ids first); a re-visited session just
-	// re-adds its id and re-lists, which is correct.
+	// Settled-flow cache (2026-11-10 "generated data doesn't sustain session
+	// switch" fix): session id → the last settled listFlows + loadFlow
+	// result. Module-level so it survives component remounts (DirectorPanel
+	// unmounts when selectedSession is null during loading) — without the
+	// module scope, the seed effect re-issued listFlows on every remount.
+	//
+	// The OLD design was a bare "settled" Set with no data: on a revisit
+	// (A→B→A) the guard `module.has(id)` short-circuited while the
+	// component-local `doc` had been wiped by the reset effect, so the
+	// persisted flow was NEVER re-listed / re-loaded — the panel re-seeded
+	// from the localStorage draft only ("I see only the initial prompt
+	// again"). The cache carries the settled result, so a revisit hydrates
+	// SYNCHRONOUSLY (no second listFlows, no re-render loop), and the
+	// generated data outlives the switch.
+	//
+	// One settled copy per session (single producer: the seed loader writes
+	// it once per session; a new run overwrites the entry in place — it
+	// never appends a second copy). Bounded: evict oldest past the cap
+	// (insertion order) so a session swing can't grow it without limit —
+	// the same bound the old Set had.
+	const settledFlowCache = new Map<
+		string,
+		{ flows: FlowSummary[]; doc: FlowDocument | null; activeRun: number | null }
+	>();
 	const LOADED_LATCH_CAP = 64;
+	function rememberSettled(
+		sid: string,
+		record: { flows: FlowSummary[]; doc: FlowDocument | null; activeRun: number | null },
+	) {
+		settledFlowCache.set(sid, record);
+		if (settledFlowCache.size > LOADED_LATCH_CAP) {
+			for (const key of settledFlowCache.keys()) {
+				if (settledFlowCache.size <= LOADED_LATCH_CAP) break;
+				settledFlowCache.delete(key);
+			}
+		}
+	}
 	import {
 		concernSummary,
 		specsByScene,
@@ -802,35 +829,49 @@
 	// for a pre-engine doc, pre-fill the idea from the run's entry text so
 	// one click on "Run S0→S5" re-builds the flow.
 	$effect(() => {
-		// `doc` is NOT a sufficient latch: a session with 0 persisted flows
-		// never sets it, so a plain `if (doc) return;` left this effect
-		// live after the first pass and any re-trigger re-issued
-		// listFlows in a loop (the "[DIRECTOR] list_flows start/done × N"
-		// log storm + pinned UI on 0-flow sessions). The once-per-session
-		// `flowsLoadedFor` latch (read in this sync guard → tracked) makes
-		// the effect terminal after ONE settled list, whatever the result.
-		// Terminal guard: settle exactly once per session (doc OR the
-		// per-session latches). Re-runs with the latch set are a no-op —
-		// no IPC, no listFlows — so a fast swing never re-storms the 0-flow
-		// loader or hammers the backend.
-		if (doc || flowsLoadedFor === sessionId || flowsLoadedForModule.has(sessionId)) {
+		// `doc` is NOT a sufficient latch on its own: a session with 0
+		// persisted flows never sets it, so a plain `if (doc) return;`
+		// guard left this effect live after the first pass and any
+		// re-trigger re-issued listFlows in a loop (the "[DIRECTOR]
+		// list_flows start/done × N" log storm). The once-per-session
+		// `flowsLoadedFor` latch makes the effect terminal after ONE
+		// settled list, whatever the result.
+		if (doc || flowsLoadedFor === sessionId) {
 			return;
 		}
-		// Per-session key: the seed loader should fire ONCE per session; 5
-		// distinct sessions each seeding once is a swing, not a loop.
+		// SETTLED-FLOW CACHE (2026-11-10 "generated data doesn't sustain
+		// session switch" fix): a settled result from an earlier visit
+		// survives the component-local wipe (reset effect / unmount). A
+		// revisit (A→B→A) or remount hydrates it SYNCHRONOUSLY — no IPC,
+		// no re-seed from the localStorage draft, no listFlows storm.
+		const cached = settledFlowCache.get(sessionId);
+		if (cached) {
+			flowsLoadedFor = sessionId;
+			flows = cached.flows;
+			doc = cached.doc;
+			activeRun = cached.activeRun;
+			if (cached.doc) {
+				// Precedence: an unsaved G0 draft that differs from the
+				// committed doc's seed (post-run edits) wins; otherwise
+				// backfill the controls from the doc.
+				const draft = loadEntryDraft(sessionId);
+				const docIdea = (cached.doc.engine?.seed?.idea ?? cached.doc.intent?.entryText ?? '').trim();
+				if (draft && draft.idea.trim() && draft.idea.trim() !== docIdea) {
+					entry = draft;
+				} else {
+					backfillEntryFromEngine(cached.doc, cached.flows[0] ?? undefined);
+				}
+			} else {
+				entry = loadEntryDraft(sessionId) ?? freshEntry();
+			}
+			return;
+		}
+		// First visit for this session: settle it exactly once. Per-session
+		// key: 5 distinct sessions each seeding once is a swing, not a loop.
 		tripEffect(`director:seed:${sessionId}`);
 		let cancelled = false;
 		const sid = sessionId;
 		flowsLoadedFor = sid; // latch BEFORE await: prevents re-entry if effect re-runs
-		flowsLoadedForModule.add(sid); // module latch: survives remounts
-		// Enforce the cap: evict oldest settled ids (insertion order) past the
-		// bound so the module-level Set can't grow without limit across swings.
-		if (flowsLoadedForModule.size > LOADED_LATCH_CAP) {
-			for (const key of flowsLoadedForModule) {
-				if (flowsLoadedForModule.size <= LOADED_LATCH_CAP) break;
-				flowsLoadedForModule.delete(key);
-			}
-		}
 		void (async () => {
 			try {
 				const listed = await listFlows(sid);
@@ -852,12 +893,19 @@
 					} else {
 						backfillEntryFromEngine(d, newest);
 					}
+					// Remember the settled result (one copy per session,
+					// overwritten in place by the next settlement) so a
+					// revisit / remount re-hydrates without a second list.
+					rememberSettled(sid, { flows: listed, doc: d, activeRun: newest.flowVersion });
 				} else {
 					// No persisted run: restore this session's in-progress G0
 					// draft (the idea may already have been typed, then the
 					// user left the tab / re-ran nothing).
 					flows = [];
 					entry = loadEntryDraft(sid) ?? freshEntry();
+					// Cache the settled EMPTY result too: a later revisit of
+					// a still-0-flow session must not re-storm listFlows.
+					rememberSettled(sid, { flows: [], doc: null, activeRun: null });
 				}
 			} catch (e) {
 				if (cancelled || sid !== sessionId) return;
@@ -911,10 +959,16 @@
 			const listed = await listFlows(sid);
 			if (sid !== sessionId) return;
 			flows = listed;
+			// Write-through: this re-list settled the session's run list, so
+			// refresh the settled cache (a revisit re-hydrates from this
+			// instead of re-listing). One copy per session, overwritten in
+			// place — `doc`/`activeRun` are the current component state.
+			rememberSettled(sid, { flows, doc, activeRun });
 		} catch (e) {
 			if (sid !== sessionId) return;
 			console.warn('director list_flows', e);
 			flows = [];
+			rememberSettled(sid, { flows, doc, activeRun });
 		}
 	}
 
