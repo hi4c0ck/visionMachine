@@ -4,9 +4,11 @@
 	//   • generation icon overlapped bottom-right; when the last typed line
 	//     comes within its 16px no-text zone it scales down (sin-tweened),
 	//     never covering a glyph.
-	//   • lock (header, right of label): after a generation completes the
-	//     block auto-locks + collapses to one line; editing requires a manual
-	//     unlock (anti-accidental-regen guarantee).
+	//   • lock (header, right of label): a block MAY be handed over locked
+	//     (e.g. a completed layer). While in-flight the block is ONLY
+	//     `generating` (not locked): it stays OPEN with the progress ring so
+	//     the watch stays visible — the producing block never auto-collapses
+	//     the moment a run starts. Lock/collapse is a post-completion state.
 	//   • word-floor footer (only when a `floor` is supplied — honest, no
 	//     invented data).
 	// All motion = --transition-sin (additive token, design §6).
@@ -47,9 +49,19 @@
 	const canEdit = $derived(!locked || manuallyUnlocked);
 
 	// Auto-collapse on the false→true lock transition (unless the user has
-	// already re-unlocked this session).
+	// already re-unlocked this session). Auto re-expand on the true→false
+	// unlock transition (whether from the inner padlock or the outer
+	// lock-toggle in the hot-path header), so a manual unlock is always
+	// followed by the text re-appearing — the user never has to click the
+	// collapsed one-line row to get back to the full editor.
 	$effect(() => {
-		if (locked && !prevLocked && !manuallyUnlocked) expanded = false;
+		if (locked && !prevLocked && !manuallyUnlocked) {
+			expanded = false;
+		} else if (!locked && prevLocked) {
+			// Unlock transition → re-expand (covers both the inner padlock
+			// and the outer DirectorHotPath lock-toggle).
+			expanded = true;
+		}
 		prevLocked = locked;
 	});
 	// Manual unlock re-expands so the user can edit.

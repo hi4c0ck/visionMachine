@@ -1,9 +1,16 @@
 <script lang="ts">
-	// Phase-1 hot path of the Director tab: ① DIRECTION · ② NOVEL · ③ STEP
-	// CHAIN + the destructive apply controls. Presentational child of
+	// Phase-1 hot path of the Director tab. Presentational child of
 	// DirectorPanel — all shared state (entry, doc, engine, stepChain,
 	// runError, runDurationMs, feedback) is parent-owned; this component
 	// only renders and writes back via $bindable (entry) / callbacks.
+	//
+	// Layout (2026-11-11 "front-load advanced options + fix the collapse"):
+	//   ① DIRECTION      — idea block (always open in-flight) + Run CTA + lock
+	//   ② PARAMETERS     — G0 seed knobs, FRONT-LOADED (steer the next run)
+	//   ③ STRUCTURE      — S0.5 structural tree
+	//   ④ NOVEL / ⑤ STEP CHAIN — the run's result + watch-it-think log
+	// The G0 params used to hide behind a completed run; now they sit in the
+	// hot path so the pre-generation knobs are reachable up front.
 	import {
 		expansionLabel,
 		type EngineEntryInput,
@@ -15,6 +22,7 @@
 	import { onRunProgress, type RunProgressEvent } from '$lib/directorStore/runProgress';
 	import type { FlowDocument } from '$lib/directorStore/types';
 	import TextBlock from '../TextBlock.svelte';
+	import DirectorG0Params from './DirectorG0Params.svelte';
 	import RunLog from './RunLog.svelte';
 	import TimelinePreview from './TimelinePreview.svelte';
 	import StructurePanel from './StructurePanel.svelte';
@@ -108,30 +116,50 @@
 	     is demoted into the Advanced disclosure at the bottom of this tab
 	     so the hot path never shows it. -->
 
-	<!-- ① DIRECTION — the single primary control: type the idea, run. -->
-	<section class="stage hot">
-		<h3 class="block-heading">① DIRECTION <span class="muted">· S0 entry</span></h3>
+	<!-- ① DIRECTION — the idea (primary control). The block stays OPEN while a
+	     run is in flight (generating={running}), so its progress ring + the
+	     live "watch it think" log below are always visible; it never
+	     auto-collapses on a run start or completion — that was the
+	     "instantly minimized, can't see progress" bug. The idea is the
+	     *source* of the flow, so it is never auto-locked: after a run you can
+	     tweak it and re-run freely. The Run button is the always-available
+	     primary trigger; ◉ inside the block is a secondary trigger. -->
+	<section class="stage hot dir-direction">
+		<div class="dir-direction-head">
+			<h3 class="block-heading">① DIRECTION <span class="muted">· idea</span></h3>
+			<button
+				class="btn primary dir-run"
+				disabled={running || !entry.idea.trim()}
+				title={!entry.idea.trim() ? 'Write the idea first' : 'Build the S0→S5 flow'}
+				onclick={onRun}>
+				{running ? 'Running…' : 'Run S0→S5'}
+			</button>
+		</div>
 		<TextBlock
 			label="Idea"
 			bind:value={entry.idea}
 			generating={running}
-			locked={running}
+			locked={false}
 			onRun={onRun}
 		/>
 	</section>
 
-	<!-- ②·S STRUCTURE — the S0.5 structural tree card (the "brief, not a
-	     cage"). Shows up before ② NOVEL on every run (the template path
-	     attaches the tree on build_run; old docs show the empty notice).
-	     The manual-override pins write back into entry.overrides so the
-	     next run re-derives the tree WITH the user's pins. -->
+	<!-- ② PARAMETERS — the G0 seed knobs, FRONT-LOADED and always visible.
+	     They steer the NEXT run (mood / format / scale / time / weather), so
+	     they live in the hot path instead of hidden behind a completed run.
+	     Read-only while a run is in flight. -->
+	<DirectorG0Params bind:entry disabled={running} />
+
+	<!-- ③ STRUCTURE — the S0.5 structural tree ("brief, not a cage").
+	     The manual-override pins write back into entry.overrides so the next
+	     run re-derives the tree WITH the user's pins. -->
 	<StructurePanel tree={engine?.tree ?? null} bind:overrides={entry.overrides} disabled={running} />
 
 	{#if engine}
-		<!-- ② NOVEL — read-only collapsed rows (the S1 visual novel state). -->
+		<!-- ④ NOVEL — read-only collapsed rows (the S1 visual novel state). -->
 		<section class="stage hot">
 			<h3 class="block-heading">
-				② NOVEL
+				④ NOVEL
 				<span class="muted chip {engine.expansion === 'llm' ? 'chip-llm' : 'chip-fallback'}"
 					title={engine.expansion_note ?? ''}>
 					{expansionLabel(engine)}
@@ -155,9 +183,11 @@
 			</ul>
 		</section>
 
-		<!-- ③ STEP CHAIN — the 4 rows + the single Run button. -->
+		<!-- ⑤ STEP CHAIN — the 4 rows + annotation / seed actions.
+		     The primary Run button lives at ① DIRECTION now (always visible),
+		     so this row keeps only the secondary post-run actions. -->
 		<section class="stage hot">
-			<h3 class="block-heading">③ STEP CHAIN <span class="muted">· {doc?.flowVersion ?? '—'}</span></h3>
+			<h3 class="block-heading">⑤ STEP CHAIN <span class="muted">· {doc?.flowVersion ?? '—'}</span></h3>
 			<!-- M1 "watch it think": the run-progress log + shot timeline strip
 			     are ADDITIVE to the step chain below (not a replacement).
 			     RunLog accumulates backend director_run_progress events;
@@ -182,16 +212,11 @@
 				<p class="flow-error" role="alert">{runError}</p>
 			{/if}
 			<div class="step-actions">
-				<button
-					class="btn primary"
-					disabled={running || !entry.idea.trim()}
-					title={!entry.idea.trim() ? 'Write the idea first' : undefined}
-					onclick={onRun}>
-					{running ? 'Running…' : 'Run S0→S5'}
-				</button>
 				{#if doc}
 					<button class="btn" onclick={() => void onAnnotate('accept')}>Accept</button>
 					<button class="btn" onclick={() => void onAnnotate('reject')}>Reject</button>
+				{:else}
+					<span class="hint step-actions-hint">No run yet — type an idea and press <b>Run S0→S5</b> above.</span>
 				{/if}
 				<!-- M2 seed card: export / import the G0 entry + novel preview. -->
 				<div class="seed-actions">
@@ -363,20 +388,15 @@
 	   demoted Advanced hairline rows below it. */
 	.stage.hot {
 		border-top: none;
-		padding-top: 0;
-		margin: 0;
 		gap: 10px;
 		background: var(--bg-secondary);
 		border: 1px solid var(--border-color);
-		border-radius: 10px;
+		border-radius: 12px;
 		padding: 14px 16px;
 		box-shadow: var(--shadow-sm, none);
 	}
-	.stage.hot + .stage.hot {
-		/* keep the three hot blocks flowing as one card stack with a quiet
-		   gap between them, not a hard hairline each */
-		margin-top: 12px;
-	}
+	/* Consistent vertical rhythm between the stacked section cards: the parent
+	   `.director-root` supplies the inter-card gap, so no per-card margin. */
 	.stage.hot .block-heading {
 		margin: 0;
 	}
@@ -446,6 +466,31 @@
 		display: flex;
 		gap: 8px;
 		margin-top: 4px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.step-actions-hint {
+		font-size: 11px;
+		color: var(--text-muted);
+	}
+	.step-actions-hint b {
+		color: var(--text-secondary);
+		font-weight: 600;
+	}
+
+	/* ── ① DIRECTION head: the idea label + the always-available Run CTA.
+	   The block below it never auto-collapses while a run is in flight —
+	   the Run button is the primary trigger; the secondary trigger (◉)
+	   lives inside the TextBlock. */
+	.dir-direction-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.dir-run {
+		white-space: nowrap;
 	}
 
 	/* ── Run + destructive apply ── */

@@ -1089,7 +1089,6 @@
 			<DirectorAdvanced
 				{engine}
 				{gatesShown}
-				bind:entry
 				{openShot}
 				onToggleShot={(id: string | null) => (openShot = id)}
 			/>

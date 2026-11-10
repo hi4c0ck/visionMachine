@@ -1,29 +1,30 @@
 <script lang="ts">
-	// Advanced disclosure of the Director hot path: gate strip + G0 grid +
-	// S1 Visual Novel + S2 scene rows + S3 shot sheets + S4 prompt blocks +
+	// Advanced disclosure of the Director hot path: gate strip + S1 Visual
+	// Novel + S2 scene rows + S3 shot sheets + S4 prompt blocks +
 	// timeline strip + S5 verify. Presentational child of DirectorPanel —
-	// state (entry, openShot, confirmed gates, engine) is parent-owned;
-	// entry writes back through this $bindable prop, shot-sheet toggles go
-	// through onToggleShot (openShot stays canonical in the parent).
+	// state (openShot, confirmed gates, engine) is parent-owned; shot-sheet
+	// toggles go through onToggleShot (openShot stays canonical in the parent).
+	//
+	// 2026-11-11 "front-load advanced options": the G0 seed params (mood,
+	// ratio, genre, scale, time of day, weather) used to live in this
+	// disclosure (engine-gated), so they were unreachable BEFORE a run
+	// completed. They now sit in the always-visible hot path as the
+	// ② PARAMETERS card (DirectorG0Params.svelte). This disclosure is
+	// therefore now a dedicated run-inspection tool: the gate spine +
+	// the S1→S5 outputs of the last run.
 	import {
-		GENRE_PRESETS,
-		RATIOS,
-		VOCAB,
 		concernSummary,
 		foldSlices,
 		specsByScene,
 		timelineRows,
 		FRAME_RATE,
-		type EngineEntryInput,
 		type EngineRun,
 		type GateState,
 	} from '$lib/directorStore/engine';
-	import MoodSlider from './MoodSlider.svelte';
 
 	let {
 		engine,
 		gatesShown,
-		entry = $bindable(),
 		openShot,
 		onToggleShot,
 	} = $props<{
@@ -31,8 +32,6 @@
 		engine: EngineRun | null;
 		/** Parent-derived gate list (engine gates + in-tab confirmations). */
 		gatesShown: GateState[];
-		/** G0 entry (parent-owned; the grid's 8 fields write back here). */
-		entry: EngineEntryInput;
 		/** Currently-open shot-sheet id (parent-owned, S3). */
 		openShot: string | null;
 		/** Toggle a shot sheet open/closed (parent updates openShot). */
@@ -76,62 +75,10 @@
 			{/each}
 		</div>
 
-		<!-- G0 grid — all 8 fields, demoted from the hot path. -->
-		<section class="stage">
-			<h3 class="block-heading">G0 · Entry parameters <span class="muted">· S0 seed</span></h3>
-			<div class="g0-grid">
-				<!-- M4 mood slider: one 0..100 control that reshapes clips,
-				     transitions, motion, effects + contrast in a single move.
-				     Binds entry.mood two-way (entry is $bindable in this child). -->
-				<MoodSlider bind:mood={entry.mood} />
-				<p class="hint mood-hint">mood reshapes clips, transitions, motion, effects + contrast in one move.</p>
-				<label class="field grow">
-					<span class="field-label">title</span>
-					<input bind:value={entry.title} placeholder="optional film title (defaults from the idea)" />
-				</label>
-				<label class="field">
-					<span class="field-label">genre</span>
-					<select bind:value={entry.genre.name}>
-						{#each GENRE_PRESETS as g}<option value={g.name}>{g.name}</option>{/each}
-					</select>
-				</label>
-				<label class="field grow">
-					<span class="field-label">style</span>
-					<input bind:value={entry.genre.style} placeholder="visual style string" />
-				</label>
-				<label class="field">
-					<span class="field-label">ratio</span>
-					<select bind:value={entry.ratio}>
-						{#each RATIOS as r}<option value={r}>{r}</option>{/each}
-					</select>
-				</label>
-				<label class="field">
-					<span class="field-label">scenes</span>
-					<input type="number" min="1" max="24" bind:value={entry.scale.scenes} />
-				</label>
-				<label class="field">
-					<span class="field-label">shots/scene</span>
-					<input type="number" min="1" max="5" bind:value={entry.scale.shots_per_scene} />
-				</label>
-				<label class="field">
-					<span class="field-label">clip_s</span>
-					<span class="clip-range">
-						<input type="number" min="4" max="12" bind:value={entry.scale.clip_s[0]} />–
-						<input type="number" min="4" max="12" bind:value={entry.scale.clip_s[1]} />
-					</span>
-				</label>
-				<label class="field">
-					<span class="field-label">time of day</span>
-					<select bind:value={entry.time_of_day}>
-						{#each VOCAB.time_of_day as t}<option value={t}>{t}</option>{/each}
-					</select>
-				</label>
-				<label class="field grow">
-					<span class="field-label">weather</span>
-					<input bind:value={entry.weather} placeholder="clear, brief clouds, …" />
-				</label>
-			</div>
-		</section>
+		<!-- G0 grid → moved to the always-visible ② PARAMETERS card
+		     (DirectorG0Params.svelte, front-loaded into the hot path).
+		     This disclosure is now a dedicated run-inspection tool:
+		     the gate spine + S1→S5 outputs. -->
 
 		<!-- S1 · Visual Novel — full scene/shot tree. -->
 		<section class="stage">
@@ -428,69 +375,9 @@
 		color: var(--text-muted);
 	}
 
-	/* ── G0 entry grid ── */
-	.g0-grid {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		gap: 8px 10px;
-	}
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		min-width: 0;
-	}
-	.field.grow {
-		grid-column: span 2;
-	}
-	.field-label {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: var(--text-muted);
-	}
-	.field select,
-	.field input {
-		font: inherit;
-		font-size: 12px;
-		color: var(--text-primary);
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-color);
-		border-radius: 5px;
-		padding: 4px 6px;
-		width: 100%;
-		box-sizing: border-box;
-		transition: border-color var(--transition-fast, 0.15s ease),
-			box-shadow var(--transition-fast, 0.15s ease);
-	}
-	.field select:hover,
-	.field input:hover {
-		border-color: var(--border-light, var(--border-color));
-	}
-	.field select:focus,
-	.field input:focus {
-		outline: none;
-		border-color: var(--accent-color);
-		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.2));
-	}
-	.field select {
-		appearance: none;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23808080' stroke-width='1.2'/%3E%3C/svg%3E");
-		background-repeat: no-repeat;
-		background-position: right 7px center;
-		padding-right: 24px;
-		cursor: pointer;
-	}
-	.field input[type='number'] {
-		width: 62px;
-	}
-	.clip-range {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-	}
-	.clip-range span {
-		color: var(--text-muted);
-	}
+	/* ── G0 entry grid → removed 2026-11-11 (the G0 seed params are now
+	   front-loaded into the hot path as the ② PARAMETERS card, rendered
+	   by DirectorG0Params.svelte, which owns those field styles). */
 
 	/* ── S1 novel ── */
 	.novel-film {

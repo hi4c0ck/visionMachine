@@ -71,14 +71,25 @@
 
 {#if tree}
 	<section class="struct" aria-label="Film structure">
-		<header class="struct-head" onclick={() => (open = !open)}>
+		<header
+			class="struct-head"
+			role="button"
+			tabindex="0"
+			aria-expanded={open}
+			onclick={() => (open = !open)}
+			onkeydown={(e) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					open = !open;
+				}
+			}}>
 			<span class="struct-title">
-				②·S FILM STRUCTURE
+				③ FILM STRUCTURE
 				<code class="struct-summary" title="driver · target runtime · branch roles">
 					{treeSummary(tree)}
 				</code>
 			</span>
-			<span class="struct-caret" aria-hidden>{open ? '–' : '+'}</span>
+			<span class="struct-caret" aria-hidden="true">{open ? '–' : '+'}</span>
 		</header>
 
 		{#if open}
@@ -231,7 +242,7 @@
 	   Motion is instant here (a structure card, not an animation surface). */
 	.struct {
 		border: 1px solid var(--border-color);
-		border-radius: 10px;
+		border-radius: 12px;
 		background: var(--bg-secondary);
 		box-shadow: var(--shadow-sm, none);
 		overflow: hidden;
@@ -254,6 +265,10 @@
 	}
 	.struct-head:hover {
 		background: var(--bg-hover, transparent);
+	}
+	.struct-head:focus-visible {
+		outline: none;
+		box-shadow: inset 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
 	}
 	.struct-title {
 		font-size: 12px;
