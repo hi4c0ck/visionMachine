@@ -692,7 +692,10 @@ impl EngineRun {
                         // dropped — that context now lives once in the pipe's
                         // global_style (the continuity line + sustained base),
                         // so a long LLM beat can't over-detail and squash.
-                        let beat = cap_words(&beats_here.unwrap_or_default(), 10);
+                        // Phrase-aware cap: cut at 10 words, then back off to
+                        // the last natural break so a long LLM beat never
+                        // leaves a dangling half-phrase ("… — mouth (if").
+                        let beat = cap_phrase(&beats_here.unwrap_or_default(), 10);
                         let p = if i == 0 {
                             if beat.is_empty() {
                                 prose.clone()
@@ -1070,6 +1073,36 @@ fn idea_units(idea: &str, n: usize) -> Vec<String> {
 /// bleeds into the next shot's territory.
 fn cap_words(text: &str, max: usize) -> String {
     text.split_whitespace().take(max).collect::<Vec<_>>().join(" ")
+}
+
+/// Cap a fragment at `max` words AND trim to the last natural break, so a
+/// long LLM beat never leaves a dangling half-phrase at the cut point
+/// (2026-11-11 "half-word splits on scene arcs": `close-up: … furrow in
+/// confusion — mouth (if` — the raw 10-word cap landing mid-detail-clause).
+/// The beat ends on the last em-dash / semicolon / comma / "·" inside the
+/// window; when there is no such break (short deterministic beats) the
+/// result is byte-identical to `cap_words`, so golden prompts stay stable.
+fn cap_phrase(text: &str, max: usize) -> String {
+    let capped = cap_words(text, max);
+    // Nothing was cut (the fragment fit the word budget) → byte-identical
+    // pass, so the deterministic golden prompts stay byte-stable.
+    if text.split_whitespace().count() <= max {
+        return capped;
+    }
+    // A cut happened: back off to the last natural break inside the window
+    // (em-dash detail clause / semicolon / comma / "·" joiner) so the beat
+    // ends on a clean phrase, never a dangling half-token. If the window
+    // holds no such break, keep the raw word cap (a whole-phrase tail is
+    // still better than nothing).
+    for sep in [" — ", "; ", ", ", " · "] {
+        if let Some(p) = capped.rfind(sep) {
+            let t = capped[..p].trim_end().to_string();
+            if !t.is_empty() {
+                return t;
+            }
+        }
+    }
+    capped
 }
 
 /// The profile's creative expansion axes (harness config/profiles.yaml,
@@ -2333,6 +2366,38 @@ mod seed_tests {
             mood: 50,
             overrides: Default::default(),
         }
+    }
+
+    /// 2026-11-11 "half-word splits on scene arcs": the raw 10-word beat
+    /// cap (`cap_words`) could land mid-detail-clause, leaving a dangling
+    /// fragment like `close-up: … furrow in confusion — mouth (if`. The
+    /// phrase-aware `cap_phrase` cuts at the word budget but backs off to
+    /// the last natural break so the beat ends on a clean phrase; a short
+    /// deterministic beat that fits the budget is returned byte-identical
+    /// (the golden-prompt stability pin).
+    #[test]
+    fn cap_phrase_ends_on_a_natural_break_not_a_half_word() {
+        // The user's exact symptom shape: a `<size>: <subject> <motion> — <detail>`
+        // beat longer than the 10-word budget. The raw cap would have ended
+        // on a dangling token; the phrase cap stops at the last " — " break.
+        let beat = "close-up: Google Bubble's eyebrows furrow in confusion — mouth (if present) tightens";
+        let capped = cap_phrase(beat, 10);
+        // Ends on a complete phrase (the subject/motion clause), not a token.
+        assert!(!capped.ends_with('(') && !capped.ends_with('—'), "dangling token: {capped}");
+        assert!(capped.starts_with("close-up: Google Bubble's eyebrows furrow in confusion"), "kept the clean clause: {capped}");
+        // The dangling detail clause is trimmed away.
+        assert!(!capped.contains("mouth (if"), "half-word detail must be trimmed: {capped}");
+
+        // A short deterministic beat that fits the budget is byte-identical
+        // (golden stability — no new punctuation, no rewording).
+        let short = "wide: the hall opens";
+        assert_eq!(cap_phrase(short, 10), short);
+
+        // A beat whose window holds no natural break keeps the raw word cap
+        // (a whole-phrase tail beats nothing).
+        let none = "a single long unbroken run of words with no separators whatsoever in the beat text";
+        let raw = cap_words(none, 6);
+        assert_eq!(cap_phrase(none, 6), raw);
     }
 
     /// The two S4 shots of one scene must no longer be identical: the
