@@ -18,6 +18,7 @@ import { type DirectorTab } from '$lib/directorStore';
 	import { getMaxFramesForResolution, RESOLUTION_DIMS } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
+import { recoverVideoDownloads } from '$lib/videoDownloadRecovery';
 	import { summarizePipe } from '$lib/promptEngine';
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
@@ -27,7 +28,7 @@ import { type DirectorTab } from '$lib/directorStore';
 import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
-	import { toMediaUrl } from '$lib/mediaUrl';
+	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
 	import { resetStallMeter } from '$lib/stallWatch';
 	import { pipeEvent, tripEffect, logComponentEndpoint } from '$lib/pipelineDiag';
 	import { setDashExtra } from '$lib/dashStore';
@@ -297,6 +298,20 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// platform opener. Browser/dev: no backend → affordance stays hidden.
 	async function handlePlayOutside() {
 		if (!isTauri() || !previewMediaPath) return;
+		// A degraded generation (CDN egress gate blocked the local download)
+		// leaves a REMOTE url in `lastGeneration.videoPath` — the backend
+		// media-root guard rejects it, so a remote value must open in the
+		// default browser instead of the OS player.
+		if (!isLocalPath(previewMediaPath)) {
+			try {
+				const w = window.open(previewMediaPath, '_blank', 'noopener,noreferrer');
+				if (w) flashToast('Opened in browser (local download pending)', 'info');
+				else flashToast('Browser blocked the popup — copy the URL from the clip panel', 'error');
+			} catch {
+				flashToast('Could not open the remote video', 'error');
+			}
+			return;
+		}
 		try {
 			await invoke('open_media_in_player', { input: { path: previewMediaPath } });
 			flashToast('Opened in system player', 'info');
@@ -2563,6 +2578,45 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		}
 	}
 
+	/** Degraded-download retry (2026-11-11): the progress modal's "Retry
+	 *  download now" affordance. The backend pass re-fetches every
+	 *  `download_failed` marker in the session (bounded), repairs the task
+	 *  row / piece log / composer last_generation, and returns which
+	 *  markers healed vs. are still gated. On a heal, re-load the session
+	 *  so the preview + `last_generation` flip to the recovered local
+	 *  clip; return a note the modal can show. */
+	async function retryVideoDownloads(): Promise<string | null> {
+		const sid = activeTask?.sessionId ?? selectedSessionId;
+		if (!isTauri() || !sid) return null;
+		const result = await recoverVideoDownloads(sid);
+		if (!result) return null; // browser dev / Tauri invoke failed
+		if (result.healed.length > 0) {
+			const reloaded = await loadSession(sid);
+			const task = activeTask; // local capture: the .find() closure would
+			// otherwise drop the `activeTask` null-narrowing (Svelte 5 `let`).
+			if (reloaded.session && task) {
+				// Re-point the live task view's terminal output at the local
+				// file so the degraded band disappears on the next render.
+				const local = reloaded.session.pipes.find(
+					(p: any) => p.id === task.pipeId,
+				)?.lastGeneration?.videoPath;
+				if (local && /^https?:/i.test(task.outputPath ?? '')) {
+					activeTask = { ...task, outputPath: local };
+				}
+			}
+			flashToast(
+				`Recovered ${result.healed.length} video download(s)`,
+				'success',
+			);
+			return result.stillGated.length
+				? `${result.stillGated.length} clip(s) still gated — retry again when the CDN frees up`
+				: null;
+		}
+		return result.stillGated.length
+			? `Still gated (${result.stillGated.length} clip(s)) — the CDN block is active right now; it re-heals automatically on the next session open`
+			: 'No pending video downloads in this session';
+	}
+
 	/** Window focus may have let events be coalesced/throttled; re-sync. */
 	function onWindowFocus() {
 		if (activeTaskId && activeTask && !isTerminalTaskStatus(activeTask.status)) {
@@ -3160,6 +3214,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
 				onReset={resetGeneration}
+				onRetryDownload={retryVideoDownloads}
 			/>
 			{/if}
 

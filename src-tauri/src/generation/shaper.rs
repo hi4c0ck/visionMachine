@@ -107,7 +107,11 @@ pub struct StageContext {
 pub fn shape_request(spec: &ModelSpecWire, ctx: &StageContext) -> Result<Value, String> {
     match spec.request_format.as_str() {
         "image-gen" => Ok(shape_image_gen(spec, ctx)),
-        "video-job-frames" => Ok(shape_video_job_frames(spec, ctx)),
+        // `video-job-frames` (V2.0 fps-native) was removed with the legacy
+        // V2.0 model (P1-7, 2026-11-11): no catalog model declares it — the
+        // V2.5-series is the only video engine. An old payload naming it now
+        // surfaces a concrete "unsupported request format" error instead of
+        // silently shaping a retired route.
         "video-job-seconds" => Ok(shape_video_job_seconds(spec, ctx)),
         "video-job" => Ok(shape_video_job_generic(spec, ctx)),
         "chat" => Ok(shape_chat(spec, ctx)),
@@ -381,82 +385,6 @@ fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     }
     if let Some((name, val)) = guidance_value(spec, ctx) {
         payload[name] = json!(val);
-    }
-    payload
-}
-
-// ── `video-job-frames` (agnes-video-v2.0 — fps-native) ────────────────────
-
-/// Collect the merged media URLs for a frames-based video stage: keyframe
-/// URLs (slot order) + subject URLs, respecting the spec's shared-array cap.
-/// Returns `(first_image_option, image_array_option)` for the 0/1/2-3
-/// branches (O3).
-fn frames_media(spec: &ModelSpecWire, ctx: &StageContext) -> (Option<String>, Option<Vec<String>>) {
-    // Upstream is a stable Vec: keyframes (slot order) then subjects (pipe
-    // order). The <Picture N> numbering (O5) follows this list.
-    let cap = spec
-        .media
-        .as_ref()
-        .and_then(|m| m.max_keyframes.or(m.max_refs))
-        .unwrap_or(3) as usize;
-    let urls: Vec<String> = ctx
-        .upstream
-        .iter()
-        .filter(|u| !u.primary.is_empty())
-        .take(cap)
-        .map(|u| u.primary.clone())
-        .collect();
-    match urls.len() {
-        0 => (None, None),
-        1 => (Some(urls[0].clone()), None),
-        _ => (None, Some(urls)),
-    }
-}
-
-fn shape_video_job_frames(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
-    let num_frames = ctx.length_frames; // E6: 8n+1 guaranteed by pre-check
-    let (first_image, image_array) = frames_media(spec, ctx);
-
-    let refs_total = ctx
-        .upstream
-        .iter()
-        .filter(|u| !u.primary.is_empty())
-        .count();
-    // Mode selection (O3): 0 refs -> ti2vid (text-only); 1 ref -> ti2vid +
-    // top-level image; 2-3 refs -> keyframes + extra_body.image + mode.
-    let mut payload = json!({
-        "model": spec.id,
-        "prompt": ctx.prompt,
-        "num_frames": num_frames,
-        "frame_rate": ctx.fps,
-    });
-
-    match refs_total {
-        0 => {
-            payload["mode"] = json!("ti2vid");
-        }
-        1 => {
-            payload["mode"] = json!("ti2vid");
-            if let Some(url) = &first_image {
-                payload["image"] = json!(url);
-            }
-        }
-        _ => {
-            payload["mode"] = json!("keyframes");
-            if let Some(arr) = &image_array {
-                let mut extra = json!({ "mode": "keyframes" });
-                extra["image"] = json!(arr);
-                payload["extra_body"] = extra;
-            }
-        }
-    }
-
-    // width/height + num_inference_steps are OMITTED (O4: server defaults).
-    if let Some((name, val)) = guidance_value(spec, ctx) {
-        payload[name] = json!(val);
-    }
-    if let Some(seed) = seed_value(spec, ctx) {
-        payload["seed"] = json!(seed);
     }
     payload
 }
@@ -857,85 +785,11 @@ mod tests {
         assert_eq!(p["guidance_scale"], 7.0);
     }
 
-    // ── video-job-frames (0/1/2–3 media branches) ────────────────────────
-
-    fn frames_spec() -> ModelSpecWire {
-        spec("video-job-frames", |m| {
-            m.id = "agnes-video-v2.0".into();
-            m.limits.max_frames = Some(441);
-            m.supports_seed = Some(true);
-            m.media = Some(ModelSpecMedia {
-                modes: vec!["keyframes".into()],
-                dual: None,
-                shared_array: Some(true),
-                max_keyframes: Some(3),
-                max_refs: Some(3),
-                max_audios: None,
-                max_videos: None,
-                wire_modes: None,
-                min_refs: None,
-                min_keyframes: None,
-                image_field: None,
-            });
-        })
-    }
-
-    #[test]
-    fn frames_zero_refs_text_only_ti2vid() {
-        let p = shape_request(&frames_spec(), &ctx(|c| c.upstream = vec![])).unwrap();
-        assert_eq!(p["mode"], "ti2vid");
-        assert_eq!(p["num_frames"], 121);
-        assert_eq!(p["frame_rate"], 24);
-        assert!(p.get("image").is_none());
-        assert!(p.get("extra_body").is_none());
-    }
-
-    #[test]
-    fn frames_one_ref_ti2vid_plus_top_level_image() {
-        let c = ctx(|c| c.upstream = vec![up("keyframe", "k1", "https://a.com/k1.png")]);
-        let p = shape_request(&frames_spec(), &c).unwrap();
-        assert_eq!(p["mode"], "ti2vid");
-        assert_eq!(p["image"], "https://a.com/k1.png");
-        assert!(p.get("extra_body").is_none());
-    }
-
-    #[test]
-    fn frames_two_three_refs_keyframes_extra_body() {
-        let c = ctx(|c| {
-            c.upstream = vec![
-                up("keyframe", "k1", "https://a.com/k1.png"),
-                up("keyframe", "k2", "https://a.com/k2.png"),
-                up("subject", "s1", "https://a.com/s1.png"),
-            ];
-        });
-        let p = shape_request(&frames_spec(), &c).unwrap();
-        assert_eq!(p["mode"], "keyframes");
-        assert_eq!(p["extra_body"]["mode"], "keyframes");
-        assert_eq!(p["extra_body"]["image"].as_array().unwrap().len(), 3);
-        assert!(p.get("image").is_none());
-    }
-
-    #[test]
-    fn frames_seed_and_guidance_gating() {
-        let s = frames_spec();
-        let c = ctx(|c| c.seed = Some(42));
-        let p = shape_request(&s, &c).unwrap();
-        assert_eq!(p["seed"], 42);
-        assert!(p.get("guidance_scale").is_none());
-
-        let s2 = spec("video-job-frames", |m| {
-            m.id = "agnes-video-v2.0".into();
-            m.guidance = Some("guidance_scale".into());
-        });
-        assert_eq!(shape_request(&s2, &c).unwrap()["guidance_scale"], 7.0);
-    }
-
-    #[test]
-    fn frames_8n1_passthrough_no_snap() {
-        let c = ctx(|c| c.length_frames = 441);
-        let p = shape_request(&frames_spec(), &c).unwrap();
-        assert_eq!(p["num_frames"], 441);
-    }
+    // `video-job-frames` (the legacy V2.0 fps-native route) was removed with
+    // the V2.0 model (P1-7, 2026-11-11): the V2.5-series is the only video
+    // engine, so the frames shaper + its tests are gone. A payload naming
+    // the retired format now gets the concrete "unsupported request format"
+    // error instead of a silently-shaped legacy request.
 
     // ── video-job-seconds (mode field-exclusion + 1-dec + 720P) ──────────
 

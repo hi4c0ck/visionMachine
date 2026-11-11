@@ -11,13 +11,13 @@ export type PresetId = 'agnes' | 'custom';
 
 /** How a model's API wants its request payload (request-builder shaper id).
  *  `video-job` is the generic OpenAI-shape async job (custom preset). The
- *  two Agnes variants differ by wire shape (P1/P2): frames-based (V2.0)
- *  vs seconds-based (V2.5 family). */
+ *  Agnes video engine is seconds-based (V2.5 family); the legacy
+ *  frames-based V2.0 route (`video-job-frames`) was removed with the
+ *  V2.0 model (P1-7, 2026-11-11). */
 export type RequestFormat =
   | 'chat'
   | 'image-gen'
   | 'video-job'
-  | 'video-job-frames'
   | 'video-job-seconds';
 
 /** Pipe-level media mode (docs/agnes-model-catalog.md, Q7). Default is

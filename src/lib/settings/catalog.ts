@@ -62,42 +62,12 @@ export const AGNES_PRESET: PresetSpec = {
       supportsSeed: true,
       media: { modes: ['keyframes', 'reference'],
                maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
-    // V2.0 — legacy model ID. Official docs mark it "retired" (2026-09-25),
-    // but the provider keeps serving the ID through the 2.5-series engine
-    // (live log: HTTP 200 with 2.5-style perf_params). User decision
-    // 2026-10-04: run it on the 2.5 config (seconds/size/reference media),
-    // the legacy frames shape (video-job-frames) is no longer maintained.
-    { id: 'agnes-video-v2.0', kind: 'video', label: 'Agnes Video V2.0',
-      endpoint: '/v1/videos', sync: false,
-      pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
-      requestFormat: 'video-job-seconds',
-      limits: { seconds: [4, 12], resolutions: ['720P'],
-                ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-                // Same 720P-only rule as 2.5-flash — every session
-                // resolution maps to it.
-                sizeMap: { '480p': '720P', '720p': '720P', '1080p': '720P' },
-                ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
-      supportsSeed: true,
-      media: { modes: ['keyframes', 'reference'],
-               // V2.0 route's mode-name family (live 400, 2026-10-04):
-               // legacy vocabulary, not the 2.5 logical names the shaper
-               // defaults to when this map is absent.
-               wireModes: { keyframes: 'keyframes', reference: 'multi_reference', text: 'ti2vid' },
-               // multi_reference needs ≥2 images (live 400, 2026-10-04):
-               // with fewer, the shaper falls back to ti2vid (+ top-level
-               // image for the single ref) instead of an undersized images[].
-               minRefs: 2,
-               // keyframes mode needs ≥2 images on the legacy route (live
-               // 400 2026-10-04: "requires image as a list of at least 2
-               // items"); below it the shaper downgrades to ti2vid (+
-               // top-level image for the single keyframe).
-               minKeyframes: 2,
-               // The legacy route takes the reference list under `image`
-               // (string when one, array for multiple), not `images[]`
-               // (live probes 2026-10-04: 200 on `image`, 400 on `images`).
-               imageField: 'image',
-               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 },
-      obsolete: true },
+    // Legacy V2.0 video model REMOVED (P1-7, 2026-11-11): the provider
+    // retired agnes-video-v2.0 (2026-09-25) and the catalog now ships the
+    // 2.5-series as the only video engine. Saved settings that still name
+    // the model id self-heal on load: normalizeSettings migrates any model
+    // id missing from the catalog to the preset's default generable model
+    // (agnes-video-2.5-flash), so the removal is transparent to users.
     // 2.5 PAID — READ-ONLY entry (Q3): inspect in Settings, never generable.
     // Dual media mode (first/last_frame + images/audios/videos) is the
     // future extension point (Q7).

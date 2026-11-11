@@ -2,8 +2,9 @@
 //! remains in TaskRegistry so the existing task lifecycle and terminal sink
 //! ordering stay authoritative.
 use crate::generation::{
-    compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeRegistry, GenerationService,
-    GenerationTaskView, ModelSpecLimits, ModelSpecWire, SourceVideo, TaskStatus,
+    compose_session_video, is_remote_media_ref, BOUNDARY_TRIM_FRAMES, ComposeRegistry,
+    GenerationService, GenerationTaskView, ModelSpecLimits, ModelSpecWire, SourceVideo,
+    TaskStatus,
 };
 use crate::models::composer::{Keyframe, LastGeneration, Pipe};
 use crate::storage::{db::Database, generation_groups_db::GenerationGroupRow};
@@ -345,6 +346,20 @@ fn stage_source_clip(out_dir: &Path, source: &SourceVideo, order_index: u32) -> 
     std::fs::create_dir_all(out_dir).ok()?;
     std::fs::copy(&source.path, &staged_path).ok()?;
     Some(staged_path.to_string_lossy().into_owned())
+}
+
+/// Pure, testable filter for the auto-compose source set: keep only records
+/// whose `source_path` is a LOCAL media-tree file (never a degraded remote
+/// url), so a CDN-gated clip is dropped from the concat manifest instead of
+/// hard-failing the whole session compose. A gated pipe's render is still
+/// safe on the provider's url and is recovered by the L3 re-heal.
+fn filter_local_group_sources(
+    records: Vec<crate::storage::generation_groups_db::GroupSourceRecord>,
+) -> Vec<crate::storage::generation_groups_db::GroupSourceRecord> {
+    records
+        .into_iter()
+        .filter(|r| !is_remote_media_ref(&r.source_path))
+        .collect()
 }
 
 /// Session-video output dir for a group run. Mirrors the standalone
@@ -1438,6 +1453,60 @@ impl GroupCoordinator {
                         .collect()
                 })
                 .unwrap_or_default();
+            // Degraded-download resilience (2026-11-11): the CDN egress gate
+            // can leave a FINISHED pipe clip stored only as the provider's
+            // remote URL (the `download_failed` marker degrades
+            // `last_generation.videoPath` to the url so a completed render is
+            // never lost to a client-side gate). Such a value is NOT a
+            // composable source: staging it makes `fs::copy` warn + drop the
+            // record, and the fallback set would hand the remote url to
+            // `compose_session_video`'s existence check and hard-fail the
+            // WHOLE session compose over one gated clip. Exclude degraded
+            // clips from BOTH the staged and the fallback sets; when nothing
+            // local remains the compose is a clean "skipped" (the gated clip
+            // stays previewable/recoverable via the L3 re-heal).
+            let group_sources = filter_local_group_sources(group_sources);
+            let sources = sources
+                .iter()
+                .filter(|s| !is_remote_media_ref(&s.path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if sources.is_empty() {
+                let skip_note = "no locally-stored clips (video download degraded to remote url)".to_string();
+                {
+                    let mut m = resilient_lock(&this.state);
+                    if let Some(r) = m.get_mut(&gid_owned) {
+                        r.compose_state = Some("skipped".into());
+                        r.compose_error = Some(skip_note.clone());
+                    }
+                }
+                this.db
+                    .update_generation_group_composition(
+                        &gid_owned,
+                        None,
+                        Some("skipped"),
+                        Some(&skip_note),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .ok();
+                this.emit(GroupEvent {
+                    group_id: gid_owned.clone(),
+                    kind: "compose-terminal".into(),
+                    pipe_id: None,
+                    task_id: None,
+                    status: Some("skipped".into()),
+                });
+                log::info!(
+                    "[Generation] group {gid_owned} session compose skipped: {}",
+                    skip_note
+                );
+                this.finish_group(&gid_owned, GroupStatus::Done, None);
+                return;
+            }
             // The concat manifest must reference THIS run's staged clips, in
             // `order_index` order (which is the pipe's timeline position, not
             // the completion order they happened to be recorded in). Sort
@@ -2086,6 +2155,54 @@ mod tests {
             "a missing clip must never yield a staged record"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // P1-4 (2026-11-11): a degraded pipe's clip is stored as the provider's
+    // REMOTE url (the CDN egress gate blocked the local download; the render
+    // still completed). The auto-compose source set must drop such records
+    // instead of feeding the url to `compose_session_video`'s existence
+    // check and hard-failing the whole session over one gated clip.
+    #[test]
+    fn filter_local_group_sources_drops_degraded_remote_urls() {
+        use crate::storage::generation_groups_db::GroupSourceRecord;
+        let rec = |pipe: &str, src: &str| GroupSourceRecord {
+            pipe_id: pipe.into(),
+            task_id: "task-1".into(),
+            source_path: src.into(),
+            staged_path: String::new(),
+            order_index: 0,
+        };
+        let local_a = "C:\\vm\\s\\pipe-a\\t1\\video.mp4";
+        let local_b = "C:\\vm\\s\\pipe-b\\t1\\video.mp4";
+        let gated = "https://platform-outputs.agnes-ai.space/videos/clip.mp4";
+        let kept = filter_local_group_sources(vec![
+            rec("pipe-a", local_a),
+            rec("pipe-gated", gated),
+            rec("pipe-b", local_b),
+        ]);
+        // The gated record is dropped; the two local clips survive IN ORDER
+        // (the concat manifest relies on order_index, so a partial set must
+        // never reorder the surviving clips).
+        let pipes: Vec<&str> = kept.iter().map(|r| r.pipe_id.as_str()).collect();
+        assert_eq!(pipes, vec!["pipe-a", "pipe-b"]);
+        // Only gated pipes remain when the whole run degraded: the caller
+        // then takes the clean "skipped" compose path.
+        assert!(filter_local_group_sources(vec![rec("pipe-gated", gated)]).is_empty());
+    }
+
+    // P1-4: the same remote-detection rule that drops a degraded record must
+    // also recognize a plain local path as local (case/trim-insensitive on
+    // the url prefix).
+    #[test]
+    fn is_remote_media_ref_classification() {
+        assert!(is_remote_media_ref(
+            "https://platform-outputs.agnes-ai.space/videos/x.mp4"
+        ));
+        assert!(is_remote_media_ref("http://cdn.example.com/x.mp4"));
+        assert!(is_remote_media_ref("  https://cdn.example.com/x.mp4 "));
+        assert!(!is_remote_media_ref("C:\\vm\\media\\s\\pipe\\t\\video.mp4"));
+        assert!(!is_remote_media_ref("/home/u/media/s/session.mp4"));
+        assert!(!is_remote_media_ref(""));
     }
 
     // Regression: a compose "success" path that does not exist on disk must

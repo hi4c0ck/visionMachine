@@ -1726,6 +1726,16 @@ pub async fn compose_session_video(
                 if path.is_empty() {
                     None
                 } else {
+                    // Degraded-download resilience (2026-11-11): a pipe whose
+                    // video download was blocked by the CDN egress gate stores
+                    // the provider's REMOTE url as `videoPath` (the render
+                    // completed; only the local file is pending the L3
+                    // re-heal). It is not a composable source — exclude it and
+                    // report it in the result envelope instead of failing the
+                    // whole session compose over one gated clip.
+                    if crate::generation::is_remote_media_ref(path) {
+                        return None;
+                    }
                     Some(SourceVideo {
                         label: p.name.clone(),
                         path: path.to_string(),
@@ -1767,27 +1777,51 @@ pub async fn compose_session_video(
         })
         .map(|p| p.name.clone())
         .collect();
+    // Degraded clips (remote url, local download pending the CDN re-heal)
+    // are NOT "missing" — the render completed. Report them separately so
+    // the user (and the L3 re-heal affordance) can tell a gated pipe apart
+    // from a pipe that never generated a video.
+    let degraded: Vec<String> = pipes
+        .iter()
+        .filter(|p| {
+            p.last_generation
+                .as_ref()
+                .map(|lg| crate::generation::is_remote_media_ref(&lg.video_path))
+                .unwrap_or(false)
+        })
+        .map(|p| p.name.clone())
+        .collect();
     if sources.is_empty() {
         return Err(composition_error(
             "COMPOSITION_NO_SOURCES",
-            "No pipes with a generated video to compose",
-            serde_json::json!({ "missingPipes": missing.clone(), "pipeCount": pipes.len() }),
+            if degraded.is_empty() {
+                "No pipes with a generated video to compose"
+            } else {
+                "No locally-stored clips to compose (video download pending — retry the download, then compose)"
+            },
+            serde_json::json!({
+                "missingPipes": missing.clone(),
+                "degradedPipes": degraded.clone(),
+                "pipeCount": pipes.len()
+            }),
         ));
     }
     // Explicit selection is strict: never silently drop a requested pipe.
-    if input.pipe_ids.is_some() && !missing.is_empty() {
+    if input.pipe_ids.is_some() && (!missing.is_empty() || !degraded.is_empty()) {
         return Err(composition_error(
             "COMPOSITION_MISSING_PIPES",
-            "Cannot compose: selected pipes without a last-gen video",
-            serde_json::json!({ "missingPipes": missing.clone(), "selected": true }),
+            "Cannot compose: selected pipes without a locally-stored last-gen video",
+            serde_json::json!({ "missingPipes": missing.clone(), "degradedPipes": degraded.clone(), "selected": true }),
         ));
     }
-    // All-pipe mode is also strict. A partial session artifact is misleading.
+    // All-pipe mode composes the locally-stored clips and reports the
+    // degraded (gated) + missing pipes in the result envelope instead of
+    // failing the whole session compose over one gated download.
     if input.pipe_ids.is_none() && !missing.is_empty() {
         return Err(composition_error(
             "COMPOSITION_MISSING_PIPES",
             "Cannot compose: some pipes lack a last-gen video",
-            serde_json::json!({ "missingPipes": missing, "selected": false, "pipeCount": pipes.len() }),
+            serde_json::json!({ "missingPipes": missing.clone(), "selected": false, "pipeCount": pipes.len() }),
         ));
     }
 
@@ -1812,6 +1846,14 @@ pub async fn compose_session_video(
     let manifest_entries: Vec<serde_json::Value> = sources
         .iter()
         .map(|s| serde_json::json!({ "label": s.label, "videoPath": s.path }))
+        .collect();
+    // All-pipe mode that skipped gated clips: say so in the success envelope
+    // (and the on-disk output.json mirror) so the user knows which pipes are
+    // waiting on the L3 re-heal instead of assuming the session video is
+    // complete.
+    let skipped_degraded_entries: Vec<serde_json::Value> = degraded
+        .iter()
+        .map(|name| serde_json::json!({ "label": name, "status": "download_degraded" }))
         .collect();
 
     let session_id = input.session_id.clone();
@@ -1889,6 +1931,7 @@ pub async fn compose_session_video(
             "videoPath": result.output_path,
             "ffmpegSource": result.ffmpeg_source,
             "sourcePipes": manifest_entries,
+            "skippedPipes": skipped_degraded_entries,
         }),
     );
 
@@ -1920,6 +1963,7 @@ pub async fn compose_session_video(
         "outputPath": result.output_path,
         "ffmpegSource": result.ffmpeg_source,
         "sourcePipes": manifest_entries.iter().map(|v| v["label"].clone()).collect::<Vec<_>>(),
+        "skippedPipes": skipped_degraded_entries.iter().map(|v| v["label"].clone()).collect::<Vec<_>>(),
     }))
 }
 

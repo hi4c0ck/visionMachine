@@ -32,7 +32,7 @@ use crate::generation::video_flow::engine::types::{
     SceneTimeline, SeedScale, ShotContent, ShotMolecule, ShotSpec, SubSlice, TimelineScene,
     TimelineShot, VisualNovel,
 };
-use crate::generation::video_flow::engine::tree::{leaf_to_concerns, role_dwell_weight, StructuralTree};
+use crate::generation::video_flow::engine::tree::{leaf_to_concerns, StructuralTree};
 use serde::{Deserialize, Serialize};
 
 /// S0 → S4 deterministic build result, one per run.

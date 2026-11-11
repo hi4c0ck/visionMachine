@@ -96,6 +96,14 @@ export async function toMediaUrl(
 ): Promise<string | null> {
   if (!path) return null;
   if (!isTauri()) return null;
+  // A degraded generation (the CDN egress gate blocked the local download)
+  // stores a REMOTE url as `lastGeneration.videoPath`. A remote / `data:`
+  // URI is NOT a media-tree path: the `media://` protocol (and the
+  // `read_media_file` / `open_media_in_player` commands, which guard against
+  // a known media root) would 404 / reject it. Pass such values through
+  // verbatim so the WebView loads them directly — never prefix a remote url
+  // with the local scheme or derive a `.proxy` sibling from it.
+  if (!isLocalPath(path)) return path;
   const effective = opts?.variant === 'preview' ? (previewSiblingPath(path) ?? path) : path;
   return `${mediaUrlPrefix()}/${encodeURIComponent(effective)}`;
 }

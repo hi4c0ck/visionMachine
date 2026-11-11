@@ -37,14 +37,19 @@ function pipeWith(overrides: Partial<PipeRow> = {}): PipeRow {
   };
 }
 
+/** Synthetic video spec helper for the media-cap / source checks. P1-7
+ *  (2026-11-11): the frames-based `video-job-frames` format was removed with
+ *  the V2.0 model — the helper now builds a seconds-based spec; the
+ *  `limits.fps`/`maxFrames` keys are inert for seconds models but keep the
+ *  shared media-cap fixtures readable. */
 function framesSpec(overrides: Partial<ModelSpec> = {}): ModelSpec {
   return {
     id: 'v-frames',
     kind: 'video',
     endpoint: '/v1/videos',
     sync: false,
-    requestFormat: 'video-job-frames',
-    limits: { fps: [18, 24, 30, 48, 60], maxFrames: 441 },
+    requestFormat: 'video-job-seconds',
+    limits: { seconds: [4, 12] },
     ...overrides,
   };
 }
@@ -97,8 +102,8 @@ describe('pipePrechecks — spec gates', () => {
     );
     expect(ok.map((x) => x.code)).not.toContain('spec-locked');
 
-    // The legacy v2.0 ID is generable again (it ships the 2.5 config) —
-    // no spec-locked conflict.
+    // A generable (non read-only) video spec — even a synthetic one named
+    // after the removed V2.0 id — must not produce a spec-locked conflict.
     const v2 = pipePrechecks(pipeWith(), sessionWith(), null, secondsSpec({ id: 'agnes-video-v2.0' }));
     expect(v2.map((x) => x.code)).not.toContain('spec-locked');
   });
@@ -112,48 +117,10 @@ describe('pipePrechecks — spec gates', () => {
   });
 });
 
-describe('pipePrechecks — frames model (8n+1 / overflow / fps)', () => {
-  const sess = sessionWith();
-  const spec = framesSpec();
-
-  it('passes a valid 8n+1 length within maxFrames on-grid fps', () => {
-    const c = pipePrechecks(pipeWith({ lengthFrames: 121 }), sess, null, spec);
-    expect(c).toEqual([]);
-  });
-
-  it('names the 8n+1 conflict with nearest valid lengths', () => {
-    const c = pipePrechecks(pipeWith({ lengthFrames: 120 }), sess, null, spec);
-    const hit = c.find((x) => x.code === 'not-8n1');
-    expect(hit).toBeTruthy();
-    expect(hit!.message).toContain('120');
-    // 120-4=116 → snap 113; 120+4=124 → snap 121
-    expect(hit!.message).toContain('use 113 or 121');
-  });
-
-  it('blocks a length overflow past maxFrames', () => {
-    const c = pipePrechecks(
-      pipeWith({ lengthFrames: 449 }),
-      sess,
-      null,
-      framesSpec({ limits: { maxFrames: 441, fps: [18, 24, 30, 48, 60] } }),
-    );
-    expect(c.map((x) => x.code)).toContain('frames-overflow');
-  });
-
-  it('blocks an off-grid session fps', () => {
-    const c = pipePrechecks(pipeWith({ lengthFrames: 121 }), sessionWith({ fps: 32 }), null, spec);
-    const hit = c.find((x) => x.code === 'fps-off-grid');
-    expect(hit).toBeTruthy();
-    expect(hit!.message).toContain('32');
-    expect(hit!.message).toContain('18, 24, 30, 48, 60');
-  });
-
-  it('skips 8n+1/fps checks for seconds-based models', () => {
-    const c = pipePrechecks(pipeWith({ lengthFrames: 120 }), sess, null, secondsSpec());
-    expect(c.map((x) => x.code)).not.toContain('not-8n1');
-    expect(c.map((x) => x.code)).not.toContain('fps-off-grid');
-  });
-});
+// The frames-based `video-job-frames` model (8n+1 / overflow / fps prechecks)
+// was removed with the legacy V2.0 model (P1-7, 2026-11-11): the 2.5-series
+// is the only video engine, so those codes no longer exist and the whole
+// describe block is gone.
 
 describe('pipePrechecks — media caps (E4)', () => {
   const sess = sessionWith();

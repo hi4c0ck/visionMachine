@@ -26,7 +26,8 @@ pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGen
 pub use ffmpeg::{extract_last_frame, resolve_ffmpeg, FfmpegAvailability};
 pub use media::{
     append_jsonl, append_request_log, archive_previous_session_video,
-    clear_session_compose_artifacts, clear_staged_session_clips, is_staged_session_clip,
+    clear_session_compose_artifacts, clear_staged_session_clips, is_remote_media_ref,
+    is_staged_session_clip,
     piece_history_dirs, pipe_media_dirs, redact, redact_authorization, safe_dir_name,
     scrub_file_component, session_generation_dirs, session_media_root, user_image_dir,
     write_json, STAGED_CLIP_PREFIX,

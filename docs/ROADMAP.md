@@ -41,16 +41,21 @@ Open items carried forward from the v0.7.8/v0.7.9 targets (none of these
 blocked v0.7.10, which shipped the persistence/provider/design fixes). Each
 is small and shippable; the linked doc/component owns the detail.
 
-- [ ] **Remove legacy Agnes Video V2.0** — the provider has retired it
-      (v0.7.7 already marks it obsolete / legacy-terms in the catalog). Drop the
-      V2.0 engine path + catalog entries entirely so the 2.5-series is the only
-      video engine. Touch `catalog.ts`, the provider engine's legacy branch, and
-      the obsolete note in `docs/agnes-model-catalog.md`.
-- [ ] **Per-model video size selection** — surface the resolution sets each
-      video provider/model actually supports and let the user pick; validate the
-      chosen size against the model's `limits` and persist it per run. Replaces
-      the hard-coded 480/720/1080p presets. Pairs with the open
-      "Resolution / size selection" item below.
+- [x] **Remove legacy Agnes Video V2.0** — DONE 2026-11-11 (P1-7, on
+      `feature/text-video-flow`): the retired `agnes-video-v2.0` catalog entry,
+      the dead `video-job-frames` fps-native engine branch + its prechecks
+      block, and the TS `video-job-frames` request format are gone; the
+      2.5-series is now the only video engine. Saved settings that still name
+      the retired id self-heal on load (the settings normalizer migrates a
+      missing model id to the preset's default generable model =
+      `agnes-video-2.5-flash`).
+- [x] **Per-model video size selection** — already SHIPPED: the session
+      resolution dropdown offers only the tiers the active model declares
+      (`availableResolutionsForModel` filters by `limits.resolutions`),
+      ratios are orientation-filtered (`videoRatiosForOrientation`), and
+      `effectiveVideoAspect` mirrors the Rust shaper so the UI shows the exact
+      `aspect_ratio` that will be sent. The classic 480p/720p/1080p presets
+      remain as the session tiers, now model-filtered.
 - [ ] **Tools panel view pass** — redesign the right-panel inspector so the
       session → pipe → segment → tag context reads clearly: a header showing
       which entity the settings/inspector currently edits, no silent
@@ -60,6 +65,14 @@ is small and shippable; the linked doc/component owns the detail.
 - [ ] **Remove frames from keyframe / subject modals** — drop the frame
       input/preview from `KeyframeModal` / `SubjectRefModal`; the frame position
       stays owned by the composer, the modals just attach the piece to that slot.
+
+### Module-size debt (P3, track-don't-block)
+Large single-file modules a future refactor should split (no correctness
+issue today; all gates stay green): `provider.rs` ~3.7k LOC,
+`commands/generation.rs` ~3.1k, `generation/group.rs` ~2.5k,
+`generation/compose.rs` ~2k, `commands/director.rs` ~1.8k. Split by
+concern (e.g. provider image/video stages; generation commands vs. recovery
+commands) when one of these files next gets a behavior change.
 
 ---
 
@@ -276,9 +289,11 @@ keyframes⇄reference for models whose `media.modes` is exclusive, Q7 in
 
 ## How to ship a version (checklist)
 
-1. Bump `version` in `src-tauri/tauri.conf.json` (the single source of truth).
+1. Bump `version` in `package.json` (**the single source of truth** — the
+   release-version-rules skill owns this; never hand-edit the derived files).
 2. `npm run sync:meta` (or let `beforeBuildCommand` run it) to align
-   `package.json`, `Cargo.toml`, `Cargo.lock`, and `src/constants.ts`.
+   `src-tauri/tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, and
+   `src/constants.ts` FROM `package.json`.
 3. Commit on `production`, push.
 4. `git tag vX.Y.Z && git push origin vX.Y.Z` — the guard only builds tags
    reachable from `production`.

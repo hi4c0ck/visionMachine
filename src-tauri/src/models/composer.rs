@@ -174,14 +174,6 @@ fn default_ref_status() -> String {
     "pending".to_string()
 }
 
-fn default_true() -> bool {
-    true
-}
-
-fn default_false() -> bool {
-    false
-}
-
 impl SubjectReference {
     pub fn new(image_url: String, use_frames: bool) -> Self {
         Self {

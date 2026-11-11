@@ -394,6 +394,19 @@ pub fn append_jsonl(path: &std::path::Path, line: &serde_json::Value) -> Result<
     writeln!(f, "{s}").map_err(|e| format!("append {}: {e}", path.display()))
 }
 
+/// True when a `last_generation` / task `output_path` value is a REMOTE url
+/// rather than a media-tree file path. The degraded video-download path
+/// (the CDN egress gate blocked the local download, so the completed render
+/// survived on the provider's url) stores exactly this, and every
+/// downstream file operation (stage-copy, proxy, compose source existence
+/// check, `read_media_file` / `open_media_in_player` media-root guards)
+/// MUST treat it as "not a local file" instead of silently failing or
+/// rejecting it as an unknown path.
+pub fn is_remote_media_ref(value: &str) -> bool {
+    value.trim_start().to_ascii_lowercase().starts_with("http://")
+        || value.trim_start().to_ascii_lowercase().starts_with("https://")
+}
+
 /// Write a single JSON document atomically-enough for our use (temp+rename
 /// not required; the engine writes these once).
 pub fn write_json(path: &std::path::Path, doc: &serde_json::Value) -> Result<(), String> {
