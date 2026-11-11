@@ -1063,6 +1063,49 @@
 			.catch(() => flashToast('Copy failed'));
 	}
 
+	// Extract every shot pipe into clean, ready-to-paste prompt text: one
+	// flowing paragraph per pipe, its concern sections merged in fixed order
+	// (scene → camera → lighting → motion → transition → effect). Uses the
+	// user's LIVE edited sections when present, else the pristine structured
+	// plan (pre-engine docs).
+	function extractPipesToPrompt() {
+		if (!doc) return;
+		const TAG_ORDER = ['scene', 'camera', 'lighting', 'motion', 'transition', 'effect'];
+		const idx = (t: string) => TAG_ORDER.findIndex((o) => o === t);
+		const lines: string[] = [];
+		if (localExtract.length) {
+			const byPipe = new Map<number, { tag: string; prompt: string }[]>();
+			for (const s of localExtract) {
+				let a = byPipe.get(s.pipeIndex);
+				if (!a) byPipe.set(s.pipeIndex, (a = []));
+				a.push({ tag: s.tag, prompt: s.prompt.trim() });
+			}
+			[...byPipe.entries()]
+				.sort((a, b) => a[0] - b[0])
+				.forEach(([pipeIndex, secs]) => {
+					const text = secs
+						.slice()
+						.sort((x, y) => idx(x.tag) - idx(y.tag))
+						.filter((s) => s.prompt)
+						.map((s) => s.prompt)
+						.join(' ');
+					lines.push(`Pipe ${String(pipeIndex).padStart(2, '0')}\n${text || '—'}`);
+				});
+		} else {
+			doc.structured.pipes.forEach((p) => {
+				const text = p.sections
+					.filter((s) => s.prompt.trim())
+					.map((s) => s.prompt.trim())
+					.join(' ');
+				lines.push(`Pipe ${String(p.index).padStart(2, '0')}\n${text || '—'}`);
+			});
+		}
+		void navigator.clipboard
+			.writeText(lines.join('\n\n'))
+			.then(() => flashToast('Pipes extracted to prompt text', 'success'))
+			.catch(() => flashToast('Copy failed'));
+	}
+
 	// The S4-derived engine sheet: shot sheets + derived image/video prompts +
 	// verified timeline — the "final structural text" of the engine flow.
 	function copyEngineSheet() {
@@ -1140,6 +1183,7 @@
 			{applyWorking}
 			{feedback}
 			onCopyExtract={copyExtract}
+			onExtractPipes={extractPipesToPrompt}
 			onCopyEngineSheet={copyEngineSheet}
 			onRegenerate={regeneratePipes}
 			onApplied={onApplied}

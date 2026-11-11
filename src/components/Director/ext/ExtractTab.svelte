@@ -52,6 +52,7 @@
 		applyWorking,
 		feedback,
 		onCopyExtract,
+		onExtractPipes,
 		onCopyEngineSheet,
 		onRegenerate,
 		onApplied,
@@ -75,6 +76,8 @@
 		feedback: { text: string; tone: string } | null;
 		/** Copy the live sections (or pre-engine structured sections). */
 		onCopyExtract: () => void;
+		/** Extract all shot pipes into clean, ready-to-paste prompt text. */
+		onExtractPipes: () => void;
 		/** Copy the S4-derived engine sheet (the "final structural text"). */
 		onCopyEngineSheet: () => void;
 		/** Destructive regenerate from the edited sections (parent). */
@@ -209,6 +212,9 @@
 		</span>
 		<div class="extract-head-btns">
 			<button class="btn" onclick={onCopyExtract}>Copy sections</button>
+			<button class="btn" onclick={onExtractPipes} title="Merge each pipe's sections into one clean prompt paragraph and copy to clipboard">
+				Extract pipes to prompt
+			</button>
 			{#if engine}
 				<button class="btn" onclick={onCopyEngineSheet}>Copy engine sheet</button>
 			{/if}
