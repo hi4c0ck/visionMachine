@@ -2465,9 +2465,13 @@ pub async fn backfill_media_proxies(
 // earlier (Nov 10), so a re-GET on session load recovers the burned
 // render without re-paying for it.
 
-/// Input for the `retry_failed_video_downloads` command.
+/// Input for the `retry_failed_video_downloads` command. No rename attribute:
+/// the wire arg is `session_id` (snake_case), exactly like the other
+/// session-scoped commands (`BackfillMediaProxiesInput`); only the RESULT
+/// is camelCase. A rename here would silently break deserialization
+/// (`missing field sessionId`), the L3 pass would never run, and the
+/// degraded markers would heal on no session load.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RetryFailedVideoDownloadsInput {
     pub session_id: String,
 }
@@ -2513,36 +2517,88 @@ pub async fn retry_failed_video_downloads(
     // DB lock is held ONLY for this resolve block and dropped BEFORE the
     // network re-fetch — a heal must never hold the DB mutex across a
     // multi-minute CDN ride-out (that would stall every other DB op).
-    let (session_root, video_key) = {
+    let (session_root, video_key, session_profile) = {
         let db = &state.db.lock().await;
         let media_root = match resolve_media_root(db, &input.session_id).await {
             Some(r) => r,
-            None => return Ok(RetryFailedVideoDownloadsResult { healed, still_gated }),
+            None => {
+                log::warn!(
+                    "[Reheal] session {}: no media root resolved — L3 heal skipped",
+                    input.session_id
+                );
+                return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+            }
         };
-        let composer = db
+        let composer = match db
             .get_composer(&input.session_id)
             .await
-            .map_err(|e| format!("load composer: {e}"))?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!(
+                    "[Reheal] session {}: load composer failed ({e}) — L3 heal aborted",
+                    input.session_id
+                );
+                return Err(format!("load composer: {e}"));
+            }
+        };
         let session_root =
             std::path::PathBuf::from(media_root).join(safe_session_name(&composer.name));
-        // The download key: the DEFAULT profile's video slot (every task
-        // stage falls back to it when its own profile carries no key) —
-        // trimmed, may be empty (a plain-GET-only retry).
-        let video_key: String = db
-            .get_profile_settings("default")
-            .await
-            .ok()
-            .flatten()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .map(|v| {
-                crate::commands::settings::normalize_settings(&v).providers.video.api_key
-            })
-            .unwrap_or_default();
-        (session_root, video_key)
+        // The download key: the SESSION's OWN profile video slot first (the
+        // tasks ran under it — e.g. profile "hi4"), then the default profile
+        // (the task stage's fallback when its own profile carries no key).
+        // An empty key is legal: a plain-GET-only retry. Note:
+        // `profile_settings` is keyed by profile ID, so the session's profile
+        // must be resolved to its ID (the session→project→profile join),
+        // never the human-readable name.
+        fn video_key_of(raw: Option<String>) -> Option<String> {
+            raw.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
+                .map(|v| crate::commands::settings::normalize_settings(&v).providers.video.api_key)
+                .filter(|k| !k.trim().is_empty())
+        }
+        let session_profile: Option<String> = sqlx::query(
+            "SELECT pr.id FROM sessions s \
+                 JOIN projects p ON p.id = s.project_id \
+                 JOIN profiles pr ON pr.id = p.profile_id \
+                 WHERE s.id = ?",
+        )
+        .bind(&input.session_id)
+        .fetch_optional(&db.pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+        .flatten()
+        .filter(|p| !p.trim().is_empty());
+        let video_key: String = match session_profile.clone() {
+            Some(p) => {
+                if let Some(k) = video_key_of(db.get_profile_settings(&p).await.ok().flatten()) {
+                    k
+                } else {
+                    video_key_of(db.get_profile_settings("default").await.ok().flatten())
+                        .unwrap_or_default()
+                }
+            }
+            None => video_key_of(db.get_profile_settings("default").await.ok().flatten())
+                .unwrap_or_default(),
+        };
+        (session_root, video_key, session_profile)
     };
     if !session_root.is_dir() {
+        log::warn!(
+            "[Reheal] session {}: media root {} does not exist — L3 heal skipped",
+            input.session_id,
+            session_root.display()
+        );
         return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
     }
+    log::info!(
+        "[Reheal] session {} pass start: root={} video_key={} (profile={})",
+        input.session_id,
+        session_root.display(),
+        if video_key.is_empty() { "none (plain GET)" } else { "present" },
+        session_profile.as_deref().unwrap_or("default")
+    );
 
     // Collect every task `output.json` under the session root (bounded,
     // no DB lock held).
@@ -2550,6 +2606,13 @@ pub async fn retry_failed_video_downloads(
     let mut budget = REHEAL_MAX_FILES;
     collect_output_json_files(&session_root, &mut output_files, &mut budget);
     if output_files.is_empty() {
+        // A root with zero output.json is almost always a root-resolution
+        // mismatch (the writer used a different tree) — say so explicitly.
+        log::warn!(
+            "[Reheal] session {}: no output.json under {} — nothing to scan (root mismatch?)",
+            input.session_id,
+            session_root.display()
+        );
         return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
     }
 
