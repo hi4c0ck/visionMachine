@@ -12,6 +12,7 @@ const mockInvokeModule = vi.hoisted(() => ({
 }));
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: mockInvokeModule.invoke,
+  isTauri: () => false,
 }));
 
 const mockInvoke = mockInvokeModule.invoke;

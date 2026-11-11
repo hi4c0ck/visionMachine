@@ -2411,6 +2411,316 @@ pub async fn backfill_media_proxies(
     Ok(result)
 }
 
+// ── L3 video-download heal (2026-11-11 CDN egress-gate flap) ──────────────
+//
+// `run_video_stage` no longer hard-fails a COMPLETED render when the
+// provider CDN gates our client egress (403): it writes a `download_failed`
+// marker into the task's `output.json` (videoUrl + providerTaskId survive)
+// and degrades to the remote URL. This command heals those markers when
+// the gate lifts — the same URL that 403s at 00:57 downloaded fine hours
+// earlier (Nov 10), so a re-GET on session load recovers the burned
+// render without re-paying for it.
+
+/// Input for the `retry_failed_video_downloads` command.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedVideoDownloadsInput {
+    pub session_id: String,
+}
+
+/// Healed markers + a still-gated marker count, returned to the frontend
+/// (camelCase on the wire) so the session can flip its pipe
+/// `last_generation` row from error to done and persist it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedVideoDownloadsResult {
+    /// Task ids whose `download_failed` marker was re-fetched and
+    /// rewritten to `done` (the frontend patches + persists those
+    /// pipes' `last_generation`).
+    pub healed: Vec<String>,
+    /// Markers still 403 after all bounded attempts — the gate is closed
+    /// right now; the next session load retries for free.
+    pub still_gated: Vec<String>,
+}
+
+/// Bound on the heal walk — a session tree is small in practice; this
+/// protects a pathological tree from an unbounded recursive scan (mirrors
+/// `BACKFILL_MAX_FILES`).
+const REHEAL_MAX_FILES: usize = 2000;
+
+/// One pass over a session's media tree: for every task `output.json`
+/// carrying a `download_failed` marker, re-GET the recorded `videoUrl`
+/// (the same hardened plain→Bearer download the task used, bounded) and,
+/// when the bytes land, rewrite the marker to `done`. A successful re-fetch
+/// is the whole heal: the 240p proxy is the next `backfill_media_proxies`
+/// pass's job (it already skips files that have one), and the composer row
+/// is patched by the frontend from the `healed` list. Best-effort: each
+/// marker's failure is logged, never fatal to the pass.
+#[tauri::command]
+pub async fn retry_failed_video_downloads(
+    input: RetryFailedVideoDownloadsInput,
+    state: State<'_, AppState>,
+) -> Result<RetryFailedVideoDownloadsResult, String> {
+    let mut healed: Vec<String> = Vec::new();
+    let mut still_gated: Vec<String> = Vec::new();
+
+    // Same root precedence as the task writer: session dir_path ->
+    // project dir_path -> default tree, then the session-name folder. The
+    // DB lock is held ONLY for this resolve block and dropped BEFORE the
+    // network re-fetch — a heal must never hold the DB mutex across a
+    // multi-minute CDN ride-out (that would stall every other DB op).
+    let (session_root, video_key) = {
+        let db = &state.db.lock().await;
+        let media_root = match resolve_media_root(db, &input.session_id).await {
+            Some(r) => r,
+            None => return Ok(RetryFailedVideoDownloadsResult { healed, still_gated }),
+        };
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        let session_root =
+            std::path::PathBuf::from(media_root).join(safe_session_name(&composer.name));
+        // The download key: the DEFAULT profile's video slot (every task
+        // stage falls back to it when its own profile carries no key) —
+        // trimmed, may be empty (a plain-GET-only retry).
+        let video_key: String = db
+            .get_profile_settings("default")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .map(|v| {
+                crate::commands::settings::normalize_settings(&v).providers.video.api_key
+            })
+            .unwrap_or_default();
+        (session_root, video_key)
+    };
+    if !session_root.is_dir() {
+        return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+    }
+
+    // Collect every task `output.json` under the session root (bounded,
+    // no DB lock held).
+    let mut output_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut budget = REHEAL_MAX_FILES;
+    collect_output_json_files(&session_root, &mut output_files, &mut budget);
+    if output_files.is_empty() {
+        return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+    }
+
+    // Network re-fetch (NO DB lock held): ride out the CDN egress-gate flap.
+    for path in &output_files {
+        let raw = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let marker: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        // Only the L2 marker: status "download_failed" + a re-fetchable URL.
+        if marker.get("status").and_then(|s| s.as_str()) != Some("download_failed") {
+            continue;
+        }
+        let video_url = match marker.get("videoUrl").and_then(|v| v.as_str()) {
+            Some(u) if !u.trim().is_empty() => u.to_string(),
+            _ => continue,
+        };
+        let dest = match marker.get("videoPath").and_then(|v| v.as_str()) {
+            Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+            _ => continue,
+        };
+        // The task id is the task-scoped dir this marker lives in
+        // (<root>/<pipe>/<task_id>/output.json) — the DB row to repair.
+        let task_id = dest
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let ok = crate::generation::ProviderEngine::retry_fetch_video_download(
+            &video_url,
+            &dest,
+            &video_key,
+            2, // one 4xx is already bounded-retried inside; 2 outer passes ride the flap
+        )
+        .await
+        .is_ok();
+        if !ok {
+            log::warn!(
+                "[Reheal] video download still gated for task {task_id} ({video_url}); retried on the next session load"
+            );
+            still_gated.push(task_id);
+            continue;
+        }
+        // Rewrote the artifact: flip the marker to done (the error fields
+        // drop, so the NEXT load finds nothing to re-heal — idempotent).
+        let done = serde_json::json!({
+            "videoPath": dest.to_string_lossy(),
+            "videoUrl": video_url,
+            "status": "done",
+        });
+        if let Err(e) = crate::generation::write_json(path, &done) {
+            log::warn!("[Reheal] task {task_id} marker rewrite failed: {e}");
+            continue;
+        }
+        // 240p proxy for the 180px top panel (non-fatal; blocking pool) —
+        // the next `backfill_media_proxies` pass would otherwise pick this
+        // up, but a same-load refresh should already show the preview.
+        crate::generation::generate_video_proxy(&dest).await;
+        healed.push(task_id.clone());
+        log::info!(
+            "[Reheal] task {task_id} download recovered: {video_url} -> {}",
+            dest.to_string_lossy()
+        );
+        if task_id.is_empty() {
+            continue;
+        }
+        // ── DB repair (brief locks, no network) ─────────────────────────
+        // 1) Task row: the DEGRADED path already persisted status "done"
+        //    with output_path = the remote URL; a pre-fix row says "error".
+        //    Either way the local file now exists → point at it. An
+        //    "error" row becomes "done" (the render DID complete).
+        let task_repair = {
+            let db = &state.db.lock().await;
+            let row = db.get_generation_task_row(&task_id).await.ok().flatten();
+            if let Some(row_ref) = row.as_ref() {
+                let status = if row_ref.status == "error" { "done" } else { row_ref.status.as_str() };
+                let _ = db
+                    .update_generation_task(
+                        &task_id,
+                        status,
+                        row_ref.progress,
+                        row_ref.stages_json.as_deref().unwrap_or("[]"),
+                        Some(&dest.to_string_lossy()),
+                        None,
+                    )
+                    .await;
+            }
+            row
+        };
+        // 2) Piece record (generation_logs): the terminal task event wrote a
+        //    piece with an error / URL outputRef; flip it to done + local
+        //    path so the session's piece history is consistent again.
+        let log_entry = {
+            let db = &state.db.lock().await;
+            db.get_generation_log(&task_id).await.ok().flatten()
+        };
+        if let Some(mut entry) = log_entry {
+            let mut changed = false;
+            if let Some(pieces) = entry.get_mut("pieces").and_then(|p| p.as_array_mut()) {
+                for piece in pieces.iter_mut() {
+                    let is_video_piece = piece
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .is_some_and(|k| k == "video");
+                    if is_video_piece
+                        && piece
+                            .get("status")
+                            .and_then(|s| s.as_str())
+                            .is_some_and(|s| s != "done")
+                    {
+                        piece["status"] = serde_json::json!("done");
+                        piece["outputRef"] =
+                            serde_json::json!(dest.to_string_lossy().into_owned());
+                        if let Some(obj) = piece.as_object_mut() {
+                            obj.remove("error");
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                let db = &state.db.lock().await;
+                let _ = db.add_generation_log(&entry).await;
+            }
+        }
+        // 3) Composer row (pipe.last_generation): the degrade path stored
+        //    the remote URL as video_path with status done; point it at the
+        //    recovered local file so session-video compose can stage it.
+        if let Some(row) = task_repair {
+            let repaired = {
+                let db = &state.db.lock().await;
+                match db.get_composer(&row.session_id).await {
+                    Ok(mut composer) => {
+                        let pipe_id = row.pipe_id.clone();
+                        let mut changed = false;
+                        for pipe in composer.pipes.iter_mut() {
+                            if pipe.id != pipe_id {
+                                continue;
+                            }
+                            if let Some(lg) = pipe.last_generation.as_mut() {
+                                if lg.task_id == task_id
+                                    && (lg.video_path.starts_with("http")
+                                        || lg.video_path != dest.to_string_lossy())
+                                {
+                                    lg.video_path = dest.to_string_lossy().into_owned();
+                                    lg.status = "done".into();
+                                    changed = true;
+                                }
+                            }
+                        }
+                        if changed {
+                            let _ = db.save_composer(&composer).await;
+                        }
+                        changed
+                    }
+                    Err(e) => {
+                        log::warn!("[Reheal] task {task_id} composer repair failed: {e}");
+                        false
+                    }
+                }
+            };
+            if repaired {
+                log::info!(
+                    "[Reheal] task {task_id} composer last_generation re-pointed to {}",
+                    dest.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "[Reheal] session {}: {} marker(s) healed, {} still gated, of {} scanned",
+        input.session_id,
+        healed.len(),
+        still_gated.len(),
+        output_files.len()
+    );
+    Ok(RetryFailedVideoDownloadsResult { healed, still_gated })
+}
+
+/// Recursively collect every `output.json` under `dir` (task-scoped dir),
+/// bounded by `budget` exactly like `backfill_collect` — a pathological
+/// tree must not turn the heal pass into an unbounded scan.
+fn collect_output_json_files(
+    dir: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    budget: &mut usize,
+) {
+    if *budget == 0 {
+        return;
+    }
+    let iter = match std::fs::read_dir(dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    for entry in iter.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_output_json_files(&path, out, budget);
+        } else if path.file_name().and_then(|n| n.to_str()) == Some("output.json") {
+            *budget -= 1;
+            out.push(path);
+        }
+    }
+}
+
 /// All known media roots: the session `directory_path` trees (0009 — the
 /// highest-precedence root `resolve_media_root` uses, and where a session's
 /// composed video + generated artifacts land when the user picked a session

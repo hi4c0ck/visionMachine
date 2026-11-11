@@ -29,6 +29,7 @@ import { SubjectReferenceServiceImpl } from './subjectRefs';
 import { GenerationServiceImpl } from './generation';
 import { normalizeSession } from './validators';
 import { backfillGeneratedImages } from '$lib/generatedImageBackfill';
+import { recoverVideoDownloads } from '$lib/videoDownloadRecovery';
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
@@ -680,6 +681,21 @@ class ComposerStoreImpl implements ComposerStore {
         // keyframes/subjects from the media-tree log (runs before the first
         // render so the chips show thumbnails on the next app run).
         const backfilled = await backfillGeneratedImages(result.session);
+        // One-time: re-fetch video artifacts whose provider download was
+        // blocked by the CDN egress gate (the backend rewrites the marker,
+        // the DB row and the composer `last_generation`). No-op / empty
+        // when nothing is gated; runs AFTER the image backfill so a healed
+        // local file is already on disk for the preview.
+        const recovered = await recoverVideoDownloads(sessionId);
+        if (recovered && recovered.healed.length > 0) {
+          // The backend persisted the repaired composer; re-load so the
+          // preview + `last_generation` flip to the recovered local clip.
+          const reloaded = await this.services.session.load(sessionId);
+          if (reloaded.session) {
+            normalizeSession(reloaded.session);
+            Object.assign(result.session, reloaded.session);
+          }
+        }
         sessions.set(sessionId, result.session);
         evictOldSessions();
         if (backfilled) {

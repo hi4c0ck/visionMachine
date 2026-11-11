@@ -57,8 +57,10 @@ async fn cancel_watcher(cancel: &AtomicBool) {
 /// is available. The probe + encode run on the blocking pool
 /// (`spawn_blocking`) so the async worker is never stalled; a
 /// `spawn_blocking` failure logs and continues — the frontend falls back
-/// to the original.
-async fn generate_video_proxy(original: &std::path::Path) {
+/// to the original. `pub(crate)`: the app-start video backfill (L3, the
+/// `download_failed` marker heal) re-generates a proxy for a re-fetched
+/// artifact.
+pub(crate) async fn generate_video_proxy(original: &std::path::Path) {
     let original_owned = original.to_path_buf();
     let result = tokio::task::spawn_blocking(move || {
         let ffmpeg = crate::generation::ffmpeg::resolve_ffmpeg();
@@ -1650,6 +1652,12 @@ impl ProviderEngine {
         let mut clean_polls = 0usize;
         let mut transport_failures = 0usize;
         const MAX_TRANSPORT_FAILURES: usize = 3;
+/// Bounded in-run attempts for the FINAL video artifact download (the
+/// provider CDN's client-egress gate flaps — fresh objects 403 for our
+/// IP for hours, then lift; catalog Q8). Distinct from the transport
+/// retry inside `fetch_artifact_to` (which skips 403 as non-retryable):
+/// this loop is the gate-flap ride-out, cancel-aware between attempts.
+const VIDEO_DOWNLOAD_ATTEMPTS: usize = 4;
         let final_body = loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
@@ -1893,12 +1901,55 @@ impl ProviderEngine {
                     pipe_media_dirs(root, pipe_dir, &input.task_id)
                         .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                match self
-                    .http
-                    .download(&video_url, &dest, slot.api_key.trim())
-                    .await
-                {
-                    Ok(()) => {
+                // Bounded in-run download retry (2026-11-11): the Agnes
+                // platform-outputs CDN IP-gates our desktop egress and the
+                // gate FLAPS — the same URL downloaded fine hours earlier,
+                // then 403s for plain and Bearer GETs for the next hours
+                // (catalog Q8; live probes 2026-11-11 confirmed the Nov-10
+                // "working" url now 403s too). Riding out a short flap in
+                // the ~80 s window costs nothing; a still-gated download
+                // must NOT hard-fail a COMPLETED render: the object is
+                // retrievable later, so we write a `download_failed` marker
+                // into output.json (videoPath + videoUrl survive for the
+                // backfill) and degrade to the remote URL, mirroring the
+                // image stage's "task success decoupled from CDN
+                // client-download policy" architecture.
+                let mut dl_err: Option<String> = None;
+                for attempt in 1..=VIDEO_DOWNLOAD_ATTEMPTS {
+                    match self
+                        .http
+                        .download(&video_url, &dest, slot.api_key.trim())
+                        .await
+                    {
+                        Ok(()) => {
+                            dl_err = None;
+                            break;
+                        }
+                        Err(e) => {
+                            dl_err = Some(e.clone());
+                            if attempt < VIDEO_DOWNLOAD_ATTEMPTS {
+                                let delay = self
+                                    .backoff_secs
+                                    .get(2)
+                                    .copied()
+                                    .unwrap_or(15);
+                                log::warn!(
+                                    "[Generation] video task {} final download attempt {attempt}/{} failed: {e} — retrying in {delay} s (CDN egress gate)",
+                                    input.task_id,
+                                    VIDEO_DOWNLOAD_ATTEMPTS
+                                );
+                                on_event(&format!(
+                                    "final video download gated — retrying in {delay} s"
+                                ));
+                                if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                                    return Err(EngineError::Cancelled);
+                                }
+                            }
+                        }
+                    }
+                }
+                match dl_err {
+                    None => {
                         self.log_entry(
                             input,
                             &secrets,
@@ -1911,39 +1962,65 @@ impl ProviderEngine {
                         )
                         .await
                     }
-                    Err(e) => {
+                    Some(e) => {
+                        // `json!` owns its values: clone into the request-log
+                        // entry, keep `e` for the marker (the final use).
                         self.log_entry(
                             input,
                             &secrets,
                             &json!({
-                                "stage": "video-download",
+                                "stage": "video-download-failed",
                                 "url": video_url,
-                                "error": e,
+                                "error": e.clone(),
                             }),
                         )
                         .await;
-                        log::error!(
-                            "[Generation] video task {} download failed: {}",
-                            input.task_id,
-                            e
+                        log::warn!(
+                            "[Generation] video task {} final download failed after {VIDEO_DOWNLOAD_ATTEMPTS} attempts: {e} — marking output.json download_failed; task degrades to the remote URL, backfill re-fetches when the CDN gate lifts",
+                            input.task_id
                         );
-                        return Err(EngineError::Failure(format!(
-                            "video download {video_url}: {e}"
-                        )));
+                        let out = json!({
+                            "videoPath": dest.to_string_lossy(),
+                            "videoUrl": video_url,
+                            "model": spec.id,
+                            "seed": input.seed,
+                            "params": payload,
+                            "status": "download_failed",
+                            "downloadFailed": true,
+                            "providerTaskId": video_id,
+                            "downloadError": e,
+                        });
+                        // The marker is the L3 backfill's trigger: app start /
+                        // session-select walk re-GETs videoUrl and rewrites
+                        // this file to "done". Best-effort — a marker-write
+                        // failure must not turn a completed render into a
+                        // task failure.
+                        if let Err(w) = write_json(&task_dir.join("output.json"), &out) {
+                            log::warn!(
+                                "[Generation] video task {} download-failed marker write failed: {w}",
+                                input.task_id
+                            );
+                        }
                     }
                 }
-                // 240p proxy for the 180px top panel (non-fatal; blocking pool).
-                generate_video_proxy(&dest).await;
-                let out = json!({
-                    "videoPath": dest.to_string_lossy(),
-                    "videoUrl": video_url,
-                    "model": spec.id,
-                    "seed": input.seed,
-                    "params": payload,
-                    "status": "done",
-                });
-                write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
-                dest.to_string_lossy().into_owned()
+                if dest.is_file() {
+                    // 240p proxy for the 180px top panel (non-fatal; blocking pool).
+                    generate_video_proxy(&dest).await;
+                    let out = json!({
+                        "videoPath": dest.to_string_lossy(),
+                        "videoUrl": video_url,
+                        "model": spec.id,
+                        "seed": input.seed,
+                        "params": payload,
+                        "status": "done",
+                    });
+                    write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
+                    dest.to_string_lossy().into_owned()
+                } else {
+                    // Degraded: the render completed, only the client-side
+                    // fetch is gated. Keep the task alive on the remote URL.
+                    video_url
+                }
             }
             None => {
                 // No media tree available: the provider artifact stays remote.
@@ -1955,6 +2032,41 @@ impl ProviderEngine {
         on_event("complete");
         log::info!("[Generation] video task {} ok ({})", input.task_id, local);
         Ok(local)
+    }
+
+    /// L3 backfill re-fetch (2026-11-11): engine/task-free re-GET of a video
+    /// artifact whose in-run download was blocked by the provider CDN's
+    /// client-egress gate (the `download_failed` marker). Drives the SAME
+    /// hardened `ReqwestClient` download (plain GET, then a Bearer-authorized
+    /// GET on 401/403) with a bounded outer loop that rides out the gate
+    /// flap; a persistent 403 (gate still closed) returns `Err` — the caller
+    /// retries later, it is never a user-facing failure.
+    pub(crate) async fn retry_fetch_video_download(
+        url: &str,
+        dest: &std::path::Path,
+        api_key: &str,
+        attempts: u32,
+    ) -> Result<(), String> {
+        let http: Arc<dyn HttpClient + Send + Sync> = Arc::new(ReqwestClient::new());
+        let key = api_key.trim().to_string();
+        let bound = attempts.max(1);
+        for attempt in 1..=bound {
+            match http.download(url, dest, &key).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    log::warn!(
+                        "[Backfill] video re-fetch attempt {attempt}/{bound} of {url} failed: {e}",
+                    );
+                    if attempt < bound {
+                        sleep(Duration::from_secs(BACKOFF_SECS.get(2).copied().unwrap_or(15)))
+                            .await;
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "video re-fetch {url} still blocked after {bound} attempts (CDN egress gate)"
+        ))
     }
 
     /// Append a redacted stage entry to the task request.log (best-effort).
@@ -2325,6 +2437,11 @@ mod tests {
         posts: StdMutex<VecDeque<Result<(u16, serde_json::Value), String>>>,
         gets: StdMutex<VecDeque<Result<(u16, serde_json::Value), String>>>,
         download_ok: StdMutex<bool>,
+        /// Per-attempt scripted download results (FIFO). When non-empty a
+        /// `download` pops the front, so tests can simulate "fail, fail,
+        /// succeed" for the video-download retry loop without touching the
+        /// global `download_ok` flag.
+        download_results: StdMutex<VecDeque<Result<(), String>>>,
         /// Records every download destination so tests can assert artifacts.
         downloads: StdMutex<Vec<String>>,
     }
@@ -2335,6 +2452,7 @@ mod tests {
                 posts: StdMutex::new(VecDeque::new()),
                 gets: StdMutex::new(VecDeque::new()),
                 download_ok: StdMutex::new(true),
+                download_results: StdMutex::new(VecDeque::new()),
                 downloads: StdMutex::new(Vec::new()),
             }
         }
@@ -2349,6 +2467,13 @@ mod tests {
         /// Simulate a failing artifact download (non-2xx, status embedded).
         fn fail_download(self) -> Self {
             *self.download_ok.lock().unwrap() = false;
+            self
+        }
+        /// Script a single download attempt (used FIFO). Let the artifact
+        /// bytes land only on `Ok` so the `dest.is_file()` degrade check
+        /// reflects a real 403 (no bytes) vs. a landed download.
+        fn queue_download(self, r: Result<(), String>) -> Self {
+            self.download_results.lock().unwrap().push_back(r);
             self
         }
     }
@@ -2393,6 +2518,20 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(dest.to_string_lossy().into_owned());
+            // Per-attempt scripted result takes precedence (FIFO): lets a test
+            // model "gate closed for the first N attempts, then lifted".
+            if let Some(scripted) = self.download_results.lock().unwrap().pop_front() {
+                return match scripted {
+                    Ok(()) => {
+                        if let Some(parent) = dest.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(dest, "fake-artifact-bytes");
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                };
+            }
             if !*self.download_ok.lock().unwrap() {
                 return Err(format!("GET {url} HTTP 503: simulated provider outage"));
             }
@@ -2762,6 +2901,110 @@ mod tests {
 
         let req_log = std::fs::read_to_string(task_dir.join("request.log")).unwrap();
         assert!(!req_log.contains("sk-video-key"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    // ── Video-download 403 resilience (L1 retry + L2 degrade marker) ─────────
+
+    #[tokio::test]
+    async fn video_download_retries_then_succeeds_writes_done_marker() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-42" }))))
+                .queue_get(Ok((200, json!({ "status": "running" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                )))
+                // The CDN egress gate flaps closed for the first two in-run
+                // attempts, then lifts: the bounded L1 loop lands the bytes
+                // and the marker is `done` (no `download_failed`).
+                .queue_download(Err(
+                    "GET https://cdn.test/out.mp4 HTTP 403: simulated egress gate".into(),
+                ))
+                .queue_download(Err(
+                    "GET https://cdn.test/out.mp4 HTTP 403: simulated egress gate".into(),
+                ))
+                .queue_download(Ok(())),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("video stage must succeed once the gate lifts mid-retry");
+
+        let task_dir = media.join("pipe1").join("task1");
+        assert_eq!(
+            out.local_path,
+            task_dir.join("video.mp4").to_string_lossy().into_owned(),
+            "the retry-then-success path must yield the local artifact, not the remote URL"
+        );
+        let out_json = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(task_dir.join("output.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out_json["status"], "done");
+        assert!(out_json.get("downloadFailed").is_none());
+        // Exactly three download attempts: 403, 403, then the landed bytes.
+        assert_eq!(http.downloads.lock().unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn video_download_always_gated_writes_download_failed_marker_and_degrades_to_remote_url() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        // Every in-run attempt is 403 (gate closed for the whole render):
+        // the L2 marker must be written and the task must DEGRADE to the
+        // remote URL instead of hard-failing a completed render.
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-42" }))))
+                .queue_get(Ok((200, json!({ "status": "running" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                )))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into()))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into()))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into()))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into())),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        // The render completed: the task succeeds and reports the remote URL
+        // (the L3 re-heal re-GETs it on the next session load).
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("a completed render must never hard-fail on a gated download");
+        assert_eq!(out.local_path, "https://cdn.test/out.mp4");
+
+        let task_dir = media.join("pipe1").join("task1");
+        assert!(
+            !task_dir.join("video.mp4").exists(),
+            "gated download must not leave a partial local artifact"
+        );
+        let out_json = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(task_dir.join("output.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out_json["status"], "download_failed");
+        assert_eq!(out_json["downloadFailed"], true);
+        assert_eq!(out_json["videoUrl"], "https://cdn.test/out.mp4");
+        assert_eq!(out_json["providerTaskId"], "vid-42");
+        assert!(out_json.get("downloadError").is_some());
         let _ = std::fs::remove_dir_all(&media);
     }
 

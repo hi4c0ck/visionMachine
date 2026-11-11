@@ -369,7 +369,30 @@ enforced by the compose step, not the provider.
   4. `data:`-URI inlining of local media (last-resort) remains as the
      documented path for local-only pieces (the catch-prev-last-frame
      flow already ships `data:image/png;base64` as `image_src` /
-     `first_frame`, catalog "bytes VERBATIM").
+     `first_frame`, catalog "bytes VERBATIM");
+  5. **video final download (live-verified 2026-11-11): the gate
+     FLAPS.** The same `platform-outputs.agnes-ai.space` video URL that
+     downloaded fine 2026-11-10 21:05 returned 403 for plain AND Bearer
+     GETs on 2026-11-11 00:42/00:57 (and the Nov-10 "working" URL now
+     403s too) — an intermittent IP-egress gate, not a permanent block.
+     The video API re-poll returns `completed` with `expires_at: null`
+     and only a bare `url` (no signed URL, no download endpoint, no b64
+     for video), so resilience is a 3-layer architecture:
+     - **L1** in-run bounded download retry (`VIDEO_DOWNLOAD_ATTEMPTS =
+       4`, cancel-aware backoff) rides out a short flap;
+     - **L2** if still gated after L1, the task NEVER hard-fails a
+       completed render: `output.json` carries `status:"download_failed"`
+       + `videoUrl` + `providerTaskId` (the L3 trigger) and the stage
+       degrades to the remote URL — the same "task success decoupled
+       from CDN client-download policy" rule as the image stage;
+     - **L3** `retry_failed_video_downloads(sessionId)` (called on
+       session load) walks the session media tree for `download_failed`
+       markers, re-GETs each `videoUrl` (bounded 2 outer passes), and on
+       success rewrites the marker to `done`, regenerates the 240p
+       proxy, and repairs the task row (`error`→`done` + local path),
+       the generation_logs piece record, and the composer
+       `last_generation` (re-pointed to the local file). Idempotent;
+       markers still gated are retried free on the next load.
 - **url XOR b64_json (live-verified 2026-11-09):** the image API returns
   exactly one of the two fields in every request shape we can build
   (`response_format=url` → url only, `b64_json:""`; `=b64_json` → b64

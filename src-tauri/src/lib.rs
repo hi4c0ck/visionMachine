@@ -587,6 +587,8 @@ commands::generation::extract_pipe_last_frame,
             commands::generation::open_media_in_player,
             commands::generation::reveal_media_folder,
             commands::generation::backfill_media_proxies,
+commands::generation::retry_failed_video_downloads,
+            commands::generation::retry_failed_video_downloads,
             // Settings & provider system (Phase 1)
             commands::settings::get_settings,
             commands::settings::save_settings,

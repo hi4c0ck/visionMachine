@@ -32,6 +32,7 @@ pub use media::{
     write_json, STAGED_CLIP_PREFIX,
 };
 pub use provider::ProviderEngine;
+pub(crate) use provider::generate_video_proxy;
 pub use registry::{MediaRootResolver, TaskRegistry};
 pub use shaper::{
     clamp_to_range, format_seconds, guard_supported, pick_image_size, pick_ratio, shape_request,
