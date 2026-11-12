@@ -824,6 +824,7 @@
 			runDurationMs = null;
 			localExtract = [];
 			seedWorking = false;
+			extractedPrompt = '';
 		}
 	});
 
@@ -1072,6 +1073,10 @@
 	// the flow doc — so this works with or without an S0→S5 run. Each pipe
 	// block: its global style line, then every timeline tag in frame order
 	// (tag · range), then the sound line, then keyframe/subject prompts.
+	// The result is NOT just a silent clipboard write: it is rendered
+	// inline under ① DIRECTION (extractedPrompt) so the user can read,
+	// edit and copy it; the clipboard copy happens on top of that.
+	let extractedPrompt = $state('');
 	function extractPipesToPrompt() {
 		const pipes: PipeRow[] = session?.pipes ?? [];
 		if (!pipes.length) {
@@ -1108,10 +1113,26 @@
 			}
 			lines.push(`Pipe ${String(i + 1).padStart(2, '0')}${p.name ? ` — ${p.name}` : ''}\n${parts.join('\n') || '—'}`);
 		});
+		const text = lines.join('\n\n');
+		// The result is NOT just a silent clipboard write — it is rendered
+		// inline under ① DIRECTION so the user can read + edit it.
+		extractedPrompt = text;
 		void navigator.clipboard
-			.writeText(lines.join('\n\n'))
-			.then(() => flashToast(`${pipes.length} pipe(s) extracted to prompt text`, 'success'))
+			.writeText(text)
+			.then(() => flashToast(`${pipes.length} pipe(s) extracted — shown below, also on the clipboard`, 'success'))
+			.catch(() => flashToast('Extracted — shown below (clipboard copy was blocked)'));
+	}
+
+	function copyExtractedPrompt() {
+		if (!extractedPrompt.trim()) return;
+		void navigator.clipboard
+			.writeText(extractedPrompt)
+			.then(() => flashToast('Prompt text copied', 'success'))
 			.catch(() => flashToast('Copy failed'));
+	}
+
+	function clearExtractedPrompt() {
+		extractedPrompt = '';
 	}
 
 	// The S4-derived engine sheet: shot sheets + derived image/video prompts +
@@ -1169,6 +1190,9 @@
 			onAnnotate={annotateRun}
 			onApply={applyPipes}
 			onExtractPipes={extractPipesToPrompt}
+			bind:extractedPrompt
+			onCopyExtracted={copyExtractedPrompt}
+			onClearExtracted={clearExtractedPrompt}
 			onExportSeed={exportSeedCard}
 			onImportSeed={importSeedCard}
 		>

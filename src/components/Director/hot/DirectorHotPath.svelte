@@ -52,6 +52,9 @@
 		onAnnotate,
 		onApply,
 		onExtractPipes,
+		extractedPrompt = $bindable(''),
+		onCopyExtracted,
+		onClearExtracted,
 		onExportSeed,
 		onImportSeed,
 	} = $props<{
@@ -81,6 +84,13 @@
 		onApply: (replace: boolean) => Promise<void>;
 		/** Extract the session's composer pipes into prompt text (parent's handler). */
 		onExtractPipes?: () => void;
+		/** The last-extracted prompt text (parent-owned, bindable — the user
+		 can edit it in the panel; re-extracting replaces it). */
+		extractedPrompt: string;
+		/** Copy the on-screen extracted text to the clipboard. */
+		onCopyExtracted?: () => void;
+		/** Clear the on-screen extracted text. */
+		onClearExtracted?: () => void;
 		/** M2: export the G0 entry to a .vmseed.json (parent's exportSeedCard). */
 		onExportSeed?: () => Promise<void>;
 		/** M2: import a .vmseed.json into the G0 controls (parent's importSeedCard). */
@@ -93,6 +103,10 @@
 	let logLines = $state<RunProgressEvent[]>([]);
 	// The S4-verified shot strip (derived from the engine after a run).
 	let previewRows = $derived(engine ? timelineRows(engine) : []);
+	// Label for the extracted-prompt block (the pipe count it came from).
+	let extractedPipeLabel = $derived(
+		extractedPrompt ? `${pipeCount} pipe${pipeCount !== 1 ? 's' : ''}` : '',
+	);
 
 	// Reset the log when a new run starts (running: false → true).
 	// prevRunning is deliberately NON-reactive bookkeeping: the effect's
@@ -154,6 +168,25 @@
 			locked={false}
 			onRun={onRun}
 		/>
+		{#if extractedPrompt}
+			<!-- The extracted pipe-prompt text is VISIBLE, editable and
+			     copyable — extraction is not a silent clipboard-only op. -->
+			<div class="extracted-prompt">
+				<header class="extracted-head">
+					<span class="k">Extracted prompt ({extractedPipeLabel})</span>
+					<div class="extracted-actions">
+						<button class="btn" disabled={!extractedPrompt.trim()} onclick={onCopyExtracted}>Copy</button>
+						<button class="btn" onclick={onClearExtracted}>Clear</button>
+					</div>
+				</header>
+				<textarea
+					class="extracted-text"
+					rows="8"
+					bind:value={extractedPrompt}
+					oninput={() => { /* bindable write-back only */ }}
+				></textarea>
+			</div>
+		{/if}
 	</section>
 
 	<!-- ② PARAMETERS — the G0 seed knobs, FRONT-LOADED and always visible.
@@ -509,6 +542,50 @@
 	}
 	.dir-run {
 		white-space: nowrap;
+	}
+
+	/* ── Extracted pipe-prompt block (visible + editable, not clipboard-only) ── */
+	.extracted-prompt {
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		background: var(--bg-tertiary);
+		overflow: hidden;
+	}
+	.extracted-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 6px 10px;
+		border-bottom: 1px solid var(--border-color);
+		background: var(--bg-elevated);
+	}
+	.extracted-head .k {
+		color: var(--text-muted);
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+	.extracted-actions {
+		display: flex;
+		gap: 6px;
+	}
+	.extracted-text {
+		display: block;
+		width: 100%;
+		box-sizing: border-box;
+		margin: 0;
+		padding: 8px 10px;
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		line-height: 1.5;
+		border: none;
+		outline: none;
+		resize: vertical;
+		min-height: 96px;
+		background: transparent;
+		color: var(--text-primary);
 	}
 
 	/* ── Run + destructive apply ── */
