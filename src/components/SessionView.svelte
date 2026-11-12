@@ -117,6 +117,7 @@
 	<div class="harness-mount" class:harness-hidden={composerTab === 'pipes'}>
 		<DirectorPanel
 			activeTab={composerTab}
+			{session}
 			sessionId={session.id}
 			sessionName={session.name}
 			pipeCount={session.pipes.length}

@@ -51,6 +51,7 @@
 		onRun,
 		onAnnotate,
 		onApply,
+		onExtractPipes,
 		onExportSeed,
 		onImportSeed,
 	} = $props<{
@@ -78,6 +79,8 @@
 		onAnnotate: (kind: 'accept' | 'reject') => Promise<void>;
 		/** Destructive regenerate pipes (parent's applyPipes). */
 		onApply: (replace: boolean) => Promise<void>;
+		/** Extract the session's composer pipes into prompt text (parent's handler). */
+		onExtractPipes?: () => void;
 		/** M2: export the G0 entry to a .vmseed.json (parent's exportSeedCard). */
 		onExportSeed?: () => Promise<void>;
 		/** M2: import a .vmseed.json into the G0 controls (parent's importSeedCard). */
@@ -127,13 +130,22 @@
 	<section class="stage hot dir-direction">
 		<div class="dir-direction-head">
 			<h3 class="block-heading">① DIRECTION <span class="muted">· idea</span></h3>
-			<button
-				class="btn primary dir-run"
-				disabled={running || !entry.idea.trim()}
-				title={!entry.idea.trim() ? 'Write the idea first' : 'Build the S0→S5 flow'}
-				onclick={onRun}>
-				{running ? 'Running…' : 'Run S0→S5'}
-			</button>
+			<div class="dir-direction-actions">
+				<button
+					class="btn"
+					disabled={pipeCount === 0}
+					title={pipeCount ? `Copy ${pipeCount} composer pipe(s) as prompt text` : 'Add pipes in the Pipes tab first'}
+					onclick={onExtractPipes}>
+					Extract pipes to prompt
+				</button>
+				<button
+					class="btn primary dir-run"
+					disabled={running || !entry.idea.trim()}
+					title={!entry.idea.trim() ? 'Write the idea first' : 'Build the S0→S5 flow'}
+					onclick={onRun}>
+					{running ? 'Running…' : 'Run S0→S5'}
+				</button>
+			</div>
 		</div>
 		<TextBlock
 			label="Idea"
@@ -487,6 +499,12 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
+		flex-wrap: wrap;
+	}
+	.dir-direction-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 		flex-wrap: wrap;
 	}
 	.dir-run {

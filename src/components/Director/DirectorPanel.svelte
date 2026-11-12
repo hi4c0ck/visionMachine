@@ -42,6 +42,7 @@
 		type FlowDocument,
 		type FlowSummary,
 	} from '$lib/directorStore/types';
+	import type { SessionData, PipeRow } from '$types';
 	// Settled-flow cache (2026-11-10 "generated data doesn't sustain session
 	// switch" fix): session id → the last settled listFlows + loadFlow
 	// result. Module-level so it survives component remounts (DirectorPanel
@@ -94,6 +95,7 @@
 
 	let {
 		activeTab,
+		session,
 		sessionId,
 		sessionName,
 		pipeCount,
@@ -103,6 +105,8 @@
 		onApplied,
 	} = $props<{
 		activeTab: DirectorTab;
+		/** The live session (composer pipes are the extraction source). */
+		session: SessionData | null;
 		sessionId: string;
 		sessionName: string;
 		pipeCount: number;
@@ -1063,46 +1067,50 @@
 			.catch(() => flashToast('Copy failed'));
 	}
 
-	// Extract every shot pipe into clean, ready-to-paste prompt text: one
-	// flowing paragraph per pipe, its concern sections merged in fixed order
-	// (scene → camera → lighting → motion → transition → effect). Uses the
-	// user's LIVE edited sections when present, else the pristine structured
-	// plan (pre-engine docs).
+	// Extract the session's composer pipes into clean, ready-to-paste prompt
+	// text. Source of truth is the LIVE composer session (session.pipes), not
+	// the flow doc — so this works with or without an S0→S5 run. Each pipe
+	// block: its global style line, then every timeline tag in frame order
+	// (tag · range), then the sound line, then keyframe/subject prompts.
 	function extractPipesToPrompt() {
-		if (!doc) return;
-		const TAG_ORDER = ['scene', 'camera', 'lighting', 'motion', 'transition', 'effect'];
-		const idx = (t: string) => TAG_ORDER.findIndex((o) => o === t);
-		const lines: string[] = [];
-		if (localExtract.length) {
-			const byPipe = new Map<number, { tag: string; prompt: string }[]>();
-			for (const s of localExtract) {
-				let a = byPipe.get(s.pipeIndex);
-				if (!a) byPipe.set(s.pipeIndex, (a = []));
-				a.push({ tag: s.tag, prompt: s.prompt.trim() });
-			}
-			[...byPipe.entries()]
-				.sort((a, b) => a[0] - b[0])
-				.forEach(([pipeIndex, secs]) => {
-					const text = secs
-						.slice()
-						.sort((x, y) => idx(x.tag) - idx(y.tag))
-						.filter((s) => s.prompt)
-						.map((s) => s.prompt)
-						.join(' ');
-					lines.push(`Pipe ${String(pipeIndex).padStart(2, '0')}\n${text || '—'}`);
-				});
-		} else {
-			doc.structured.pipes.forEach((p) => {
-				const text = p.sections
-					.filter((s) => s.prompt.trim())
-					.map((s) => s.prompt.trim())
-					.join(' ');
-				lines.push(`Pipe ${String(p.index).padStart(2, '0')}\n${text || '—'}`);
-			});
+		const pipes: PipeRow[] = session?.pipes ?? [];
+		if (!pipes.length) {
+			flashToast('No pipes in this session yet', 'info');
+			return;
 		}
+		const lines: string[] = [];
+		pipes.forEach((p, i) => {
+			const parts: string[] = [];
+			// global style + sound (pipe-level prompts, enabled only)
+			for (const el of p.elements) {
+				if (el.tag === 'global_style' && el.enabled && (el.prompt ?? '').trim()) {
+					parts.push(`style: ${(el.prompt ?? '').trim()}`);
+				} else if (el.tag === 'sound' && el.enabled && (el.prompt ?? '').trim()) {
+					parts.push(`sound: ${(el.prompt ?? '').trim()}`);
+				} else if (el.tag === 'timeline') {
+					for (const seg of el.segments) {
+						for (const t of seg.tags) {
+							const txt = (t.prompt ?? '').trim();
+							if (txt) parts.push(`${t.tag}: ${txt}`);
+						}
+					}
+				}
+			}
+			// keyframe prompts (the per-frame image prompts)
+			for (const k of p.keyframes) {
+				const txt = (k.prompt ?? '').trim();
+				if (txt) parts.push(`keyframe ${k.slotIndex} (f${k.frame}): ${txt}`);
+			}
+			// subject reference prompts (txt2img / img2img subjects)
+			for (const s of p.subjectReferences) {
+				const txt = (s.prompt ?? '').trim();
+				if (txt) parts.push(`subject: ${txt}`);
+			}
+			lines.push(`Pipe ${String(i + 1).padStart(2, '0')}${p.name ? ` — ${p.name}` : ''}\n${parts.join('\n') || '—'}`);
+		});
 		void navigator.clipboard
 			.writeText(lines.join('\n\n'))
-			.then(() => flashToast('Pipes extracted to prompt text', 'success'))
+			.then(() => flashToast(`${pipes.length} pipe(s) extracted to prompt text`, 'success'))
 			.catch(() => flashToast('Copy failed'));
 	}
 
@@ -1160,6 +1168,7 @@
 			onRun={handleRun}
 			onAnnotate={annotateRun}
 			onApply={applyPipes}
+			onExtractPipes={extractPipesToPrompt}
 			onExportSeed={exportSeedCard}
 			onImportSeed={importSeedCard}
 		>
@@ -1183,7 +1192,6 @@
 			{applyWorking}
 			{feedback}
 			onCopyExtract={copyExtract}
-			onExtractPipes={extractPipesToPrompt}
 			onCopyEngineSheet={copyEngineSheet}
 			onRegenerate={regeneratePipes}
 			onApplied={onApplied}
