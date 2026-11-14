@@ -86,7 +86,11 @@ pub struct IntentSnapshot {
 
 impl IntentSnapshot {
     pub fn new(entry_text: &str) -> Self {
-        let normalized = normalize_text(entry_text);
+        // 2026-11-14 ("wide: Pipe 01" fix): a Director extraction dump fed
+        // back into the idea box must not become narrative — its `Pipe N`
+        // index labels + `style:`/`scene:` tag prefixes are stripped up front
+        // so clause decomposition + subject_phrase see STORY, not structure.
+        let normalized = strip_entry_labels(&normalize_text(entry_text));
         let clauses = decompose_clauses(&normalized);
         Self {
             entry_text: normalized,
@@ -116,6 +120,145 @@ impl IntentSnapshot {
         self.clauses
             .get(clause_index)
             .map(|c| SpanId::new(c.id.as_str().to_string()))
+    }
+}
+
+/// 2026-11-14 (the "wide: Pipe 01" fix): the Director's "Extract pipes to
+/// prompt" outputs a structured dump — `Pipe 01 — <name> · shot N` header
+/// lines + `style:` / `scene:` / `camera:` tag-prefixed prose lines. When
+/// that dump is fed back into the G0 idea box, the raw labels must NOT
+/// become narrative clauses: "Pipe 01" would otherwise survive clause
+/// decomposition and `subject_phrase` would pick it as the shot subject,
+/// producing degenerate beats ("wide: Pipe 01") instead of story.
+///
+/// Per-line sanitization (applied after `normalize_text`, BEFORE clause
+/// decomposition — it is a no-op on genuine prose):
+///  1. strip a leading `Pipe N` index label (+ one separator, `—`/`·`/`:`/space);
+///  2. strip a closed set of extraction tag prefixes (`style:`, `scene:`, …)
+///     and `keyframe N (fN):` markers — the prose AFTER the tag is kept;
+///  3. strip a trailing `· shot N` residue (the extraction's own naming);
+///  4. drop lines that became empty.
+///
+/// Steps 1+2 run to a fixed point (a tag strip can expose a second leading
+/// `Pipe N` label, e.g. "scene: Pipe 01 settles…"), so the loop is bounded
+/// to two iterations. All case is preserved (matches run on a lowercase
+/// view, slices taken from the original).
+pub fn strip_entry_labels(normalized: &str) -> String {
+    normalized
+        .lines()
+        .map(|line| {
+            let mut t = line.trim().to_string();
+            for _ in 0..2 {
+                let before = t.clone();
+                if let Some(rest) = strip_tag_prefix(&t) {
+                    t = rest;
+                }
+                if let Some(rest) = strip_pipe_label(&t) {
+                    t = rest;
+                }
+                if t == before {
+                    break;
+                }
+            }
+            t = strip_shot_suffix(&t).to_string();
+            t
+        })
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A leading `Pipe 01` / `Pipe 2` index label (+ one separator) → the rest.
+/// "pipeline" and prose lines never match (a digit is required after "pipe",
+/// allowing one space between the word and the digits — the extraction
+/// writes "Pipe 01", not "Pipe01"). The match runs on a lowercase view, but
+/// the RETURNED text is sliced from the original line so case is preserved.
+fn strip_pipe_label(line: &str) -> Option<String> {
+    let lower = line.to_ascii_lowercase();
+    let rest = lower.get(4..)?; // after "pipe"
+    // One optional space between the word and the index ("Pipe 01").
+    let after_space = rest.trim_start_matches(' ');
+    let spaces_skipped = rest.len() - after_space.len();
+    let end = after_space
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_digit())
+        .map(|(i, _)| i)
+        .unwrap_or(after_space.len());
+    if end == 0 {
+        return None; // "pipeline…" or "pipe " with no index — not a label
+    }
+    // Byte offset into the ORIGINAL line of the char just past the digits.
+    let label_end = 4 + spaces_skipped + end;
+    let after = &line[label_end..];
+    Some(after.trim_start_matches(['\u{2014}', '\u{2013}', '-', '\u{b7}', ':', ' ']).to_string())
+}
+
+/// A closed set of the extraction's tag prefixes. `keyframe N (fN):` and
+/// bare `tag:` both yield the prose that follows; anything else is
+/// untouched. The match is `tag` + `:` exactly, so a prose line that
+/// merely *starts with* the word "scene" (no colon) is never stripped.
+/// Loops to a fixed point (depth ≤ 3) so nested extraction dumps
+/// ("style: scene: …", produced when an extraction is fed back through
+/// the extractor) are stripped fully in one call.
+fn strip_tag_prefix(line: &str) -> Option<String> {
+    const TAGS: [&str; 11] = [
+        "keyframe", "subject", "style", "sound", "scene", "camera", "lighting", "motion", "zoom", "transition", "effect",
+    ];
+    let lower0 = line.to_ascii_lowercase();
+    let t0 = line.trim();
+    if lower0.starts_with("keyframe") {
+        // "keyframe 1 (f0): prompt…" → drop through the "):"
+        if let Some(p) = t0.find(':') {
+            return Some(t0[p + 1..].trim().to_string());
+        }
+        return None;
+    }
+    let mut s = line;
+    let mut changed = false;
+    for _ in 0..3 {
+        let mut found: Option<&str> = None;
+        let lower_s = s.to_ascii_lowercase();
+        for tag in TAGS {
+            if tag == "keyframe" {
+                continue;
+            }
+            if lower_s.starts_with(tag) && s.as_bytes().get(tag.len()) == Some(&b':') {
+                found = Some(&s[tag.len() + 1..]);
+                break;
+            }
+        }
+        match found {
+            Some(rest) => {
+                s = rest.trim();
+                changed = true;
+            }
+            None => break,
+        }
+    }
+    if changed {
+        Some(s.to_string())
+    } else {
+        None
+    }
+}
+
+/// A trailing `· shot N` residue (the extraction's per-shot naming) → the part
+/// before it. Only the LAST middle-dot is inspected: `The Departure · shot 1`
+/// and `Scene 1 · Departure · shot 1` both lose their trailing `· shot N`,
+/// while a scene name that merely contains a `·` (no `shot` after its last
+/// dot) is left untouched. A plain "shot 1" with no `·` is content, never
+/// stripped.
+fn strip_shot_suffix(s: &str) -> &str {
+    let last_dot = match s.rfind('\u{b7}') {
+        Some(i) => i,
+        None => return s,
+    };
+    let after = s[last_dot + '\u{b7}'.len_utf8()..].trim();
+    let after_lower = after.to_ascii_lowercase();
+    if after_lower.starts_with("shot ") || after_lower == "shot" {
+        s[..last_dot].trim_end()
+    } else {
+        s
     }
 }
 
@@ -218,5 +361,87 @@ mod tests {
             }]);
         assert_eq!(snap.refs.len(), 1);
         assert_eq!(snap.refs[0].kind, "style");
+    }
+
+    // ── 2026-11-14 "wide: Pipe 01" regression: an extraction dump fed back
+    //    into the G0 idea box must reduce to story, not structure. ─────────
+
+    /// The exact shape the Director's "Extract pipes to prompt" produces
+    /// (the real Session 8 dump that caused the degenerate beats):
+    /// `Pipe 01 — <name> · shot N` headers + `style:`/`scene:`/… prefixed
+    /// lines. After sanitization the "Pipe NN" label, tag prefixes, and
+    /// `· shot N` residue are gone — the clause/subject pipeline sees prose.
+    #[test]
+    fn extraction_dump_is_sanitized_to_story() {
+        let dump = "Pipe 01 — The Departure · shot 1\n\
+                    style: A weary officer navigates the smoke-choked corridors of an Imperial battleship\n\
+                    scene: wide: The Departure unfolds as the gate slams shut\n\
+                    camera: close-up shot, fill_frame framing, shallow depth of field\n\
+                    lighting: soft key light, medium contrast, 5600K, cool\n\
+                    transition: crossfade (out)";
+        let snap = IntentSnapshot::new(dump);
+        // No clause may LEAD with the "Pipe NN" index label, and no closed
+        // tag prefix / per-shot residue may survive.
+        for c in &snap.clauses {
+            assert!(!c.text.starts_with("Pipe "), "no clause may lead with the pipe index: {:?}", c.text);
+            for bad in ["style:", "scene:", "camera:", "lighting:", "transition:", "· shot"] {
+                assert!(!c.text.contains(bad), "tag prefix '{}' survived in: {:?}", bad, c.text);
+            }
+        }
+        // The real scene name (from the header) survives sanitization.
+        let all = snap.clauses.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(all.contains("The Departure"), "the scene name must survive: {all}");
+        assert!(all.contains("A weary officer navigates the smoke-choked corridors of an Imperial battleship"),
+            "the style prose is kept: {all}");
+    }
+
+    /// Genuine prose is a NO-OP: a "pipeline" line, a line that merely
+    /// *starts with* the word "scene" (no colon), and "shot 1" mid-prose
+    /// must all survive byte-stable.
+    #[test]
+    fn strip_entry_labels_is_a_noop_on_prose() {
+        let prose = "The pipeline carries the girl home. A scene of silence. shot 1 holds the frame · a pause · then motion.";
+        assert_eq!(
+            strip_entry_labels(prose),
+            prose,
+            "prose lines must pass through untouched"
+        );
+    }
+
+    /// A nested extraction dump ("style: scene: …", produced by feeding an
+    /// extraction into the extractor twice) strips to the innermost prose.
+    #[test]
+    fn nested_extraction_tags_strip_to_fixed_point() {
+        let s = "style: scene: Pipe 02 — The Chase · shot 1\nsound: wind";
+        let out = strip_entry_labels(s);
+        assert!(
+            out.contains("The Chase") && out.contains("wind"),
+            "the story survives: {out}"
+        );
+        assert!(!out.contains("Pipe 02") && !out.contains("style:") && !out.contains("scene:") && !out.contains("· shot"),
+            "all labels stripped: {out}");
+    }
+
+    /// The Subject-phrase consequence: even if a raw "Pipe 01" fragment
+    /// reached the engine, `subject_phrase` must not return the index.
+    /// (The sanitize step makes this unreachable, but the engine's own
+    /// `subject_phrase` is the last line of defense — pinned here via the
+    /// seed module's exported behavior through an IntentSnapshot clause.)
+    #[test]
+    fn pipe_label_never_becomes_a_shot_subject() {
+        // Simulate the post-sanitize clause the engine would see.
+        let snap = IntentSnapshot::new("Pipe 01 — The Departure · shot 1");
+        // After sanitization the header line reduces to "The Departure"
+        // (the "· shot 1" suffix is the extraction's per-shot naming).
+        assert!(
+            snap.clauses.iter().any(|c| c.text.contains("Departure")),
+            "the real scene name must survive sanitization: {:?}",
+            snap.clauses
+        );
+        assert!(
+            snap.clauses.iter().all(|c| !c.text.starts_with("Pipe")),
+            "no clause may lead with the pipe index label: {:?}",
+            snap.clauses
+        );
     }
 }
