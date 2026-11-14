@@ -74,6 +74,10 @@ fn visual_novel_schema() -> Value {
                     "properties": {
                         "title": { "type": "string" },
                         "prose": { "type": "string" },
+                        "hand_off": {
+                            "type": "string",
+                            "description": "One sentence: the state this scene LEAVES the story in, so the next clip can open on it (the cross-clip connectivity line)."
+                        },
                         "shots": {
                             "type": "array",
                             "minItems": 1,
@@ -100,7 +104,7 @@ fn visual_novel_schema() -> Value {
 
 /// Node A's system prompt (harness `config/nodes.yaml` node_a.prompt,
 /// condensed to the fixture's single-block form).
-const NODE_A_SYSTEM: &str = "You are the film director. From the FilmSeed, write a saturated VISUAL NOVEL: the film's world/palette/time_of_day/weather, then each scene and each shot as dense, sensory visual prose (light, texture, sound, motion, color, weather, emotion). Rules:\n- Output ONE JSON object. Only the schema fields, nothing else.\n- Keep every string under 300 characters. No repeated phrases. Do not list exclusions or negations — just describe what IS present.\n- Each shot's `beats` must be 2-4 CINEMATIC MICRO-CUES, each written as `<shot-size>: <subject> <motion> — <light/sound detail>`, concrete and sensory. No generic filler.\n- Never put on-screen text, subtitles, or UI into the prose.";
+const NODE_A_SYSTEM: &str = "You are the film director. From the FilmSeed, write a saturated VISUAL NOVEL: the film's world/palette/time_of_day/weather, then each scene and each shot as dense, sensory visual prose (light, texture, sound, motion, color, weather, emotion). Rules:\n- Output ONE JSON object. Only the schema fields, nothing else.\n- Keep every string under 300 characters. No repeated phrases. Do not list exclusions or negations — just describe what IS present.\n- Each shot's `beats` must be 2-4 CINEMATIC MICRO-CUES, each written as `<shot-size>: <subject> <motion> — <light/sound detail>`, concrete and sensory. No generic filler.\n- Each scene's `hand_off` is ONE short sentence: the state this scene LEAVES the story in (principal + place + what just happened), so the NEXT clip can open on that exact state. It is the cross-clip connectivity line — never invent a new plot point here, only describe the ending state the following scene must pick up.\n- Never put on-screen text, subtitles, or UI into the prose.";
 
 /// The Node A chat-completions request body: system + user prompts
 /// (seed JSON, genre style, creative profile + sensory axes, hard counts)
@@ -126,15 +130,24 @@ pub fn node_a_request_body(
     let mood_line = MoodProfile::for_mood(entry.mood).directive();
     // Phase 2: the structural brief + soft duration note (only when a tree
     // is attached; otherwise an empty string so the prompt is unchanged).
+    // Stage 1 (2026-11-14): the duration note now carries the SATURATION
+    // budget — how many prose words must FILL the awaited runtime — so the
+    // story length the model writes matches the run's clip count × clip
+    // length, not a fixed prose amount repeated per clip.
     let (brief, duration_note): (String, String) = match tree {
-        Some(t) => (
-            brief_block(t),
-            format!(
-                "Target total runtime is ~{}s ({n} scenes); aim your prose to pace toward it, but the scene/shot COUNTS below are hard and the S5 repair will fix any count drift.",
-                t.root.target_duration_s,
-                n = t.branches.len(),
-            ),
-        ),
+        Some(t) => {
+            let clips = (t.branches.len() * t.branches.first().map(|b| b.shots.max(1) as usize).unwrap_or(1)).max(1) as u32;
+            let clip_s = entry.scale.clip_s[0].max(4);
+            let (_, wpc, total_words) =
+                crate::generation::video_flow::engine::tree::saturation_budget(clips, clip_s);
+            (
+                brief_block(t),
+                format!(
+                    "Target total runtime is ~{}s across {clips} clips (~{clip_s}s each); the story must FILL it: write ~{wpc} dense words of visual prose PER CLIP (~{total_words} total across the whole film). Pace each scene's prose to its clip's share of the runtime — do NOT write one fixed block and repeat it, and do NOT pad with filler. The scene/shot COUNTS below are hard; the S5 repair fixes any count drift.",
+                    t.root.target_duration_s
+                ),
+            )
+        }
         None => (String::new(), String::new()),
     };
     let user = format!(
@@ -421,6 +434,71 @@ mod tests {
         // The hard counts still govern the schema (the brief never relaxes
         // the scene/shot counts).
         assert!(user.contains("scenes.length == 2"), "hard counts survive the brief injection");
+    }
+
+    /// Stage 1 pin (2026-11-14): the duration note carries the SATURATION
+    /// budget — per-clip words derived from the clip count × clip length —
+    /// so the LLM fills the awaited runtime instead of repeating one fixed
+    /// prose block per clip. A longer runtime (more clips) must demand a
+    /// higher total word budget in the prompt.
+    #[test]
+    fn node_a_duration_note_carries_saturation_budget() {
+        use crate::generation::video_flow::engine::tree::build_structural_tree;
+        use crate::generation::video_flow::intent::IntentSnapshot;
+
+        fn body_for(scenes: u32, shots: u32) -> String {
+            let mut e = entry();
+            e.scale = crate::generation::video_flow::engine::types::SeedScale {
+                scenes,
+                shots_per_scene: shots,
+                clip_s: [8, 10],
+            };
+            let intent = IntentSnapshot::new(&e.idea);
+            let tree = build_structural_tree(&intent, &e, &e.overrides);
+            node_a_request_body(&e, "agnes-2.5-flash", Some(&tree))
+                .to_string()
+        }
+
+        let short = body_for(2, 2); // 4 clips × 32 words = 128
+        let long = body_for(3, 3); // 9 clips × 32 words = 288
+        assert!(short.contains("dense words of visual prose PER CLIP"), "per-clip budget present: {short}");
+        assert!(short.contains("~128 total across"), "4 clips × 32 words = 128 total: {short}");
+        assert!(long.contains("PER CLIP"), "per-clip budget present in the longer run: {long}");
+        assert!(long.contains("~288 total across"), "9 clips × 32 words = 288 total: {long}");
+    }
+
+    /// Stage 2 pin: the VisualNovel schema carries the optional `hand_off`
+    /// scene field (the LLM-authored connectivity line; absent = the
+    /// deterministic fallback fires at assembly time).
+    #[test]
+    fn visual_novel_schema_carries_optional_hand_off() {
+        let schema = visual_novel_schema();
+        let scene_props = schema["properties"]["scenes"]["items"]["properties"].as_object().unwrap();
+        assert!(
+            scene_props.contains_key("hand_off"),
+            "the scene schema must expose the optional hand_off field"
+        );
+        // Not required (older responses + the template path omit it).
+        let required: Vec<String> = schema["properties"]["scenes"]["items"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            !required.contains(&"hand_off".to_string()),
+            "hand_off must stay optional: {required:?}"
+        );
+        // And a scene WITHOUT hand_off still deserializes (serde default),
+        // so older LLM responses + the template path keep working.
+        let bare: Result<crate::generation::video_flow::engine::types::NovelScene, _> =
+            serde_json::from_value(
+                json!({
+                    "title": "S", "prose": "p", "shots": [ {"prose": "q", "beats": ["b"]} ]
+                }),
+            );
+        assert!(bare.is_ok(), "a scene without hand_off must parse (serde default)");
+        assert!(bare.unwrap().hand_off.is_none(), "absent hand_off deserializes to None");
     }
 
     #[test]

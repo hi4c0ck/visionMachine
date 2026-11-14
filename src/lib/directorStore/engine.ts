@@ -68,6 +68,11 @@ export interface NovelScene {
 	title: string;
 	prose: string;
 	shots: NovelShot[];
+	/** Stage 2 (2026-11-14): the LLM-authored hand-off line ("what state this
+	 scene leaves the story in so the next clip opens on it"). Optional on the
+	 wire (`serde default`): an absent field means the Rust assembly falls back
+	 to the deterministic hand-off (`tree::deterministic_handoff`). */
+	hand_off?: string | null;
 }
 
 export interface VisualNovel {

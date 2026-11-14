@@ -575,6 +575,35 @@ impl EngineRun {
                 format!("{film_ctx} · {} {}", s.time_of_day, s.weather)
             });
             let ambience = self.scenes.get(si).map(|s| s.ambience.clone());
+            // Stage 1/2: total clip count + this scene's hand-off (LLM-authored
+            // when present, else the deterministic fallback from tree.rs).
+            let total_clips: usize = shot_counts.iter().sum::<usize>().max(1);
+            let scene_count = self.novel.scenes.len().max(1);
+            let last_beat: String = sc
+                .shots
+                .iter()
+                .flat_map(|s| s.beats.iter())
+                .last()
+                .cloned()
+                .unwrap_or_default();
+            let branch_role = self
+                .tree
+                .as_ref()
+                .and_then(|t| t.branches.get(si).map(|b| b.role.as_str()))
+                .unwrap_or("developing");
+            let hand_off = sc
+                .hand_off
+                .clone()
+                .filter(|h| !h.trim().is_empty())
+                .unwrap_or_else(|| {
+                    crate::generation::video_flow::engine::tree::deterministic_handoff(
+                        &sc.title,
+                        &last_beat,
+                        branch_role,
+                        si as u32,
+                        scene_count as u32,
+                    )
+                });
             for (ki, _kshot) in sc.shots.iter().enumerate() {
                 let mi: usize = shot_counts[..si].iter().sum::<usize>() + ki;
                 let Some(spec) = self.specs.get(mi) else { continue };
@@ -633,9 +662,13 @@ impl EngineRun {
                 // generated clip knows "the same person / same place / does it
                 // keep going". The locus is the scene's own title (its place).
                 let locus = cap_words(&sc.title, 5);
+                let clip_pos = format!(
+                    "clip {} of {total_clips}",
+                    mi + 1
+                );
                 let scene_style = format!(
-                    "{scene_style} · {}",
-                    continuity_line(&principal, &locus, si, ki)
+                    "{scene_style} · {} · {hand_off}",
+                    continuity_line(&principal, &locus, si, ki, &clip_pos)
                 );
 
                 let shot_f = shot_frames(spec);
@@ -974,6 +1007,7 @@ fn build_novel(seed: &FilmSeed, tod: &str, weather: &str) -> VisualNovel {
                 title: format!("Scene {scene_num}"),
                 prose,
                 shots,
+                hand_off: None, // deterministic template: the assembly-time fallback (tree.rs) supplies the hand-off
             }
         })
         .collect();
@@ -1247,19 +1281,40 @@ fn scene_sentence(g: usize, place: &str, fragment: &str, axis_detail: &str) -> S
 /// - shot 0 of a later scene -> the scene shifts place but the SAME subject
 ///   carries over (continuable across the cut).
 /// `subject` = the film's principal (one word, the through-line), `locus` =
-/// the scene's concrete place.
-fn continuity_line(subject: &str, locus: &str, si: usize, ki: usize) -> String {
+/// the scene's concrete place, `clip_pos` = this clip's position in the run
+/// (e.g. "3 of 6 clips") so the model knows WHERE it is in the story, not
+/// just that it continues.
+///
+/// Stage 3 (2026-11-14): the doubled-article bug — when the principal is
+/// "the main subject", the old template "the same {subject}" produced
+/// "the same THE MAIN SUBJECT". `strip_article` removes the leading article
+/// so the template reads "the same main subject".
+fn continuity_line(subject: &str, locus: &str, si: usize, ki: usize, clip_pos: &str) -> String {
+    let s = strip_article(subject);
     if si == 0 && ki == 0 {
-        format!("continuity: the film opens here — {subject} in {locus}")
+        format!("continuity: the film opens here — {subject} in {locus} ({clip_pos})")
     } else if ki == 0 {
         format!(
-            "continuity: the scene shifts to {locus} but the same {subject} carries over from the previous scene"
+            "continuity: the scene shifts to {locus} but the same {s} carries over from the previous scene ({clip_pos})"
         )
     } else {
         format!(
-            "continuity: continues the previous shot — the same {subject} remains in {locus}"
+            "continuity: continues the previous shot — the same {s} remains in {locus} ({clip_pos})"
         )
     }
+}
+
+/// Strip a leading article ("the"/"a"/"an") from a noun phrase so it can
+/// follow "the same" without doubling ("the same main subject", not
+/// "the same the main subject"). A bare subject ("officer") is unchanged.
+fn strip_article(s: &str) -> String {
+    let t = s.trim();
+    let rest = t
+        .strip_prefix("the ")
+        .or_else(|| t.strip_prefix("The "))
+        .or_else(|| t.strip_prefix("a "))
+        .or_else(|| t.strip_prefix("an "));
+    rest.map(str::to_string).unwrap_or_else(|| t.to_string())
 }
 
 /// Beats in the harness Node A micro-cue form:
@@ -3148,6 +3203,7 @@ mod seed_tests {
                             beats: vec![beat_cu.to_string()],
                         },
                     ],
+                    hand_off: None,
                 }
             ],
         };
@@ -3255,6 +3311,7 @@ mod seed_tests {
                             beats: beats.clone(),
                         }
                     ],
+                    hand_off: None,
                 }
             ],
         };
@@ -3516,6 +3573,7 @@ mod seed_tests {
                             beats: beats.clone(),
                         }
                     ],
+                    hand_off: None,
                 }
             ],
         };
@@ -3624,6 +3682,7 @@ mod seed_tests {
                             beats: beats.clone(),
                         },
                     ],
+                    hand_off: None,
                 }
             ],
         };
@@ -3685,6 +3744,196 @@ mod seed_tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Stage 3 (2026-11-14): the continuity grammar fix + clip position +
+    /// the deterministic hand-off. The forest-show test case showed the
+    /// principal "the main subject" producing the doubled article
+    /// "the same the main subject" — `strip_article` must collapse that.
+    /// Every pipe also carries "clip N of M" (position-in-story) and a
+    /// `hand-off:` line (the connectivity demand), derived deterministically
+    /// when the LLM authored none (the template novel never does).
+    #[test]
+    fn continuity_line_fixes_doubled_article_and_carries_position_and_handoff() {
+        use crate::generation::video_flow::engine::types::VisualNovel;
+        use crate::generation::video_flow::plan::VideoTag;
+
+        let mut e = entry("a girl follows the river road north at dusk");
+        e.scale = crate::generation::video_flow::engine::types::SeedScale {
+            scenes: 2,
+            shots_per_scene: 2,
+            clip_s: [8, 10],
+        };
+        let seed = e.to_seed();
+        let beats = vec![
+            "wide: the girl steps onto the river path - light on the water".to_string(),
+            "medium: the river bends around the pines - the hum of the current".to_string(),
+        ];
+        let novel = VisualNovel {
+            film: crate::generation::video_flow::engine::types::FilmLook {
+                title: "River".into(),
+                logline: "a girl follows the river".into(), // → principal "the main subject" (article case)
+                style: "cinematic natural light".into(),
+                world: "the river road".into(),
+                palette: "dusk blue".into(),
+                time_of_day: "dusk".into(),
+                weather: "clear".into(),
+            },
+            scenes: vec![
+                crate::generation::video_flow::engine::types::NovelScene {
+                    title: "Scene 1: The Path".into(),
+                    prose: "the girl on the river path".into(),
+                    shots: vec![
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the path begins".into(),
+                            beats: beats.clone(),
+                        },
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the path winds".into(),
+                            beats: beats.clone(),
+                        },
+                    ],
+                    hand_off: None, // deterministic fallback must supply it
+                },
+                crate::generation::video_flow::engine::types::NovelScene {
+                    title: "Scene 2: The Bend".into(),
+                    prose: "the river bends".into(),
+                    shots: vec![
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the bend opens".into(),
+                            beats: beats.clone(),
+                        },
+                        crate::generation::video_flow::engine::types::NovelShot {
+                            prose: "the bend closes".into(),
+                            beats: beats.clone(),
+                        },
+                    ],
+                    hand_off: None,
+                },
+            ],
+        };
+
+        let run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Llm,
+            None,
+        );
+        assert!(
+            run.verify.verified,
+            "hand-off-augmented run must still pass S5 verify: {:?}",
+            run.verify.issues
+        );
+        let plan = run.plan_from_engine(1);
+        assert_eq!(plan.pipes.len(), 4, "2 scenes × 2 shots = 4 pipes");
+
+        for (i, pipe) in plan.pipes.iter().enumerate() {
+            let gs = &pipe.global_style;
+            // 1) The grammar fix: NEVER "the same the main subject".
+            assert!(
+                !gs.contains("the same the"),
+                "pipe {i} must not carry the doubled article: {gs}"
+            );
+            // 2) Position-in-story: every pipe names its clip position.
+            assert!(
+                gs.contains(&format!("clip {} of 4", i + 1)),
+                "pipe {i} must carry 'clip {} of 4': {gs}",
+                i + 1
+            );
+            // 3) The deterministic hand-off is present (LLM authored none).
+            assert!(
+                gs.contains("hand-off:"),
+                "pipe {i} must carry the deterministic hand-off: {gs}"
+            );
+            // 4) The Scene arc stays lean (the hand-off lives in global_style,
+            //    not the per-slice scene prompt, so it can't squash the model).
+            for s in &pipe.sections {
+                if s.tag == VideoTag::Scene {
+                    let words = s.prompt.split_whitespace().count();
+                    assert!(
+                        words <= 24,
+                        "pipe {i} scene arc must stay lean, got {words}: '{}'",
+                        s.prompt
+                    );
+                }
+            }
+        }
+
+        // The opener's continuity line vs a mid-scene line differ as before.
+        assert!(plan.pipes[0].global_style.contains("the film opens here"));
+        assert!(plan.pipes[1].global_style.contains("continues the previous shot"));
+    }
+
+    /// Stage 2: an LLM-AUTHORED hand-off wins over the deterministic
+    /// fallback (the "powerful fallback, LLM primary" rule the user asked
+    /// for): when a `NovelScene.hand_off` is present, it is used verbatim
+    /// and the deterministic line is NOT synthesized.
+    #[test]
+    fn llm_authored_handoff_wins_over_deterministic_fallback() {
+        use crate::generation::video_flow::engine::types::VisualNovel;
+
+        let mut e = entry("a girl follows the river road north at dusk");
+        e.scale = crate::generation::video_flow::engine::types::SeedScale {
+            scenes: 1,
+            shots_per_scene: 2,
+            clip_s: [8, 10],
+        };
+        let seed = e.to_seed();
+        let beats = vec![
+            "wide: the river path - light on the water".to_string(),
+            "medium: the pines - the current's hum".to_string(),
+        ];
+        let novel = VisualNovel {
+            film: crate::generation::video_flow::engine::types::FilmLook {
+                title: "T".into(),
+                logline: "the officer commands".into(), // → principal "officer" (bare, no article)
+                style: "s".into(),
+                world: "w".into(),
+                palette: "p".into(),
+                time_of_day: "dusk".into(),
+                weather: "clear".into(),
+            },
+            scenes: vec![crate::generation::video_flow::engine::types::NovelScene {
+                title: "The Path".into(),
+                prose: "the path".into(),
+                shots: vec![
+                    crate::generation::video_flow::engine::types::NovelShot {
+                        prose: "begins".into(),
+                        beats: beats.clone(),
+                    },
+                    crate::generation::video_flow::engine::types::NovelShot {
+                        prose: "winds".into(),
+                        beats: beats,
+                    },
+                ],
+                hand_off: Some("leaves the story on the river bend, the officer mid-stride, the current still rising".into()),
+            }],
+        };
+        let run = EngineRun::build_with_novel(
+            seed,
+            novel,
+            &e.time_of_day,
+            &e.weather,
+            ExpansionSource::Llm,
+            None,
+        );
+        let plan = run.plan_from_engine(1);
+        for pipe in &plan.pipes {
+            assert!(
+                pipe.global_style.contains("leaves the story on the river bend"),
+                "the LLM hand-off must be used verbatim, got: {}",
+                pipe.global_style
+            );
+            // The deterministic line (derived from the last beat + "developing")
+            // must NOT have been synthesized instead.
+            assert!(
+                !pipe.global_style.contains("the developing state above"),
+                "the deterministic fallback must not fire when the LLM authored a hand-off: {}",
+                pipe.global_style
+            );
         }
     }
 

@@ -70,6 +70,15 @@ pub struct NovelScene {
     pub title: String,
     pub prose: String,
     pub shots: Vec<NovelShot>,
+    /// Stage 2: the LLM-authored HAND-OFF line for this scene — "what state
+    /// this scene leaves the story in so the next clip opens on it." Optional
+    /// (`serde default`): an absent field = the deterministic fallback
+    /// (`tree.rs::deterministic_handoff`) is used at assembly time, so an
+    /// older LLM response (or the template novel, which never sets it) still
+    /// gets a connectivity line. Strict schema keeps `additionalProperties`
+    /// false but lists this as an optional property.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand_off: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

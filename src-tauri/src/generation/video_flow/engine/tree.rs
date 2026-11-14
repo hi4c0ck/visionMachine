@@ -346,6 +346,52 @@ pub fn role_dwell_weight(role: &str) -> f32 {
     }
 }
 
+/// Stage 1 (2026-11-14): the story SATURATION budget. The run knows how
+/// long the story is (`clips` × the mood band's clip length); this is the
+/// number of prose words that should FILL that runtime. A `{clip_s}s`
+/// clip carries ~4 dense visual words per second (a 6s clip ≈ a 24-word
+/// beat sentence + scene prose), floored at 32 words so a short clip
+/// still gets a real beat, never filler. The LLM expander is told this
+/// budget explicitly (llm.rs duration note) so the story fills the
+/// awaited length instead of writing a fixed prose amount that gets
+/// repeated per clip. Pure + testable; `clips` must be the HARD count
+/// (entry.scale scenes × shots) so the budget matches what S2–S5 build.
+pub fn saturation_budget(clips: u32, clip_s: u32) -> (u32, u32, u32) {
+    let clips = clips.max(1);
+    let words_per_clip = (clip_s.max(4) * 4).max(32);
+    (clips, words_per_clip, clips * words_per_clip)
+}
+
+/// Stage 2 (2026-11-14): the DETERMINISTIC hand-off fallback. When the LLM
+/// didn't author a `NovelScene.hand_off` (the template novel never does;
+/// an older LLM schema may omit it), this derives the connectivity line
+/// from the scene's own beats + role: "leaves the story in <last beat
+/// state> so the next clip opens on <next intent>". Bounded, closed-vocab,
+/// no invented prose — it says WHAT state persists, not a new plot point.
+/// `branch_i`/`total` label the position; the last scene hands off to the
+/// film's release (no next clip).
+pub fn deterministic_handoff(scene_title: &str, last_beat: &str, branch_role: &str, branch_i: u32, total: u32) -> String {
+    let beat = last_beat.trim().rsplit(':').next().unwrap_or(last_beat).trim();
+    let beat = if beat.is_empty() { "the scene's current state" } else { &beat };
+    let cap = beat.chars().take(60).collect::<String>();
+    if branch_i + 1 >= total {
+        format!(
+            "hand-off: {scene_title} ends on '{cap}' — the story releases here, no new setup beyond this state"
+        )
+    } else {
+        let role_cue = match branch_role {
+            "establishing" => "the world now established",
+            "developing" => "the developing state above",
+            "turn" => "the reversal just played out",
+            "resolving" => "the settling ending",
+            _ => "the current scene state",
+        };
+        format!(
+            "hand-off: leaves the story on '{cap}' ({role_cue}); the next clip must open on this exact state, same principal and place"
+        )
+    }
+}
+
 /// The content-aware run scale — the "real understanding" seam (2026-11-10).
 /// The scene/shot counts are derived from the IDEA's structure (clauses/words
 /// via `suggest_scale`), not from the frozen G0 default. The rule is SOFT —
@@ -1123,6 +1169,52 @@ mod tests {
 
     fn intent_rich() -> IntentSnapshot {
         IntentSnapshot::new(RICH)
+    }
+
+    // ── Stage 1 (2026-11-14): the saturation budget ────────────────────
+
+    #[test]
+    fn saturation_budget_scales_with_runtime() {
+        // Same clip length, different clip counts → different total mass.
+        let (clips_4, wpc_4, total_4) = saturation_budget(4, 8);
+        let (clips_8, wpc_8, total_8) = saturation_budget(8, 8);
+        assert_eq!(clips_4, 4);
+        assert_eq!(clips_8, 8);
+        assert_eq!(wpc_4, wpc_8, "per-clip words depend on clip length only");
+        assert_eq!(total_8, 2 * total_4, "doubling clips doubles the story mass");
+    }
+
+    #[test]
+    fn saturation_budget_floor_and_short_clip() {
+        // Short clips (4s) still get the 32-word floor; a huge clip scales.
+        let (_, wpc_short, t_short) = saturation_budget(1, 4);
+        assert_eq!(wpc_short, 32, "a 4s clip floored at 32 words");
+        assert_eq!(t_short, 32);
+        let (_, wpc_long, t_long) = saturation_budget(3, 10);
+        assert_eq!(wpc_long, 40, "a 10s clip = 40 words");
+        assert_eq!(t_long, 120);
+        // Degenerate inputs never panic.
+        assert_eq!(saturation_budget(0, 0).0, 1, "clip count floored at 1");
+    }
+
+    // ── Stage 2 (2026-11-14): the deterministic hand-off fallback ──────
+
+    #[test]
+    fn deterministic_handoff_carries_position_and_state() {
+        let h = deterministic_handoff("Scene 2 Arrival", "close-up: the hand releases the rope", "developing", 1, 3);
+        assert!(h.contains("hand-off:"), "the line labels itself: {h}");
+        assert!(h.contains("the hand releases the rope"), "the last beat state is named: {h}");
+        assert!(h.contains("the next clip must open on this exact state"), "the connectivity demand is explicit: {h}");
+        assert!(h.contains("developing state"), "the role cue is present: {h}");
+    }
+
+    #[test]
+    fn deterministic_handoff_last_scene_releases() {
+        let h = deterministic_handoff("Scene 3 Aftermath", "wide: the shadow passes", "resolving", 2, 3);
+        assert!(h.contains("the story releases here"), "the last scene releases, no new setup: {h}");
+        // Unknown beat → the neutral state wording, never a panic.
+        let empty = deterministic_handoff("S", "", "developing", 0, 2);
+        assert!(empty.contains("the scene's current state"), "empty beat falls back to the neutral wording: {empty}");
     }
 
     /// The untouched G0 default (1×2) adopts the idea's own structure — a
