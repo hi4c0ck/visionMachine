@@ -2544,6 +2544,28 @@ pub async fn retry_failed_video_downloads(
         };
         let session_root =
             std::path::PathBuf::from(media_root).join(safe_session_name(&composer.name));
+        // P5 cheap pre-check: a session with NO degraded task rows can't have a
+        // `download_failed` marker, so skip the whole (bounded but still O(files)
+        // + per-marker CDN ride-out) walk on session load. The L2 marker is only
+        // ever written for a task whose row's `output_path` degraded to the
+        // remote URL; a healed task flips that row back to a local path. Count
+        // rows whose output is still a remote URL: zero → nothing to scan.
+        let degraded_rows: i64 = sqlx::query(
+            "SELECT COUNT(*) FROM video_generation_tasks \
+             WHERE session_id = ? AND output_path LIKE 'http%'",
+        )
+        .bind(&input.session_id)
+        .fetch_one(&db.pool)
+        .await
+        .map(|r| r.try_get::<i64, _>(0).unwrap_or(0))
+        .unwrap_or(0);
+        if degraded_rows == 0 {
+            log::info!(
+                "[Reheal] session {}: no degraded task rows — skipped file walk (pre-check)",
+                input.session_id
+            );
+            return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+        }
         // The download key: the SESSION's OWN profile video slot first (the
         // tasks ran under it — e.g. profile "hi4"), then the default profile
         // (the task stage's fallback when its own profile carries no key).

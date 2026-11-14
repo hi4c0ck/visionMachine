@@ -450,11 +450,36 @@ impl TaskRegistry {
                 .filter(|t| matches!(t.view.status, TaskStatus::Queued | TaskStatus::Running))
                 .count();
             if active >= MAX_CONCURRENT_TASKS {
-                log::warn!(
-                    "[Generation] start task {} rejected: generation already in progress",
-                    view.task_id
-                );
-                return Err("Generation already in progress".to_string());
+                // P5: carry WHO holds the single generation slot (its session +
+                // task) in the rejection so the UI can say "another session is
+                // generating", not a bare "already in progress" error. The slot
+                // is global (MAX_CONCURRENT_TASKS == 1), so there is at most one
+                // holder — surface its identity when it belongs to a DIFFERENT
+                // session than the request (the cross-session case that reads
+                // as "an error when I switch sessions").
+                let holder = tasks
+                    .values()
+                    .find(|t| matches!(t.view.status, TaskStatus::Queued | TaskStatus::Running))
+                    .map(|t| (t.view.session_id.clone(), t.view.task_id.clone()));
+                match holder {
+                    Some((h_session, h_task)) if h_session != view.session_id => {
+                        log::warn!(
+                            "[Generation] start task {} rejected: held by session {} (task {})",
+                            view.task_id, h_session, h_task
+                        );
+                        return Err(format!(
+                            "Generation slot is in use by another session (task {h_task}). \
+                             Wait for it to finish, cancel it, or switch to that session."
+                        ));
+                    }
+                    _ => {
+                        log::warn!(
+                            "[Generation] start task {} rejected: generation already in progress",
+                            view.task_id
+                        );
+                        return Err("Generation already in progress".to_string());
+                    }
+                }
             }
             tasks.insert(
                 view.task_id.clone(),

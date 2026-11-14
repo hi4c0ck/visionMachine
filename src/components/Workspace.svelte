@@ -328,15 +328,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// attach runs through attachSessionVideo so it is also mirrored into
 		// the ToolsPanel preview section (see syncCompose / compose button).
 		//
-		// IMPORTANT: run this check for the CURRENT session, not just "some
-		// session video is set". `groupSessionVideoPath`/`groupComposeState`
-		// are armed by the last RESTORED group, which can belong to a DIFFERENT
-		// session (the user just switched away from a composed one). Without the
-		// sid guard a stale path from the previous session would re-attach that
-		// session's video to the top panel — exactly the "preview doesn't change
-		// when I switch sessions" bug. The path's owning session is implicit:
-		// it is only ever armed for the session currently being restored.
-		if (groupSessionVideoPath && groupComposeState === 'done') {
+		// P3 cross-session leak guard: `groupSessionVideoPath`/`groupComposeState`
+		// are GLOBAL state armed asynchronously by the LAST finished group-restore,
+		// so on a fast A→B swing they can still point at session A's video while we
+		// are restoring session B. The owning session is tracked in
+		// `groupSessionVideoOwner`; only attach when the owner matches the session
+		// being restored (or no owner was claimed — the safe legacy behavior). A
+		// foreign path falls through to B's own session video below, so B's panel
+		// never shows A's composed video ("preview doesn't switch" bug).
+		if (groupSessionVideoPath && groupComposeState === 'done' &&
+			(!groupSessionVideoOwner || groupSessionVideoOwner === sid)) {
 			// A composed session video owns the top panel even when a pipe
 			// preview was attached earlier — always re-attach (refreshing
 			// the tool-panel mirror too), never early-return.
@@ -617,6 +618,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// on-demand refresh (focus / refresh button) + the fallback poll don't
 	// double-apply the terminal side-effects.
 	let terminalHandled = new Set<string>();
+	// P4: groups whose terminal (error/cancelled) reopen has already been
+	// surfaced (toast + red pill) in this app session. The restore body runs on
+	// EVERY visit to a session whose last group failed, so without this the
+	// "Generation failed: …" toast + error pill re-fire on every switch away
+	// and back — the "stale generation error on every session move" noise.
+	// First visit surfaces it; later visits keep the pill marker (state, not a
+	// re-toast). Bounded like the other module Maps.
+	let terminalNotified = new Set<string>();
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
 	// The on-disk path of the file currently attached to the top-panel preview
 	// (the source of `previewVideo`'s blob URL). "Play outside" hands this to
@@ -652,6 +661,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// so a "stubbed with error" run is not silently invisible.
 	let groupRunError = $state<string | null>(null);
 	let groupSessionVideoPath = $state<string | null>(null);
+	// P3: the session that `groupSessionVideoPath` belongs to. The path is a
+	// GLOBAL armed asynchronously by the LAST finished group-restore, so it can
+	// transiently point at a DIFFERENT session than the one currently being
+	// restored (a fast A→B swing). The restore effect must only attach it when
+	// the owner matches the session it is restoring — otherwise a foreign
+	// session's composed video leaks into the new session's top panel ("preview
+	// doesn't switch / another session's video shows"). null = no owner claimed.
+	let groupSessionVideoOwner = $state<string | null>(null);
 	// 0012 G8: the video-normalization params the last compose ran with,
 	// snapshotted on the group row. Compared against the session's CURRENT
 	// target + crop mode to flag a stale session video (the user changed
@@ -674,6 +691,25 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	let groupProgress = $state(0);
 	let groupComposePhase = $state<string | null>(null);
 	let restoredGroupSessionId = $state<string | null>(null);
+	// P2 (bounded): a per-GROUP live snapshot, keyed by group id, written on
+	// every poll tick of the displayed group. When the user switches AWAY from
+	// a still-running group and BACK, the restore hydrates the display globals
+	// synchronously from this record (O(1), no 0% flash, no re-fetch window)
+	// instead of waiting for the async re-fetch to land. The record persists
+	// across switches, so the "coming back shows correct live progress" case
+	// is instant. Bounded like the other module Maps (the live group is the
+	// hot one; terminal groups drop out on the next visit).
+	type GroupLiveSnapshot = {
+		pipeTaskIds: Record<string, string>;
+		taskViews: Record<string, GenerationTaskView>;
+		status: string | null;
+		progress: number;
+		composeState: string | null;
+		composeError: string | null;
+		sessionVideoPath: string | null;
+		at: number;
+	};
+	let groupLiveRecords = new Map<string, GroupLiveSnapshot>();
 	// ARCHITECTURE (single-transaction session switch):
 	//   sessionEpoch  — monotonic counter, bumped on every handleSessionSelect.
 	//   sessionSwitching — while true, no other user-initiated async work
@@ -736,6 +772,29 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					}
 				}
 				groupTaskViews = merged;
+			// P2: persist the group's live display state so a switch-away +
+			// switch-back can re-hydrate the modal/pill synchronously (no 0%
+			// flash). One record per group; the live group is the only one that
+			// ticks, so the map stays tiny.
+			groupLiveRecords.set(gid, {
+				pipeTaskIds: { ...groupPipeTaskIds },
+				taskViews: merged,
+				status: groupStatus,
+				progress: groupProgress,
+				composeState: groupComposeState,
+				composeError: groupComposeError,
+				sessionVideoPath: groupSessionVideoPath,
+				at: Date.now(),
+			});
+			// P2 bound: the map is per-LIVE-group and drops on terminal, but a
+			// pathological many-group lifetime should still be capped. Keep the
+			// most recent 32.
+			if (groupLiveRecords.size > 32) {
+				for (const k of groupLiveRecords.keys()) {
+					if (groupLiveRecords.size <= 32) break;
+					groupLiveRecords.delete(k);
+				}
+			}
 				// Recompute the "Overall" bar from the LIVE per-pipe views. The
 				// backend's `g.progress` is a terminal-only average (per-pipe
 				// values sit at 0 until each pipe finishes), so trusting it
@@ -762,9 +821,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				groupComposeState = g.composeState ?? groupComposeState;
 				groupComposeError = g.composeError ?? groupComposeError;
 				groupSessionVideoPath = g.sessionVideoPath ?? groupSessionVideoPath;
+				// P3: this poller drives the currently-displayed session's group;
+				// claim its id as the owner so a later restore can reject a
+				// foreign session's path.
+				if (g.sessionVideoPath) groupSessionVideoOwner = selectedSessionId;
 				// Group reached a terminal state — stop polling.
 				if (!['running'].includes(g.status)) {
 					stopGroupPoll();
+					groupLiveRecords.delete(gid); // P2: terminal group's snapshot no longer useful
 					if (gid !== activeGroupId) return; // a new group took over mid-flight
 					// Safety net: if the group-terminal event was lost (the
 					// subscription dropped mid-session), the poller is the only
@@ -818,6 +882,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						groupComposeState = g.composeState ?? null;
 						groupComposeError = g.composeError ?? null;
 						groupSessionVideoPath = g.sessionVideoPath ?? null;
+						// P3: arm the owner from the session in front of us when
+						// this event actually attached something, so a later
+						// restore of a DIFFERENT session rejects the path.
+						if (g.composeState === 'done' && g.sessionVideoPath) groupSessionVideoOwner = selectedSessionId;
 						if (progressMinimized) {
 							if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
 							// Compose success must not mask a failed pipe: a
@@ -834,6 +902,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			}
 			if (event.kind === 'group-terminal') {
 				groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
+				groupLiveRecords.delete(gid); // P2: terminal group's snapshot no longer useful
 				groupStatus = event.status ?? 'done'; groupStale = false;
 				// Final pill marker: green only on a clean 'done' — 'error'
 				// (stop policy), 'done_with_errors' (continue policy) and
@@ -1433,6 +1502,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			groupComposeState = null;
 			groupComposeError = null;
 			groupSessionVideoPath = null;
+			groupSessionVideoOwner = null;
 			groupRunError = null;
 			stopGroupPoll();
 			stopWatching();
@@ -1482,10 +1552,61 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		groupStatus = group.status;
 		groupStale = isStaleGroup(group.status, group.live);
 		groupTaskId = null;
-		groupPipeTaskIds = isLiveGroup
-			? Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []))
-			: {};
+		// P2: hydrate the live-group display from the last poll-tick snapshot when
+		// one exists (warm start on switch-back); fall back to the group's own
+		// pipe→task map otherwise (cold reopen after a restart has no snapshot
+		// yet — the P1 re-fetch below fills it).
 		groupTaskViews = {};
+		groupPipeTaskIds = {};
+		if (isLiveGroup) {
+			// P2: synchronously re-hydrate the live display from the last poll
+			// tick's snapshot so the user does not see a 0% / empty-rows flash
+			// while the P1 re-fetch is in flight. The snapshot holds exactly
+			// what the poller would have written (views + merged progress +
+			// compose phase), so it is a warm start, not a second source of
+			// truth — the P1 fetch immediately after overwrites each view as
+			// it lands and the poller keeps ticking.
+			const snap = groupLiveRecords.get(group.groupId);
+			if (snap && snap.at && Date.now() - snap.at < 30_000) {
+				groupPipeTaskIds = snap.pipeTaskIds;
+				groupTaskViews = snap.taskViews;
+				groupStatus = snap.status;
+				groupProgress = snap.progress;
+				groupComposeState = snap.composeState;
+				groupComposeError = snap.composeError;
+				groupSessionVideoPath = snap.sessionVideoPath;
+				groupSessionVideoOwner = snap.sessionVideoPath ? sessionId : null;
+				// Never inherit the previous session's activeTask: null it first,
+				// then adopt only a view that actually exists in the snapshot.
+				activeTask = null;
+				const lastTaskId = Object.values(snap.pipeTaskIds).pop() ?? null;
+				activeTaskId = lastTaskId;
+				if (lastTaskId) {
+					const pipeKey = Object.entries(snap.pipeTaskIds).find(([, t]) => t === lastTaskId)?.[0];
+					const view = pipeKey ? snap.taskViews[pipeKey] : null;
+					if (view) activeTask = view;
+				}
+			} else {
+				groupPipeTaskIds = Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []));
+			}
+			// P1: re-fetch the live task views for every pipe that still has an
+			// in-flight task. Before this, a switch into a running session wiped
+			// `groupTaskViews` to {} and the 2 s poller only merged progress for
+			// pipes ALREADY present in that map — so the compact rows and the
+			// "Overall" bar sat at 0% (the backend's pipe progress only advances
+			// at pipe-terminal) until the first pipe-terminal event or a manual
+			// row fetch: the "coming back shows incorrect progress" symptom.
+			// Display the newest pipe task in the pill/modal immediately.
+			const liveTaskIds = Object.values(groupPipeTaskIds);
+			if (!activeTaskId) activeTaskId = liveTaskIds.length ? liveTaskIds[liveTaskIds.length - 1] : null;
+			for (const taskId of liveTaskIds) {
+				void fetchGenerationTask(taskId).then((view) => {
+					if (group.groupId !== activeGroupId) return; // a newer session took over mid-flight
+					if (view.pipeId) groupTaskViews[view.pipeId] = view;
+					if (view.taskId === activeTaskId) activeTask = view;
+				}).catch(() => {});
+			}
+		}
 		groupComposeState = group.composeState ?? null;
 		groupComposeError = group.composeError ?? null;
 		// Surface a terminal group's run-level error on reopen. The group
@@ -1496,19 +1617,34 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// pill as errored and toast the reason so the user sees it immediately.
 		groupRunError = group.error ?? null;
 		if (!isLiveGroup && (group.status === 'error' || group.status === 'cancelled')) {
+			// P4 once-per-app-session surfacing: the first reopen of a failed
+			// group toasts + marks the red pill; later visits keep the pill
+			// marker (state) but do NOT re-fire the "Generation failed: …" toast,
+			// which previously re-fired on every switch away and back — the
+			// "stale generation error on every session move" noise.
 			pillTerminal = 'error';
 			const detail = group.error ?? group.composeError ?? 'unknown reason';
 			generationError = detail; // Show in ToolsPanel indicator
-			flashToast(
-				`${group.status === 'cancelled' ? 'Generation cancelled' : 'Generation failed'}: ${detail}`,
-				'error',
-			);
+			if (!terminalNotified.has(group.groupId)) {
+				terminalNotified.add(group.groupId);
+				if (terminalNotified.size > 64) {
+					const first = terminalNotified.values().next();
+					if (!first.done) terminalNotified.delete(first.value);
+				}
+				flashToast(
+					`${group.status === 'cancelled' ? 'Generation cancelled' : 'Generation failed'}: ${detail}`,
+					'error',
+				);
+			}
 		}
 		// The session video path is only meaningful when the compose SUCCEEDED.
 		// A failed / cancelled latest compose must not leave a stale path from
 		// another session attached — clear it so the preview can fall back (or
 		// blank) rather than showing the previous session's video.
 		groupSessionVideoPath = (group.composeState === 'done') ? (group.sessionVideoPath ?? null) : null;
+		// P3: claim the owning session so a later restore can reject a path that
+		// belongs to a DIFFERENT session (the cross-session leak).
+		groupSessionVideoOwner = (group.composeState === 'done' && group.sessionVideoPath) ? sessionId : null;
 		// 0012 G8: capture the compose-normalization snapshot so the stale
 		// badge (ToolsPanel) can flag a session video that was produced with
 		// a different target/crop than the session currently has.
@@ -2159,6 +2295,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			groupComposeState = null;
 			groupComposeError = null;
 			groupSessionVideoPath = null;
+			groupSessionVideoOwner = null;
 			subscribeGroupWatcher(result.groupId, { models, seed });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
