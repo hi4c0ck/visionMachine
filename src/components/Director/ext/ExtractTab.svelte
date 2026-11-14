@@ -89,13 +89,62 @@
 	// structured sections for rendering.
 	const sections = $derived<PlanSection[]>(doc?.structured.pipes[0]?.sections ?? []);
 
+	// ── Time-zone view (VISUAL ONLY — localExtract stays a flat array; the
+	// apply / copy / regenerate business logic reads it unchanged) ──
+	// `range` is a "SS–EE" frame window within the clip at the seed's 24 fps.
+	// Sections naturally cluster at SLICE BOUNDARIES (frames 0, 24, 48…) and
+	// the clip's tail (transition-out) — those clusters are the "time zones".
+	// Grouping by the RANGE START (a zone's first frame) is pure view layer.
+	const zoneStartOf = (s: LocalSection): number => {
+		// "00–48" → 0. The separator is the en dash the seed's rng() writes;
+		// a missing separator (legacy rows) falls back to the clip head.
+		const i = s.range.indexOf('\u2013');
+		const n = Number.parseInt(i >= 0 ? s.range.slice(0, i) : s.range, 10);
+		return Number.isFinite(n) ? n : 0;
+	};
+
+	// Tag filter chips: counts over the FULL extract (stable while
+	// filtering). Closed concern vocabulary first (the lane colors know
+	// these), unknowns after.
+	const tagCounts = $derived.by(() => {
+		const m = new Map<string, number>();
+		for (const s of localExtract) m.set(s.tag, (m.get(s.tag) ?? 0) + 1);
+		const known = ['scene', 'camera', 'lighting', 'motion', 'transition', 'effect'];
+		const keys = [...m.keys()];
+		return new Map(
+			[...known.filter((t) => m.has(t)), ...keys.filter((t) => !known.includes(t))].map(
+				(t) => [t, m.get(t)!] as [string, number],
+			),
+		);
+	});
+	// Multi-select, OR across tags: a section shows when ANY selected tag
+	// matches. Empty selection = the full extract. ($state requires `let` —
+	// reassignment is the reactive write.)
+	let activeTags = $state<string[]>([]);
+	function toggleTag(tag: string) {
+		activeTags = activeTags.includes(tag)
+			? activeTags.filter((t) => t !== tag)
+			: [...activeTags, tag];
+	}
+	function clearTags() {
+		activeTags = [];
+	}
+	const visibleSections = $derived(
+		activeTags.length
+			? localExtract.filter((s: LocalSection) => activeTags.includes(s.tag))
+			: localExtract,
+	);
+
 	// M3: group the concrete sections by shot-pipe (pipeIndex) so each
 	// pipe renders one header (carrying the scoped-apply control) above its
 	// per-section articles. Sections arrive pipe-major from the parent's
 	// seed, but the Map keeps the grouping correct regardless of order.
+	// Groups over the FILTERED view: a pipe with zero matching sections
+	// drops out of the panel while the filter is active (the scoped apply
+	// still targets the whole pipe — the filter is display-only).
 	const pipeGroups = $derived.by(() => {
 		const m = new Map<number, LocalSection[]>();
-		for (const s of localExtract) {
+		for (const s of visibleSections) {
 			let arr = m.get(s.pipeIndex);
 			if (!arr) m.set(s.pipeIndex, (arr = []));
 			arr.push(s);
@@ -103,6 +152,34 @@
 		return [...m.entries()]
 			.sort((a, b) => a[0] - b[0])
 			.map(([pipeIndex, secs]) => ({ pipeIndex, sections: secs }));
+	});
+
+	// Within a pipe: group its sections by range start frame (ascending).
+	// One zone = one slice boundary (or the clip head / tail). Seed order
+	// inside a zone is preserved (scene → camera → lighting → …).
+	function zonesOf(secs: LocalSection[]) {
+		const m = new Map<number, LocalSection[]>();
+		for (const s of secs) {
+			const z = zoneStartOf(s);
+			let arr = m.get(z);
+			if (!arr) m.set(z, (arr = []));
+			arr.push(s);
+		}
+		return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([start, list]) => ({ start, sections: list }));
+	}
+
+	// Collapse memory (visual only). Default = everything expanded, so a
+	// fresh extract renders with today's density plus the new affordances.
+	// Zone keys are `${pipeIndex}:${startFrame}`. Reset on session change so
+	// a new session's extract opens fully and unfiltered. ($state requires
+	// `let` — reassignment is the reactive write.)
+	let collapsedPipes = $state<Record<number, boolean>>({});
+	let collapsedZones = $state<Record<string, boolean>>({});
+	$effect(() => {
+		void sessionId;
+		collapsedPipes = {};
+		collapsedZones = {};
+		activeTags = [];
 	});
 
 	// M3: per-pipe scoped-apply state (busy flag + inline feedback) keyed by
@@ -228,10 +305,32 @@
 		</div>
 	</div>
 
+	<!-- Tag filter chips: one per concern, lane-colored, with counts. Multi-
+	     select (OR); a section shows when ANY selected tag matches. -->
+	{#if tagCounts.size}
+		<div class="tag-chips" role="group" aria-label="Filter sections by tag">
+			<button
+				class="chip"
+				class:active={activeTags.length === 0}
+				onclick={clearTags}
+			>
+				<span class="chip-count">{localExtract.length}</span> all
+			</button>
+			{#each [...tagCounts.entries()] as [tag, count]}
+				<button
+					class="chip {TAG_LANE_CLASS[tag] ?? 'lane-muted'}"
+					class:active={activeTags.includes(tag)}
+					onclick={() => toggleTag(tag)}
+					aria-pressed={activeTags.includes(tag)}
+				>
+					{tag} <span class="chip-count">{count}</span>
+				</button>
+			{/each}
+		</div>
+	{/if}
+
 	<!-- The concrete, editable structure (mirror of Rust plan_from_engine):
-	     one group per shot pipe. Story arcs tile the shot; the whole-shot
-	     meta conditions (camera/motion/lighting/transition/effect) span
-	     and overlap it. -->
+	     one group per shot pipe, nested by time zone (range start frame). -->
 	{#if localExtract.length}
 		{#if engine}
 			<p class="hint extract-film-ctx">
@@ -241,14 +340,24 @@
 		{/if}
 		{#each pipeGroups as group}
 			{@const groupDirty = group.sections.filter(isEdited).length}
+			{@const zones = zonesOf(group.sections)}
+			{@const zoneKeyOf = (start: number) => `${group.pipeIndex}:${start}`}
 			<!-- M3: one header per shot-pipe carries the scoped-apply control.
 			     Enabled when the pipe has >=1 dirty section OR the user wants
 			     to re-materialize it; disabled when no composer pipes exist yet
 			     (a scoped replace can't target pipes that don't exist). -->
 			<div class="pipe-group">
 				<header class="pipe-group-head">
+					<button
+						class="chev-btn"
+						aria-expanded={!collapsedPipes[group.pipeIndex]}
+						aria-label={collapsedPipes[group.pipeIndex] ? 'expand pipe' : 'collapse pipe'}
+						onclick={() => (collapsedPipes[group.pipeIndex] = !collapsedPipes[group.pipeIndex])}
+					>
+						<span class="chev" aria-hidden="true">{collapsedPipes[group.pipeIndex] ? '›' : '▾'}</span>
+					</button>
 					<code class="extract-pipe">pipe {String(group.pipeIndex).padStart(2, '0')}</code>
-					<span class="pipe-group-note">{groupDirty} edited</span>
+					<span class="pipe-group-note">{group.sections.length} section(s) · {groupDirty} edited</span>
 					{#if scopedView(group.pipeIndex).feedback}
 						{@const sf = scopedView(group.pipeIndex)}
 						<p class="action-feedback {sf.tone}" role="status">{sf.feedback}</p>
@@ -268,33 +377,55 @@
 						<span class="btn-note">run a full apply first</span>
 					{/if}
 				</header>
-				{#each group.sections as s}
-					{@const edited = isEdited(s)}
-					<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
-						<header class="extract-meta">
-							<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
-							<code class="range">{s.range}</code>
-							{#if edited}
-								<span class="dirty-mark" title="edited">●</span>
-								<button
-									class="revert-section"
-									title="revert this section to its source"
-									onclick={() => revertSection(s)}
-								>↩</button>
-							{:else}
-								<span class="btn-note">unchanged</span>
+				{#if !collapsedPipes[group.pipeIndex]}
+					{#each zones as zone}
+						<div class="tz-zone">
+							<button
+								class="tz-zone-head"
+								aria-expanded={!collapsedZones[zoneKeyOf(zone.start)]}
+								onclick={() => (collapsedZones[zoneKeyOf(zone.start)] = !collapsedZones[zoneKeyOf(zone.start)])}
+							>
+								<span class="chev" aria-hidden="true">{collapsedZones[zoneKeyOf(zone.start)] ? '›' : '▾'}</span>
+								<code class="tz-zone-label">t{String(zone.start).padStart(2, '0')}f</code>
+								<span class="tz-zone-count">{zone.sections.length}</span>
+							</button>
+							{#if !collapsedZones[zoneKeyOf(zone.start)]}
+								{#each zone.sections as s}
+									{@const edited = isEdited(s)}
+									<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
+										<header class="extract-meta">
+											<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
+											<code class="range">{s.range}</code>
+											{#if edited}
+												<span class="dirty-mark" title="edited">●</span>
+												<button
+													class="revert-section"
+													title="revert this section to its source"
+													onclick={() => revertSection(s)}
+												>↩</button>
+											{:else}
+												<span class="btn-note">unchanged</span>
+											{/if}
+										</header>
+										<!-- Editable concrete prompt. -->
+										<textarea
+											class="extract-prompt-edit"
+											rows="2"
+											bind:value={s.prompt}
+										></textarea>
+									</article>
+								{/each}
 							{/if}
-						</header>
-						<!-- Editable concrete prompt. -->
-						<textarea
-							class="extract-prompt-edit"
-							rows="2"
-							bind:value={s.prompt}
-						></textarea>
-					</article>
-				{/each}
+						</div>
+					{/each}
+				{/if}
 			</div>
 		{/each}
+		{#if activeTags.length}
+			<p class="filter-note">
+				{visibleSections.length} of {localExtract.length} section(s) shown · filter hides pipes with no matching sections
+			</p>
+		{/if}
 		<!-- M3 landed: per-pipe scoped apply ("↺ apply this pipe", disabled
 		     when no composer pipes exist) + per-section revert ("↩" back to
 		     source) now live above each shot-pipe group. The destructive
@@ -535,6 +666,128 @@
 	.hint {
 		color: var(--text-muted);
 		font-size: 11px;
+	}
+
+	/* ── Tag filter chips (time-zone view) ──
+	   One chip per concern tag, lane-colored via the existing --tag-* tokens
+	   (the chip reuses the .lane-* classes so the tick + tint match the
+	   section tag words below — a red "scene" chip reads like a red scene
+	   tag). Multi-select; the "all" chip is the clear affordance. */
+	.tag-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: 8px;
+	}
+	.chip {
+		font: inherit;
+		font-size: 11px;
+		font-weight: 500;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 9px;
+		border: 1px solid var(--border-color);
+		border-radius: 999px;
+		background: var(--bg-secondary);
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: border-color var(--transition-fast, 0.15s ease),
+			background var(--transition-fast, 0.15s ease),
+			color var(--transition-fast, 0.15s ease);
+	}
+	.chip .chip-count {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		opacity: 0.75;
+	}
+	.chip:hover {
+		border-color: var(--accent-color);
+		color: var(--text-primary);
+	}
+	.chip.active {
+		border-color: var(--lane-color, var(--accent-color));
+		background: color-mix(in srgb, var(--lane-color, var(--accent-color)) 10%, var(--bg-secondary));
+		color: color-mix(in srgb, var(--lane-color, var(--accent-color)) 75%, var(--text-primary));
+	}
+	.chip.lane-red { --lane-color: var(--tag-red); }
+	.chip.lane-yellow { --lane-color: var(--tag-yellow); }
+	.chip.lane-cyan { --lane-color: var(--tag-cyan); }
+	.chip.lane-pink { --lane-color: var(--tag-pink); }
+	.chip.lane-orange { --lane-color: var(--tag-orange); }
+	.chip.lane-blue { --lane-color: var(--tag-blue); }
+	.chip.lane-muted { --lane-color: var(--text-muted); }
+
+	/* ── Time zones (range-start groups inside a pipe) ── */
+	.pipe-group-head {
+		cursor: default;
+	}
+	.chev-btn {
+		font: inherit;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		padding: 0;
+		border: 1px solid transparent;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		flex: none;
+	}
+	.chev-btn:hover {
+		border-color: var(--border-color);
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+	}
+	.chev {
+		font-size: 12px;
+		line-height: 1;
+	}
+	.tz-zone {
+		margin: 4px 0 0 14px;
+		border-left: 1px solid var(--border-color);
+		padding-left: 10px;
+	}
+	.tz-zone-head {
+		font: inherit;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		width: 100%;
+		padding: 3px 0;
+		border: none;
+		background: transparent;
+		color: var(--text-muted);
+		font-size: 10px;
+		cursor: pointer;
+	}
+	.tz-zone-head:hover .tz-zone-label {
+		color: var(--text-primary);
+	}
+	.tz-zone-head .chev {
+		font-size: 10px;
+	}
+	.tz-zone-label {
+		font-family: var(--font-mono, monospace);
+		color: var(--text-secondary);
+	}
+	.tz-zone-count {
+		font-family: var(--font-mono, monospace);
+		opacity: 0.65;
+	}
+	/* Sections nested one level deeper than before: indent under the zone
+	   tick so the hierarchy pipe → zone → section reads. */
+	.tz-zone .extract-block {
+		margin-left: 4px;
+	}
+	.filter-note {
+		margin: 8px 0 0;
+		font-size: 10px;
+		font-family: var(--font-mono, monospace);
+		color: var(--text-muted);
 	}
 
 	/* Respect the user's motion preference: drop the sine tweens, keep the
