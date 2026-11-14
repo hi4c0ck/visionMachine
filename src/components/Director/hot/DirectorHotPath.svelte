@@ -108,6 +108,33 @@
 		extractedPrompt ? `${pipeCount} pipe${pipeCount !== 1 ? 's' : ''}` : '',
 	);
 
+	// ── Compact mode (visual-only, no data changes) ──
+	// One toggle on ① DIRECTION compresses the flow: the G0 grid collapses
+	// to a single summary line, the novel becomes a scene-strip, and the
+	// step chain + watch-it-think log fold into a status rail. A second
+	// $state holds the expanded grid open while compact (click-through).
+	// The preference is per app-session (a plain $state) — it resets on
+	// remount, which matches "a mode", not "the document".
+	let compact = $state(false);
+	let compactParamsOpen = $state(false);
+	// Scene totals for the ④ NOVEL heading (readability cue in both modes).
+	const novelTotals = $derived.by(() => {
+		const scenes: NovelScene[] = engine?.novel.scenes ?? [];
+		const shots = scenes.reduce((n, s) => n + s.shots.length, 0);
+		return { scenes: scenes.length, shots };
+	});
+	// The G0 summary line (compact mode replaces the grid with this).
+	const g0Summary = $derived(
+		`${entry.genre.name} · ${entry.ratio} · ${entry.scale.scenes}×${entry.scale.shots_per_scene} · ` +
+		`${entry.time_of_day} · ${entry.weather} · mood ${entry.mood ?? 50}`,
+	);
+	// The last run's duration, human-readable ("1.8s" / "420ms") — the
+	// compact step rail drops the full step rows, so the ⑤ heading carries
+	// the "the run happened, and it took N" cue instead of the row states.
+	const runDurationLabel = $derived(
+		runDurationMs == null ? '' : runDurationMs < 1000 ? `${runDurationMs}ms` : `${(runDurationMs / 1000).toFixed(1)}s`,
+	);
+
 	// Reset the log when a new run starts (running: false → true).
 	// prevRunning is deliberately NON-reactive bookkeeping: the effect's
 	// only tracked dependency is `running`, so it re-runs exactly when
@@ -145,6 +172,17 @@
 		<div class="dir-direction-head">
 			<h3 class="block-heading">① DIRECTION <span class="muted">· idea</span></h3>
 			<div class="dir-direction-actions">
+				<!-- Compact-mode toggle (visual only): compresses ②/④/⑤ into
+				     summary + rail forms. The data is unchanged — the same
+				     entry / engine / doc renders denser, and "expand"
+				     restores the full panels in place. -->
+				<button
+					class="btn compact-toggle"
+					aria-pressed={compact}
+					title={compact ? 'Expand the full panels' : 'Compress the tab into a compact view'}
+					onclick={() => (compact = !compact)}>
+					{compact ? '⊞ Full' : '⊟ Compact'}
+				</button>
 				<button
 					class="btn"
 					disabled={pipeCount === 0}
@@ -192,8 +230,22 @@
 	<!-- ② PARAMETERS — the G0 seed knobs, FRONT-LOADED and always visible.
 	     They steer the NEXT run (mood / format / scale / time / weather), so
 	     they live in the hot path instead of hidden behind a completed run.
-	     Read-only while a run is in flight. -->
-	<DirectorG0Params bind:entry disabled={running} />
+	     Read-only while a run is in flight. Compact mode: the full grid is
+	     replaced by one summary line (click to expand in place); the data is
+	     the SAME `entry` binding, not a separate compact copy. -->
+	{#if compact && !compactParamsOpen}
+		<button
+			class="g0-summary"
+			disabled={running}
+			title="Expand the full parameter grid"
+			onclick={() => (compactParamsOpen = true)}>
+			<code class="g0-summary-label">② params</code>
+			<span class="g0-summary-text">{g0Summary}</span>
+			<span class="g0-summary-caret" aria-hidden="true">⊞</span>
+		</button>
+	{:else}
+		<DirectorG0Params bind:entry disabled={running} />
+	{/if}
 
 	<!-- ③ STRUCTURE — the S0.5 structural tree ("brief, not a cage").
 	     The manual-override pins write back into entry.overrides so the next
@@ -201,7 +253,12 @@
 	<StructurePanel tree={engine?.tree ?? null} bind:overrides={entry.overrides} disabled={running} />
 
 	{#if engine}
-		<!-- ④ NOVEL — read-only collapsed rows (the S1 visual novel state). -->
+		<!-- ④ NOVEL — read-only (the S1 visual novel state).
+		     Full mode: the three summary rows. Compact mode: a scene strip —
+		     one card per scene (id · title · prose · shot count · hand-off),
+		     so the story's shape reads at a glance. Same engine.novel data;
+		     the hand-off chip surfaces the connectivity line (f07a15e Stage 2)
+		     that was previously only visible in the step chain. -->
 		<section class="stage hot">
 			<h3 class="block-heading">
 				④ NOVEL
@@ -209,50 +266,111 @@
 					title={engine.expansion_note ?? ''}>
 					{expansionLabel(engine)}
 				</span>
+				<span class="muted novel-totals">{novelTotals.scenes} scene(s) · {novelTotals.shots} shot(s)</span>
 			</h3>
-			<ul class="novel-rows">
-				<li>
-					<code class="nr-id">primary</code>
-					<span class="nr-text">{engine.novel.scenes.map((s: NovelScene) => s.prose).join(' · ')}</span>
-				</li>
-				<li>
-					<code class="nr-id">secondary</code>
-					<span class="nr-text">
-						{engine.novel.scenes.map((s: NovelScene) => s.shots.map((sh: NovelShot) => sh.prose).join(' · ')).join(' · ')}
-					</span>
-				</li>
-				<li>
-					<code class="nr-id">ambient</code>
-					<span class="nr-text">{engine.novel.film.logline}</span>
-				</li>
-			</ul>
+			{#if compact}
+				<!-- Story-flow pacing bar: one segment per scene, width ∝ shot
+				     count — the film's shape (where the story lingers vs
+				     rushes) reads at a glance, before the cards. -->
+				<div class="story-flow" role="img"
+					aria-label="Story pacing: {novelTotals.scenes} scenes, {novelTotals.shots} shots total">
+					{#each engine.novel.scenes as s, i}
+						<span class="story-flow-seg" style="flex-grow: {s.shots.length || 1}"
+							title="S{i + 1} · {s.shots.length} shot(s)">
+							<span class="story-flow-label">S{i + 1}</span>
+						</span>
+					{/each}
+				</div>
+				<div class="scene-strip" role="list" aria-label="Novel scenes">
+					{#each engine.novel.scenes as s, i}
+						<article class="scene-card" role="listitem">
+							<header class="scene-card-head">
+								<code class="scene-card-id">S{i + 1}</code>
+								<span class="scene-card-title">{s.title || 'untitled'}</span>
+							</header>
+							<p class="scene-card-prose">{s.prose}</p>
+							<footer class="scene-card-meta">
+								<span>{s.shots.length} shot(s)</span>
+								{#if s.hand_off}
+									<span class="scene-card-handoff" title="Hand-off: the state this scene leaves the story in">
+										→ {s.hand_off}
+									</span>
+								{/if}
+							</footer>
+						</article>
+					{/each}
+				</div>
+			{:else}
+				<ul class="novel-rows">
+					<li>
+						<code class="nr-id">primary</code>
+						<span class="nr-text">{engine.novel.scenes.map((s: NovelScene) => s.prose).join(' · ')}</span>
+					</li>
+					<li>
+						<code class="nr-id">secondary</code>
+						<span class="nr-text">
+							{engine.novel.scenes.map((s: NovelScene) => s.shots.map((sh: NovelShot) => sh.prose).join(' · ')).join(' · ')}
+						</span>
+					</li>
+					<li>
+						<code class="nr-id">ambient</code>
+						<span class="nr-text">{engine.novel.film.logline}</span>
+					</li>
+				</ul>
+			{/if}
 		</section>
 
-		<!-- ⑤ STEP CHAIN — the 4 rows + annotation / seed actions.
-		     The primary Run button lives at ① DIRECTION now (always visible),
-		     so this row keeps only the secondary post-run actions. -->
-		<section class="stage hot">
-			<h3 class="block-heading">⑤ STEP CHAIN <span class="muted">· {doc?.flowVersion ?? '—'}</span></h3>
-			<!-- M1 "watch it think": the run-progress log + shot timeline strip
-			     are ADDITIVE to the step chain below (not a replacement).
-			     RunLog accumulates backend director_run_progress events;
-			     TimelinePreview builds in from the S4-verified rows. -->
-			<RunLog lines={logLines} {running} />
-			<TimelinePreview rows={previewRows} active={!!engine} />
-			<ul class="step-chain">
-				{#if stepChain}
-					{#each stepChain as row}
-						<li class="step {row.stateClass} {runError ? 'step-fail' : ''}">
-							<code class="step-name">{row.name}</code>
-							<code class="step-ver">{row.ver}</code>
-							<span class="step-src">{row.src}</span>
-							<span class="step-state">{row.state}</span>
-						</li>
-					{/each}
-				{:else}
-					<li class="hint">No run yet — type an idea and press Run.</li>
+		<!-- ⑤ STEP CHAIN — the 4 steps + annotation / seed actions.
+		     Full mode: vertical step rows + the watch-it-think log + shot
+		     timeline. Compact mode: the log/timeline fold away and the four
+		     steps render as a dense horizontal status rail (one row of
+		     step "pips", same data, half the height). -->
+		<section class="stage hot" class:compact-stage={compact}>
+			<h3 class="block-heading">
+				⑤ STEP CHAIN
+				<span class="muted">· {doc?.flowVersion ?? '—'}</span>
+				{#if runDurationLabel}
+					<span class="muted run-duration" title="Last S0→S5 run duration">· {runDurationLabel}</span>
 				{/if}
-			</ul>
+			</h3>
+			{#if compact}
+				<div class="step-rail" role="list" aria-label="Engine steps">
+					{#if stepChain}
+						{#each stepChain as row}
+							<span
+								class="step-pip {row.stateClass} {runError ? 'step-fail' : ''}"
+								role="listitem"
+								title="{row.name} {row.ver} · {row.src}">
+								<code class="step-pip-name">{row.name}</code>
+								<span class="step-pip-state">{row.state}</span>
+							</span>
+						{/each}
+					{:else}
+						<span class="hint">No run yet.</span>
+					{/if}
+				</div>
+			{:else}
+				<!-- M1 "watch it think": the run-progress log + shot timeline strip
+				     are ADDITIVE to the step chain below (not a replacement).
+				     RunLog accumulates backend director_run_progress events;
+				     TimelinePreview builds in from the S4-verified rows. -->
+				<RunLog lines={logLines} {running} />
+				<TimelinePreview rows={previewRows} active={!!engine} />
+				<ul class="step-chain">
+					{#if stepChain}
+						{#each stepChain as row}
+							<li class="step {row.stateClass} {runError ? 'step-fail' : ''}">
+								<code class="step-name">{row.name}</code>
+								<code class="step-ver">{row.ver}</code>
+								<span class="step-src">{row.src}</span>
+								<span class="step-state">{row.state}</span>
+							</li>
+						{/each}
+					{:else}
+						<li class="hint">No run yet — type an idea and press Run.</li>
+					{/if}
+				</ul>
+			{/if}
 			{#if runError}
 				<p class="flow-error" role="alert">{runError}</p>
 			{/if}
@@ -663,4 +781,216 @@
 			transition-timing-function: linear !important;
 		}
 	}
+
+	/* ── Compact mode (visual-only density switch on ① DIRECTION) ──
+	   No new color families: every compact primitive reuses the existing
+	   stage-card / chip / lane tokens. The toggle is a quiet icon-button;
+	   the compact forms are the FULL panels rendered denser, never a
+	   second data source. */
+	.compact-toggle {
+		min-width: 92px;
+		justify-content: center;
+	}
+	.compact-toggle[aria-pressed='true'] {
+		border-color: var(--accent-color);
+		background: var(--accent-bg, color-mix(in srgb, var(--accent-color) 10%, transparent));
+	}
+
+	/* ② compact: the G0 grid folds to one summary line (click = expand in
+	   place, via the parent's compactParamsOpen flag). */
+	.g0-summary {
+		font: inherit;
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		width: 100%;
+		padding: 10px 12px;
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		background: var(--bg-secondary);
+		color: var(--text-primary);
+		cursor: pointer;
+		text-align: left;
+		transition: border-color var(--transition-fast, 0.15s ease);
+	}
+	.g0-summary:hover:not(:disabled) {
+		border-color: var(--accent-color);
+	}
+	.g0-summary-label {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		font-weight: 600;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+		flex: none;
+	}
+	.g0-summary-text {
+		font-size: 12px;
+		color: var(--text-secondary);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.g0-summary-caret {
+		margin-left: auto;
+		font-size: 11px;
+		color: var(--text-muted);
+		flex: none;
+	}
+
+	/* ④ compact: the scene strip. One card per scene, wrapping; the
+	   hand-off chip (Stage-2 connectivity line) is quiet so it reads as
+   a cue, not the story. */
+	.novel-totals {
+		margin-left: 6px;
+		font-size: 11px;
+		letter-spacing: 0;
+	}
+	/* Story-flow pacing bar: a proportional segment per scene (flex-grow =
+	   shot count) so the film's temporal shape reads BEFORE the cards.
+	   Quiet: bg-tertiary fill + the accent on the active (first) segment. */
+	.story-flow {
+		display: flex;
+		gap: 3px;
+		height: 10px;
+		margin-bottom: 2px;
+	}
+	.story-flow-seg {
+		display: block;
+		border-radius: 3px;
+		background: var(--bg-tertiary, rgba(128, 128, 128, 0.15));
+		overflow: hidden;
+		position: relative;
+		min-width: 14px;
+	}
+	.story-flow-seg:hover {
+		background: var(--accent-bg, color-mix(in srgb, var(--accent-color) 18%, transparent));
+	}
+	.story-flow-label {
+		position: absolute;
+		left: 4px;
+		top: 50%;
+		transform: translateY(-50%);
+		font-family: var(--font-mono, monospace);
+		font-size: 7px;
+		line-height: 1;
+		color: var(--text-muted);
+		pointer-events: none;
+	}
+	.scene-strip {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.scene-card {
+		flex: 1 1 180px;
+		max-width: 260px;
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		background: var(--bg-elevated);
+		padding: 8px 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+	.scene-card-head {
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
+		min-width: 0;
+	}
+	.scene-card-id {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--accent-color, var(--text-secondary));
+		flex: none;
+	}
+	.scene-card-title {
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--text-primary);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.scene-card-prose {
+		margin: 0;
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--text-secondary);
+		/* Two-line clamp: the strip is a GLANCE surface; the full prose
+	   stays one click away in the full-mode rows / the scene's own data. */
+		display: -webkit-box;
+		line-clamp: 2;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	.scene-card-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 10px;
+		font-size: 10px;
+		color: var(--text-muted);
+		font-family: var(--font-mono, monospace);
+	}
+	.scene-card-handoff {
+		color: var(--text-secondary);
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 100%;
+	}
+
+	/* ⑤ compact: the status rail — one row of step pips, same data as the
+	   vertical step rows, half the height. Pips carry the state color via
+   the existing step-* left-border tokens (re-purposed as a top tick). */
+	.compact-stage {
+		gap: 6px;
+		padding: 10px 12px;
+	}
+	/* The ⑤ heading's run-duration cue (compact mode): the full step rows
+	   carry "the run happened, and it took N" — in compact the heading does. */
+	.run-duration {
+		font-family: var(--font-mono, monospace);
+		letter-spacing: 0;
+	}
+	.step-rail {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+	}
+	.step-pip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 8px;
+		border: 1px solid var(--border-color);
+		border-top: 2px solid var(--border-color);
+		border-radius: 5px;
+		background: var(--bg-elevated);
+		min-width: 0;
+	}
+	.step-pip.step-ok { border-top-color: var(--success-color, #22c55e); }
+	.step-pip.step-mut { border-top-color: var(--border-color); }
+	.step-pip.step-fail { border-top-color: var(--danger-color, #ef4444); }
+	.step-pip-name {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+	.step-pip-state {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		color: var(--text-muted);
+	}
+	.step-pip.step-fail .step-pip-state { color: var(--danger-color, #ef4444); }
 </style>
