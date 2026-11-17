@@ -10,6 +10,7 @@
 	import type { FlowDocument, PlanSection } from '$lib/directorStore/types';
 	import { applyFlowScoped, type EditedSection } from '$lib/directorStore';
 	import { flashToast } from '$lib/flashToast';
+	import { tick } from 'svelte';
 
 	// Parent-owned shape (src/components/Director/DirectorPanel.svelte):
 	// one pipe per shot, delta-driven concern sections. Structural mirror
@@ -39,6 +40,50 @@
 	// Mirrors the parent's isEdited (also used there by copyExtract /
 	// dirtyCount): a section is "dirty" when its prompt ≠ source.
 	const isEdited = (s: LocalSection) => s.prompt.trim() !== s.source.trim();
+
+	// A1 · edit-on-focus: a clean section renders clamped static text; the
+	// full-text editor materializes on row click — or once the section is
+	// dirty. Keyed by the addressing key (pipeIndex:tag:occurrence) so
+	// zone / tag-filter re-renders keep materialization stable.
+	let expandedSections = $state<Record<string, boolean>>({});
+	function sectionKey(s: LocalSection): string {
+		return `${s.pipeIndex}:${s.tag}:${s.occurrence}`;
+	}
+	function expandSection(s: LocalSection) {
+		if (isEdited(s)) return; // a dirty row already shows the editor
+		expandedSections[sectionKey(s)] = true;
+		// Focus the freshly materialized editor once it is in the DOM.
+		void (async () => {
+			await tick();
+			document
+				.querySelector<HTMLTextAreaElement>(`textarea.extract-prompt-edit[data-skey="${sectionKey(s)}"]`)
+				?.focus();
+		})();
+	}
+	// Blur with no change (or a revert to source) → back to static.
+	function collapseSection(s: LocalSection) {
+		if (!isEdited(s)) delete expandedSections[sectionKey(s)];
+	}
+
+	// A4 · compressed head row: "Copy sections" / "Copy engine sheet" fold
+	// into one Copy ▾ menu (the existing handlers, unchanged).
+	let copyMenuOpen = $state(false);
+
+	// A5 · humanized zone labels: seconds primary (the seed's 24 fps);
+	// the frame window moves to the label's tooltip.
+	const ZONE_FPS = 24;
+	function zoneLabel(start: number): string {
+		return `t${(start / ZONE_FPS).toFixed(1)}s`;
+	}
+	function zoneEndOf(secs: LocalSection[]): number {
+		let end = 0;
+		for (const s of secs) {
+			const i = s.range.indexOf('\u2013');
+			const n = Number.parseInt(i >= 0 ? s.range.slice(i + 1) : s.range, 10);
+			if (Number.isFinite(n)) end = Math.max(end, n);
+		}
+		return end;
+	}
 
 	let {
 		doc,
@@ -180,6 +225,7 @@
 		collapsedPipes = {};
 		collapsedZones = {};
 		activeTags = [];
+		expandedSections = {}; // A1: a new session's extract opens unedited
 	});
 
 	// M3: per-pipe scoped-apply state (busy flag + inline feedback) keyed by
@@ -270,33 +316,53 @@
 	// parent's dirtyCount / extractPipeCount deriveds recompute.
 	function revertSection(s: LocalSection) {
 		s.prompt = s.source;
+		// A revert leaves the section clean: drop the materialized editor so
+		// the row returns to its clamped static text (A1).
+		delete expandedSections[sectionKey(s)];
 	}
 </script>
 
 {#if doc}
+	<!-- A4 · one-line head: `v19 · 41§ · 6 pipes · 0 edited` (edited in
+	     the warning lane when > 0). Copy controls fold into a Copy ▾ menu
+	     (existing handlers); Regenerate stays standalone — the only
+	     destructive edge, with the fixed copy naming it. -->
 	<div class="extract-head">
-		<span class="muted">
-			{sessionName} · v{doc.flowVersion}
-			{#if localExtract.length}
-				· {localExtract.length} concrete section(s) across {extractPipeCount} shot pipe(s)
-			{:else}
-				· no engine structure yet
-			{/if}
-			· {dirtyCount} edited · {pipeCount} pipes in composer
-		</span>
+		<span class="head-meta" title={`${sessionName} · ${extractPipeCount} shot pipe(s)`}>v{doc.flowVersion} · {localExtract.length}§ · {pipeCount} pipes · <span class="head-edited" class:edited={dirtyCount > 0}>{dirtyCount} edited</span></span>
 		<div class="extract-head-btns">
-			<button class="btn" onclick={onCopyExtract}>Copy sections</button>
-			{#if engine}
-				<button class="btn" onclick={onCopyEngineSheet}>Copy engine sheet</button>
+			{#if copyMenuOpen}
+				<button class="copy-menu-backdrop" aria-label="close copy menu" onclick={() => (copyMenuOpen = false)}></button>
 			{/if}
-			<!-- Phase 2: the single destructive control — regenerate from
-			     the edited concrete sections (replace only; no append). -->
+			<div class="copy-menu-wrap">
+				<button
+					class="btn head-chip"
+					aria-haspopup="true"
+					aria-expanded={copyMenuOpen}
+					onclick={() => (copyMenuOpen = !copyMenuOpen)}
+				>
+					Copy <span class="chev" aria-hidden="true">{copyMenuOpen ? '▴' : '▾'}</span>
+				</button>
+				{#if copyMenuOpen}
+					<div class="copy-menu" role="menu">
+						<button class="copy-menu-item" role="menuitem" onclick={() => { onCopyExtract(); copyMenuOpen = false; }}>
+							Copy sections
+						</button>
+						{#if engine}
+							<button class="copy-menu-item" role="menuitem" onclick={() => { onCopyEngineSheet(); copyMenuOpen = false; }}>
+								Copy engine sheet
+							</button>
+						{/if}
+					</div>
+				{/if}
+			</div>
+			<!-- A4: the single destructive control — regenerate from the
+			     edited concrete sections (replace only; no append). -->
 			<button class="btn danger" disabled={applyWorking || !doc} onclick={() => void onRegenerate()}>
 				{applyWorking ? 'Applying…' : 'Regenerate pipes'}
 				<span class="btn-note">
 					{applyWorking
 						? 'materializing the concrete plan into composer pipes'
-						: `replace ${pipeCount} pipes · ${dirtyCount} edited · replay v${doc.regen.version.flowVersion}`}
+						: `replace · no fallback · replay v${doc.regen.version.flowVersion}`}
 				</span>
 			</button>
 			{#if feedback}
@@ -379,17 +445,25 @@
 				</header>
 				{#if !collapsedPipes[group.pipeIndex]}
 					{#each zones as zone}
-						<div class="tz-zone">
-							<button
-								class="tz-zone-head"
-								aria-expanded={!collapsedZones[zoneKeyOf(zone.start)]}
-								onclick={() => (collapsedZones[zoneKeyOf(zone.start)] = !collapsedZones[zoneKeyOf(zone.start)])}
-							>
-								<span class="chev" aria-hidden="true">{collapsedZones[zoneKeyOf(zone.start)] ? '›' : '▾'}</span>
-								<code class="tz-zone-label">t{String(zone.start).padStart(2, '0')}f</code>
-								<span class="tz-zone-count">{zone.sections.length}</span>
-							</button>
-							{#if !collapsedZones[zoneKeyOf(zone.start)]}
+						{@const flat = zone.sections.length < 2}
+						<div class="tz-zone" class:tz-zone-flat={flat}>
+							<!-- A2 · flattened singleton zones: a 1-section
+						     zone drops the header band entirely — the
+						     section's range code carries the time window.
+						     A5 · ≥2-section zones keep the band; the label is
+						     seconds-primary, frames in the tooltip. -->
+							{#if !flat}
+								<button
+									class="tz-zone-head"
+									aria-expanded={!collapsedZones[zoneKeyOf(zone.start)]}
+									onclick={() => (collapsedZones[zoneKeyOf(zone.start)] = !collapsedZones[zoneKeyOf(zone.start)])}
+								>
+									<span class="chev" aria-hidden="true">{collapsedZones[zoneKeyOf(zone.start)] ? '›' : '▾'}</span>
+									<code class="tz-zone-label" title={`${zone.start}–${zoneEndOf(zone.sections)}f`}>{zoneLabel(zone.start)}</code>
+									<span class="tz-zone-count">{zone.sections.length}</span>
+								</button>
+							{/if}
+							{#if flat || !collapsedZones[zoneKeyOf(zone.start)]}
 								{#each zone.sections as s}
 									{@const edited = isEdited(s)}
 									<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
@@ -403,16 +477,26 @@
 													title="revert this section to its source"
 													onclick={() => revertSection(s)}
 												>↩</button>
-											{:else}
-												<span class="btn-note">unchanged</span>
 											{/if}
 										</header>
-										<!-- Editable concrete prompt. -->
-										<textarea
-											class="extract-prompt-edit"
-											rows="2"
-											bind:value={s.prompt}
-										></textarea>
+										<!-- A1 · edit-on-focus: a clean section is clamped static
+											 text (a 0-edit doc renders zero <textarea>s); the
+											 full-text editor materializes on row click or once
+											 dirty. A3 · a clean section says nothing (silence is
+											 the default state). -->
+										{#if edited || expandedSections[sectionKey(s)]}
+											<textarea
+												class="extract-prompt-edit"
+												data-skey={sectionKey(s)}
+												rows="2"
+												bind:value={s.prompt}
+												onblur={() => collapseSection(s)}
+											></textarea>
+										{:else}
+											<button class="extract-prompt-static" title={s.prompt} onclick={() => expandSection(s)}>
+												{s.prompt || '—'}
+											</button>
+										{/if}
 									</article>
 								{/each}
 							{/if}
@@ -460,10 +544,6 @@
 	/* Design tokens only (Template A): no new colors, hairlines, quiet.
 	   Motion uses --transition-sin (additive token, design doc §6). */
 
-	.muted {
-		color: var(--text-muted);
-		font-weight: 400;
-	}
 
 	/* ── Extract: concrete editable sections ──
 	   (the block / prompt-edit / dirty styles now live in the later
@@ -528,6 +608,74 @@
 		letter-spacing: 0.01em;
 	}
 
+	/* A4 · compressed head row: one mono meta line + chip-style Copy menu
+	     + the standalone danger regenerate. */
+	.head-meta {
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		color: var(--text-secondary);
+		letter-spacing: 0.02em;
+		white-space: nowrap;
+	}
+	.head-edited {
+		color: var(--text-muted);
+	}
+	.head-edited.edited {
+		color: var(--warning-color, #e0a34e);
+		font-weight: 600;
+	}
+	.head-chip {
+		padding: 4px 10px;
+	}
+	.copy-menu-wrap {
+		position: relative;
+		z-index: 2;
+	}
+	.copy-menu-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 1;
+		border: none;
+		padding: 0;
+		background: transparent;
+		cursor: default;
+	}
+	.copy-menu {
+		position: absolute;
+		top: calc(100% + 4px);
+		right: 0;
+		width: 220px;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+		overflow: hidden;
+		z-index: 2;
+	}
+	.copy-menu-item {
+		font: inherit;
+		width: 100%;
+		padding: 8px 10px;
+		border: none;
+		border-top: 1px solid var(--border-color);
+		background: transparent;
+		color: var(--text-secondary);
+		font-size: 11px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.copy-menu-item:first-child {
+		border-top: none;
+	}
+	.copy-menu-item:hover {
+		background: var(--bg-tertiary);
+		color: var(--text-primary);
+	}
+	.copy-menu-item:focus-visible {
+		outline: none;
+		box-shadow: inset 0 0 0 2px var(--accent-bg, rgba(89, 181, 255, 0.25));
+	}
+
 	/* Transient action feedback (confirm / accept / reject / apply) so a
 		click is never silent. Quiet template-a: hairline left border, tone. */
 	.action-feedback {
@@ -574,6 +722,36 @@
 	.extract-block.dirty {
 		border-color: color-mix(in srgb, var(--warning-color, #fbbf24) 55%, var(--border-color));
 		background: color-mix(in srgb, var(--warning-color, #fbbf24) 6%, var(--bg-secondary));
+	}
+	/* A1 · edit-on-focus: the clean section's clamped static text (the
+	     full-text editor materializes on click / once dirty). A real
+	     <button> = keyboard-native + no static-element-interaction debt. */
+	.extract-prompt-static {
+		width: 100%;
+		margin: 2px 0 0;
+		padding: 0;
+		border: none;
+		background: none;
+		font-family: var(--font-mono, monospace);
+		font-size: 11px;
+		line-height: 1.5;
+		color: var(--text-primary);
+		text-align: left;
+		cursor: text;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+		transition: color var(--transition-fast, 0.15s ease);
+	}
+	.extract-prompt-static:hover {
+		color: color-mix(in srgb, var(--accent-color) 55%, var(--text-primary));
+	}
+	.extract-prompt-static:focus-visible {
+		outline: none;
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.2));
+		border-radius: 4px;
 	}
 	.extract-meta {
 		display: flex;
@@ -782,6 +960,16 @@
 	   tick so the hierarchy pipe → zone → section reads. */
 	.tz-zone .extract-block {
 		margin-left: 4px;
+	}
+	/* A2 · flattened singleton zone: no header band, no indent — the
+	     section's range code carries the time window. */
+	.tz-zone-flat {
+		margin: 4px 0 0;
+		border-left: none;
+		padding-left: 0;
+	}
+	.tz-zone-flat .extract-block {
+		margin-left: 0;
 	}
 	.filter-note {
 		margin: 8px 0 0;
