@@ -341,14 +341,16 @@
 				<ul class="novel-scenes">
 					{#each engine.novel.scenes as s, i}
 						<li class="scene-row">
-							<code class="scene-row-id">S{i + 1}</code>
-							<span class="scene-row-title">{s.title || 'untitled'}</span>
-							<span class="scene-row-prose">{s.prose}</span>
-							<code class="scene-row-shots">{s.shots.length} shot{s.shots.length !== 1 ? 's' : ''}</code>
+							<div class="scene-row-head">
+								<code class="scene-row-id">S{i + 1}</code>
+								<span class="scene-row-title">{s.title || 'untitled'}</span>
+								<code class="scene-row-shots">{s.shots.length} shot{s.shots.length !== 1 ? 's' : ''}</code>
+							</div>
+							<p class="scene-row-prose">{s.prose}</p>
 							{#if s.shots.length}
 								<ul class="scene-beats">
-									{#each s.shots as sh}
-										<li class="scene-beat">{sh.prose}</li>
+									{#each s.shots as sh, k}
+										<li class="scene-beat"><code class="scene-beat-num">{k + 1}</code><span>{sh.prose}</span></li>
 									{/each}
 								</ul>
 							{/if}
@@ -664,14 +666,22 @@
 		flex-direction: column;
 		gap: 4px;
 	}
+	/* Two-tier scene card: a header row (S-id · title · shot count, right-
+	   aligned), then the scene prose at full width, then the shot beats
+	   with a hanging number — every tier flush-left at the same edge.
+	   Replaces the old single flex strip where the prose column sat on one
+	   baseline line and the beats hung off a 26px indent that aligned to
+	   nothing. */
 	.scene-row {
-		display: flex;
-		gap: 8px;
-		align-items: baseline;
-		padding: 4px 8px;
+		padding: 6px 8px;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
 		background: var(--bg-elevated);
+	}
+	.scene-row-head {
+		display: flex;
+		gap: 8px;
+		align-items: baseline;
 	}
 	.scene-row-id {
 		font-family: var(--font-mono, monospace);
@@ -681,20 +691,14 @@
 		min-width: 18px;
 	}
 	.scene-row-title {
+		flex: 1;
+		min-width: 0;
 		font-size: 12px;
 		font-weight: 600;
 		color: var(--text-primary);
-		min-width: 140px;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
-	}
-	.scene-row-prose {
-		flex: 1;
-		min-width: 0;
-		font-size: 11px;
-		line-height: 1.45;
-		color: var(--text-secondary);
 	}
 	.scene-row-shots {
 		font-family: var(--font-mono, monospace);
@@ -702,8 +706,14 @@
 		color: var(--text-muted);
 		white-space: nowrap;
 	}
+	.scene-row-prose {
+		margin: 6px 0 0;
+		font-size: 12px;
+		line-height: 1.5;
+		color: var(--text-secondary);
+	}
 	.scene-beats {
-		margin: 4px 0 0 26px;
+		margin: 4px 0 0;
 		padding: 0;
 		list-style: none;
 		display: flex;
@@ -711,9 +721,20 @@
 		gap: 2px;
 	}
 	.scene-beat {
+		display: flex;
+		gap: 6px;
+		align-items: baseline;
 		font-size: 11px;
 		line-height: 1.4;
 		color: var(--text-muted);
+	}
+	.scene-beat-num {
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		min-width: 12px;
+		text-align: right;
+		color: var(--text-muted);
+		opacity: 0.7;
 	}
 
 	.step-chain {
