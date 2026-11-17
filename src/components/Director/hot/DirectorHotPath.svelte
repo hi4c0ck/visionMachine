@@ -16,7 +16,6 @@
 		type EngineEntryInput,
 		type EngineRun,
 		type NovelScene,
-		type NovelShot,
 	} from '$lib/directorStore/engine';
 	import { timelineRows } from '$lib/directorStore/engine';
 	import { onRunProgress, type RunProgressEvent } from '$lib/directorStore/runProgress';
@@ -134,6 +133,24 @@
 	const runDurationLabel = $derived(
 		runDurationMs == null ? '' : runDurationMs < 1000 ? `${runDurationMs}ms` : `${(runDurationMs / 1000).toFixed(1)}s`,
 	);
+	// B6: the regenerate dropdown on the slim action row (opens UP — the row
+	// sits at the tab's bottom edge, so a down-menu would clip off-panel).
+	let regenOpen = $state(false);
+	// B7/B8: the ONE film-context line under ④ (full and compact) — the film
+	// look the run resolved to (S1 saturation of the G0 axes). Empty fields
+	// drop out of the line; no new store data (engine.novel.film is the
+	// existing S1 artifact).
+	const filmContext = $derived.by(() => {
+		if (!engine) return '';
+		const f = engine.novel.film;
+		const parts: string[] = [];
+		if (f.logline) parts.push(`logline: ${f.logline}`);
+		if (f.world) parts.push(`world: ${f.world}`);
+		if (f.palette) parts.push(`palette: ${f.palette}`);
+		if (f.time_of_day) parts.push(f.time_of_day);
+		if (f.weather) parts.push(f.weather);
+		return parts.join(' · ');
+	});
 
 	// Reset the log when a new run starts (running: false → true).
 	// prevRunning is deliberately NON-reactive bookkeeping: the effect's
@@ -269,6 +286,12 @@
 				<span class="muted novel-totals">{novelTotals.scenes} scene(s) · {novelTotals.shots} shot(s)</span>
 			</h3>
 			{#if compact}
+				{#if filmContext}
+					<!-- B7: the film-context line the compact strip used to lose
+					     (logline · world · palette · time · weather) — "compact
+					     and same-informative" holds with it under the heading. -->
+					<p class="novel-context" title="Film context — the look the run resolved (S1 saturation of the G0 axes)">{filmContext}</p>
+				{/if}
 				<!-- Story-flow pacing bar: one segment per scene, width ∝ shot
 				     count — the film's shape (where the story lingers vs
 				     rushes) reads at a glance, before the cards. -->
@@ -301,21 +324,31 @@
 					{/each}
 				</div>
 			{:else}
-				<ul class="novel-rows">
-					<li>
-						<code class="nr-id">primary</code>
-						<span class="nr-text">{engine.novel.scenes.map((s: NovelScene) => s.prose).join(' · ')}</span>
-					</li>
-					<li>
-						<code class="nr-id">secondary</code>
-						<span class="nr-text">
-							{engine.novel.scenes.map((s: NovelScene) => s.shots.map((sh: NovelShot) => sh.prose).join(' · ')).join(' · ')}
-						</span>
-					</li>
-					<li>
-						<code class="nr-id">ambient</code>
-						<span class="nr-text">{engine.novel.film.logline}</span>
-					</li>
+				<!-- B8: per-scene rows instead of the two joined-string walls —
+				     scene boundaries read in a 6-scene run, and the union of the
+				     row texts equals the old walls (scene prose + shot prose +
+				     logline, nothing dropped). The film-context line is the
+				     same one compact mode carries under the ④ heading, so full
+				     and compact share one data shape. -->
+				{#if filmContext}
+					<p class="novel-context" title="Film context — the look the run resolved (S1 saturation of the G0 axes)">{filmContext}</p>
+				{/if}
+				<ul class="novel-scenes">
+					{#each engine.novel.scenes as s, i}
+						<li class="scene-row">
+							<code class="scene-row-id">S{i + 1}</code>
+							<span class="scene-row-title">{s.title || 'untitled'}</span>
+							<span class="scene-row-prose">{s.prose}</span>
+							<code class="scene-row-shots">{s.shots.length} shot{s.shots.length !== 1 ? 's' : ''}</code>
+							{#if s.shots.length}
+								<ul class="scene-beats">
+									{#each s.shots as sh}
+										<li class="scene-beat">{sh.prose}</li>
+									{/each}
+								</ul>
+							{/if}
+						</li>
+					{/each}
 				</ul>
 			{/if}
 		</section>
@@ -361,7 +394,6 @@
 						{#each stepChain as row}
 							<li class="step {row.stateClass} {runError ? 'step-fail' : ''}">
 								<code class="step-name">{row.name}</code>
-								<code class="step-ver">{row.ver}</code>
 								<span class="step-src">{row.src}</span>
 								<span class="step-state">{row.state}</span>
 							</li>
@@ -374,32 +406,7 @@
 			{#if runError}
 				<p class="flow-error" role="alert">{runError}</p>
 			{/if}
-			<div class="step-actions">
-				{#if doc}
-					<button class="btn" onclick={() => void onAnnotate('accept')}>Accept</button>
-					<button class="btn" onclick={() => void onAnnotate('reject')}>Reject</button>
-				{:else}
-					<span class="hint step-actions-hint">No run yet — type an idea and press <b>Run S0→S5</b> above.</span>
-				{/if}
-				<!-- M2 seed card: export / import the G0 entry + novel preview. -->
-				<div class="seed-actions">
-					<button
-						class="btn"
-						disabled={seedWorking || !canExportSeed}
-						title={canExportSeed ? 'Export the G0 entry as a shareable seed file' : 'Write the idea first'}
-						onclick={() => onExportSeed?.()}>
-						{seedWorking ? 'Working…' : 'Export seed'}
-					</button>
-					<button
-						class="btn"
-						disabled={seedWorking}
-						title="Import a .vmseed.json into the G0 controls"
-						onclick={() => onImportSeed?.()}>
-						Import seed
-					</button>
-				</div>
-			</div>
-		</section>
+			</section>
 
 		<!-- Advanced disclosure (gate strip + G0 grid + S2–S5): injected by
 		     the parent via this slot so DOM order stays exactly as the
@@ -411,20 +418,65 @@
 		</div>
 	{/if}
 
-	<!-- Destructive apply (I9, design §4): materialize the flow's
-	     structured plan into composer pipes via save_composer.
-	     replace vs append, gated by a confirm dialog. -->
-	{#if doc}
-		<section class="stage actions">
-			<button class="btn danger" disabled={applyWorking} onclick={() => void onApply(true)}>
-				Regenerate pipes
-				<span class="btn-note">replace · no fallback · replay v{doc.regen.version.flowVersion}</span>
+	<!-- B6: the ONE action row — annotation (accept/reject), seed card
+	     (export/import) and the destructive regenerate, in a single slim
+	     icon-chip row (≈28px chips, 9px mono labels). Replaces both the ⑤
+	     card's foot buttons and the standalone apply card. Same handlers as
+	     before (onAnnotate / onExportSeed / onImportSeed / onApply) — zero
+	     behavior change; the destructive edge (regenerate) stays loud. -->
+	<div class="action-row">
+		{#if !doc}
+			<span class="action-row-hint">run first — Run S0→S5 builds the doc (export / import stay available)</span>
+		{/if}
+		<div class="act-group">
+			<button class="act-chip" disabled={!engine}
+				title={engine ? 'Accept this run (annotation → training data)' : 'Run S0→S5 first'}
+				onclick={() => void onAnnotate('accept')}>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 7"/></svg>accept</button>
+			<button class="act-chip" disabled={!engine}
+				title={engine ? 'Reject this run' : 'Run S0→S5 first'}
+				onclick={() => void onAnnotate('reject')}>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>reject</button>
+		</div>
+		<span class="act-divider" aria-hidden="true"></span>
+		<div class="act-group">
+			<button class="act-chip" disabled={seedWorking || !canExportSeed}
+				title={canExportSeed ? 'Export the G0 entry as a shareable seed file' : 'Write the idea first'}
+				onclick={() => void onExportSeed?.()}>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10m0 0l-4-4m4 4l4-4M5 19h14"/></svg>export</button>
+			<button class="act-chip" disabled={seedWorking}
+				title="Import a .vmseed.json into the G0 controls"
+				onclick={() => void onImportSeed?.()}>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 13V3m0 0L8 7m4-4l4 4M5 19h14"/></svg>import</button>
+		</div>
+		<div class="act-right">
+			{#if regenOpen}
+				<button class="menu-backdrop" aria-hidden="true" tabindex="-1"
+					onclick={() => (regenOpen = false)}></button>
+			{/if}
+			<button class="act-chip danger" disabled={!doc || applyWorking}
+				aria-haspopup="menu" aria-expanded={regenOpen}
+				title={doc ? 'Regenerate the composer pipes (destructive)' : 'Run S0→S5 first'}
+				onclick={() => (regenOpen = !regenOpen)}>
+				<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 4 22 10 16 10"/><path d="M20.5 15a8.5 8.5 0 1 1-2-9.4L22 10"/></svg>regenerate
+				<svg class="act-chevron" viewBox="0 0 24 24" aria-hidden="true">{#if regenOpen}<polyline points="6 15 12 9 18 15"/>{:else}<polyline points="6 9 12 15 18 9"/>{/if}</svg>
 			</button>
-			<button class="btn danger" disabled={applyWorking} onclick={() => void onApply(false)}>
-				<span class="btn-note">append</span>
-			</button>
-		</section>
-	{/if}
+			{#if regenOpen && doc}
+				<div class="regen-menu" role="menu" aria-label="Regenerate pipes">
+					<button class="regen-item" role="menuitem"
+						onclick={() => { regenOpen = false; void onApply(true); }}>
+						<code class="regen-item-k danger">replace</code>
+						<span>no fallback · replay v{doc.regen.version.flowVersion}</span>
+					</button>
+					<button class="regen-item" role="menuitem"
+						onclick={() => { regenOpen = false; void onApply(false); }}>
+						<code class="regen-item-k">append</code>
+						<span>keep the existing {pipeCount} pipe{pipeCount !== 1 ? 's' : ''}</span>
+					</button>
+				</div>
+			{/if}
+		</div>
+	</div>
 
 	{#if feedback}
 		<p class="action-feedback {feedback.tone}" role="status">{feedback.text}</p>
@@ -567,7 +619,23 @@
 		letter-spacing: 0.04em;
 	}
 
-	.novel-rows {
+	.novel-context {
+		margin: 0;
+		padding: 4px 8px;
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		color: var(--text-muted);
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		background: var(--bg-tertiary);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	/* B8: per-scene rows (full mode) — one row per scene, its shots' prose
+	   indented under it. Same text as the old joined walls, structured. */
+	.novel-scenes {
 		margin: 0;
 		padding: 0;
 		list-style: none;
@@ -575,26 +643,56 @@
 		flex-direction: column;
 		gap: 4px;
 	}
-	.novel-rows li {
+	.scene-row {
 		display: flex;
 		gap: 8px;
 		align-items: baseline;
-		padding: 4px 6px;
+		padding: 4px 8px;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
 		background: var(--bg-elevated);
-		cursor: default;
 	}
-	.nr-id {
+	.scene-row-id {
 		font-family: var(--font-mono, monospace);
-		font-size: 11px;
-		color: var(--text-secondary);
-		min-width: 72px;
+		font-size: 10px;
+		font-weight: 600;
+		color: var(--accent-color, var(--text-secondary));
+		min-width: 18px;
 	}
-	.nr-text {
+	.scene-row-title {
 		font-size: 12px;
-		line-height: 1.5;
+		font-weight: 600;
 		color: var(--text-primary);
+		min-width: 140px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.scene-row-prose {
+		flex: 1;
+		min-width: 0;
+		font-size: 11px;
+		line-height: 1.45;
+		color: var(--text-secondary);
+	}
+	.scene-row-shots {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
+		color: var(--text-muted);
+		white-space: nowrap;
+	}
+	.scene-beats {
+		margin: 4px 0 0 26px;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.scene-beat {
+		font-size: 11px;
+		line-height: 1.4;
+		color: var(--text-muted);
 	}
 
 	.step-chain {
@@ -607,38 +705,154 @@
 	}
 	.step {
 		display: grid;
-		grid-template-columns: 72px 44px 1fr auto;
+		grid-template-columns: 72px 1fr auto;
 		gap: 8px;
 		align-items: center;
 		padding: 6px 8px;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
 	}
-	.step-name, .step-ver, .step-src, .step-state {
+	.step-name, .step-src, .step-state {
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;
 	}
-	.step-ver { color: var(--text-secondary); }
 	.step-src { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.step-name, .step-state { color: var(--text-primary); }
 	.step-ok { border-left: 3px solid var(--success-color, #22c55e); }
 	.step-mut { border-left: 3px solid var(--border-color); }
 	.step-fail { border-left: 3px solid var(--danger-color, #ef4444); }
 
-	.step-actions {
+	/* B6: the single slim action row — icon chips (≈28px, 9px mono label,
+	   hairline border). The destructive edge is the regenerate chip (danger
+	   color family) with an up-opening replace/append menu. Template A: no
+	   new color families — accent / danger / hairlines only. */
+	.action-row {
 		display: flex;
-		gap: 8px;
-		margin-top: 4px;
 		align-items: center;
-		flex-wrap: wrap;
+		gap: 10px;
+		padding: 8px 12px;
+		border: 1px solid var(--border-color);
+		border-radius: 10px;
+		background: var(--bg-secondary);
+		position: relative;
 	}
-	.step-actions-hint {
-		font-size: 11px;
+	.action-row-hint {
+		font-size: 10px;
 		color: var(--text-muted);
 	}
-	.step-actions-hint b {
+	.act-group {
+		display: flex;
+		gap: 6px;
+	}
+	.act-divider {
+		width: 1px;
+		height: 18px;
+		background: var(--border-color);
+	}
+	.act-right {
+		margin-left: auto;
+		position: relative;
+		display: flex;
+		align-items: center;
+	}
+	.act-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		height: 28px;
+		padding: 0 10px;
+		border: 1px solid var(--border-color);
+		border-radius: 6px;
+		background: var(--bg-elevated);
+		color: var(--text-primary);
+		font: 500 9px var(--font-mono, monospace);
+		letter-spacing: 0.02em;
+		cursor: pointer;
+		transition: border-color var(--transition-fast, 0.15s ease);
+	}
+	.act-chip svg {
+		width: 13px;
+		height: 13px;
+		flex: none;
+		stroke: currentColor;
+		fill: none;
+		stroke-width: 2;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+	.act-chip:hover:not(:disabled) {
+		border-color: var(--accent-color);
+	}
+	.act-chip:focus-visible {
+		outline: none;
+		box-shadow: 0 0 0 3px var(--accent-bg, rgba(89, 181, 255, 0.25));
+	}
+	.act-chip:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	.act-chip.danger {
+		color: var(--danger-color);
+		border-color: color-mix(in srgb, var(--danger-color) 50%, var(--border-color));
+		background: var(--danger-bg, transparent);
+	}
+	.act-chip.danger:hover:not(:disabled) {
+		border-color: var(--danger-color);
+	}
+	.act-chevron {
+		width: 9px;
+		height: 9px;
+	}
+	.menu-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 40;
+		border: 0;
+		padding: 0;
+		background: transparent;
+		cursor: default;
+	}
+	.regen-menu {
+		position: absolute;
+		bottom: 36px;
+		right: 0;
+		z-index: 41;
+		width: 300px;
+		display: flex;
+		flex-direction: column;
+		background: var(--bg-elevated);
+		border: 1px solid var(--border-light, var(--border-color));
+		border-radius: 8px;
+		box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+		overflow: hidden;
+	}
+	.regen-item {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 12px;
+		border: 0;
+		border-top: 1px solid var(--border-color);
+		background: transparent;
 		color: var(--text-secondary);
+		font-size: 11px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.regen-item:first-child {
+		border-top: 0;
+	}
+	.regen-item:hover {
+		background: var(--bg-hover, var(--bg-tertiary));
+	}
+	.regen-item-k {
+		font-family: var(--font-mono, monospace);
+		font-size: 10px;
 		font-weight: 600;
+		min-width: 52px;
+	}
+	.regen-item-k.danger {
+		color: var(--danger-color);
 	}
 
 	/* ── ① DIRECTION head: the idea label + the always-available Run CTA.
@@ -707,12 +921,6 @@
 	}
 
 	/* ── Run + destructive apply ── */
-	.actions {
-		flex-direction: row;
-		gap: 8px;
-		align-items: center;
-		flex-wrap: wrap;
-	}
 	.btn {
 		font: inherit;
 		font-size: 12px;
@@ -760,13 +968,6 @@
 	.btn.danger:hover:not(:disabled) {
 		border-color: var(--danger-color);
 		background: var(--danger-bg, var(--bg-hover));
-	}
-	.btn-note {
-		font-size: 10px;
-		font-weight: 400;
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-		letter-spacing: 0.01em;
 	}
 	.hint {
 		color: var(--text-muted);
