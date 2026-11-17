@@ -98,8 +98,8 @@ pub use regen::{
     ElementTrace, FlowElement, Lowered, RegenerationContract, VersionTriple, lower_to_elements,
 };
 
-// ── flow_doc ───────────────────────────────────────────────────────────
-pub use flow_doc::FlowDocument;
+// ── flow_doc ──────────────────────────────────────────────────────────
+pub use flow_doc::{FlowDocument, latest_flow_version, select_rerun_base};
 
 // ── steps (Phase-0 deterministic seams, kept for backward compat) ─────
 pub use steps::{
@@ -117,6 +117,42 @@ pub struct VideoFlow {
 }
 
 pub type VFlow = VideoFlow;
+
+/// C11 — the re-runnable steps of the ⑤ step chain (the four rows the UI
+/// offers a per-step "↻ re-run from here" affordance on). S0 (intent) is
+/// upstream of every step; S5 (verify) always re-runs with the re-run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FromStep {
+    Expand,
+    Structure,
+    Critic,
+    Lower,
+}
+
+impl FromStep {
+    /// The wire/UI name — exactly the step-row names the Director renders.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Expand => "expand",
+            Self::Structure => "structure",
+            Self::Critic => "critic",
+            Self::Lower => "lower",
+        }
+    }
+
+    /// Parse the wire name. Unknown/empty → `None` = the full-run path
+    /// (backward compat: existing callers that pass nothing keep working).
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "expand" => Self::Expand,
+            "structure" => Self::Structure,
+            "critic" => Self::Critic,
+            "lower" => Self::Lower,
+            _ => return None,
+        })
+    }
+}
 
 impl VideoFlow {
     pub fn new() -> Self {
@@ -216,6 +252,149 @@ impl VideoFlow {
         // so every persisted doc carries the full flow state. Entry drives the
         // seed; without one, derive a default seed from the raw text.
         let engine = Some(build_engine_run(raw, &intent, entry));
+
+        Ok(FlowDocument {
+            flow_version: self.config.flow_version,
+            intent,
+            novel,
+            structured: plan,
+            scoretree,
+            lowered,
+            regen,
+            critic_model: Some(critic_model),
+            engine,
+        })
+    }
+
+    /// C11: re-run the pipeline **from a step**, keeping every upstream
+    /// output LOCKED from `base` (the newest persisted doc) and re-executing
+    /// `from`..end with the CURRENT entry params. S5 verify always re-runs
+    /// (the engine rebuild below). The result is a FRESH document — the
+    /// caller persists it as the next `flow.v{K+1}.json` (append-only, I5).
+    ///
+    /// Per-step semantics (the pinned spec, docs/director-c11-rerun-from-step.md):
+    /// - `expand`    — fresh intent from `text`, novel re-expanded (the
+    ///   command's LLM Node A block may still replace the engine novel),
+    ///   structure/critic/lower re-derive.
+    /// - `structure` — novel LOCKED from `base`; plan/critic/lower re-derive.
+    /// - `critic`    — novel + plan LOCKED; scoretree/lower re-derive.
+    /// - `lower`     — novel + plan + scoretree LOCKED; lowered re-derives.
+    pub fn run_from_step(
+        &self,
+        base: &FlowDocument,
+        from: FromStep,
+        text: &str,
+        entry: Option<&crate::generation::video_flow::engine::seed::EngineEntry>,
+    ) -> FlowResult<FlowDocument> {
+        use crate::generation::video_flow::engine::seed::{EngineRun, MoodProfile};
+        use crate::generation::video_flow::engine::tree::build_structural_tree;
+
+        // Upstream lock + re-derive, per the step table above.
+        let (intent, novel) = match from {
+            FromStep::Expand => {
+                let intent = IntentSnapshot::new(text);
+                let look = match entry {
+                    Some(e) => LookAxes::from(e),
+                    None => LookAxes::from(&default_engine_entry(text, &intent)),
+                };
+                let novel = TemplateLayeredExpander.expand_with_look(&intent, &self.config.expand, &look)?;
+                (intent, novel)
+            }
+            FromStep::Structure | FromStep::Critic | FromStep::Lower => {
+                (base.intent.clone(), base.novel.clone())
+            }
+        };
+
+        let plan = match from {
+            FromStep::Expand | FromStep::Structure => {
+                let marker_text = self.marker_text_from_novel(&intent, &novel);
+                let plan = structure_plan(&marker_text, &self.config.structure, self.config.flow_version)?;
+                validate_plan(&plan, &self.config.structure)?;
+                plan
+            }
+            FromStep::Critic | FromStep::Lower => base.structured.clone(),
+        };
+
+        let critic_input = CriticInput {
+            sections: plan
+                .primary()
+                .sections
+                .iter()
+                .enumerate()
+                .map(|(i, s)| CriticSectionView {
+                    id: format!("s{i}"),
+                    prompt: s.prompt.clone(),
+                })
+                .collect(),
+            intent_clauses: intent.clauses.iter().map(|c| c.text.clone()).collect(),
+        };
+        let scoretree = match from {
+            FromStep::Lower => base.scoretree.clone(),
+            FromStep::Expand | FromStep::Structure | FromStep::Critic => {
+                DefaultCritic.score(&critic_input, &self.config.critic)?
+            }
+        };
+
+        // `lower` is the last re-derivable step — it always re-executes,
+        // whatever the starting step is.
+        let lowered = lower_to_elements(&plan)?;
+
+        // Re-stamp the version triple + destructive regen contract (I5) —
+        // the re-run is replayable under the CURRENT step versions.
+        let triple = VersionTriple {
+            flow_version: self.config.flow_version,
+            expand_version: self.config.expand.step_version,
+            structure_version: self.config.structure.step_version,
+            critic_version: self.config.critic.step_version,
+            critic_model_version: 0,
+        };
+        let regen = RegenerationContract::new(triple, &lowered);
+        let critic_model = StubModelResolver.resolve(
+            ModelRole::Critic,
+            0,
+            self.config.learn.model_root.as_deref(),
+        );
+
+        // Engine rebuild + S5 verify (always re-executed).
+        let engine = match from {
+            FromStep::Expand => {
+                // Fresh template run — the command's LLM Node A block may
+                // still replace the engine novel afterwards (same as a full
+                // run; upstream of `expand` is only the intent snapshot).
+                Some(build_engine_run(text, &intent, entry))
+            }
+            _ => {
+                // S2/S3/S5 re-derive around the LOCKED engine novel, with the
+                // current G0 seed + tree. The engine doc is guaranteed by
+                // the command-side guard (select_rerun_base) — name it anyway
+                // (D1: no silent assumption).
+                let base_engine = base.engine.as_ref().ok_or_else(|| {
+                    FlowError::RerunIncompatible {
+                        step: from.name().to_string(),
+                        why: "the last doc has no engine run".to_string(),
+                    }
+                })?;
+                let default_entry = default_engine_entry(text, &base.intent);
+                let effective = entry.unwrap_or(&default_entry);
+                let seed = effective.to_seed();
+                let tod = effective.time_of_day.clone();
+                let weather = effective.weather.clone();
+                let profile = MoodProfile::for_mood(effective.mood);
+                let tree = build_structural_tree(&base.intent, effective, &effective.overrides);
+                let mut run = EngineRun::build_with_novel_mood(
+                    seed,
+                    base_engine.novel.clone(),
+                    &tod,
+                    &weather,
+                    base_engine.expansion,
+                    base_engine.expansion_note.clone(),
+                    Some(&profile),
+                    Some(&tree),
+                );
+                run.tree = Some(tree);
+                Some(run)
+            }
+        };
 
         Ok(FlowDocument {
             flow_version: self.config.flow_version,
@@ -507,5 +686,138 @@ mod tests {
         // system enforces I1 (no access to novel, intent clauses, etc.
         // beyond what `CriticInput` carries).
         let _ = doc.scoretree.overall();
+    }
+
+    // ── C11: per-step re-run (from_step) ────────────────────────────────────
+
+    fn entry_for(text: &str) -> crate::generation::video_flow::engine::seed::EngineEntry {
+        default_engine_entry(text, &IntentSnapshot::new(text))
+    }
+
+    #[test]
+    fn from_step_parses_wire_names() {
+        assert_eq!(FromStep::parse("expand"), Some(FromStep::Expand));
+        assert_eq!(FromStep::parse("structure"), Some(FromStep::Structure));
+        assert_eq!(FromStep::parse("critic"), Some(FromStep::Critic));
+        assert_eq!(FromStep::parse("lower"), Some(FromStep::Lower));
+        // Unknown/empty = full run (backward compat — never a re-run).
+        assert_eq!(FromStep::parse(""), None);
+        assert_eq!(FromStep::parse("bogus"), None);
+    }
+
+    #[test]
+    fn rerun_from_structure_keeps_novel() {
+        let flow = default_flow();
+        let entry = entry_for(LONG);
+        let base = flow.run_full_with_entry(LONG, Some(&entry)).unwrap();
+        let rerun = flow
+            .run_from_step(&base, FromStep::Structure, LONG, Some(&entry))
+            .unwrap();
+        // Upstream locked byte-stable.
+        assert_eq!(rerun.novel, base.novel, "novel is locked for a structure re-run");
+        assert_eq!(rerun.intent, base.intent);
+        // Downstream re-derived + re-stamped under the current versions.
+        assert!(rerun.regen.is_destructive_no_fallback());
+        assert_eq!(rerun.regen.version.flow_version, FLOW_VERSION);
+        // Engine novel stays locked; S5 verify re-ran and stayed clean.
+        let e0 = base.engine.as_ref().unwrap();
+        let e1 = rerun.engine.as_ref().unwrap();
+        assert_eq!(e1.novel, e0.novel, "S2/S3 re-derive around the LOCKED engine novel");
+        assert!(e1.verify.verified, "S5 verify always re-runs — and clean");
+    }
+
+    #[test]
+    fn rerun_from_lower_keeps_novel_plan_scoretree() {
+        let flow = default_flow();
+        let entry = entry_for(LONG);
+        let base = flow.run_full_with_entry(LONG, Some(&entry)).unwrap();
+        let rerun = flow
+            .run_from_step(&base, FromStep::Lower, LONG, Some(&entry))
+            .unwrap();
+        assert_eq!(rerun.novel, base.novel);
+        assert_eq!(rerun.structured, base.structured, "plan is locked for a lower re-run");
+        assert_eq!(rerun.scoretree, base.scoretree, "scoretree is locked for a lower re-run");
+        assert!(rerun.engine.as_ref().unwrap().verify.verified);
+    }
+
+    #[test]
+    fn rerun_from_expand_rederives_from_text() {
+        let flow = default_flow();
+        let base = flow.run_full(LONG).unwrap();
+        // Same text + same (default) params → the deterministic re-derivation
+        // equals the full run's stable layers (determinism contract).
+        let rerun = flow.run_from_step(&base, FromStep::Expand, LONG, None).unwrap();
+        assert_eq!(rerun.novel, base.novel);
+        assert_eq!(rerun.structured, base.structured);
+        assert!(rerun.engine.as_ref().unwrap().verify.verified);
+    }
+
+    // ── C11 guard: the named re-run failures (D1 — never silent) ──────────
+
+    #[test]
+    fn rerun_guard_names_missing_doc() {
+        let dir = std::env::temp_dir().join("vm_c11_guard_missing");
+        let _ = std::fs::create_dir_all(&dir);
+        // A truly empty session flow dir: clear anything stale first.
+        if let Ok(mut rd) = std::fs::read_dir(&dir) {
+            for e in rd.by_ref().flatten() {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        let msg = select_rerun_base(&dir, FLOW_VERSION, "expand")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg == "re-run from expand needs a compatible last doc — no persisted flow doc in this session yet · run the full S0→S5 first",
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn rerun_guard_names_pre_engine_doc() {
+        let flow = default_flow();
+        let mut doc = flow.run_full(LONG).unwrap();
+        doc.engine = None; // the pre-engine doc shape
+        let dir = std::env::temp_dir().join("vm_c11_guard_pre_engine");
+        let _ = std::fs::create_dir_all(&dir);
+        doc.save(&dir.join(FlowDocument::default_filename(1))).unwrap();
+        let msg = select_rerun_base(&dir, FLOW_VERSION, "structure")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg == "re-run from structure needs a compatible last doc — the last doc (v1) predates the engine · run the full S0→S5 first",
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn rerun_guard_names_version_mismatch() {
+        let flow = default_flow();
+        let mut doc = flow.run_full(LONG).unwrap();
+        doc.flow_version = 999; // a doc from another flow contract
+        let dir = std::env::temp_dir().join("vm_c11_guard_mismatch");
+        let _ = std::fs::create_dir_all(&dir);
+        doc.save(&dir.join(FlowDocument::default_filename(1))).unwrap();
+        let msg = select_rerun_base(&dir, FLOW_VERSION, "lower")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg == format!(
+                "re-run from lower needs a compatible last doc — the last doc (v1) is flow version 999, this engine runs {FLOW_VERSION} · run the full S0→S5 first"
+            ),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn rerun_guard_accepts_compatible_doc() {
+        let flow = default_flow();
+        let doc = flow.run_full(LONG).unwrap();
+        let dir = std::env::temp_dir().join("vm_c11_guard_ok");
+        let _ = std::fs::create_dir_all(&dir);
+        doc.save(&dir.join(FlowDocument::default_filename(2))).unwrap();
+        let (k, base) = select_rerun_base(&dir, FLOW_VERSION, "critic").unwrap();
+        assert_eq!(k, 2, "the newest version is the re-run base");
+        assert_eq!(base.novel, doc.novel);
     }
 }

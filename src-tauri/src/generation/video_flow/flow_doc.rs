@@ -89,6 +89,79 @@ impl FlowDocument {
     }
 }
 
+/// The newest `flow.v{N}.json` version on disk in `dir` (0 when none).
+/// Same name grammar as the write side (`default_filename`) — `flow.v` prefix
+/// + `.json` suffix, nothing else qualifies.
+pub fn latest_flow_version(dir: &Path) -> u32 {
+    let mut best: u32 = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                let v = name
+                    .strip_prefix("flow.v")
+                    .and_then(|s| s.strip_suffix(".json"))
+                    .and_then(|v| v.parse::<u32>().ok());
+                if let Some(v) = v {
+                    best = best.max(v);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// C11 guard: pick the newest persisted flow doc as a per-step re-run base.
+/// Pure (no DB), unit-testable with a temp dir. Returns the (version, doc)
+/// pair; fails with a NAMED `FlowError` (D1: no silent fallback to a full
+/// run) when no compatible last doc exists:
+/// - no `flow.v{N}.json` on disk at all,
+/// - the newest doc's `engine` is `None` (it predates the engine),
+/// - the newest doc's `flow_version` differs from `expected_flow_version`.
+pub fn select_rerun_base(
+    dir: &Path,
+    expected_flow_version: u32,
+    step: &str,
+) -> Result<(u32, FlowDocument), crate::generation::video_flow::FlowError> {
+    use crate::generation::video_flow::FlowError;
+
+    let k = latest_flow_version(dir);
+    if k == 0 {
+        return Err(FlowError::RerunIncompatible {
+            step: step.to_string(),
+            why: "no persisted flow doc in this session yet".to_string(),
+        });
+    }
+    let path = dir.join(FlowDocument::default_filename(k));
+    let doc = match FlowDocument::load(&path) {
+        Ok(d) => d,
+        // A doc that cannot deserialize under the current reader is treated
+        // as pre-engine (the list side already skips such files with a WARN
+        // — `director_list_flows`), so the re-run guard names it as such.
+        Err(_) => {
+            return Err(FlowError::RerunIncompatible {
+                step: step.to_string(),
+                why: format!("the last doc (v{k}) predates the engine"),
+            })
+        }
+    };
+    if doc.engine.is_none() {
+        return Err(FlowError::RerunIncompatible {
+            step: step.to_string(),
+            why: format!("the last doc (v{k}) predates the engine"),
+        });
+    }
+    if doc.flow_version != expected_flow_version {
+        return Err(FlowError::RerunIncompatible {
+            step: step.to_string(),
+            why: format!(
+                "the last doc (v{k}) is flow version {}, this engine runs {expected_flow_version}",
+                doc.flow_version
+            ),
+        });
+    }
+    Ok((k, doc))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

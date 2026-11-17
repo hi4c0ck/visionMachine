@@ -41,6 +41,7 @@
 	import {
 		type FlowDocument,
 		type FlowSummary,
+		type RerunStep,
 	} from '$lib/directorStore/types';
 	import type { SessionData, PipeRow } from '$types';
 	// Settled-flow cache (2026-11-10 "generated data doesn't sustain session
@@ -1020,13 +1021,31 @@
 	}
 
 	async function handleRun() {
+		await handleRunWithStep(null);
+	}
+
+	// C11: re-run from a ⑤ step — upstream outputs locked from the newest
+	// persisted doc, S5 re-verifies, the result lands as flow.v{K+1}. The
+	// backend guard (select_rerun_base) names any missing/pre-engine/
+	// version-mismatched last doc — it never silently falls back to a full
+	// run. Same run-state lifecycle as handleRun; only the fromStep differs.
+	async function handleRerunFrom(step: RerunStep) {
+		await handleRunWithStep(step);
+	}
+
+	async function handleRunWithStep(fromStep: RerunStep | null) {
 		const sid = sessionId;
 		running = true;
 		onRunningChange?.(true);
 		runError = null;
 		const t0 = Date.now();
 		try {
-			const result = await runFlow(sid, entry.idea || entry.input_text?.trim() || '', buildEntry());
+			const result = await runFlow(
+				sid,
+				entry.idea || entry.input_text?.trim() || '',
+				buildEntry(),
+				fromStep ?? null,
+			);
 			if (sid !== sessionId) return;
 			runDurationMs = Date.now() - t0;
 			doc = result;
@@ -1187,6 +1206,7 @@
 			seedWorking={seedWorking}
 			canExportSeed={entry.idea.trim().length > 0}
 			onRun={handleRun}
+			onRerunFrom={handleRerunFrom}
 			onAnnotate={annotateRun}
 			onApply={applyPipes}
 			onExtractPipes={extractPipesToPrompt}

@@ -11,7 +11,7 @@
 // flow data + per-session run state.
 
 import { invoke } from '@tauri-apps/api/core';
-import type { FlowDocument, FlowSummary, RunFlowResult, GoldenRun } from './types';
+import type { FlowDocument, FlowSummary, RunFlowResult, GoldenRun, RerunStep } from './types';
 import type { EngineEntryInput } from './engine';
 
 export type DirectorTab = 'pipes' | 'director' | 'extract' | 'scoreboard';
@@ -56,10 +56,16 @@ export function runStatesSize(): number {
 	return runStates.size;
 }
 
+/** Run S0→S5 for a session. `fromStep` (C11) targets a per-step re-run:
+ * re-execute from the named ⑤ step with upstream outputs locked from the
+ * session's newest persisted doc; omitted/`null` = the full run (byte-
+ * identical to before C11). A missing/incompatible last doc is a named
+ * error (the FlowError guard), never a silent fallback. */
 export async function runFlow(
 	sessionId: string,
 	text: string,
 	entry?: EngineEntryInput | null,
+	fromStep?: RerunStep | null,
 ): Promise<FlowDocument> {
 	const rs = getRunState(sessionId);
 	rs.running = true;
@@ -69,6 +75,7 @@ export async function runFlow(
 			sessionId,
 			text,
 			entry: entry ? JSON.stringify(entry) : null,
+			fromStep: fromStep ?? null,
 		});
 		// The backend returns the REAL persisted version. The document's own
 		// flowVersion field is the contract FLOW_VERSION (1), so it must be

@@ -19,7 +19,7 @@
 	} from '$lib/directorStore/engine';
 	import { timelineRows } from '$lib/directorStore/engine';
 	import { onRunProgress, type RunProgressEvent } from '$lib/directorStore/runProgress';
-	import type { FlowDocument } from '$lib/directorStore/types';
+	import type { FlowDocument, RerunStep } from '$lib/directorStore/types';
 	import TextBlock from '../TextBlock.svelte';
 	import DirectorG0Params from './DirectorG0Params.svelte';
 	import RunLog from './RunLog.svelte';
@@ -48,6 +48,7 @@
 		seedWorking,
 		canExportSeed,
 		onRun,
+		onRerunFrom,
 		onAnnotate,
 		onApply,
 		onExtractPipes,
@@ -77,6 +78,10 @@
 		canExportSeed: boolean;
 		/** Run S0→S5 (parent's handleRun). */
 		onRun: () => void;
+		/** C11: re-run from a ⑤ step — upstream outputs locked, S5
+		 * re-verifies, result persists as flow.v{K+1} (parent's handler).
+		 * Omit the prop to hide the per-step affordance. */
+		onRerunFrom?: (step: RerunStep) => void;
 		/** Accept / Reject run annotation (parent's annotateRun). */
 		onAnnotate: (kind: 'accept' | 'reject') => Promise<void>;
 		/** Destructive regenerate pipes (parent's applyPipes). */
@@ -376,6 +381,14 @@
 								title="{row.name} {row.ver} · {row.src}">
 								<code class="step-pip-name">{row.name}</code>
 								<span class="step-pip-state">{row.state}</span>
+								{#if onRerunFrom}
+									<button
+										class="step-pip-rerun"
+										disabled={running}
+										title={`↻ re-run from ${row.name} — upstream locked · S5 re-verifies`}
+										aria-label={`Re-run from ${row.name}`}
+										onclick={() => onRerunFrom(row.name as RerunStep)}>↻</button>
+								{/if}
 							</span>
 						{/each}
 					{:else}
@@ -396,6 +409,14 @@
 								<code class="step-name">{row.name}</code>
 								<span class="step-src">{row.src}</span>
 								<span class="step-state">{row.state}</span>
+								{#if onRerunFrom}
+									<button
+										class="step-rerun"
+										disabled={running}
+										title={`↻ re-run from ${row.name} — upstream locked · S5 re-verifies · saves as v${(doc?.flowVersion ?? 0) + 1}`}
+										aria-label={`Re-run from ${row.name}`}
+										onclick={() => onRerunFrom(row.name as RerunStep)}>↻</button>
+								{/if}
 							</li>
 						{/each}
 					{:else}
@@ -705,13 +726,53 @@
 	}
 	.step {
 		display: grid;
-		grid-template-columns: 72px 1fr auto;
+		grid-template-columns: 72px 1fr auto auto;
 		gap: 8px;
 		align-items: center;
 		padding: 6px 8px;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
 	}
+	/* C11: the per-step "↻ re-run from here" affordance — a small icon
+	   button at each ⑤ row's end. Muted at rest (hairline on hover),
+	   disabled while a run is in flight. The 4th grid column is auto, so
+	   it collapses to 0 when the affordance prop is absent. */
+	.step-rerun {
+		width: 20px;
+		height: 20px;
+		display: grid;
+		place-items: center;
+		font-size: 12px;
+		line-height: 1;
+		color: var(--text-secondary);
+		background: transparent;
+		border: 1px solid transparent;
+		border-radius: 4px;
+		cursor: pointer;
+		padding: 0;
+	}
+	.step-rerun:hover:not(:disabled) {
+		color: var(--text-primary);
+		border-color: var(--border-color);
+	}
+	.step-rerun:disabled { opacity: 0.35; cursor: default; }
+	/* C11 compact: the same affordance inside a step-pip (tiny, 14px). */
+	.step-pip-rerun {
+		width: 14px;
+		height: 14px;
+		display: grid;
+		place-items: center;
+		font-size: 9px;
+		line-height: 1;
+		color: var(--text-secondary);
+		background: transparent;
+		border: 0;
+		border-radius: 3px;
+		cursor: pointer;
+		padding: 0;
+	}
+	.step-pip-rerun:hover:not(:disabled) { color: var(--text-primary); }
+	.step-pip-rerun:disabled { opacity: 0.35; cursor: default; }
 	.step-name, .step-src, .step-state {
 		font-family: var(--font-mono, monospace);
 		font-size: 11px;

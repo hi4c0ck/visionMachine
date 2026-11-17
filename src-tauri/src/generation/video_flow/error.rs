@@ -35,6 +35,11 @@ pub enum FlowError {
     Provenance(String),
     /// The append-only signal log was malformed or rejected an event.
     Signal(String),
+    /// A per-step re-run (`from_step`) needs a compatible last persisted flow
+    /// doc. `step` names the requested re-run step; `why` is the concrete,
+    /// actionable reason (missing / pre-engine / version-mismatch doc). Never
+    /// a silent fallback to a full run — the UI surfaces this verbatim.
+    RerunIncompatible { step: String, why: String },
 }
 
 impl FlowError {
@@ -63,6 +68,10 @@ impl fmt::Display for FlowError {
             Self::Model(d) => write!(f, "model: {d}"),
             Self::Provenance(d) => write!(f, "provenance: {d}"),
             Self::Signal(d) => write!(f, "signal: {d}"),
+            Self::RerunIncompatible { step, why } => write!(
+                f,
+                "re-run from {step} needs a compatible last doc — {why} · run the full S0→S5 first"
+            ),
         }
     }
 }

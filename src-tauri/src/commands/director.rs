@@ -15,8 +15,8 @@
 
 use crate::generation::video_flow::engine::types::Genre;
 use crate::generation::video_flow::{
-    append_signal_jsonl, materialize_pipes, validate_plan, FlowDocument, SignalKind, SignalRecord,
-    StructuredVideoPlan, VideoFlow, VideoTag,
+    append_signal_jsonl, materialize_pipes, select_rerun_base, validate_plan, FromStep,
+    FlowDocument, SignalKind, SignalRecord, StructuredVideoPlan, VideoFlow, VideoTag,
 };
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -228,11 +228,20 @@ fn next_flow_version(flow: &PathBuf) -> u32 {
 /// `entry` is the optional S0 engine entry (Director G0 controls: genre,
 /// ratio, scale, time_of_day, weather). When supplied it drives the engine
 /// seed; when absent a default seed is derived from `text`.
+///
+/// `from_step` (C11) is the optional ⑤ step-chain name
+/// ("expand" | "structure" | "critic" | "lower"). When set, the run re-
+/// executes from that step with upstream outputs LOCKED from the session's
+/// newest persisted `flow.v{K}.json`, and persists the result as
+/// `flow.v{K+1}.json` (append-only, I5). None / empty / unrecognized keeps
+/// the full-run path byte-identical to today; a missing / pre-engine /
+/// version-mismatched last doc is a NAMED `FlowError` (no silent fallback).
 #[tauri::command]
 pub async fn director_run_flow(
     session_id: String,
     text: String,
     entry: Option<String>,
+    from_step: Option<String>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
@@ -290,10 +299,28 @@ pub async fn director_run_flow(
             }
             None => None,
         };
+    // C11: per-step re-run. `from_step` re-executes from the named step with
+    // upstream outputs locked from the newest persisted doc — the guard
+    // (select_rerun_base) names any missing / pre-engine / mismatched doc;
+    // it never silently falls back to a full run. None / empty /
+    // unrecognized = the full-run path below, byte-identical to before C11.
+    let from = from_step.as_deref().and_then(FromStep::parse);
+    let mut rerun_base_version: u32 = 0;
+
     let flow = VideoFlow::new();
-    let mut doc = flow
-        .run_full_with_entry(&text, resolved_entry.as_ref())
-        .map_err(|e| e.to_string())?;
+    let mut doc = match from {
+        Some(step) => {
+            let (k, base) =
+                select_rerun_base(&dir, flow.config.flow_version, step.name())
+                    .map_err(|e| e.to_string())?;
+            rerun_base_version = k;
+            flow.run_from_step(&base, step, &text, resolved_entry.as_ref())
+                .map_err(|e| e.to_string())?
+        }
+        None => flow
+            .run_full_with_entry(&text, resolved_entry.as_ref())
+            .map_err(|e| e.to_string())?,
+    };
 
     // Phase 2: expand — run_full_with_entry returned; report the engine
     // novel scene/shot counts.
@@ -325,11 +352,28 @@ pub async fn director_run_flow(
         }
         None => "template · no engine run".to_string(),
     };
+    // C11: on a re-run the upstream steps are LOCKED — their progress lines
+    // say so explicitly ("locked from v{K}"), never a silent no-op in the
+    // "watch it think" log.
+    let expand_event_detail: String = if matches!(
+        from,
+        Some(FromStep::Structure | FromStep::Critic | FromStep::Lower)
+    ) {
+        format!("locked from v{rerun_base_version}")
+    } else {
+        structure_detail.clone()
+    };
+    let structure_event_detail: String =
+        if matches!(from, Some(FromStep::Critic | FromStep::Lower)) {
+            format!("locked from v{rerun_base_version}")
+        } else {
+            structure_detail.clone()
+        };
     app.emit(
         "director_run_progress",
         RunProgress {
             phase: "expand".into(),
-            detail: structure_detail.clone(),
+            detail: expand_event_detail,
             ms: t0.elapsed().as_millis() as u64,
         },
     )
@@ -341,7 +385,7 @@ pub async fn director_run_flow(
         "director_run_progress",
         RunProgress {
             phase: "structure".into(),
-            detail: structure_detail,
+            detail: structure_event_detail,
             ms: t0.elapsed().as_millis() as u64,
         },
     )
@@ -354,7 +398,11 @@ pub async fn director_run_flow(
     // `doc.engine` and names WHY the LLM didn't produce — never a silent
     // fallback. A missing/unconfigured provider simply stays on template
     // (nothing was attempted, so no note).
-    let critic_detail: String = {
+    // C11: a re-run from structure/critic/lower keeps the novel LOCKED, so
+    // the LLM Node A (the novel writer) only applies to the full run or a
+    // re-run from expand.
+    let critic_detail: String = match from {
+        None | Some(FromStep::Expand) => {
         use crate::generation::video_flow::engine::llm::{self, TextProvider};
         use crate::generation::video_flow::engine::seed::{EngineRun, ExpansionSource};
 
@@ -454,6 +502,13 @@ pub async fn director_run_flow(
                 }
             }
             None => "template · LLM skipped".to_string(),
+        }
+        }
+        Some(step) => {
+            format!(
+                "re-run from {} · novel locked from v{rerun_base_version} · S2–S5 re-derived",
+                step.name()
+            )
         }
     };
     // Phase 4: critic — after the LLM Node A block.

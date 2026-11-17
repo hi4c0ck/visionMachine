@@ -6,6 +6,11 @@
 import type { EngineRun, ShotSpec } from './engine';
 import { concernSummary } from './engine';
 
+/** C11 — the ⑤ step-chain names a per-step "re-run from here" may target.
+ * Mirrors Rust's `FromStep` wire names exactly; S0 (intent) and S5 (verify)
+ * are never re-runnable units (verify always re-runs with any re-run). */
+export type RerunStep = 'expand' | 'structure' | 'critic' | 'lower';
+
 export type VideoTag =
 	| 'scene'
 	| 'camera'
