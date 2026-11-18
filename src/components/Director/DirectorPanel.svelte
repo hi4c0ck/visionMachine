@@ -384,10 +384,36 @@
 				// one sustained base pair (Scene + base Camera), both full-clip.
 				const prose = sp.content.prose;
 				const slices = sp.sub_timeline.length ? sp.sub_timeline : null;
-				// Cap a beat to ~10 words (mirrors Rust cap_words(_, 10)) so a
-				// verbose LLM beat can't over-detail and squash the model.
-				const capWords = (s: string, n: number) =>
-					s.trim().split(/\s+/).slice(0, n).join(' ');
+				// B14 (mirrors Rust cap_phrase(_, 40) in seed.rs): cap a beat
+				// to 40 words so a verbose LLM beat can't over-detail and
+				// squash the model — but the cut backs off to the RIGHTMOST
+				// clean boundary (sentence ends ". " / "…" / "; ", clause
+				// ends " — " / " · " joiner / comma), so the novel's rich
+				// beats carry complete sentences into the section text,
+				// never a dangling mid-sentence fragment.
+				const capPhrase = (s: string, n: number) => {
+					const t = s.trim();
+					const words = t.split(/\s+/);
+					if (words.length <= n) return t;
+					const capped = words.slice(0, n).join(' ');
+					// [separator, chars to keep past its start] — sentence-
+					// final marks are kept, clause marks dropped.
+					const BOUNDARIES: Array<[string, number]> = [
+						['. ', 1],
+						['…', 1],
+						[' — ', 0],
+						['; ', 1],
+						[' · ', 0],
+						[', ', 0],
+					];
+					let best = -1;
+					for (const [sep, keep] of BOUNDARIES) {
+						const p = capped.lastIndexOf(sep);
+						if (p > 0 && p + keep > best) best = p + keep;
+					}
+					if (best > 0) return capped.slice(0, best).trimEnd();
+					return capped;
+				};
 				if (!slices) {
 					push('scene', prose, 0, clipF);
 					push('camera', camFor(sp.concerns.camera, sp.concerns.lens), 0, clipF);
@@ -403,7 +429,8 @@
 						const beatHere = sl.absorbed_beats?.length
 							? sl.absorbed_beats.join(' · ')
 							: sp.content.beats[i] ?? '';
-						const beat = capWords(beatHere, 10);
+						// B14: sentence-aware 40-word cap (mirrors Rust).
+						const beat = capPhrase(beatHere, 40);
 						const p = i === 0 ? (beat ? `${prose} · ${beat}` : prose) : beat;
 						if (p) push('scene', p, s0, s1);
 						const st = sl.state;

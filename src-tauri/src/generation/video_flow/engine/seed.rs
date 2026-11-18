@@ -725,10 +725,13 @@ impl EngineRun {
                         // dropped — that context now lives once in the pipe's
                         // global_style (the continuity line + sustained base),
                         // so a long LLM beat can't over-detail and squash.
-                        // Phrase-aware cap: cut at 10 words, then back off to
-                        // the last natural break so a long LLM beat never
-                        // leaves a dangling half-phrase ("… — mouth (if").
-                        let beat = cap_phrase(&beats_here.unwrap_or_default(), 10);
+                        // B14 (2026-11-18): the budget is 40 words and the
+                        // back-off is sentence-aware (cap_phrase), so the
+                        // novel's rich beats carry COMPLETE sentences into
+                        // the section text — the old 10-word fragment cap
+                        // sliced them mid-sentence ("…presses forward in",
+                        // "…settles — the"), which read as broken.
+                        let beat = cap_phrase(&beats_here.unwrap_or_default(), 40);
                         let p = if i == 0 {
                             if beat.is_empty() {
                                 prose.clone()
@@ -1109,13 +1112,18 @@ fn cap_words(text: &str, max: usize) -> String {
     text.split_whitespace().take(max).collect::<Vec<_>>().join(" ")
 }
 
-/// Cap a fragment at `max` words AND trim to the last natural break, so a
+/// Cap a fragment at `max` words AND trim to the last clean boundary, so a
 /// long LLM beat never leaves a dangling half-phrase at the cut point
 /// (2026-11-11 "half-word splits on scene arcs": `close-up: … furrow in
 /// confusion — mouth (if` — the raw 10-word cap landing mid-detail-clause).
-/// The beat ends on the last em-dash / semicolon / comma / "·" inside the
-/// window; when there is no such break (short deterministic beats) the
-/// result is byte-identical to `cap_words`, so golden prompts stay stable.
+///
+/// The cut lands on the RIGHTMOST clean boundary inside the window —
+/// sentence ends first (". ", "…"), then clause ends (" — ", "; "), then the
+/// " · " beat joiner (a joined slice keeps only complete beats), then commas
+/// — so the most content is kept and the beat still ends on a complete
+/// sentence/clause, never a dangling half-token. When the window holds no
+/// boundary (short deterministic beats) the result is byte-identical to
+/// `cap_words`, so golden prompts stay stable.
 fn cap_phrase(text: &str, max: usize) -> String {
     let capped = cap_words(text, max);
     // Nothing was cut (the fragment fit the word budget) → byte-identical
@@ -1123,19 +1131,35 @@ fn cap_phrase(text: &str, max: usize) -> String {
     if text.split_whitespace().count() <= max {
         return capped;
     }
-    // A cut happened: back off to the last natural break inside the window
-    // (em-dash detail clause / semicolon / comma / "·" joiner) so the beat
-    // ends on a clean phrase, never a dangling half-token. If the window
-    // holds no such break, keep the raw word cap (a whole-phrase tail is
-    // still better than nothing).
-    for sep in [" — ", "; ", ", ", " · "] {
+    // A cut happened: back off to the RIGHTMOST clean boundary in the
+    // window so the beat ends on a complete sentence/clause. The cut keeps
+    // sentence-final marks (". ", "…", "; ") and drops the others (" — ",
+    // the " · " joiner, ", ") — a rightmost cut keeps the most content.
+    const BOUNDARIES: [(&str, usize); 6] = [
+        (". ", 1),   // keep the period
+        ("…", 3),    // keep the ellipsis
+        (" — ", 0),  // drop the dash
+        ("; ", 1),   // keep the semicolon
+        (" · ", 0),  // drop the joiner (a slice keeps whole beats)
+        (", ", 0),   // drop the comma
+    ];
+    let mut best: Option<usize> = None; // byte prefix length to keep
+    for (sep, keep) in BOUNDARIES {
         if let Some(p) = capped.rfind(sep) {
-            let t = capped[..p].trim_end().to_string();
-            if !t.is_empty() {
-                return t;
+            let len = p + keep;
+            if len > 0 && best.is_none_or(|b| len > b) {
+                best = Some(len);
             }
         }
     }
+    if let Some(len) = best {
+        let t = capped[..len].trim_end().to_string();
+        if !t.is_empty() {
+            return t;
+        }
+    }
+    // No boundary in the window: keep the raw word cap (a whole-phrase
+    // tail is still better than nothing).
     capped
 }
 
@@ -2453,6 +2477,30 @@ mod seed_tests {
         let none = "a single long unbroken run of words with no separators whatsoever in the beat text";
         let raw = cap_words(none, 6);
         assert_eq!(cap_phrase(none, 6), raw);
+    }
+
+    /// B14: the slice text keeps COMPLETE sentences. The budget is 40
+    /// words and the back-off is sentence-aware, so a rich LLM beat either
+    /// passes through whole (fits the budget) or is cut on the rightmost
+    /// clean boundary — never left as a dangling mid-sentence fragment.
+    #[test]
+    fn cap_phrase_keeps_complete_sentences_at_the_budget() {
+        // A rich 27-word beat under the 40-word budget passes through
+        // byte-identical — the novel's detail reaches the section text.
+        let rich = "the bubble's shell fogs over as the drift slows; its light cools to a dusk blue, and the motes settle into the shadow of the sinking sun.";
+        assert_eq!(rich.split_whitespace().count(), 27);
+        assert_eq!(cap_phrase(rich, 40), rich, "an under-budget beat must pass whole");
+
+        // An over-budget cut lands on the rightmost sentence end — the
+        // kept prefix ends on a complete sentence, not a mid-clause word.
+        let long = "alpha beta gamma delta. epsilon zeta eta theta.";
+        let capped = cap_phrase(long, 6);
+        assert_eq!(capped, "alpha beta gamma delta.", "ends on the sentence: {capped}");
+
+        // A joined multi-beat slice keeps only complete beats — the " · "
+        // joiner is a boundary, and the cut keeps whole beats only.
+        let joined = "first beat completes its thought · second beat starts a new one · third beat follows on";
+        assert_eq!(cap_phrase(joined, 8), "first beat completes its thought");
     }
 
     /// The two S4 shots of one scene must no longer be identical: the
