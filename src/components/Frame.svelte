@@ -478,6 +478,7 @@
 				<video
 					bind:this={videoEl}
 					class="frame-video"
+					data-vm-display
 					src={video.url}
 					muted
 					playsinline

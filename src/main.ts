@@ -1,5 +1,8 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
+// Global background/idle gate: pauses all CSS animations + display <video>
+// when the window is unfocused/hidden (App.svelte toggles html.vm-bg-idle).
+import './bg-idle.css';
 
 console.log('[Boot] Starting VisionMachine app...');
 const target = document.getElementById('app');

@@ -447,6 +447,7 @@
 						{#if lastVideoUrl}
 							<video
 								class="pipe-video"
+								data-vm-display
 								src={lastVideoUrl}
 								muted
 								loop
@@ -614,6 +615,7 @@
 					<video
 						src={sessionVideo.url}
 						class="out-video"
+						data-vm-display
 						style={`aspect-ratio: ${targetAspectCss}`}
 						muted
 						loop

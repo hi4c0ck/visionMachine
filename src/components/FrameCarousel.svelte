@@ -21,6 +21,7 @@
 	 */
 	import { untrack, onDestroy } from 'svelte';
 	import * as pd from '$lib/pipelineDiag';
+	import { isBgIdle, onBgIdleChange } from '$lib/bgIdle';
 	import { APP_CONSTANTS } from '$constants';
 	import {
 		FrameSource,
@@ -205,6 +206,15 @@
 	const MANUAL_PAUSE_MS = 1500; // manual move → resume only after this
 	let lastManualAt = 0;
 
+	// Item 3: the background/idle gate (bgIdle.ts, driven by App.svelte).
+	// While the window is unfocused/hidden the auto-transport rAF loop must
+	// stand down — a steady roll that keeps seeking the live <video> in an
+	// unseen window is wasted GPU. The flag re-arms the loop on focus.
+	let bgIdle = $state(isBgIdle());
+	$effect(() => onBgIdleChange((next) => {
+		bgIdle = next;
+	}));
+
 	function pauseAuto() {
 		lastManualAt = performance.now();
 	}
@@ -212,7 +222,9 @@
 	$effect(() => {
 		const mode = autoScroll;
 		void totalFrames;
+		void bgIdle; // item 3: re-run on focus return to re-arm the transport
 		if (mode === 'off') return;
+		if (bgIdle) return; // backgrounded/unfocused: stop the auto-transport rAF
 		let cancelled = false;
 
 		// —— FAST: snap to the next stop, dwell 0.8s at each snap. ——
@@ -982,6 +994,7 @@
 			<video
 				bind:this={videoEl}
 				class="fc-video"
+				data-vm-display
 				src={video.url}
 				muted
 				playsinline
