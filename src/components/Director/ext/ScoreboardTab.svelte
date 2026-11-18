@@ -70,6 +70,26 @@
 	/** Local error note for a failed loadFlow. */
 	let cmpError = $state<string | null>(null);
 
+	// B13: the Critic A/B version pickers — live UI now, diff disabled until
+	// a trained head lands (Phase 2). Versions are whatever distinct critic
+	// head versions are on file (golden baselines ∪ the current doc), or 0
+	// when only the deterministic stub (v0) has ever run.
+	let abA = $state(0);
+	let abB = $state(0);
+	const criticVersions = $derived.by(() => {
+		const vs = new Set<number>();
+		for (const g of golden) if (g.criticModelVersion > 0) vs.add(g.criticModelVersion);
+		const cur = doc?.regen.version.criticModelVersion;
+		if (cur && cur > 0) vs.add(cur);
+		return [...vs].sort((a, b) => b - a);
+	});
+	// Default both pickers to the newest versions on file when the data set
+	// changes (a new golden flag / a new doc).
+	$effect(() => {
+		abA = criticVersions[0] ?? 0;
+		abB = criticVersions[1] ?? criticVersions[0] ?? 0;
+	});
+
 	function cmpToggle(v: number) {
 		const next = new Set(compareSel);
 		if (next.has(v)) {
@@ -272,6 +292,14 @@
 	<h3 class="block-heading">
 		Weak spots · {sessionName} run v{doc.flowVersion} · {bars.length} tags used
 	</h3>
+	<!-- B11: while the critic is the deterministic stub, every score on this
+	     card is pinned at 0.5 — say so here, at the numbers, not just in the
+	     A/B card, so the board never reads as real signal. -->
+	{#if doc.criticModel?.untrained}
+		<p class="hint">
+			deterministic critic — every score is neutral (0.5) until a critic head trains (Phase 2)
+		</p>
+	{/if}
 	<ul class="tag-bars">
 		{#each bars as b}
 			<li>
@@ -331,6 +359,11 @@
 					<span class:run-chip={f.verified ? 'chip-ok' : 'chip-mut'}>
 						{f.verified ? 'verified' : 'unverified'}
 					</span>
+					{#if f.rerunFrom}
+						<code
+							class="run-rerun"
+							title={`B12 provenance: re-run from ${f.rerunFrom} (C11) — upstream outputs locked from the last doc · S5 re-verified · persisted as v${f.flowVersion}`}>↻ {f.rerunFrom}</code>
+					{/if}
 					<span class="run-src">{f.sectionCount}s · {f.entryText.slice(0, 24)}…</span>
 					<span class="run-anno">
 						<button
@@ -446,15 +479,54 @@
 
 <section class="score-card">
 	<h3 class="block-heading">Critic A/B</h3>
+	<!-- B13: the version pickers are live now; the diff stays disabled
+	     until a trained critic head lands (Phase 2). -->
+	<div class="ab-row">
+		<label class="ab-pick">
+			<code class="ab-label">head A</code>
+			<select
+				class="ab-select"
+				bind:value={abA}
+				disabled={criticVersions.length === 0}
+				aria-label="Critic head version A">
+				{#if criticVersions.length === 0}
+					<option value="0">— no trained heads on file —</option>
+				{:else}
+					{#each criticVersions as v}
+						<option value={v}>v{v}</option>
+					{/each}
+				{/if}
+			</select>
+		</label>
+		<code class="ab-vs">vs</code>
+		<label class="ab-pick">
+			<code class="ab-label">head B</code>
+			<select
+				class="ab-select"
+				bind:value={abB}
+				disabled={criticVersions.length === 0}
+				aria-label="Critic head version B">
+				{#if criticVersions.length === 0}
+					<option value="0">— no trained heads on file —</option>
+				{:else}
+					{#each criticVersions as v}
+						<option value={v}>v{v}</option>
+					{/each}
+				{/if}
+			</select>
+		</label>
+		<button
+			class="mini ab-diff"
+			disabled={criticVersions.length < 2 || abA === 0 || abA === abB}
+			title={criticVersions.length < 2
+				? 'Need ≥2 distinct critic versions on file to diff'
+				: 'Trained critic heads land in Phase 2 — the diff is read-only for now'}>diff</button>
+	</div>
 	<p class="hint">
-		Flag ≥2 golden runs across two critic head versions to compare.
-		{#if doc}
-			Currently v{doc.regen.version.criticModelVersion}
-			{doc.criticModel?.untrained ? ' (stub — real critic lands in Phase 2)' : ''}.
-		{/if}
+		Trained critic heads land in Phase 2 — the diff is read-only for now.
 		{#if golden.length}
-			{golden.length} golden baseline(s) on file — a trained critic will diff
-			them here.
+			{golden.length} golden baseline(s) on file; a trained critic will
+			diff them here against the same text (Q3 "keep critic head vN?").
 		{/if}
 	</p>
 </section>
@@ -465,7 +537,7 @@
 		<p class="hint">
 			{flows.length} run{flows.length === 1 ? '' : 's'} recorded · critic
 			{#if doc?.criticModel?.untrained}
-				untrained (stub)
+				untrained (stub · scores neutral)
 			{:else}
 				v{(doc?.regen.version.criticModelVersion) ?? 0}
 			{/if} · signals wired
@@ -665,6 +737,15 @@
 	.chip-mut {
 		color: var(--text-muted);
 	}
+	/* B12 provenance chip: this run is a C11 per-step re-run. Accent family
+	   (Template A) — quiet at rest, readable against the hairline. */
+	.run-rerun {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		padding: 1px 6px;
+		border: 1px solid var(--border-color);
+		color: var(--accent-color, var(--text-secondary));
+	}
 	.run-src {
 		flex: 1;
 		font-size: 11px;
@@ -693,6 +774,40 @@
 		border-color: var(--accent-color);
 		color: var(--text-primary);
 	}
+	/* B13: the Critic A/B version picker row — head A · vs · head B · diff,
+	   mono controls, hairline borders, quiet at rest (Template A). */
+	.ab-row {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		margin: 0 0 6px;
+	}
+	.ab-pick {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+	}
+	.ab-label {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--text-muted);
+	}
+	.ab-select {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: var(--text-primary);
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		padding: 2px 4px;
+	}
+	.ab-select:disabled { opacity: 0.5; }
+	.ab-vs {
+		font-family: var(--font-mono);
+		font-size: 9px;
+		color: var(--text-muted);
+	}
+	.ab-diff:disabled { opacity: 0.4; cursor: default; }
 
 	/* Golden ★ flag (Q2 quality baseline): a quiet star toggle on the run row.
 	   On = accent-filled star (flagged); off = muted outline. Design: no new

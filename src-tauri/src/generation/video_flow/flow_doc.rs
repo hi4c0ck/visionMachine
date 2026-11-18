@@ -53,6 +53,11 @@ pub struct FlowDocument {
     /// `#[serde(default)]` keeps old `flow.v{N}.json` files loading verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<EngineRun>,
+    /// C11 provenance: the ⑤ step this doc was re-run FROM (e.g. "critic").
+    /// `None` for a full S0→S5 run. `#[serde(default, skip_serializing_if)]`
+    /// keeps old `flow.v{N}.json` files loading verbatim (field absent = None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun_from: Option<String>,
 }
 
 impl FlowDocument {
@@ -315,6 +320,7 @@ mod tests {
             regen,
             critic_model: Some(critic_model),
             engine: None,
+            rerun_from: None,
         }
     }
 

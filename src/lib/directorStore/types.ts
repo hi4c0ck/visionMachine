@@ -145,6 +145,9 @@ export interface FlowDocument {
 	/** S0→S5 engine run (absorbed from `harness/`). `null` for docs produced
 	 before the engine landed, or when the run was entry-less. */
 	engine: EngineRun | null;
+	/** B12 provenance: the ⑤ step this doc re-ran from (C11). `null`/absent
+	 for a full S0→S5 run. */
+	rerunFrom?: string | null;
 }
 
 /** One row of the Scoreboard run list (director_list_flows). */
@@ -156,6 +159,9 @@ export interface FlowSummary {
 	entryText: string;
 	/** S5 verify state for this run (false when no engine was produced). */
 	verified: boolean;
+	/** B12 provenance: the ⑤ step this run re-ran from (C11); absent for a
+	 full S0→S5 run. */
+	rerunFrom?: string | null;
 }
 
 /** Response shape of director_run_flow. */

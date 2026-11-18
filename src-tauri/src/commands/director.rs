@@ -584,6 +584,10 @@ pub struct FlowSummary {
     pub entry_text: String,
     /// S5 verify state for this run (false when no engine was produced).
     pub verified: bool,
+    /// B12 provenance: the ⑤ step this run re-ran from (C11), or `None`
+    /// for a full S0→S5 run. `null` over the wire when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rerun_from: Option<String>,
 }
 
 /// Every persisted `flow.v{N}.json` under the session, newest first.
@@ -640,6 +644,8 @@ pub async fn director_list_flows(
                 .as_ref()
                 .map(|e| e.verify.verified)
                 .unwrap_or(false),
+            // B12 provenance: a C11 re-run doc carries its step.
+            rerun_from: doc.rerun_from.clone(),
         });
     }
     out.sort_by(|a, b| b.flow_version.cmp(&a.flow_version));
@@ -1467,6 +1473,7 @@ mod tests {
             regen,
             critic_model: Some(critic_model),
             engine,
+            rerun_from: None,
         }
     }
 

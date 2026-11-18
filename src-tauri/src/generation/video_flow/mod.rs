@@ -263,6 +263,8 @@ impl VideoFlow {
             regen,
             critic_model: Some(critic_model),
             engine,
+            // B12 provenance: a FULL S0→S5 run — not a per-step re-run.
+            rerun_from: None,
         })
     }
 
@@ -406,6 +408,9 @@ impl VideoFlow {
             regen,
             critic_model: Some(critic_model),
             engine,
+            // B12 provenance: this doc IS a per-step re-run (C11) — the
+            // named step the re-execution started from.
+            rerun_from: Some(from.name().to_string()),
         })
     }
 
@@ -738,6 +743,29 @@ mod tests {
         assert_eq!(rerun.structured, base.structured, "plan is locked for a lower re-run");
         assert_eq!(rerun.scoretree, base.scoretree, "scoretree is locked for a lower re-run");
         assert!(rerun.engine.as_ref().unwrap().verify.verified);
+    }
+
+    #[test]
+    fn rerun_provenance_marks_the_step() {
+        let flow = default_flow();
+        let full = flow.run_full(LONG).unwrap();
+        assert!(
+            full.rerun_from.is_none(),
+            "a full S0→S5 run carries no re-run provenance"
+        );
+        for step in [
+            FromStep::Expand,
+            FromStep::Structure,
+            FromStep::Critic,
+            FromStep::Lower,
+        ] {
+            let rerun = flow.run_from_step(&full, step, LONG, None).unwrap();
+            assert_eq!(
+                rerun.rerun_from.as_deref(),
+                Some(step.name()),
+                "a re-run from {step:?} must mark its step in the doc"
+            );
+        }
     }
 
     #[test]
