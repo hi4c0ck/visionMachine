@@ -213,19 +213,210 @@ pub fn parse_novel(content: &Value) -> Result<VisualNovel, String> {
         return parse_novel_string(&text);
     }
     // 2) Bare VisualNovel object.
-    serde_json::from_value::<VisualNovel>(content.clone())
-        .map_err(|e| format!("response is not a VisualNovel object: {e}"))
+    let mut novel =
+        serde_json::from_value::<VisualNovel>(content.clone())
+            .map_err(|e| format!("response is not a VisualNovel object: {e}"))?;
+    sanitize_novel(&mut novel);
+    Ok(novel)
 }
 
 /// The model's *content* string (or an embedded object) → VisualNovel,
-/// tolerating ```json fences.
+/// tolerating ```json fences. LLM narrative strings are sanitized at
+/// ingress (B15) so foreign-glyph + repetition-loop degeneration never
+/// reaches a flow doc.
 fn parse_novel_string(text: &str) -> Result<VisualNovel, String> {
     let stripped = text.trim().trim_start_matches("```json").trim_start_matches("```").trim();
-    serde_json::from_str::<VisualNovel>(stripped)
-        .map_err(|e| format!("VisualNovel JSON parse failed: {e}"))
+    let mut novel =
+        serde_json::from_str::<VisualNovel>(stripped)
+            .map_err(|e| format!("VisualNovel JSON parse failed: {e}"))?;
+    sanitize_novel(&mut novel);
+    Ok(novel)
 }
 
-/// Count repair: the harness `nodes.yaml` constraints —
+/// B15 (2026-11-18): sanitize LLM-authored narrative strings at parse
+/// ingress, so the two observed generation failures (agnes-2.5-flash)
+/// never reach downstream layers (section text, pipe prompts, flow
+/// docs):
+///   1. foreign-script glyph hallucination — `hinting脆弱ness` (CJK
+///      bolted into English mid-word),
+///   2. repetition-loop degeneration at the tail — `elsewherewhere`
+///      (glued) / `holds, holds, holds` (spaced).
+///
+/// The prompt already asks for "No repeated phrases", but the model
+/// doesn't honor it under saturation pressure — the sanitizer is the
+/// deterministic guarantee. Pure + byte-stable: clean text passes
+/// through UNCHANGED, and the deterministic template novel never flows
+/// through `parse_novel` at all, so golden prompts stay byte-stable.
+pub fn sanitize_novel(n: &mut VisualNovel) {
+    let f = &mut n.film;
+    sanitize_str(&mut f.title);
+    sanitize_str(&mut f.logline);
+    sanitize_str(&mut f.style);
+    sanitize_str(&mut f.world);
+    sanitize_str(&mut f.palette);
+    sanitize_str(&mut f.time_of_day);
+    sanitize_str(&mut f.weather);
+    for sc in n.scenes.iter_mut() {
+        sanitize_str(&mut sc.title);
+        sanitize_str(&mut sc.prose);
+        if let Some(h) = sc.hand_off.as_mut() {
+            sanitize_str(h);
+        }
+        for sh in sc.shots.iter_mut() {
+            sanitize_str(&mut sh.prose);
+            for b in sh.beats.iter_mut() {
+                sanitize_str(b);
+            }
+        }
+    }
+}
+
+fn sanitize_str(s: &mut String) {
+    let cleaned = clean_narrative(s);
+    if cleaned != *s {
+        *s = cleaned;
+    }
+}
+
+/// Clean one LLM narrative string: drop foreign-script glyphs, collapse
+/// glued token repeats inside a word, cut a spaced repetition loop at
+/// the tail. Clean input returns byte-identical (the caller keeps the
+/// original when nothing changed).
+fn clean_narrative(s: &str) -> String {
+    // The style's typographic set survives alongside plain ASCII.
+    const KEEP_EXTRA: [char; 7] = [
+        '…', '—', '–', '·', '\u{2019}', '\u{201c}', '\u{201d}',
+    ];
+    let foreign = s
+        .chars()
+        .any(|c| !(c.is_ascii() || KEEP_EXTRA.contains(&c)));
+
+    // 1) Per-word glued-repetition collapse ("elsewherewherewhere." →
+    //    "elsewhere."). Trailing punctuation is kept off the check.
+    fn trail_punct(t: &str) -> &str {
+        t.trim_end_matches(|c: char| {
+            matches!(c, '.' | ',' | '!' | '?' | ';' | '…' | '—' | '–' | '·')
+        })
+    }
+    let trail = trail_punct;
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let mut words_changed = false;
+    let mut cleaned_words: Vec<String> = Vec::with_capacity(words.len());
+    for w in &words {
+        let t = trail(w);
+        let core: String = if foreign {
+            // Strip foreign glyphs first so the repeat check sees ASCII.
+            t.chars()
+                .filter(|c| c.is_ascii() || KEEP_EXTRA.contains(c))
+                .collect()
+        } else {
+            t.to_string()
+        };
+        let collapsed = collapse_glued_repeats(&core);
+        if collapsed != core {
+            words_changed = true;
+        }
+        // Trailing punctuation of the ORIGINAL word (kept off `core`),
+        // reattached after the collapsed core.
+        let wchars: Vec<char> = w.chars().collect();
+        let trail_start = wchars
+            .iter()
+            .rposition(|c| {
+                !matches!(c, '.' | ',' | '!' | '?' | ';' | '…' | '—' | '–' | '·')
+            })
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let trail_str: String = wchars[trail_start..].iter().collect();
+        cleaned_words.push(format!("{collapsed}{trail_str}"));
+    }
+
+    // 2) Spaced tail loop ("…holds, holds, holds." → "…holds.").
+    let norm = |t: &str| trail(t).to_lowercase();
+    let mut tail_run = 1usize;
+    if words.len() >= 2 {
+        let last = norm(words.last().unwrap());
+        let mut i = words.len() - 1;
+        while i > 0 && !last.is_empty() && norm(words[i - 1]) == last {
+            i -= 1;
+            tail_run += 1;
+        }
+    }
+    if !foreign && !words_changed && tail_run < 2 {
+        return s.to_string(); // byte-identical clean path
+    }
+    let mut out: String = if foreign {
+        cleaned_words
+            .iter()
+            .filter(|w| !w.is_empty())
+            .map(|w| {
+                w.chars()
+                    .filter(|c| c.is_ascii() || KEEP_EXTRA.contains(c))
+                    .collect::<String>()
+            })
+            .filter(|w| !w.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        cleaned_words.join(" ")
+    };
+    if tail_run >= 2 {
+        // Keep the FIRST occurrence, drop the rest; trim its trailing
+        // clause mark, re-attach a terminal mark only if the original
+        // ended on one.
+        let kept: Vec<&str> = cleaned_words[..words.len() - (tail_run - 1)]
+            .iter()
+            .filter(|w| !w.is_empty())
+            .map(|w| w.as_str())
+            .collect();
+        out = kept
+            .join(" ")
+            .trim_end_matches(|c: char| matches!(c, ',' | ';' | '—' | '–'))
+            .to_string();
+        if s.chars()
+            .filter(|c| !c.is_whitespace())
+            .last()
+            .is_some_and(|c| matches!(c, '.' | '!' | '?' | '…'))
+        {
+            out.push('.');
+        }
+    }
+    out
+}
+
+/// Truncate a word that ends in a glued repeated suffix S (|S| ≥ 3,
+/// repeated ≥ 2×) down to prefix + S once: "elsewherewherewhere" →
+/// "elsewhere". No common English word ends in a glued 3+ char repeat,
+/// so this only fires on degeneration (unit-tested against false
+/// positives).
+fn collapse_glued_repeats(w: &str) -> String {
+    let b = w.as_bytes();
+    let mut end = b.len();
+    loop {
+        let n_max = end / 2;
+        if n_max < 3 {
+            break;
+        }
+        let mut found = false;
+        for n in (3..=n_max).rev() {
+            let s = end - n;
+            // word ends with S·S iff b[s-n..s] == b[s..end]
+            if b[s - n..s] == b[s..end] {
+                end = s; // keep prefix + one S
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    if end == b.len() {
+        w.to_string()
+    } else {
+        String::from_utf8(b[..end].to_vec())
+            .unwrap_or_else(|_| w.to_string())
+    }
+}
 /// `scenes.length == seed.scale.scenes`, `shots.length ==
 /// seed.scale.shotsPerScene`. The LLM may under/over-produce; repair
 /// deterministically (truncate / repeat the last valid item) so S2–S5
@@ -521,6 +712,74 @@ mod tests {
         assert!(parse_novel(&fenced).is_ok());
         // Bare VisualNovel object (a permissive server skips the envelope).
         assert!(parse_novel(&v).is_ok());
+    }
+
+    /// B15: the sanitizer cuts the two observed generation failures at
+    /// parse ingress — foreign-script glyph hallucination and
+    /// repetition-loop degeneration (glued + spaced) — while clean text
+    /// passes byte-identical (golden stability).
+    #[test]
+    fn sanitize_cuts_foreign_glyphs_and_repetition_loops() {
+        // The user-reported failure, verbatim (CJK bolted into a word +
+        // glued tail loop):
+        let dirty = "wide: twin spheres float side-by-side — lightning flash reveals tiny cracks forming along edges hinting脆弱ness yet ignored completely by occupants focused entirely elsewherewherewhere.";
+        let out = clean_narrative(dirty);
+        assert!(!out.contains('脆'), "foreign glyph stripped: {out}");
+        assert!(!out.contains("wherewhere"), "glued loop collapsed: {out}");
+        assert!(out.ends_with("elsewhere."), "tail intact and clean: {out}");
+
+        // Clean text (typographic set included) passes byte-identical.
+        let clean = "wide: twin spheres float side-by-side — lightning flash reveals tiny cracks · dusk light";
+        assert_eq!(clean_narrative(clean), clean);
+
+        // Spaced tail loop: keep the first occurrence, drop the rest,
+        // re-attach the terminal mark.
+        assert_eq!(
+            clean_narrative("the light holds, holds, holds."),
+            "the light holds."
+        );
+        assert_eq!(clean_narrative("the hum fades, fades."), "the hum fades.");
+        assert_eq!(
+            clean_narrative("the hum fades."),
+            "the hum fades.",
+            "a single token is untouched"
+        );
+
+        // No false positives on common words (no English word ends in a
+        // glued 3+ char repeat).
+        for w in ["bookkeeper", "banana", "mississippi", "tandem", "repetition", "elsewhere", "side-by-side"] {
+            assert_eq!(clean_narrative(w), w, "false positive on {w}");
+        }
+    }
+
+    /// B15: parse ingress sanitizes — a dirty beat in a bare VisualNovel
+    /// object comes back clean (both envelope paths funnel through the
+    /// same sanitizer).
+    #[test]
+    fn parse_novel_sanitizes_at_ingress() {
+        let v = json!({
+            "film": { "title": "T", "logline": "l", "style": "s", "world": "w", "palette": "p", "time_of_day": "night", "weather": "rain" },
+            "scenes": [{
+                "title": "S1",
+                "prose": "the spheres drift — light holds, holds, holds.",
+                "hand_off": "the light 脆弱 cools to dusk.",
+                "shots": [{ "prose": "p.", "beats": ["wide: a sphere drifts — light settles, settles, settles."] }]
+            }]
+        });
+        let novel = parse_novel(&v).unwrap();
+        assert_eq!(
+            novel.scenes[0].shots[0].beats[0],
+            "wide: a sphere drifts — light settles."
+        );
+        assert_eq!(
+            novel.scenes[0].prose,
+            "the spheres drift — light holds."
+        );
+        assert_eq!(
+            novel.scenes[0].hand_off.as_deref(),
+            Some("the light cools to dusk."),
+            "foreign glyph stripped from hand_off"
+        );
     }
 
     #[test]
