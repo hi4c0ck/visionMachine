@@ -189,7 +189,7 @@
 
 	function confirmNewSession() {
 		if (!newSessionName.trim() || !project) return;
-		console.log('[ToolsPanel] Create session:', newSessionName);
+		if (import.meta.env.DEV) console.log('[ToolsPanel] Create session:', newSessionName);
 		closeNewSessionModal();
 	}
 

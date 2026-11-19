@@ -329,12 +329,12 @@
 	});
 
 	function setLayout(mode: string) {
-		console.log('[Frame] Layout:', mode);
+		if (import.meta.env.DEV) console.log('[Frame] Layout:', mode);
 		onlayoutChange?.(mode);
 	}
 
 	function handlePreviewClick() {
-		console.log('[Frame] Preview image clicked');
+		if (import.meta.env.DEV) console.log('[Frame] Preview image clicked');
 	}
 </script>
 
