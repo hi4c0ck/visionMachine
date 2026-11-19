@@ -114,6 +114,7 @@ impl Database {
                             video_ratio: None,
                             total_generated_frames,
                             session_video_path: None,
+                            session_video_overlap: None,
                             created_at: None,
                             updated_at: None,
                         })

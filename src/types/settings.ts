@@ -123,6 +123,21 @@ export interface ModelSpec {
    * the live-verification pass).
    */
   guidance?: string;
+  /** Wire param name the engine sends qValue (inference steps) under.
+   *  Same gating as guidance; absent → logged only. (Item 8, live-probed
+   *  2026-11-19: Agnes img2img accepts num_inference_steps.) */
+  steps?: string;
+  /** Product-unit range for the guidance INVERSION at the wire chokepoint:
+   *  wire = (min + max) − cValue. Product semantics: higher C = more
+   *  dreaming; provider CFG semantics: higher guidance = stronger prompt
+   *  adherence = less dreaming. Absent → cValue sent verbatim (a provider
+   *  whose semantics already match the product). */
+  guidanceRange?: [number, number];
+  /** When true, guidance/steps ride ONLY img2img requests (a reference
+   *  image is present); txt2img requests omit them — the Agnes text-image
+   *  queue rejects both knobs there (live 400 probes 2026-11-19), while
+   *  the img2img queue accepts them. */
+  img2imgOnly?: boolean;
   /** Media-mode capabilities driving pipe-UI row visibility. */
   media?: ModelMedia;
 }

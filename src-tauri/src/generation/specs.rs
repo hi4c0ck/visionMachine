@@ -119,6 +119,17 @@ pub struct ModelSpecWire {
     /// "guidance_scale"); absent → the value is logged only, never sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guidance: Option<String>,
+    /// Item 8: wire param name for qValue (inference steps); same gating.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<String>,
+    /// Item 8: product-unit range for the guidance inversion at the wire
+    /// chokepoint: wire = (min + max) − cValue. Absent → verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guidance_range: Option<[f32; 2]>,
+    /// Item 8: guidance/steps ride ONLY img2img requests (reference present);
+    /// the Agnes txt2img queue rejects both (live 400 probes 2026-11-19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub img2img_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<ModelSpecMedia>,
 }
@@ -126,6 +137,11 @@ pub struct ModelSpecWire {
 impl ModelSpecWire {
     pub fn supports_seed(&self) -> bool {
         self.supports_seed.unwrap_or(false)
+    }
+
+    /// Item 8: the img2img-only gate for the Q/C knobs.
+    pub fn img2img_only(&self) -> bool {
+        self.img2img_only.unwrap_or(false)
     }
 
     pub fn is_read_only(&self) -> bool {

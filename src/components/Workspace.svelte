@@ -13,6 +13,7 @@ import { type DirectorTab } from '$lib/directorStore';
 	import SessionGenerateModal from './ComposerModals/SessionGenerateModal.svelte';
 	import type { SessionGenerateStats } from './ComposerModals/SessionGenerateModal.svelte';
 	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
+	import ComposeSelectModal from './ComposerModals/ComposeSelectModal.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
 	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece, ResolutionPreset, Orientation, MediaMode } from '$types';
 	import { getMaxFramesForResolution, RESOLUTION_DIMS } from '$types';
@@ -476,7 +477,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// unit-tested in src/lib/sessionVideoLayout.ts; the deriveds below just
 	// thread it through the session-video vs. composer-mode switch.
 	const sessionVideoLayout = $derived.by(() =>
-		previewIsSessionVideo ? computeSessionVideoLayout(pipes) : null
+		previewIsSessionVideo
+			? computeSessionVideoLayout(pipes, selectedSession?.sessionVideoOverlap ?? null)
+			: null
 	);
 
 	// Sliding the session-video carousel (or the top-panel frame step / arrow
@@ -652,6 +655,8 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// can replay the exact same run without re-opening the generate modal.
 	let lastGenerateParams = $state<{ pipeId: string; models: ModelSelection; seed: number | null } | null>(null);
 	let showSessionGenerateModal = $state(false);
+	// Item 10: the compose-select modal (pipe selection + signed boundary cuts).
+	let composeSelectOpen = $state(false);
 	let activeGroupId = $state<string | null>(null);
 	let groupUnlisten: (() => void) | null = null;
 	let groupTaskId: string | null = null;
@@ -2262,6 +2267,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// so block until the switch commits.
 		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		if (groupActive) { flashToast('Session generation is already in progress', 'info'); return; }
+		// Item 3 (RC3): the engine reads per-pipe q/c from SQLite — flush the
+		// 800ms-debounced save so a slider edit made right before Generate is
+		// not lost to the race (best-effort; the run reads the DB regardless).
+		await saveSession(selectedSession.id);
 		// Read-only (paid) model gate: the session flow's "continue" policy
 		// tolerates per-pipe conflicts, but a paid-only model can never run —
 		// block the whole run instead.
@@ -2381,23 +2390,28 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			flashToast(APP_CONSTANTS.strings.composeSessionNoFfmpeg, 'error');
 			return;
 		}
+		// Item 10: open the compose-select modal — the user picks WHICH pipes
+		// to splice (partial sessions compose their generated subset) and sets
+		// a signed cut per boundary. The invoke lives in runComposeSelected.
+		composeSelectOpen = true;
+	}
+
+	/** Item 10: run the compose with the modal's selection + signed boundary
+	 *  map. pipe_ids rides explicitly (backend keeps the requested order);
+	 *  overlap_frames: negative cuts the PREVIOUS pipe's tail, positive the
+	 *  NEW pipe's head, null = classic lossless splice. */
+	function runComposeSelected(pipeIds: string[], overlap: Record<string, number> | null) {
+		if (!selectedSession || composing) return;
 		composing = true;
 		compositionProgress = { phase: 'preparing', progress: 0, detail: 'Preparing sources' };
-		// Experimental "compose pipes" boundary-trim: when the master gate is
-		// on, interior pipes with the per-pipe switch ON have one 8n+1
-		// interval dropped off their clip head (the first pipe is never
-		// trimmed). Empty map = the classic lossless splice.
-		const s = getSettings();
-		const trimMap = buildTrimBoundaryMap(selectedSession.pipes ?? [], s.experimental?.composePipes === true);
-		const hasTrim = Object.values(trimMap).some(Boolean);
 		invoke<{ outputPath: string; ffmpegSource: string; sourcePipes: string[] }>(
 			'compose_session_video',
-			{ input: { session_id: selectedSession.id, pipe_ids: null, trim_boundary: hasTrim ? trimMap : null } },
+			{ input: { session_id: selectedSession.id, pipe_ids: pipeIds, trim_boundary: null, overlap_frames: overlap } },
 		)
 		.then((r) => {
 			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
 			flashToast(
-				hasTrim ? 'Session video ready (boundary-trimmed)' : APP_CONSTANTS.strings.composeSessionDone,
+				overlap ? 'Session video ready (boundary-trimmed)' : APP_CONSTANTS.strings.composeSessionDone,
 				'success',
 			);
 			// Point the top panel at the composed file (served via read_media_file).
@@ -2405,6 +2419,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			// 0012 G8: the manual compose just ran with the CURRENT target/crop,
 			// so the snapshot is no longer stale — clear it.
 			groupComposeSnapshot = null;
+			// Item 10: refresh the session row so the trim-aware playhead
+			// layout picks up the persisted boundary map immediately.
+			void loadSession(selectedSession.id);
 		})
 		.catch((e) => {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
@@ -2434,6 +2451,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// session that is still mid-switch.
 		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		const pipe = generatePipe;
+		// Item 3 (RC3): flush the debounced composer save before the engine
+		// reads q/c from SQLite (slider edit → immediate Generate race).
+		await saveSession(selectedSession.id);
 		// Pass the video media spec so collectRemoteUrls can skip subjects
 		// when the model is in plain keyframe mode (subjects are inert there).
 		const videoSpecForCheck = getPreset(settings.providers.video.preset) ?
@@ -3297,6 +3317,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				{focus}
 				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
 				qValue={activePipe?.qValue}
+				pipeName={activePipe?.name}
 				cValue={activePipe?.cValue}
 				onqvaluechange={handleQValueChange}
 				oncvaluechange={handleCValueChange}
@@ -3325,6 +3346,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			{/if}
 
 			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
+			{#if composeSelectOpen && selectedSession}
+				<ComposeSelectModal
+					bind:open={composeSelectOpen}
+					session={selectedSession}
+					pipes={selectedSession.pipes}
+					onConfirm={runComposeSelected}
+				/>
+			{/if}
 			{#if showSessionGenerateModal && selectedSession}
 				<SessionGenerateModal
 					bind:open={showSessionGenerateModal}

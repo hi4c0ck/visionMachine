@@ -102,12 +102,19 @@ export function validateKeyframeFrame(
   return { snapped, valid: errors.length === 0, errors };
 }
 
+// Bug batch nov19 (item 3, RC2): ONE range source for Q/C across the tools
+// panel, the settings defaults, and the session modal — the modal used to
+// offer Q 1–50 / C 1–30 while the store clamped 5–30 / 0.5–15, so the wire
+// and the panel disagreed. Every Q/C input consumes these constants.
+export const Q_RANGE = { min: 5, max: 30, step: 1 } as const;
+export const C_RANGE = { min: 0.5, max: 15, step: 0.5 } as const;
+
 export function validateQValue(qValue: number): number {
-  return Math.max(5, Math.min(30, qValue));
+  return Math.max(Q_RANGE.min, Math.min(Q_RANGE.max, qValue));
 }
 
 export function validateCValue(cValue: number): number {
-  return Math.max(0.5, Math.min(15, cValue));
+  return Math.max(C_RANGE.min, Math.min(C_RANGE.max, cValue));
 }
 
 /**

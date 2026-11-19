@@ -322,8 +322,39 @@ fn seed_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<i64> {
 
 /// cValue under the spec's `guidance` param name, only when the flag is set
 /// (E7). Absent → the value is logged only, never sent.
+///
+/// Item 8 (live-probed 2026-11-19): two refinements at this SINGLE wire
+/// chokepoint —
+/// 1. img2img-only gate: the Agnes TEXT-image queue 400s on guidance_scale;
+///    the IMG2IMG queue accepts it. When the spec declares img2img_only,
+///    the knob rides only requests carrying a reference image.
+/// 2. INVERSION: product semantics are higher C = more dreaming; provider
+///    CFG semantics are higher guidance = stronger prompt adherence = less
+///    dreaming. With a declared guidanceRange [lo, hi] (product units),
+///    wire = (lo + hi) − cValue. UI/store/log values stay in PRODUCT units —
+///    the inversion lives HERE only. No range → verbatim (a provider whose
+///    semantics already match the product).
 fn guidance_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<(String, f32)> {
-    spec.guidance.clone().map(|name| (name, ctx.c_value))
+    let name = spec.guidance.clone()?;
+    if spec.img2img_only() && ctx.reference_url.is_none() {
+        return None;
+    }
+    let val = match spec.guidance_range {
+        Some([lo, hi]) => (lo + hi) - ctx.c_value,
+        None => ctx.c_value,
+    };
+    Some((name, val))
+}
+
+/// Item 8: qValue under the spec's `steps` param name (inference steps),
+/// same img2img gate as guidance. Steps direction matches the product Q
+/// (more steps = more quality) — sent verbatim, no inversion.
+fn steps_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<(String, u32)> {
+    let name = spec.steps.clone()?;
+    if spec.img2img_only() && ctx.reference_url.is_none() {
+        return None;
+    }
+    Some((name, ctx.q_value))
 }
 
 // ── `image-gen` (agnes image 2.5-flash / 2.1-flash) ────────────────────────
@@ -384,6 +415,10 @@ fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
         payload["ratio"] = json!(ratio);
     }
     if let Some((name, val)) = guidance_value(spec, ctx) {
+        payload[name] = json!(val);
+    }
+    // Item 8: quality (inference steps) rides the same img2img gate.
+    if let Some((name, val)) = steps_value(spec, ctx) {
         payload[name] = json!(val);
     }
     payload
@@ -681,6 +716,9 @@ mod tests {
             read_only: None,
             supports_seed: None,
             guidance: None,
+            steps: None,
+            guidance_range: None,
+            img2img_only: None,
             media: None,
         };
         extra(&mut s);
@@ -771,18 +809,71 @@ mod tests {
 
     #[test]
     fn image_gen_guidance_gated_by_spec_flag() {
+        // No guidance declared → omitted (logged only).
         let without = spec("image-gen", |m| m.id = "img".into());
         assert!(shape_request(&without, &ctx(|_| {}))
             .unwrap()
             .get("guidance_scale")
             .is_none());
 
+        // Guidance declared, no range, no img2img gate → verbatim (custom
+        // providers whose semantics already match the product).
         let with = spec("image-gen", |m| {
             m.id = "img".into();
             m.guidance = Some("guidance_scale".into());
         });
         let p = shape_request(&with, &ctx(|_| {})).unwrap();
         assert_eq!(p["guidance_scale"], 7.0);
+    }
+
+    /// Item 8 (live-probed 2026-11-19): the Agnes img2img queue accepts
+    /// guidance_scale + num_inference_steps; the txt2img queue 400s on both.
+    /// The shaper gates on the reference image and INVERTS guidance at the
+    /// wire (product higher C = more dreaming → lower CFG guidance).
+    #[test]
+    fn image_gen_qc_knobs_img2img_gated_and_guidance_inverted() {
+        let agnes = spec("image-gen", |m| {
+            m.id = "agnes-image-2.5-flash".into();
+            m.guidance = Some("guidance_scale".into());
+            m.steps = Some("num_inference_steps".into());
+            m.guidance_range = Some([0.5, 15.0]);
+            m.img2img_only = Some(true);
+        });
+
+        // txt2img (no reference): BOTH knobs omitted — the queue rejects them.
+        let t2i = shape_request(&agnes, &ctx(|_| {})).unwrap();
+        assert!(t2i.get("guidance_scale").is_none(), "txt2img omits guidance");
+        assert!(t2i.get("num_inference_steps").is_none(), "txt2img omits steps");
+
+        // img2img (reference present): guidance INVERTED (c=7 → 15.5−7=8.5),
+        // steps verbatim (q=18).
+        let i2i = shape_request(
+            &agnes,
+            &ctx(|c| c.reference_url = Some("https://a.com/ref.png".into())),
+        )
+        .unwrap();
+        assert_eq!(i2i["guidance_scale"], 8.5, "wire = (0.5+15) − cValue");
+        assert_eq!(i2i["num_inference_steps"], 18, "steps direction matches Q");
+
+        // Inversion endpoints: product C 0.5 → wire 15; C 15 → wire 0.5.
+        let lo = shape_request(
+            &agnes,
+            &ctx(|c| {
+                c.c_value = 0.5;
+                c.reference_url = Some("https://a.com/ref.png".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(lo["guidance_scale"], 15.0);
+        let hi = shape_request(
+            &agnes,
+            &ctx(|c| {
+                c.c_value = 15.0;
+                c.reference_url = Some("https://a.com/ref.png".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(hi["guidance_scale"], 0.5);
     }
 
     // `video-job-frames` (the legacy V2.0 fps-native route) was removed with

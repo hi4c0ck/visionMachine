@@ -55,6 +55,12 @@ export class SessionServiceImpl implements SessionService {
           typeof backendData.sessionVideoPath === 'string' && backendData.sessionVideoPath
             ? backendData.sessionVideoPath
             : null,
+        // Item 10: the signed boundary map rides with the artifact so the
+        // trim-aware playhead layout survives a restart. Legacy rows → null.
+        sessionVideoOverlap:
+          backendData.sessionVideoOverlap && typeof backendData.sessionVideoOverlap === 'object'
+            ? (backendData.sessionVideoOverlap as Record<string, number>)
+            : null,
         createdAt: backendData.createdAt || Date.now(),
         updatedAt: backendData.updatedAt || Date.now(),
         directoryPath: backendData.directoryPath || '',

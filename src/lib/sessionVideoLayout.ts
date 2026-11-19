@@ -25,18 +25,40 @@ export interface SessionVideoLayout {
  * Compute each pipe's spliced start + the frame→pipe mapping.
  * `pipes` is the session's array (in UI order); `orderIndex` drives the
  * concat order. Returns `null` for an empty list (no session video to map).
+ *
+ * Item 10: `overlap` is the SIGNED boundary map the video was composed with
+ * (persisted on the session row; key = the NEW pipe's id at each boundary,
+ * positive = frames cut off that pipe's head, negative = frames cut off the
+ * PREVIOUS pipe's tail). Each pipe's EFFECTIVE spliced length subtracts its
+ * head + tail cuts, so the playhead→pipe mapping stays correct after a
+ * trimmed compose. Absent/null → the classic sum (byte-identical behavior).
  */
-export function computeSessionVideoLayout(pipes: PipeRow[]): SessionVideoLayout | null {
+export function computeSessionVideoLayout(
+  pipes: PipeRow[],
+  overlap?: Record<string, number> | null,
+): SessionVideoLayout | null {
   if (pipes.length === 0) return null;
   // Walk in orderIndex (concat) order to compute each pipe's spliced
   // start, but store the result ALIGNED to the `pipes` array so
   // `starts[pipeIdx]` is that pipe's own offset for localFrameForPipe.
   const order = [...pipes].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  // Per-pipe head/tail cuts resolved from the signed boundary map.
+  const head = new Map<string, number>();
+  const tail = new Map<string, number>();
+  if (overlap) {
+    for (let i = 1; i < order.length; i++) {
+      const v = overlap[order[i].id] ?? 0;
+      if (v > 0) head.set(order[i].id, (head.get(order[i].id) ?? 0) + v);
+      else if (v < 0) tail.set(order[i - 1].id, (tail.get(order[i - 1].id) ?? 0) + -v);
+    }
+  }
+  const effLen = (p: PipeRow) =>
+    Math.max(0, (p.lengthFrames ?? 0) - (head.get(p.id) ?? 0) - (tail.get(p.id) ?? 0));
   const starts = new Array<number>(pipes.length).fill(0);
   let acc = 0;
   for (const p of order) {
     starts[pipes.indexOf(p)] = acc;
-    acc += p.lengthFrames ?? 0;
+    acc += effLen(p);
   }
   return {
     starts,
@@ -45,7 +67,7 @@ export function computeSessionVideoLayout(pipes: PipeRow[]): SessionVideoLayout 
       // last pipe so a rounding-overshoot playhead still lands.
       let remaining = f;
       for (const p of order) {
-        const len = p.lengthFrames ?? 0;
+        const len = effLen(p);
         if (remaining < len || p === order[order.length - 1]) return pipes.indexOf(p);
         remaining -= len;
       }

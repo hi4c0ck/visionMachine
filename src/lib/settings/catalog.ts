@@ -31,11 +31,19 @@ export const AGNES_PRESET: PresetSpec = {
                 // Provisional tier mapping (Q2): session res → tier, orientation → ratio.
                 sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
-      // guidance: the Agnes text-image queue REJECTS `guidance_scale`
-      // (HTTP 400 "guidance_scale is not supported by text image queue",
-      // live 2026-11-08) — same as the video route (catalog doc Q4: no Agnes
-      // model exposes a CFG/creativity knob). cValue is recorded in the run
-      // log but NOT sent on the image request.
+      // Item 8 (live-probed 2026-11-19, 22 requests): the Agnes TEXT-image
+      // queue rejects guidance_scale/num_inference_steps (400 "not supported
+      // by text image queue"), but the IMG2IMG queue ACCEPTS both —
+      // guidance_scale verified at 0/0.5/15/20/30, steps at 18. So the knobs
+      // are real wires on reference-based keyframes, gated img2img-only.
+      // guidanceRange [0.5,15] = the product C range; the shaper INVERTS at
+      // the wire (product higher C = more dreaming → lower CFG guidance).
+      // Video routes (flash + paid, text + keyframe) reject every name tried
+      // (guidance_scale/guidance/creativity/cfg/cfg_scale/steps/quality).
+      guidance: 'guidance_scale',
+      steps: 'num_inference_steps',
+      guidanceRange: [0.5, 15],
+      img2imgOnly: true,
       supportsSeed: false },
     { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',

@@ -84,6 +84,9 @@ pub async fn get_composer(
         // Session-level composed video artifact (persisted by the compose
         // writer paths; re-opened sessions re-attach it in the tool panel).
         "sessionVideoPath": composer.session_video_path,
+        // Item 10: the signed boundary map the video was composed with —
+        // the playhead→pipe layout subtracts these trims (trim-aware starts).
+        "sessionVideoOverlap": composer.session_video_overlap,
         "directoryPath": directory_path,
     }))
 }
@@ -135,6 +138,10 @@ pub async fn save_composer(input: SaveInput, state: State<'_, AppState>) -> Resu
         session_video_path: existing
             .as_ref()
             .and_then(|e| e.session_video_path.clone()),
+        // Item 10: preserve the composed video's boundary map like the path.
+        session_video_overlap: existing
+            .as_ref()
+            .and_then(|e| e.session_video_overlap.clone()),
         created_at: None,
         updated_at: None,
     };

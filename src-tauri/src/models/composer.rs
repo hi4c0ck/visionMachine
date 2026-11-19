@@ -624,6 +624,14 @@ pub struct ComposerConfig {
     /// legacy blobs (defaults None).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_video_path: Option<String>,
+    /// Item 10: the SIGNED per-boundary overlap map the session video was
+    /// composed with (key = the NEW pipe's id at the boundary; positive =
+    /// frames cut off that pipe's head, negative = frames cut off the
+    /// PREVIOUS pipe's tail). Persisted alongside session_video_path so the
+    /// playhead→pipe layout stays trim-aware after a restart. Absent on
+    /// legacy blobs / untrimmed composes (None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_video_overlap: Option<std::collections::HashMap<String, i32>>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -664,6 +672,7 @@ impl ComposerConfig {
             video_ratio: None,
             total_generated_frames: 0,
             session_video_path: None,
+            session_video_overlap: None,
             created_at: Some(now),
             updated_at: Some(now),
         }

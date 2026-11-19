@@ -2610,6 +2610,9 @@ mod tests {
             read_only: None,
             supports_seed: Some(true),
             guidance: None,
+            steps: None,
+            guidance_range: None,
+            img2img_only: None,
             media: None,
         }
     }
@@ -2628,6 +2631,9 @@ mod tests {
             read_only: None,
             supports_seed: Some(true),
             guidance: None,
+            steps: None,
+            guidance_range: None,
+            img2img_only: None,
             media: None,
         }
     }

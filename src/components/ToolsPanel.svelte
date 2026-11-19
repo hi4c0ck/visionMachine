@@ -7,6 +7,8 @@
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
 	import { availableResolutionsForModel, videoRatiosForOrientation, effectiveVideoAspect } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
+	import { Q_RANGE, C_RANGE } from '$lib/composerStore/validators';
+	import { qcSupport } from '$lib/settings/qcSupport';
 	import { onMount } from 'svelte';
 	import ChromeIcon from './ChromeIcon.svelte';
 
@@ -33,6 +35,7 @@
 		sessionVideoStale = false,
 		qValue,
 		cValue,
+		pipeName,
 		onqvaluechange,
 		oncvaluechange,
 		unsynced = false,
@@ -79,6 +82,10 @@
 		qValue?: number;
 		/** Creativity (cfg scale) of the active pipe */
 		cValue?: number;
+		/** Item 3 (RC5): name of the pipe the Q/C sliders edit — the panel
+		 *  targets the ACTIVE pipe, which may differ from the pipe a
+		 *  generation modal was opened for; label it so the values read honest. */
+		pipeName?: string;
 		onqvaluechange?: (q: number) => void;
 		oncvaluechange?: (c: number) => void;
 		unsynced?: boolean;
@@ -312,6 +319,22 @@
 	const compiledLines = $derived(compiledOutput ? compiledOutput.split('\n').length : 0);
 
 	// Last-gen preview (D9): served through the media:// protocol.
+	// Item 8: honest Q/C support note — the knobs are real wires on img2img
+	// keyframes only (Agnes txt2img + every video route reject them). The
+	// note sits AT the sliders so a no-op tune is never silent.
+	const qcNote = $derived.by(() => {
+		void settingsRev; // re-derive on settings changes
+		const s = getSettings();
+		const preset = getPreset(s.providers.image.preset);
+		const spec = preset?.models.find((m) => m.id === s.providers.image.model) ?? null;
+		const support = qcSupport(spec);
+		return support === 'img2img-only'
+			? APP_CONSTANTS.strings.qcSupportImg2ImgOnly
+			: support === 'none'
+				? APP_CONSTANTS.strings.qcSupportNone
+				: null;
+	});
+
 	let lastVideoUrl = $state<string | null>(null);
 	// True while lastVideoUrl is in flight — the <video> is then hidden so a
 	// stale/failed 0:00 shell can't sit in the panel.
@@ -580,18 +603,24 @@
 					</select>
 				</label>
 
-				<div class="set-slider">
+				{#if pipeName}
+				<div class="set-target" title="The Q/C sliders below edit this pipe (the active pipe)">Editing · {pipeName}</div>
+			{/if}
+			<div class="set-slider">
 					<span class="set-lab">Quality</span>
-					<input type="range" min="5" max="30" step="1" value={qValue ?? 18} class="set-range"
+					<input type="range" min={Q_RANGE.min} max={Q_RANGE.max} step={Q_RANGE.step} value={qValue ?? 18} class="set-range"
 						onchange={(e) => onqvaluechange?.(Number(e.currentTarget.value))} />
 					<b class="set-val">{qValue ?? 18}</b>
 				</div>
 				<div class="set-slider">
 					<span class="set-lab">Creativity</span>
-					<input type="range" min="0.5" max="15" step="0.5" value={cValue ?? 7} class="set-range"
+					<input type="range" min={C_RANGE.min} max={C_RANGE.max} step={C_RANGE.step} value={cValue ?? 7} class="set-range"
 						onchange={(e) => oncvaluechange?.(Number(e.currentTarget.value))} />
 					<b class="set-val">{cValue ?? 7}</b>
 				</div>
+				{#if qcNote}
+					<p class="set-note">{qcNote}</p>
+				{/if}
 			</div>
 		{:else}
 			<p class="set-empty">Select a session to configure settings.</p>
@@ -1214,7 +1243,26 @@
 		box-shadow: 0 0 0 3px var(--accent-glow);
 	}
 
+	/* Item 8: honest Q/C support note at the sliders. */
+	.set-note {
+		font-size: 10px;
+		line-height: 1.4;
+		color: var(--text-muted);
+		margin: 2px 0 6px;
+	}
+
 	/* Sliders: label · track · value. A satisfying tactile thumb. */
+	/* Item 3 (RC5): which pipe the Q/C sliders edit — the active pipe may
+	   differ from the pipe a generation modal targets; label it honestly. */
+	.set-target {
+		font-size: 10px;
+		color: var(--text-muted);
+		padding: 2px 0 4px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
 	.set-slider {
 		display: flex;
 		align-items: center;

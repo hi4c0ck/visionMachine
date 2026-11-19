@@ -89,6 +89,10 @@ pub struct SourceVideo {
     /// the re-encode filter path, which is the only one that can re-time
     /// per-clip without audio.
     pub trim_frames: u32,
+    /// Item 10: trailing frames to drop from this clip's TAIL (the previous
+    /// pipe at a negative-overlap boundary). 0 = keep the tail. Like the
+    /// head trim, any non-zero value forces the re-encode filter path.
+    pub tail_trim_frames: u32,
     /// 0012 D2: this clip's per-pipe crop-mode override. `Some(mode)` =
     /// normalize THIS clip under its own crop mode; `None` = fall back to the
     /// session-global crop mode passed to `filter_args`/`compose_session_video`.
@@ -185,7 +189,28 @@ pub fn copy_args(manifest_path: &Path, out_path: &Path) -> Vec<String> {
 /// copy-trim is impossible for another reason. Used to choose the
 /// experiment's trim path up-front.
 pub fn trim_active(sources: &[SourceVideo]) -> bool {
-    sources.iter().any(|s| s.trim_frames > 0)
+    sources.iter().any(|s| s.trim_frames > 0 || s.tail_trim_frames > 0)
+}
+
+/// Item 10: resolve a SIGNED per-boundary overlap map onto the source list.
+/// Key = the NEW pipe's id at each boundary (sources[i], i >= 1); value in
+/// frames: POSITIVE cuts that many frames off the NEW clip's head,
+/// NEGATIVE cuts |v| off the PREVIOUS clip's tail, 0 = classic splice.
+/// A key matching sources[0] is ignored (nothing precedes the first clip).
+/// Pure + in-place so the resolution is unit-testable without ffmpeg.
+pub fn apply_overlap(
+    sources: &mut [SourceVideo],
+    pipe_ids: &[String],
+    overlap: &std::collections::HashMap<String, i32>,
+) {
+    for i in 1..sources.len().min(pipe_ids.len()) {
+        let v = overlap.get(&pipe_ids[i]).copied().unwrap_or(0);
+        if v > 0 {
+            sources[i].trim_frames = v as u32;
+        } else if v < 0 {
+            sources[i - 1].tail_trim_frames = (-v) as u32;
+        }
+    }
 }
 
 /// The shared letterbox fragment: fit the source inside W x H preserving
@@ -307,8 +332,18 @@ pub fn filter_args(
                     target_h,
                 ));
             }
-            if s.trim_frames > 0 {
-                v_parts.push(format!("trim=start_frame={}", s.trim_frames));
+            if s.trim_frames > 0 || s.tail_trim_frames > 0 {
+                // Item 10: head AND tail trims combine into ONE trim filter.
+                // end_frame is exact from the probed frame count (tail cut).
+                let mut parts: Vec<String> = Vec::new();
+                if s.trim_frames > 0 {
+                    parts.push(format!("start_frame={}", s.trim_frames));
+                }
+                if s.tail_trim_frames > 0 {
+                    let end = metas[i].frame_count.saturating_sub(s.tail_trim_frames as u64);
+                    parts.push(format!("end_frame={end}"));
+                }
+                v_parts.push(format!("trim={}", parts.join(":")));
             }
             let v_body = if v_parts.is_empty() {
                 String::from("null")
@@ -320,9 +355,21 @@ pub fn filter_args(
             // Per-clip AUDIO chain (only when preserving audio).
             if has_audio {
                 let mut a_parts: Vec<String> = Vec::new();
-                if s.trim_frames > 0 && metas[i].fps > 0.0 {
-                    let start = s.trim_frames as f64 / metas[i].fps;
-                    a_parts.push(format!("atrim=start={start:.4}"));
+                if (s.trim_frames > 0 || s.tail_trim_frames > 0) && metas[i].fps > 0.0 {
+                    // Item 10: audio trims in lock-step with video — head
+                    // start AND tail end (end = (frame_count − tail) / fps).
+                    if s.trim_frames > 0 {
+                        let start = s.trim_frames as f64 / metas[i].fps;
+                        a_parts.push(format!("start={start:.4}"));
+                    }
+                    if s.tail_trim_frames > 0 {
+                        let end = metas[i].frame_count.saturating_sub(s.tail_trim_frames as u64) as f64
+                            / metas[i].fps;
+                        a_parts.push(format!("end={end:.4}"));
+                    }
+                    let body = a_parts.join(":");
+                    a_parts.clear();
+                    a_parts.push(format!("atrim={body}"));
                     a_parts.push("asetpts=N/SR/TB".to_string());
                 }
                 let a_body = if a_parts.is_empty() {
@@ -1322,6 +1369,7 @@ mod tests {
                 path: "C:\\proj\\Session\\Pipe 1\\t1\\video.mp4".into(),
                 task_id: "t1".into(),
                 trim_frames: 0,
+                tail_trim_frames: 0,
                 crop_mode: None,
             },
             SourceVideo {
@@ -1329,6 +1377,7 @@ mod tests {
                 path: "C:\\proj\\Session\\Pipe 2\\t2\\video.mp4".into(),
                 task_id: "t2".into(),
                 trim_frames: 0,
+                tail_trim_frames: 0,
                 crop_mode: None,
             },
         ]
@@ -1451,6 +1500,76 @@ mod tests {
         assert!(fc.contains("[0:v]null[v0]"), "fc: {fc}");
         assert!(fc.contains("[1:v]trim=start_frame=8[v1]"), "fc: {fc}");
         assert!(fc.contains("[v0][v1]concat=n=2:v=1:a=0[v]"), "fc: {fc}");
+    }
+
+    /// Item 10: a NEGATIVE boundary value cuts the PREVIOUS clip's tail —
+    /// exact end_frame from the probed frame count, audio in lock-step.
+    #[test]
+    fn filter_args_tail_trim_cuts_previous_clip_end() {
+        let mut srcs = srcs();
+        srcs[0].tail_trim_frames = 16;
+        assert!(trim_active(&srcs), "a tail-only trim still forces re-encode");
+        let ms = metas();
+        let a = filter_args(&srcs, &ms, Path::new("out.mp4"), 0, 0, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
+        let fc = &s[fc_idx + 1];
+        let end = ms[0].frame_count - 16;
+        assert!(
+            fc.contains(&format!("[0:v]trim=end_frame={end}[v0]")),
+            "fc: {fc}"
+        );
+        assert!(fc.contains("[1:v]null[v1]"), "fc: {fc}");
+    }
+
+    /// Item 10: head + tail on one clip combine into ONE trim filter.
+    #[test]
+    fn filter_args_head_and_tail_combine() {
+        let mut srcs = srcs();
+        srcs[1].trim_frames = 8;
+        srcs[1].tail_trim_frames = 8;
+        let ms = metas();
+        let a = filter_args(&srcs, &ms, Path::new("out.mp4"), 0, 0, "center");
+        let s: Vec<&str> = a.iter().map(|x| x.as_str()).collect();
+        let fc_idx = s.iter().position(|x| *x == "-filter_complex").unwrap();
+        let fc = &s[fc_idx + 1];
+        let end = ms[1].frame_count - 8;
+        assert!(
+            fc.contains(&format!("[1:v]trim=start_frame=8:end_frame={end}[v1]")),
+            "fc: {fc}"
+        );
+    }
+
+    /// Item 10: the signed boundary resolution — positive cuts the NEW
+    /// clip's head, negative cuts the PREVIOUS clip's tail, 0 keeps both,
+    /// and a key on the first pipe is ignored (nothing precedes it).
+    #[test]
+    fn apply_overlap_resolves_signed_boundaries() {
+        let mut srcs_pos = srcs();
+        let ids = vec!["p0".to_string(), "p1".to_string()];
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("p0".to_string(), -24); // ignored: first pipe has no predecessor
+        ov.insert("p1".to_string(), 8); // +8 → p1 head
+        apply_overlap(&mut srcs_pos, &ids, &ov);
+        assert_eq!(srcs_pos[0].tail_trim_frames, 0, "first-pipe key is ignored");
+        assert_eq!(srcs_pos[0].trim_frames, 0);
+        assert_eq!(srcs_pos[1].trim_frames, 8, "positive cuts the NEW clip head");
+        assert_eq!(srcs_pos[1].tail_trim_frames, 0);
+
+        // Negative: cuts the PREVIOUS clip's tail.
+        let mut srcs_neg = srcs();
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("p1".to_string(), -16);
+        apply_overlap(&mut srcs_neg, &ids, &ov);
+        assert_eq!(srcs_neg[0].tail_trim_frames, 16, "negative cuts the PREVIOUS tail");
+        assert_eq!(srcs_neg[1].trim_frames, 0);
+
+        // Zero / absent: classic splice, nothing trimmed.
+        let mut srcs_zero = srcs();
+        let mut ov = std::collections::HashMap::new();
+        ov.insert("p1".to_string(), 0);
+        apply_overlap(&mut srcs_zero, &ids, &ov);
+        assert!(!trim_active(&srcs_zero), "0 = classic lossless splice");
     }
 
     #[test]
@@ -1928,6 +2047,7 @@ mod tests {
             path: "C:\\definitely\\not\\here.mp4".into(),
             task_id: String::new(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         }];
         let cancel = Arc::new(AtomicBool::new(false));

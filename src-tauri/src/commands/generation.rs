@@ -347,16 +347,22 @@ pub fn build_pipe_start(
         // 0012: explicit video aspect-ratio override (None = use orientation
         // ratio map as before).
         video_ratio: composer.video_ratio.clone(),
+        // Item 3 (RC2): run-scoped overrides are clamped to the SAME range
+        // the UI/store enforce (Q 5..30, C 0.5..15) — defense in depth so a
+        // stale/malformed client can never push an out-of-range value into
+        // the engine. Covers both the per-pipe and the session-group paths.
         q_value: params
             .pipe_params
             .as_ref()
             .and_then(|p| p.q_value)
-            .unwrap_or(pipe.q_value),
+            .unwrap_or(pipe.q_value)
+            .clamp(5, 30),
         c_value: params
             .pipe_params
             .as_ref()
             .and_then(|p| p.c_value)
-            .unwrap_or(pipe.c_value),
+            .unwrap_or(pipe.c_value)
+            .clamp(0.5, 15.0),
         image_model: params.image_model.clone(),
         video_model: params.video_model.clone(),
         seed: params.seed,
@@ -1614,6 +1620,13 @@ pub struct ComposeSessionVideoInput {
     /// the toggle (nothing to trim before it).
     #[serde(default)]
     pub trim_boundary: Option<std::collections::HashMap<String, bool>>,
+    /// Item 10: SIGNED per-boundary overlap (frames), keyed by the NEW pipe's
+    /// id at each boundary. Positive cuts that many frames off the NEW clip's
+    /// head; negative cuts |v| off the PREVIOUS clip's tail; 0 = classic
+    /// splice. When present it WINS over the boolean trim_boundary map.
+    /// Per-boundary sliders in the compose-select modal map 1:1 onto this.
+    #[serde(default)]
+    pub overlap_frames: Option<std::collections::HashMap<String, i32>>,
 }
 
 /// Stable error envelope returned as a JSON string because the existing
@@ -1718,7 +1731,7 @@ pub async fn compose_session_video(
         ));
     }
 
-    let sources: Vec<SourceVideo> = pipes
+    let mut sources: Vec<SourceVideo> = pipes
         .iter()
         .filter_map(|p| {
             p.last_generation.as_ref().and_then(|lg| {
@@ -1762,11 +1775,58 @@ pub async fn compose_session_video(
                         // 0012 D2: this pipe's per-pipe crop-mode override
                         // (session crop when `None`); blank values -> None.
                         crop_mode: p.crop_override.clone().filter(|m| !m.is_empty()),
+                        // Item 10: tail trims are resolved by apply_overlap
+                        // from the signed boundary map (negative values cut
+                        // the PREVIOUS clip's tail); 0 at construction.
+                        tail_trim_frames: 0,
                     })
                 }
             })
         })
         .collect();
+    // Item 10: resolve the signed per-boundary overlap map. The source ids
+    // mirror the filter_map predicate above (non-empty local video path).
+    // When the signed map is present it WINS: zero the boolean-derived head
+    // trims first, then apply head (+) / previous-tail (−) cuts per boundary.
+    let source_ids: Vec<String> = pipes
+        .iter()
+        .filter(|p| {
+            p.last_generation
+                .as_ref()
+                .map(|lg| {
+                    let path = lg.video_path.trim();
+                    !path.is_empty() && !crate::generation::is_remote_media_ref(path)
+                })
+                .unwrap_or(false)
+        })
+        .map(|p| p.id.clone())
+        .collect();
+    if let Some(ov) = input.overlap_frames.as_ref() {
+        for s in sources.iter_mut() {
+            s.trim_frames = 0;
+        }
+        crate::generation::apply_overlap(&mut sources, &source_ids, ov);
+    }
+    // The effective signed map persisted with the session video so the
+    // playhead→pipe layout stays trim-aware after a restart (item 10).
+    let effective_overlap: std::collections::HashMap<String, i32> =
+        if let Some(ov) = input.overlap_frames.as_ref() {
+            ov.iter()
+                .filter(|(_, v)| **v != 0)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect()
+        } else {
+            input
+                .trim_boundary
+                .as_ref()
+                .map(|m| {
+                    m.iter()
+                        .filter(|(_, on)| **on)
+                        .map(|(k, _)| (k.clone(), BOUNDARY_TRIM_FRAMES as i32))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
     let missing: Vec<String> = pipes
         .iter()
         .filter(|p| {
@@ -1951,6 +2011,12 @@ pub async fn compose_session_video(
             .await
             .map_err(|e| e.to_string())?;
         composer.session_video_path = Some(result.output_path.clone());
+        // Item 10: persist the effective boundary map with the artifact.
+        composer.session_video_overlap = if effective_overlap.is_empty() {
+            None
+        } else {
+            Some(effective_overlap.clone())
+        };
         db.save_composer(&composer).await.map_err(|e| e.to_string())
     } {
         Ok(()) => {}

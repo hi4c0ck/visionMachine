@@ -507,6 +507,10 @@ export interface SessionData {
    *  session.mp4` path), persisted in the composer row so re-opening the
    *  session re-attaches it in the tool panel. Absent/legacy = null. */
   sessionVideoPath?: string | null;
+  /** Item 10: the signed per-boundary overlap map the session video was
+   *  composed with (key = NEW pipe id; +head / −previous-tail frames).
+   *  The playhead→pipe layout subtracts these trims. Null = untrimmed. */
+  sessionVideoOverlap?: Record<string, number> | null;
 }
 
 /**

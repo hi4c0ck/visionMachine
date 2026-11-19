@@ -115,6 +115,9 @@ fn fallback_image_spec(model_id: &str) -> ModelSpecWire {
         read_only: None,
         supports_seed: None,
         guidance: None,
+        steps: None,
+        guidance_range: None,
+        img2img_only: None,
         media: None,
     }
 }
@@ -302,6 +305,7 @@ fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> O
             // StartSessionGenerationInput.trim_frames when present; 0 here
             // keeps the classic lossless splice for non-trimmed runs.
             trim_frames: 0,
+            tail_trim_frames: 0,
             // 0012 D2: per-pipe crop override is wired on the staged-source
             // path (where the composer's pipe map is available); this
             // fallback keeps the session-global crop mode (None).
@@ -1526,6 +1530,7 @@ impl GroupCoordinator {
                     // head-trim (0 = keep the whole clip). Pipe 0 is never
                     // offered the toggle, but a stored value still applies.
                     trim_frames: boundary_trim_of(trim_map.get(&r.pipe_id).copied().unwrap_or(false)),
+                    tail_trim_frames: 0,
                     // 0012 D2: this pipe's crop override (session crop if none).
                     crop_mode: crop_override_map
                         .get(&r.pipe_id)
@@ -1661,6 +1666,15 @@ impl GroupCoordinator {
             if let Some(path) = output_path.as_ref() {
                 if let Ok(mut c) = this.db.get_composer(&session_id).await {
                     c.session_video_path = Some(path.clone());
+                    // Item 10: persist the bool-trim-derived signed map so the
+                    // playhead→pipe layout stays trim-aware after a restart
+                    // (each opted-in interior pipe = +8 head frames).
+                    let ov: std::collections::HashMap<String, i32> = trim_map
+                        .iter()
+                        .filter(|(_, on)| **on)
+                        .map(|(k, _)| (k.clone(), crate::generation::BOUNDARY_TRIM_FRAMES as i32))
+                        .collect();
+                    c.session_video_overlap = if ov.is_empty() { None } else { Some(ov) };
                     let _ = this.db.save_composer(&c).await;
                 }
             }
@@ -2113,6 +2127,7 @@ mod tests {
             path: src_path.to_string_lossy().into_owned(),
             task_id: "task-9".into(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         };
         let staged = stage_source_clip(&out_dir, &source, 0);
@@ -2148,6 +2163,7 @@ mod tests {
                 .into_owned(),
             task_id: "task-9".into(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         };
         assert!(
@@ -2243,6 +2259,7 @@ mod tests {
             path: src.to_string_lossy().into_owned(),
             task_id: "t1".into(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         };
         let staged = stage_source_clip(&out_dir, &source, 0).unwrap();
@@ -2478,6 +2495,49 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "qValue": 24 })).unwrap();
         assert_eq!(back.q_value, Some(24), "qValue key deserializes");
         assert_eq!(back.c_value, None, "absent cValue = None");
+    }
+
+    /// Bug batch nov19 (item 3, RC2): run-scoped Q/C overrides are clamped
+    /// to the SAME range the UI/store enforce — a stale or malformed client
+    /// can never push an out-of-range value into the engine.
+    #[test]
+    fn out_of_range_pipe_param_overrides_are_clamped() {
+        use crate::commands::generation::{build_pipe_start, PipeParamOverride, PipeStartParams};
+        let composer: crate::models::ComposerConfig = serde_json::from_value(serde_json::json!({
+            "id": "c1", "sessionId": "s1", "name": "S",
+            "fps": 24, "resolution": "720p", "orientation": "horizontal",
+            "pipes": [{ "id": "p1", "name": "Pipe 1", "orderIndex": 0, "qValue": 18, "cValue": 7.0 }]
+        }))
+        .unwrap();
+        let pipe = composer.pipes[0].clone();
+
+        let high = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            pipe_params: Some(PipeParamOverride {
+                q_value: Some(99),
+                c_value: Some(40.0),
+            }),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &high);
+        assert_eq!(engine.q_value, 30, "q clamps to the range ceiling");
+        assert_eq!(engine.c_value, 15.0, "c clamps to the range ceiling");
+
+        let low = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            pipe_params: Some(PipeParamOverride {
+                q_value: Some(1),
+                c_value: Some(0.1),
+            }),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &low);
+        assert_eq!(engine.q_value, 5, "q clamps to the range floor");
+        assert_eq!(engine.c_value, 0.5, "c clamps to the range floor");
     }
 
     /// The run-stats pin resolves `run_stats ?? composer` into a fully

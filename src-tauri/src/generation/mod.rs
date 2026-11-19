@@ -19,8 +19,8 @@ mod types;
 pub mod video_flow;
 
 pub use compose::{
-    compose_session_video, ComposeCancel, ComposeError, ComposeRegistry, ComposeResult,
-    ComposeStartError, SourceVideo, VideoMetadata, BOUNDARY_TRIM_FRAMES,
+    apply_overlap, compose_session_video, ComposeCancel, ComposeError, ComposeRegistry,
+    ComposeResult, ComposeStartError, SourceVideo, VideoMetadata, BOUNDARY_TRIM_FRAMES,
 };
 pub use engine::{BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration};
 pub use ffmpeg::{extract_last_frame, resolve_ffmpeg, FfmpegAvailability};

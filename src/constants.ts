@@ -89,6 +89,29 @@ const APP_CONSTANTS = {
     sessionPipeForceLastFrame: 'Force last frame',
     sessionPipeForceLastFrameHint:
       "On: this pipe's first keyframe is (re)snap'd from the previous pipe's last frame — created when missing, overwritten when settled. Off: a missing first keyframe is filled automatically and an existing one is kept.",
+    sessionForceAll: 'Force last frame — all',
+    sessionTrimAll: '8f boundary trim — all',
+    sessionTrimAllHint:
+      'Experimental: check/uncheck the 8-frame boundary trim on every interior pipe at once. On: each trimmed pipe loses one 8n+1 keyframe interval off its clip head so the session-video splice lands in stable content (re-encode). Off: classic lossless back-to-back splice.',
+    // Item 8: honest Q/C support notes at the sliders (live-probed 2026-11-19).
+    qcSupportImg2ImgOnly:
+      'Q/C apply to img2img keyframes (with a reference image) — inverted to the provider\'s guidance scale at the wire. txt2img and video: not supported by the provider.',
+    qcSupportNone:
+      'Q/C are logged only — the current image model does not accept them (video models never do).',
+    // Item 10: compose-select modal (pipe selection + signed boundary cuts).
+    composeSelectTitle: 'Compose session video',
+    composeSelectHint: 'Pick the pipes to splice and set each boundary cut',
+    composeSelectAll: 'All',
+    composeSelectNone: 'None',
+    composeBoundaryMaster: 'All boundaries',
+    composeBoundaryHint:
+      'Negative cuts frames off the PREVIOUS pipe\'s tail; positive cuts frames off the NEW pipe\'s head; 0 = classic lossless splice. Any non-zero cut re-encodes.',
+    composeBoundaryZero: '0 · lossless splice',
+    composeBoundaryMixed: 'mixed',
+    composeNoGen: 'not generated',
+    composeGenDone: 'generated',
+    composeReencode: 're-encode',
+    composeConfirm: 'Compose',
     sessionCatchLastFrameNote:
       "Each pipe's empty first keyframe is auto-filled with the previous pipe's last frame as they run. Tick \"Force last frame\" on a specific pipe to overwrite its settled first keyframe.",
     sessionCancelAll: 'Cancel all',

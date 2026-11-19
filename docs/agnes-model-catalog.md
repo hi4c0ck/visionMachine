@@ -409,16 +409,36 @@ enforced by the compose step, not the provider.
   A single response can never carry both — hence the rescue is a second
   call, not a dual-field read.
 
-## Q4 fact flag (keep as-is, configure later)
+## Q4 fact flag — SUPERSEDED by live re-probe 2026-11-19 (item 8)
 
-Q/C have NO wire mapping on the V2.5 family (sending
-`num_inference_steps`/`quality` → 400). V2.0 exposes `num_inference_steps`
-(default 8; 12–14 for keyframes per hermes) — a future `qValue → steps`
-map is optional and deferred per user.
-USER MAPPING (2026-09-16): **`cValue` → `guidance_scale`** — the engine
-sends cValue as `guidance_scale` where the model/endpoint accepts it;
-verify per-endpoint in Phase 6 live tests. Until then both Q/C stay in
-the portable log unchanged.
+The original Q4 flag ("no Agnes model exposes a CFG/creativity knob") was
+over-generalized from txt2img probes. A full re-probe (22 requests,
+2026-11-19, request ids in the session scratch `agnes-probe-results/`)
+established the real matrix:
+
+| route | guidance_scale | num_inference_steps | alt names (guidance/creativity/cfg/cfg_scale) |
+|---|---|---|---|
+| image **txt2img** | 400 "not supported by text image queue" | 400 same | 400 same |
+| image **img2img** | **200** at 0 / 0.5 / 15 / 20 / 30 | **200** at 18 | — |
+| video flash `mode:text` | 400 "not an allowed request field" | 400 "forbidden field" | 400 |
+| video flash `mode:keyframe` | 400 | — | — |
+| video paid 2.5 | 400 (field check precedes size check) | — | — |
+
+`quality` on video: 400 "forbidden field". `GET /v1/models`: no video
+engine newer than the 2.5 series.
+
+**Implemented (bug batch nov19, item 8):** the image 2.5-flash spec declares
+`guidance: 'guidance_scale'`, `steps: 'num_inference_steps'`,
+`guidanceRange: [0.5, 15]`, `img2imgOnly: true`. The shaper gates both knobs
+on the reference image (img2img) and INVERTS guidance at the single wire
+chokepoint: `wire = (0.5 + 15) − cValue` (product higher C = more dreaming →
+lower CFG guidance = less prompt adherence). UI/store/log stay in product
+units. Video routes carry no knobs; the UI badges say so at the sliders.
+Effect magnitude on the bytes is unverified (CDN client-egress 403 gate);
+acceptance + range are live-verified.
+
+Historical note (2026-09-16): **`cValue` → `guidance_scale`** was the agreed
+user mapping; it is now live on img2img with the inversion above.
 
 ## Proposed catalog data (paste target, `src/lib/settings/catalog.ts`)
 

@@ -1140,6 +1140,7 @@ async fn merge_and_save_composer(
             video_ratio: existing.video_ratio.clone(),
             total_generated_frames: existing.total_generated_frames,
             session_video_path: existing.session_video_path.clone(),
+            session_video_overlap: existing.session_video_overlap.clone(),
             created_at: None,
             updated_at: None,
         }

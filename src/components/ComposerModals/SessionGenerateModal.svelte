@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { ModelSpec, Orientation, PipeRow, ResolutionPreset, SessionData } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
@@ -6,6 +7,9 @@
 	import { modelsFor, getPreset, resolveSpecs } from '$lib/settings';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
+	import { Q_RANGE, C_RANGE, validateQValue, validateCValue } from '$lib/composerStore/validators';
+	import { masterState, setMaster } from '$lib/sessionMasters';
+	import { qcSupport } from '$lib/settings/qcSupport';
 	import type { ModelSelection } from './GenerateModal.svelte';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
@@ -102,21 +106,45 @@
 	});
 
 	// ── Per-pipe Q/C run-local values (seeded from the pipe rows) ──
+	// Bug batch nov19 (item 3, RC1): per-field DIRTY tracking. The old seed
+	// ran once at open and the diff compared stale locals against the live
+	// rows — a ToolsPanel edit while the modal was open became a PHANTOM
+	// override that reverted the user's edit on the wire. Now: unedited
+	// fields re-sync to the row whenever it changes (the pipes prop is a
+	// fresh array per store mutation since the item-1 pipe-ref bridge);
+	// only fields the user actually typed ride the diff.
 	let pipeParamsLocal = $state<PipeParamState>({});
+	let paramDirty = $state<Record<string, { q?: boolean; c?: boolean }>>({});
 	$effect(() => {
 		if (!open) return;
-		pipeParamsLocal = Object.fromEntries(pipes.map((p: PipeRow) => [p.id, { q: p.qValue, c: p.cValue }]));
+		const rows = pipes; // tracked: fresh array identity per store mutation
+		// untrack the locals: reading-what-we-write would loop the effect.
+		const cur = untrack(() => pipeParamsLocal);
+		const dirty = untrack(() => paramDirty);
+		const next: PipeParamState = {};
+		let changed = Object.keys(cur).length !== rows.length;
+		for (const p of rows) {
+			const existing = cur[p.id];
+			const q = dirty[p.id]?.q && existing ? existing.q : p.qValue;
+			const c = dirty[p.id]?.c && existing ? existing.c : p.cValue;
+			next[p.id] = { q, c };
+			if (!existing || existing.q !== q || existing.c !== c) changed = true;
+		}
+		// Write only on a real change → the effect converges (no loop).
+		if (changed) pipeParamsLocal = next;
 	});
-	/** The Q/C diff map: only pipes whose local value differs from the row
-	 *  value, and only the values that changed. Empty → null on the wire. */
+	/** The Q/C diff map: only DIRTY fields whose local value differs from
+	 *  the row value. Empty → null on the wire. An unedited field can never
+	 *  ship an override (it mirrors the row by construction). */
 	const pipeParams: Record<string, PipeParamOverride> = $derived.by(() => {
 		const out: Record<string, PipeParamOverride> = {};
 		for (const p of pipes) {
 			const local = pipeParamsLocal[p.id];
 			if (!local) continue;
+			const dirty = paramDirty[p.id];
 			const entry: PipeParamOverride = {};
-			if (local.q !== p.qValue) entry.qValue = local.q;
-			if (local.c !== p.cValue) entry.cValue = local.c;
+			if (dirty?.q && local.q !== p.qValue) entry.qValue = local.q;
+			if (dirty?.c && local.c !== p.cValue) entry.cValue = local.c;
 			if (Object.keys(entry).length > 0) out[p.id] = entry;
 		}
 		return out;
@@ -136,7 +164,7 @@
 	 *  yet) is exactly where the user wants to pull the snapped cut in, so the
 	 *  checkbox is shown on it too. */
 	const forceEligible = $derived(
-		new Set(
+		new Set<string>(
 			pipes
 				.slice(1)
 				.filter((p: PipeRow) => p.mediaMode !== 'reference')
@@ -155,6 +183,7 @@
 		if (!open) return;
 		forceLastFramesLocal = {};
 		trimBoundaryLocal = {};
+		paramDirty = {};
 	});
 
 	// ── Per-pipe "experimental compose pipes" boundary-trim (run-scoped).
@@ -166,7 +195,7 @@
 	//    only: it rides the wire (StartSessionGenerationInput.trim_boundary),
 	//    never written back to the session row by this modal. ──
 	const composeGateOn = $derived(getSettings().experimental?.composePipes === true);
-	const trimEligible = $derived(new Set(pipes.slice(1).map((p: PipeRow) => p.id)));
+	const trimEligible = $derived(new Set<string>(pipes.slice(1).map((p: PipeRow) => p.id)));
 	const trimBoundary: Record<string, boolean> = $derived.by(() => {
 		const out: Record<string, boolean> = {};
 		if (!composeGateOn) return out;
@@ -175,6 +204,20 @@
 		}
 		return out;
 	});
+
+	// ── Master toggles (bug batch nov19, item 9): check/uncheck ALL eligible
+	//    pipes at once. Pure bulk edits of the same run-local state — the
+	//    per-pipe diff maps and the wire are unchanged. ──
+	const forceMaster = $derived(masterState(forceEligible, forceLastFramesLocal));
+	const trimMaster = $derived(masterState(trimEligible, trimBoundaryLocal));
+	function toggleForceAll(e: Event) {
+		const on = (e.target as HTMLInputElement).checked;
+		forceLastFramesLocal = setMaster(forceEligible, forceLastFramesLocal, on);
+	}
+	function toggleTrimAll(e: Event) {
+		const on = (e.target as HTMLInputElement).checked;
+		trimBoundaryLocal = setMaster(trimEligible, trimBoundaryLocal, on);
+	}
 
 	// 0012: session target size label + crop-method label + the compose
 	// re-encode badge. `none` crop resolves to center for mixed-size sets, so
@@ -215,6 +258,18 @@
 	let imageModel = $state('');
 	let videoModel = $state('');
 	let imageModels = $state<ModelSpec[]>([]);
+	// Item 8: honest Q/C note for the picked image model — the per-pipe Q/C
+	// inputs above edit real values, but the wire only carries them on
+	// img2img keyframes (Agnes txt2img + video routes reject the knobs).
+	const qcNote = $derived.by(() => {
+		const spec = imageModels.find((m) => m.id === imageModel) ?? null;
+		const support = qcSupport(spec);
+		return support === 'img2img-only'
+			? APP_CONSTANTS.strings.qcSupportImg2ImgOnly
+			: support === 'none'
+				? APP_CONSTANTS.strings.qcSupportNone
+				: null;
+	});
 	let videoModels = $state<ModelSpec[]>([]);
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
@@ -282,15 +337,21 @@
 	);
 
 	function handlePipeQ(pipeId: string, e: Event) {
-		const next = Number((e.target as HTMLInputElement).value);
-		if (Number.isFinite(next) && pipeParamsLocal[pipeId]) {
+		const raw = Number((e.target as HTMLInputElement).value);
+		if (Number.isFinite(raw) && pipeParamsLocal[pipeId]) {
+			// Item 3 (RC2): clamp to the ONE range source — the wire can
+			// never carry a value the panel/store would reject.
+			const next = validateQValue(raw);
 			pipeParamsLocal = { ...pipeParamsLocal, [pipeId]: { ...pipeParamsLocal[pipeId], q: next } };
+			paramDirty = { ...paramDirty, [pipeId]: { ...paramDirty[pipeId], q: true } };
 		}
 	}
 	function handlePipeC(pipeId: string, e: Event) {
-		const next = Number((e.target as HTMLInputElement).value);
-		if (Number.isFinite(next) && pipeParamsLocal[pipeId]) {
+		const raw = Number((e.target as HTMLInputElement).value);
+		if (Number.isFinite(raw) && pipeParamsLocal[pipeId]) {
+			const next = validateCValue(raw);
 			pipeParamsLocal = { ...pipeParamsLocal, [pipeId]: { ...pipeParamsLocal[pipeId], c: next } };
+			paramDirty = { ...paramDirty, [pipeId]: { ...paramDirty[pipeId], c: true } };
 		}
 	}
 
@@ -364,6 +425,28 @@
 				<div class="sg-split">
 					<div class="sg-pane sg-pipes">
 						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionPipes} · {rows.length}</span>
+						{#if qcNote}
+							<p class="sg-qc-note">{qcNote}</p>
+						{/if}
+						<!-- Item 9: master check-all controls above the pipe list. -->
+						{#if forceEligible.size > 0 || (composeGateOn && trimEligible.size > 0)}
+							<div class="sg-masters">
+								{#if forceEligible.size > 0}
+									<label class="gen-check sg-master" title={APP_CONSTANTS.strings.sessionPipeForceLastFrameHint}>
+										<input type="checkbox" checked={forceMaster.all} indeterminate={forceMaster.mixed}
+											onchange={toggleForceAll} />
+										<span>{APP_CONSTANTS.strings.sessionForceAll}</span>
+									</label>
+								{/if}
+								{#if composeGateOn && trimEligible.size > 0}
+									<label class="gen-check sg-master" title={APP_CONSTANTS.strings.sessionTrimAllHint}>
+										<input type="checkbox" checked={trimMaster.all} indeterminate={trimMaster.mixed}
+											onchange={toggleTrimAll} />
+										<span>{APP_CONSTANTS.strings.sessionTrimAll}</span>
+									</label>
+								{/if}
+							</div>
+						{/if}
 						<div class="gen-pipe-list">
 							{#each rows as row, i (row.pipe.id)}
 								{@const local = pipeParamsLocal[row.pipe.id]}
@@ -372,10 +455,10 @@
 									<span class="gen-pipe-name">{row.pipe.name}</span>
 									<span class="gen-chips"><span>{row.pipe.lengthFrames}f</span></span>
 									<span class="gen-pipe-params" aria-label="Pipe Q / C">
-										<label>Q<input type="number" min="1" max="50" value={local?.q ?? row.pipe.qValue}
+										<label>Q<input type="number" min={Q_RANGE.min} max={Q_RANGE.max} step={Q_RANGE.step} value={local?.q ?? row.pipe.qValue}
 											class:changed={local && local.q !== row.pipe.qValue}
 											onchange={(e) => handlePipeQ(row.pipe.id, e)} /></label>
-										<label>C<input type="number" min="1" max="30" step="0.1" value={local?.c ?? row.pipe.cValue}
+										<label>C<input type="number" min={C_RANGE.min} max={C_RANGE.max} step={C_RANGE.step} value={local?.c ?? row.pipe.cValue}
 											class:changed={local && local.c !== row.pipe.cValue}
 											onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
 									</span>
@@ -671,6 +754,37 @@
 	}
 
 	.sg-pipes .sg-force input {
+		width: auto;
+		margin: 0;
+	}
+
+	/* Item 8: honest Q/C support note under the Pipes heading. */
+	.sg-qc-note {
+		font-size: 10px;
+		line-height: 1.4;
+		color: var(--text-muted);
+		margin: 2px 0 6px;
+	}
+
+	/* Item 9: master check-all row above the pipe list — same gen-check
+	   chrome, hairline separator so the bulk controls read apart from rows. */
+	.sg-masters {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px 16px;
+		padding: 4px 2px 8px;
+		margin-bottom: 8px;
+		border-bottom: 1px solid var(--border-color);
+	}
+	.sg-masters .sg-master {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-size: 11px;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+	.sg-masters .sg-master input {
 		width: auto;
 		margin: 0;
 	}

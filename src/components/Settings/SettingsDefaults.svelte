@@ -3,6 +3,7 @@
 	// generation defaults + display name. These seed NEW sessions; existing
 	// sessions keep their own values. Stateless: parent owns the draft.
 	import type { Settings } from '$types';
+	import { Q_RANGE, C_RANGE } from '$lib/composerStore/validators';
 
 	let {
 		draft,
@@ -74,9 +75,9 @@
 		<input
 			id="sd-q"
 			type="range"
-			min="5"
-			max="30"
-			step="1"
+			min={Q_RANGE.min}
+			max={Q_RANGE.max}
+			step={Q_RANGE.step}
 			value={g.qValue}
 			oninput={(e) => setG({ qValue: Number(e.currentTarget.value) })}
 		/>
@@ -87,9 +88,9 @@
 		<input
 			id="sd-c"
 			type="range"
-			min="0.5"
-			max="15"
-			step="0.5"
+			min={C_RANGE.min}
+			max={C_RANGE.max}
+			step={C_RANGE.step}
 			value={g.cValue}
 			oninput={(e) => setG({ cValue: Number(e.currentTarget.value) })}
 		/>
