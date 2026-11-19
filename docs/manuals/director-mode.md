@@ -1,9 +1,9 @@
 # Director Mode — User Manual
 
 VisionMachine v0.7.11 · Director mode turns a short creative idea into a
-verified, regeneration-ready set of composer pipes — one pipe per shot —
-through a chain of versioned steps. It speaks the language of a film set:
-slates, takes, script pages, cue sheets, and contact sheets.
+verified set of composer pipes — one pipe per shot — through a chain of
+steps you can watch, re-run, and apply. It speaks the language of a film
+set: slates, takes, script pages, and cue sheets.
 
 > Screenshots marked **capture pending** are filled from the live app in the
 > final release pass; the layout described is the shipped v0.7.11 layout.
@@ -12,50 +12,56 @@ slates, takes, script pages, cue sheets, and contact sheets.
 
 ## 1. Opening Director
 
-Select a session, then open the **Director** tab in the workspace. The panel
-has three tabs:
+Select a session. Above the composer sit three tabs: **Pipes**,
+**Director**, **Extract**. Open **Director**.
 
-| Tab | What it shows |
+A diagonal clapper stripe runs across the top of the Director panel —
+that's the slate. Everything below it is the production. The panel is five
+numbered blocks:
+
+| Block | What it holds |
 |---|---|
-| **Hot path** | The run controls: idea, look controls, film structure, step chain, run log, timeline preview |
-| **Extract** | The concrete structural text of the last run — one cue-sheet block per section |
-| **Scoreboard** | The read-first quality board: weak spots, golden drift, critic A/B, learning strip |
+| **① DIRECTION · idea** | Your creative premise — the ground truth every later step traces back to |
+| **② PARAMETERS** | The look controls: style, ratio, scale, time of day, weather, mood |
+| **③ FILM STRUCTURE** | The structural tree: driver, runtime, branch roles, energy, temperature arc |
+| **④ NOVEL** | The written story — scene cards with sluglines and numbered beats |
+| **⑤ STEP CHAIN** | The run itself: steps, status lamps, take line, run log |
 
-A diagonal clapper stripe runs across the top of the Director frame on every
-tab — that's the slate. Everything below it is the production.
+<!-- SCREENSHOT PENDING: director-overview.png — Director tab, post-run state -->
 
-<!-- SCREENSHOT PENDING: director-overview.png — full Director panel, hot path tab, post-run state -->
+## 2. Setting up a run
 
-## 2. Setting up a run (the G0 entry)
+In **① DIRECTION**, type a short premise, e.g. *"a red fox darts through the
+tall pine forest at dusk"*.
 
-On the Hot path:
+In **② PARAMETERS**, set the look:
 
-1. **Idea** — type a short creative premise, e.g. *"a red fox darts through
-   the tall pine forest at dusk"*. This is the ground truth every later step
-   traces back to.
-2. **Look controls** — genre/style, aspect ratio, time of day, weather.
-3. **Scale** — scenes × shots-per-scene × clip seconds. This is your *goal
-   length*: the engine treats it as the runtime budget and resolves the
-   actual counts from your content (a dense idea earns more shots; the
-   badge on the structure card reflects the same resolution).
-4. **Mood slider** — Subtle ↔ Balanced ↔ Cinematic. The mood sets the look
-   band (clip length, transitions, effects, contrast). Since v0.7.11 it no
-   longer dictates pacing by itself — see §6.
+- **Style / genre**, **aspect ratio**, **time of day**, **weather**.
+- **Scale** — scenes × shots-per-scene × clip seconds. This is your *goal
+  length*: the engine treats it as the runtime budget and resolves the
+  actual counts from your content — a dense idea earns more shots.
+- **Mood slider** — Subtle ↔ Balanced ↔ Cinematic. The mood sets the look
+  band (clip length, transitions, effects, contrast). Since v0.7.11 it no
+  longer dictates pacing by itself — see §6.
 
-### The Film Structure card
+### ③ FILM STRUCTURE
 
-Below the entry sits the **S0.5 structural tree**: the driver character,
-target runtime, branch roles (open / develop / close), energy bars, and the
-chained color-temperature arc. You can pin manual overrides — driver, scene
-count, shots per scene, target seconds, per-branch transitions — and the run
-honors them. The `driver · target ~40s · auto 3×3` badge is live data, not
-decoration: it is the exact scale the run will use.
+The collapsible structure card shows the resolved plan before you run: the
+driver character, target runtime, branch roles (open / develop / close),
+energy bars, and the chained color-temperature arc. You can pin manual
+overrides — driver, scene count, shots per scene, target seconds,
+per-branch transitions — and the run honors them. The
+`driver · target ~40s · auto 3×3` badge is live data: the exact scale the
+run will use.
 
-<!-- SCREENSHOT PENDING: director-structure.png — Film Structure card with pins -->
+The **export / import** chips save and load the whole setup as a shareable
+seed file.
 
-## 3. Running — the step chain
+<!-- SCREENSHOT PENDING: director-structure.png — ③ FILM STRUCTURE with pins -->
 
-Press **Run**. The ⑤ STEP CHAIN heading becomes a slate take line:
+## 3. Running — ⑤ STEP CHAIN
+
+Press **run**. The ⑤ STEP CHAIN heading becomes a slate take line:
 
 - **TAKE K** — the flow version of this run (every run is kept; takes never
   overwrite each other).
@@ -69,19 +75,20 @@ row carries a **tally lamp**:
 | Lamp | Meaning |
 |---|---|
 | 🟢 green glow | step verified ok |
-| 🟠 dim amber | untrained stub (honest placeholder — see Scoreboard) |
+| 🟠 dim amber | untrained stub (an honest placeholder, not a failure) |
 | 🔴 red | step failed |
 
-The steps, in order: **intent → expand → structure → critic → lower →
-verify**. The run log streams progress so nothing looks frozen — including
-while the LLM writes the novel (when a text provider is configured; without
-one, the deterministic template path runs and always works).
+The steps run in order — intent, expand, structure, critic, lower, verify —
+and the run log streams progress so nothing looks frozen, including while
+the novel is written. The chip on **④ NOVEL** tells you which path wrote it:
+the LLM (when a text provider is configured) or the deterministic template
+fallback, which always works.
 
-<!-- SCREENSHOT PENDING: director-running.png — step chain mid-run, leader ring + lamps -->
+<!-- SCREENSHOT PENDING: director-running.png — ⑤ STEP CHAIN mid-run -->
 
 ## 4. Reading the result
 
-### The script page
+### ④ NOVEL — the script pages
 
 Each scene renders as a script-page card: uppercase mono slugline, a
 **REV {K}** revision stamp, the prose in a comfortable reading column, and
@@ -92,42 +99,39 @@ continuity between scenes.
 
 The run materializes **one composer pipe per shot**, lengthed to that shot's
 own clip — no dead tails. Each pipe's timeline is a set of **window zones**:
-every story beat gets its own `<segments>` window with its scene, camera,
-lighting, motion, and transition tags nested inside at their own sub-ranges
-(new in v0.7.11 — previously everything collapsed into one long block). The
-prompt sent to the video model preserves that nested structure.
+every story beat gets its own window with its scene, camera, lighting,
+motion, and transition tags nested inside at their own sub-ranges (new in
+v0.7.11 — previously everything collapsed into one long block). The prompt
+sent to the video model preserves that nested structure.
+
+### Applying to the composer — regenerate
+
+The **regenerate** chip opens a two-choice menu:
+
+- **replace** — rebuild the composer pipes from this take (destructive; the
+  menu shows which flow version will replay).
+- **append** — keep the existing pipes and add the new ones.
 
 ### Extract — the cue sheet
 
-The Extract tab lists every section of the plan as a cue-sheet row. Alongside
-the full text (never truncated) you get department chips:
+The **Extract** tab lists every section of the plan as a cue-sheet row.
+Alongside the full text (never truncated) you get department chips:
 
 - **SC / CAM / LGT / MOT / TRN / FX** — which department the cue belongs to
 - **4500K** gel chip with a luminance dot on lighting cues
 - **35mm** lens chip on camera cues
 - **→ fast** motion vector glyph + speed on motion cues
 
-From here you can **copy all**, **save**, **regenerate pipes** into the
-composer, or **diff** against a previous take.
+From here you can copy all, save, or diff against a previous take.
 
 <!-- SCREENSHOT PENDING: director-extract.png — Extract tab with cue-sheet chips -->
 
-## 5. Scoreboard — the contact sheet
+## 5. Re-runs
 
-The Scoreboard answers four questions before you trust a run:
-
-1. **Weak spot** — exposure strips with 10% tick marks. A dashed edge means
-   the critic model is *untrained* (the score is a stub, honestly marked);
-   solid edges mean a trained critic scored it.
-2. **Golden drift** — the golden set renders as sprocketed film frames with
-   a grade ring: dashed while the critic version is 0, solid once trained.
-   Drift chips show movement against the baseline.
-3. **Critic A/B** — split-dailies comparison: **REEL A** vs **REEL B** picks
-   over the same run.
-4. **Learning strip** — the dailies ledger: full runs carry a **PRINT**
-   stamp, re-runs a rotated **↻ RETAKE** stamp, with provenance sentences.
-
-<!-- SCREENSHOT PENDING: director-scoreboard.png — Scoreboard with strips + goldens -->
+Every step row offers **re-run from here**: only that step and the ones
+after it execute again. The take line shows the RETAKE stamp, the previous
+take stays intact, and you can diff the two in Extract. Use it when one
+stage of the plan looks wrong — you don't pay for the whole chain again.
 
 ## 6. Pacing that reads your intent (new in v0.7.11)
 
@@ -146,24 +150,20 @@ In kinetic runs the motion layer is **staggered** against the camera window,
 so the layers shift against each other — the dynamic feel a trailer needs —
 instead of moving in lockstep.
 
-## 7. Re-runs and persistence
+## 7. Persistence
 
-- **Re-run from any step** (C11): pick the step, run again — the take line
-  shows the RETAKE stamp and only the downstream steps re-execute.
-- **Everything survives a restart**: your entry draft, look controls, mood,
-  scratch edits, every take (`flow.v{N}.json` coexist), the signal ledger,
-  and the golden baseline. Reopen the session and the Director is exactly
-  where you left it.
-- **Seed card**: export the whole film plan as one shareable file.
+Everything survives a restart: your idea, parameters, mood, structure pins,
+every take (they coexist as versions), and the timeline preview. Reopen the
+session and the Director is exactly where you left it.
 
 ## 8. Troubleshooting
 
 | Symptom | What it means |
 |---|---|
 | Amber lamps on critic steps | The critic model is untrained — scores are honest stubs, not failures |
-| "still 2 scenes despite target 40s" | Fixed since the content-aware scale resolver — the badge now reflects the consumed scale |
-| LLM run fell back to template | The run log records *why*; the template result is always valid |
+| The novel chip says "template" | No text provider answered (the run log records why); the template result is always valid |
 | A take looks wrong | Diff it against the previous take in Extract, or re-run from the offending step |
+| regenerate is disabled | Run the chain first — there is no plan to apply yet |
 
 ---
 
