@@ -374,6 +374,10 @@ export interface EngineRun {
 	 * `undefined` via the Rust serde default and keep the legacy cycling
 	 * tables byte-stable). */
 	tree?: StructuralTree | null;
+	/** Bug batch nov19 (item 11): the G0 mood band the run was built with
+	 * (additive Rust serde default — old docs load undefined). Lets the
+	 * backfill restore the slider instead of resetting to 50 on restart. */
+	mood?: number | null;
 }
 
 /** S1 source chip for the panel: 'LLM · {model}' / 'template' /

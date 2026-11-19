@@ -15,7 +15,7 @@
 		type FlowSummary,
 		type GoldenRun,
 	} from '$lib/directorStore/types';
-	import { loadFlow, flagGolden, listGolden } from '$lib/directorStore';
+	import { loadFlow, flagGolden, listGolden, listSignals } from '$lib/directorStore';
 	import { sessions } from '$lib/composerStore';
 	import { concernSummary, type EngineRun } from '$lib/directorStore/engine';
 	import { flashToast } from '$lib/flashToast';
@@ -239,6 +239,10 @@
 	let golden = $state<GoldenRun[]>([]);
 	let goldenLoaded = $state(false);
 	let goldenBusy = $state(false);
+	// Item 11 (link D): the real preference-signal count, read back from
+	// flow_signals.jsonl (was write-only — the strip said "signals wired"
+	// with no number). null = backend unavailable (browser dev) → legacy text.
+	let signalCount = $state<number | null>(null);
 
 	// Resolve the session id for the flag/list invokes (the slim parent owns
 	// the flows ledger; this child gets sessionName, so find the id via the
@@ -253,6 +257,7 @@
 		const sid = sessionIdFor();
 		golden = [];
 		goldenLoaded = false;
+		signalCount = null;
 		if (!sid) {
 			goldenLoaded = true;
 			return;
@@ -265,6 +270,15 @@
 			.catch(() => {
 				golden = [];
 				goldenLoaded = true;
+			});
+		// Item 11: read the signal log back so the learning strip shows the
+		// real logged count after a restart (pure read; failure → null).
+		void listSignals(sid)
+			.then((s) => {
+				signalCount = s.length;
+			})
+			.catch(() => {
+				signalCount = null;
 			});
 	});
 
@@ -546,7 +560,12 @@
 				untrained (stub · scores neutral)
 			{:else}
 				v{(doc?.regen.version.criticModelVersion) ?? 0}
-			{/if} · signals wired
+			{/if} ·
+			{#if signalCount != null}
+				{signalCount} signal{signalCount === 1 ? '' : 's'} logged
+			{:else}
+				signals wired
+			{/if}
 		</p>
 		{#if sparkPoints}
 			<svg

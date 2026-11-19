@@ -567,6 +567,7 @@ pub fn run() {
             commands::director::director_list_golden,
             commands::director::director_save_scratch,
             commands::director::director_load_scratch,
+            commands::director::director_list_signals,
             commands::generation::start_generation,
             commands::generation::start_session_generation,
             commands::generation::get_generation_group,

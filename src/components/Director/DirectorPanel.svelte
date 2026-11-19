@@ -36,6 +36,11 @@
 		type DirectorTab,
 		type EditedSection,
 	} from '$lib/directorStore';
+	import {
+		parseScratch,
+		buildScratchPayload,
+		type ScratchData,
+	} from '$lib/directorStore/scratch';
 	import { loadSession } from '$lib/composerStore';
 	import { tripEffect } from '$lib/pipelineDiag';
 	import {
@@ -508,10 +513,10 @@
 	// write on change, read on session open). Frontend owns the JSON shape;
 	// the backend stores an opaque string. Module-level cache (bounded) so a
 	// fast session swing never re-invokes the backend load.
-	const scratchCache = new Map<string, { entry?: EngineEntryInput | null; edits: EditedSection[] }>();
+	const scratchCache = new Map<string, ScratchData>();
 	const SCRATCH_CAP = 64;
 
-	function cacheScratch(sessionId: string, v: { entry?: EngineEntryInput | null; edits: EditedSection[] }) {
+	function cacheScratch(sessionId: string, v: ScratchData) {
 		scratchCache.set(sessionId, v);
 		if (scratchCache.size > SCRATCH_CAP) {
 			for (const k of scratchCache.keys()) {
@@ -536,12 +541,35 @@
 		}
 	}
 
+	// Bug batch nov19 (item 11, link A): the persist effect below must NEVER
+	// write before hydration settles for the current session — on a cold start
+	// the 800ms debounce fired with edits:[] (doc not loaded yet) and wiped the
+	// saved unapplied Extract edits. This flag gates every scratch write.
+	let scratchSettledFor = $state<string | null>(null);
+
+	// Restore the session's durable scratch fields. Disk entry wins only when
+	// nothing is in memory yet (empty idea), so it never fights the
+	// committed-doc backfill precedence. The additive run-UI fields
+	// (extractedPrompt / runDurationMs — item 11) restore the same way: disk
+	// wins only over an empty memory value.
+	function restoreScratchFields(sid: string, data: ScratchData) {
+		if (data.entry?.idea?.trim() && entry.idea.trim() === '') {
+			entry = { ...freshEntry(), ...data.entry };
+		}
+		if (data.extractedPrompt && !extractedPrompt.trim()) {
+			extractedPrompt = data.extractedPrompt;
+		}
+		if (data.runDurationMs != null && runDurationMs == null) {
+			runDurationMs = data.runDurationMs;
+		}
+		applyScratchEdits(sid);
+	}
+
 	// Restore the session's durable scratch from disk (async, non-blocking).
-	// Disk entry wins only when nothing is in memory yet (empty idea), so it
-	// never fights the committed-doc backfill precedence.
 	async function hydrateScratch(sessionId: string) {
 		if (scratchCache.has(sessionId)) {
-			applyScratchEdits(sessionId);
+			restoreScratchFields(sessionId, scratchCache.get(sessionId)!);
+			scratchSettledFor = sessionId;
 			return;
 		}
 		const sid = sessionId;
@@ -549,52 +577,49 @@
 		try {
 			raw = await loadScratch(sid);
 		} catch {
-			return; // non-Tauri / backend unavailable → in-memory-only fallback
+			// non-Tauri / backend unavailable → in-memory-only fallback; still
+			// settle so the persist effect works (saveScratch is a no-op there).
+			if (sid === sessionId) scratchSettledFor = sid;
+			return;
 		}
 		if (sid !== sessionId) return; // abandoned mid-flight
-		let parsed: { entry?: EngineEntryInput | null; edits: EditedSection[] } | null = null;
-		if (raw && raw.trim()) {
-			try {
-				parsed = JSON.parse(raw);
-			} catch {
-				parsed = null; // corrupt → treat as empty, never crash
-			}
-		}
-		cacheScratch(sid, parsed ?? { entry: null, edits: [] });
-		// Disk entry is authoritative only when the memory draft is empty.
-		if (parsed?.entry?.idea?.trim() && entry.idea.trim() === '') {
-			entry = { ...freshEntry(), ...parsed.entry };
-		}
-		applyScratchEdits(sid);
+		const parsed = parseScratch(raw);
+		const data: ScratchData = parsed ?? { entry: null, edits: [], extractedPrompt: '', runDurationMs: null };
+		cacheScratch(sid, data);
+		restoreScratchFields(sid, data);
+		scratchSettledFor = sid;
 	}
 
-	// Debounced durable persist: watch entry + the dirty-edit signature and
-	// write scratch to disk. The effect only READS entry/localExtract and
-	// issues an async invoke — it never writes any $state, so it cannot form
-	// a write-what-you-read loop. 800ms debounce keeps a typing burst to one
-	// lazy write.
+	// Debounced durable persist: watch entry + the dirty-edit signature + the
+	// additive run-UI fields and write scratch to disk. The effect only READS
+	// state and issues an async invoke — it never writes any $state, so it
+	// cannot form a write-what-you-read loop. 800ms debounce keeps a typing
+	// burst to one lazy write.
+	// GATE (item 11, link A): no write until hydration has settled for THIS
+	// session — a cold-start write with edits:[] used to wipe the saved edits.
 	let scratchSaveTimer: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
 		const sid = sessionId;
+		if (scratchSettledFor !== sid) return;
 		const idea = entry.idea; // track entry (any G0 field) as the object identity changes on write
 		const edits = editedList();
+		const extract = extractedPrompt;
+		const duration = runDurationMs;
 		const sig =
 			idea + '|' +
-			edits.map((e) => `${e.pipeIndex}:${e.tag}:${e.occurrence}:${e.prompt}`).join('§');
+			edits.map((e) => `${e.pipeIndex}:${e.tag}:${e.occurrence}:${e.prompt}`).join('§') +
+			'|' + extract + '|' + (duration ?? '');
+		void sig;
 		if (scratchSaveTimer) clearTimeout(scratchSaveTimer);
 		scratchSaveTimer = setTimeout(() => {
 			if (sid !== sessionId) return; // session moved on → drop the write
-			const hasEdits = edits.length > 0;
-			const hasEntry = idea.trim().length > 0;
-			if (!hasEdits && !hasEntry) {
-				// Nothing worth keeping → clear the file so a stale draft
-				// never resurfaces on the next open.
-				void saveScratch(sid, '').catch(() => {});
-				return;
-			}
-			const payload = JSON.stringify({
-				entry: hasEntry ? entry : null,
-				edits: hasEdits ? edits : [],
+			// '' = nothing worth keeping → saveScratch clears the file so a
+			// stale draft never resurfaces on the next open.
+			const payload = buildScratchPayload({
+				entry,
+				edits,
+				extractedPrompt: extract,
+				runDurationMs: duration,
 			});
 			void saveScratch(sid, payload).catch(() => {});
 		}, 800);
@@ -825,6 +850,10 @@
 	// log, then the UI pinned). Cleared on session switch, set after one
 	// settled list (including the 0-flows and error paths).
 	let flowsLoadedFor = $state<string | null>(null); // synced with module-level Set
+	// Item 11 (link B): bounded retry budget for a FAILED seed list — a
+	// transient cold-start failure must not latch the session into "no
+	// flows" forever. Reset per session in the reset effect.
+	let seedRetryCount = $state(0);
 	// Per-session isolation: when the session prop changes, reset in-tab state
 	// so a switched session never carries the previous session's run; restore
 	// the new session's G0 draft instead of a stale entry.
@@ -853,7 +882,23 @@
 			localExtract = [];
 			seedWorking = false;
 			extractedPrompt = '';
+			// Item 11: the new session's scratch must re-hydrate before any
+			// persist write; the seed retry budget starts fresh per session.
+			scratchSettledFor = null;
+			seedRetryCount = 0;
 		}
+	});
+
+	// Item 11 (link C): hydrate the durable scratch INDEPENDENT of the
+	// engine-gated localExtract seeding effect — pre-engine sessions (no
+	// run yet) still restore their saved entry/edits/run-UI state. Runs on
+	// mount AND on every session change (the reset effect above clears
+	// first; effects run in declaration order). The seeding effect's own
+	// hydrateScratch call stays — it re-applies edits AFTER localExtract
+	// seeds (cache hit, idempotent).
+	$effect(() => {
+		const sid = sessionId;
+		void hydrateScratch(sid);
 	});
 
 	// Seed the active document from the newest persisted run so Extract /
@@ -977,6 +1022,20 @@
 			} catch (e) {
 				if (cancelled || sid !== sessionId) return;
 				console.warn('director load_latest', e);
+				// Item 11 (link B): a transient listFlows failure (cold-start DB
+				// not ready, flow_dir race) used to leave flowsLoadedFor latched
+				// with no retry path — the persisted run stayed unread until a
+				// session switch. Bounded delayed retry: clear the latch after
+				// 1500ms so this effect re-runs; at most 2 attempts, then the
+				// latch stays (a session switch still recovers).
+				if (seedRetryCount < 2) {
+					seedRetryCount += 1;
+					setTimeout(() => {
+						if (sid === sessionId && !doc && flowsLoadedFor === sid) {
+							flowsLoadedFor = null;
+						}
+					}, 1500);
+				}
 			}
 		})();
 		return () => {
@@ -1008,11 +1067,11 @@
 			},
 			time_of_day: film.time_of_day,
 			weather: film.weather,
-			// M4: the run's EngineRun does not store its mood band (it lives
-			// on the EngineEntry input, and FilmSeed stays byte-stable), so
-			// preserve the user's current slider value (entry.mood) rather
-			// than clobber it — a re-load never silently resets mood.
-			mood: entry.mood ?? 50,
+			// M4 + item 11: new runs stamp their mood provenance on the
+			// EngineRun (additive serde field); prefer it so a restart
+			// restores the run's actual band. Old docs (no mood key) keep
+			// the user's current slider value rather than clobbering it.
+			mood: e.mood ?? entry.mood ?? 50,
 			// Phase 3: the S0.5 tree's manual-override pins are USER state,
 			// not engine state — a re-run / re-load never clobbers them.
 			// (The tree itself re-derives on the next run; the pins survive.)

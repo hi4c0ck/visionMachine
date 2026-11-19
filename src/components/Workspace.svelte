@@ -251,11 +251,20 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			return false;
 		}
 		if (!url) return false;
+		// Bug batch nov19 (item 1): the composed session video lives at a FIXED
+		// path (session-video/session.mp4 + its .proxy sibling), so every
+		// re-compose resolves to the IDENTICAL URL string — the <video> src
+		// attribute never changes and the element never reloads the new file
+		// (the "loading…" overlay could stick over the OLD clip). A run-unique
+		// query forces a fresh attribute + a new HTTP cache key. Safe: the
+		// media handler decodes only request.uri().path() (media_protocol.rs),
+		// the query is ignored server-side.
+		const bustedUrl = `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}`;
 		previewIsSessionVideo = true;
-		previewVideo = { url, label };
+		previewVideo = { url: bustedUrl, label };
 		previewMediaPath = path;
-		toolsSessionVideo = { url, label };
-		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label, path };
+		toolsSessionVideo = { url: bustedUrl, label };
+		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url: bustedUrl, label, path };
 		return true;
 	}
 	// Flip the top-panel ownership back off the session video when the user
@@ -2805,6 +2814,23 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				if (saved.errors.length > 0) {
 					console.error('[Workspace] generated video persistence failed:', saved.errors);
 					flashToast('Generated video was created but could not be saved', 'error');
+				}
+			}
+			// Bug batch nov19 (item 1): auto-refresh the top-panel preview on
+			// terminal. The store attach above updates the DATA, but before
+			// this nothing re-attached the preview — the panel kept whatever
+			// was attached before the run. Rules: only the selected session;
+			// never clobber a composed session video (session-video
+			// precedence); attach when the panel is empty or shows THIS
+			// pipe's previous clip (same pipe media dir). Another pipe the
+			// user is inspecting is left alone. Group runs reach this same
+			// hook via pipe-terminal → reconcileTerminal.
+			if (view.sessionId === selectedSessionId && !previewIsSessionVideo) {
+				const pipeDir = view.outputPath.replace(/[\\/][^\\/]+[\\/][^\\/]+$/, '');
+				const showingThisPipe = !!previewMediaPath && previewMediaPath.startsWith(pipeDir);
+				if (!previewVideo || showingThisPipe) {
+					const freshPipe = selectedSession?.pipes.find((p) => p.id === view.pipeId);
+					if (freshPipe) openPreview(freshPipe);
 				}
 			}
 			flashToast(APP_CONSTANTS.strings.generationComplete, 'success');

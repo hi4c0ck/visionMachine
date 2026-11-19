@@ -71,6 +71,13 @@ pub struct EngineRun {
     /// and their S2/S3 keep the legacy per-shot cycling tables (byte-stable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<crate::generation::video_flow::engine::tree::StructuralTree>,
+    /// Bug batch nov19 (item 11): the G0 mood band the run was built with.
+    /// Additive persistence — old docs load `None` (the UI keeps its draft
+    /// value); new runs stamp it so a restart/backfill never silently resets
+    /// the slider to 50. Structure is unaffected (the band already shaped
+    /// S2/S3 at build time); this is the run's provenance, not a new input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mood: Option<u8>,
 }
 
 /// One gate's in-run state. Absorbed shape of `harness/out/session.json`
@@ -499,6 +506,10 @@ impl EngineRun {
             // low-level builder leaves it `None` so the legacy / golden
             // structure pins stay byte-stable; the tree is additive.
             tree: None,
+            // Mood provenance is stamped by the callers that own the G0
+            // entry (build_run / director_run_flow LLM path); the low-level
+            // builder stays None so legacy pins remain byte-stable.
+            mood: None,
         };
         run.verify = verify(&run);
         run.gates = Self::gate_states();
@@ -2414,6 +2425,9 @@ impl EngineEntry {
             Some(&tree),
         );
         run.tree = Some(tree);
+        // Bug batch nov19 (item 11): stamp the run's mood provenance so a
+        // restart/backfill restores the slider instead of resetting to 50.
+        run.mood = Some(self.mood);
         run
     }
 }

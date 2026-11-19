@@ -155,13 +155,14 @@ describe('Sound Element Service', () => {
       const pipe = pipeOf(session);
       await addGlobalElement(session.id, pipe.id, 0, 120);
       await addSoundElement(session.id, pipe.id, 0, 120);
-      const soundId = pipe.elements[1].id;
+      const soundId = session.pipes[0].elements[1].id;
 
       const result = await removeSoundElement(session.id, pipe.id, soundId);
 
       expect(result.errors).toHaveLength(0);
-      expect(pipe.elements).toHaveLength(1);
-      expect(pipe.elements[0].tag).toBe('global_style');
+      // Item 1: re-read the store shell (pipe refs are replaced per mutation).
+      expect(session.pipes[0].elements).toHaveLength(1);
+      expect(session.pipes[0].elements[0].tag).toBe('global_style');
     });
   });
 

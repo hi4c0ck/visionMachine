@@ -65,19 +65,16 @@ re-run. Data attach + persistence are CORRECT; only the UI is frozen
 
 **Fix — one root-cause change + two independent links:**
 
-1. **Pipe-reference replacement.** New shared helper
-   `touchPipe(session, pipeId)` in `src/lib/composerStore/pipes.ts`:
-   `session.pipes = session.pipes.map(p => p.id === pipeId ? { ...p } : p)`.
-   Shallow copy of ONE pipe; untouched pipes keep references (bounds churn,
-   preserves the single-producer/one-copy design). Call it LAST (after all
-   writes to the pipe) in every pipe-content mutator:
-   - `generation.ts`: attachLastGeneration, attachGeneratedImage, markRefStatus
-   - `keyframes.ts`: add (upsert + push), remove, update/move paths
-   - `subjectRefs.ts`: all ref mutators
-   - `pipes.ts`: updateQ, updateC, setMediaMode, setTrimBoundary,
-     setCropOverride, rename/resize/add/remove
-   - `elements.ts` / `segments.ts` / `tags.ts`: every timeline mutator
-   Audit with grep for `pipe.` writes in composerStore; no mutator missed.
+1. **Pipe-reference replacement (as implemented: ONE central choke point).**
+   `touchPipeShells(session)` in `src/lib/composerStore/pipeRef.ts` replaces
+   the pipes array with shallow pipe shells (`pipes.map(p => ({...p}))`);
+   nested data stays shared — no deep clone, the anti-heap-ratchet design
+   holds. Called from `notifyUpdate` (the store's single mutation trigger,
+   AFTER every service mutator, BEFORE the UI callback) — superior to
+   per-mutator calls: no mutator can be missed, array-level ops
+   (add/remove/move/duplicate) are covered uniformly. New array + new pipe
+   shells → ComposerPanel pipes derived propagates → keyed each reconciles
+   → child effects re-run and read fresh fields.
 2. **Terminal → top-panel re-attach.** In `Workspace.handleTaskTerminal`
    (~2793-2810), after successful attachLastGeneration: when
    `view.sessionId === selectedSessionId` and the top panel is not owning a
@@ -152,9 +149,12 @@ dead `onmediamodechange` prop (no incidental refactor).
    tests (no component-mount harness exists).
 4. NEW Rust command `director_list_signals(session_id)` → parsed
    `flow_signals.jsonl` rows (pure read, tolerant of malformed lines);
-   register in invoke_handler. DirectorPanel re-hydrates `confirmedGates`
-   from gate-confirm signals on session open; Scoreboard learning strip
-   shows the real signal count (fixes D).
+   register in invoke_handler. The Scoreboard learning strip shows the
+   REAL logged signal count (was the static "signals wired" text).
+   Scope note (verified at implementation): `confirmedGates` is dead UI
+   state — no gate-confirm control writes it and no gate-confirm signal
+   kind exists — so gate re-hydration is OUT of scope (no invented
+   feature); the read-back serves the learning strip.
 5. `EngineRun` gains `mood: Option<u8>` (`#[serde(default)]`, additive —
    old docs load None); stamped at run; `backfillEntryFromEngine` prefers
    it over the 50 fallback.

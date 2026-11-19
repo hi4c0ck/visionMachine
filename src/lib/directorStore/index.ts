@@ -243,3 +243,23 @@ export async function loadScratch(sessionId: string): Promise<string> {
 	const out = await invoke<string>('director_load_scratch', { sessionId });
 	return out ?? '';
 }
+
+// ── Preference signals read-back (bug batch nov19, item 11) ─────────────────
+// Signals were write-only (logSignal appends to flow_signals.jsonl; nothing
+// read them back), so the learning state appeared reset after every restart.
+// This mirror of the Rust SignalRecord (camelCase) + the pure-read command
+// close the loop: the Scoreboard learning strip shows the real logged count.
+
+export interface SignalRecord {
+	recordId: string;
+	kind: 'edit_diff' | 'accept' | 'reject' | 'rate';
+	flowVersion: number;
+	targetSpan: string;
+	note?: string | null;
+	ts: number;
+}
+
+export async function listSignals(sessionId: string): Promise<SignalRecord[]> {
+	const out = await invoke<SignalRecord[]>('director_list_signals', { sessionId });
+	return out ?? [];
+}

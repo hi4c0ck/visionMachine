@@ -553,11 +553,12 @@ describe('Composer Integration', () => {
       await addKeyframe(session.id, pipe.id, 0, 0, 'url', 'https://example.com/1.jpg');
       await addKeyframe(session.id, pipe.id, 1, 40, 'url', 'https://example.com/2.jpg');
 
-      const kfId = pipe.keyframes[0].id;
+      const kfId = session.pipes[0].keyframes[0].id;
       const result = await removeKeyframe(session.id, pipe.id, kfId);
 
       expect(result.errors).toHaveLength(0);
-      expect(pipe.keyframes).toHaveLength(1);
+      // Item 1: re-read the store shell (pipe refs are replaced per mutation).
+      expect(session.pipes[0].keyframes).toHaveLength(1);
     });
   });
 
@@ -667,6 +668,29 @@ describe('Composer Integration', () => {
       expect(result.errors).toHaveLength(0);
       expect(sessions.has('session-1')).toBe(true);
       expect(sessions.get('session-1')!.pipes).toHaveLength(1);
+    });
+
+    it('mediaMode survives the load round-trip (bug batch nov19, item 2)', async () => {
+      // The save path writes mediaMode, but mapBackendPipes used to DROP it
+      // on load — normalizePipe then coerced every pipe back to 'keyframes',
+      // silently reverting the user's Reference lock on each session switch.
+      mockInvoke.mockResolvedValue({
+        id: 'session-mm',
+        name: 'MediaMode',
+        pipes: [
+          { id: 'p-ref', name: 'Ref', lengthFrames: 121, keyframes: [], elements: [], mediaMode: 'reference' },
+          { id: 'p-kf', name: 'Kf', lengthFrames: 121, keyframes: [], elements: [], mediaMode: 'keyframes' },
+          { id: 'p-legacy', name: 'Legacy', lengthFrames: 121, keyframes: [], elements: [] },
+        ],
+      });
+
+      const result = await loadSession('session-mm');
+      expect(result.errors).toHaveLength(0);
+      const pipes = sessions.get('session-mm')!.pipes;
+      expect(pipes[0].mediaMode).toBe('reference');
+      expect(pipes[1].mediaMode).toBe('keyframes');
+      // Absent/legacy rows read as the default, never undefined.
+      expect(pipes[2].mediaMode).toBe('keyframes');
     });
 
     it('should handle backend error', async () => {

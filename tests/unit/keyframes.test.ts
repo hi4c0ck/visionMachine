@@ -386,12 +386,13 @@ describe('Keyframe Service', () => {
       await addKeyframe(session.id, pipe.id, 0, 0, 'url', 'https://example.com/1.jpg');
       await addKeyframe(session.id, pipe.id, 1, 40, 'url', 'https://example.com/2.jpg');
 
-      const kfId = pipe.keyframes[0].id;
+      const kfId = session.pipes[0].keyframes[0].id;
       const result = await removeKeyframe(session.id, pipe.id, kfId);
 
       expect(result.errors).toHaveLength(0);
-      expect(pipe.keyframes).toHaveLength(1);
-      expect(pipe.keyframes.some(k => k.id === kfId)).toBe(false);
+      // Item 1: re-read the store shell (pipe refs are replaced per mutation).
+      expect(session.pipes[0].keyframes).toHaveLength(1);
+      expect(session.pipes[0].keyframes.some(k => k.id === kfId)).toBe(false);
     });
 
     it('should handle removing last keyframe', async () => {
@@ -402,10 +403,11 @@ describe('Keyframe Service', () => {
       const pipe = session.pipes[0];
       await addKeyframe(session.id, pipe.id, 0, 0, 'url', 'https://example.com/1.jpg');
 
-      const kfId = pipe.keyframes[0].id;
+      const kfId = session.pipes[0].keyframes[0].id;
       await removeKeyframe(session.id, pipe.id, kfId);
 
-      expect(pipe.keyframes).toHaveLength(0);
+      // Item 1: re-read the store shell (pipe refs are replaced per mutation).
+      expect(session.pipes[0].keyframes).toHaveLength(0);
     });
   });
 

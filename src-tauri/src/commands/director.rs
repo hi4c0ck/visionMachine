@@ -482,6 +482,10 @@ pub async fn director_run_flow(
                         // The low-level builder leaves the run's tree field
                         // None; the caller stores it (Phase 1a).
                         llm_run.tree = Some(tree);
+                        // Bug batch nov19 (item 11): mood provenance for
+                        // restart restore (structure stays mood-None by
+                        // design — the band shapes the Node A prompt only).
+                        llm_run.mood = Some(effective_entry.mood);
                         doc.engine = Some(llm_run);
                         format!("LLM · {} · {}ms", prov.model, t_llm.elapsed().as_millis())
                     }
@@ -950,6 +954,46 @@ pub async fn director_load_scratch(
         Ok(s) if !s.trim().is_empty() => Ok(s),
         Ok(_) => Ok(String::new()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Parse a `flow_signals.jsonl` body into records (bug batch nov19, item 11).
+/// Tolerant by design: the log is append-only and may carry a torn tail line
+/// after a crash — malformed/empty lines are skipped, never fatal. Pure so
+/// the read-back is unit-testable without a Tauri state.
+pub fn parse_signals_jsonl(raw: &str) -> Vec<SignalRecord> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(rec) = serde_json::from_str::<SignalRecord>(line) {
+            out.push(rec);
+        }
+    }
+    out
+}
+
+/// Read back the session's preference-signal log. Before this, signals were
+/// WRITE-ONLY (director_log_signal appends; nothing read them), so the
+/// learning/annotation state appeared reset after every restart even though
+/// flow_signals.jsonl survived on disk. Pure read (house style): missing
+/// file → empty log; never writes, never reorders.
+#[tauri::command]
+pub async fn director_list_signals(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<SignalRecord>, String> {
+    let dir = {
+        let db = &state.db.lock().await;
+        flow_dir(db, &session_id).await?
+    };
+    let p = dir.join("flow_signals.jsonl");
+    match std::fs::read_to_string(&p) {
+        Ok(s) => Ok(parse_signals_jsonl(&s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -1847,5 +1891,60 @@ mod tests {
         empty.pipes.clear();
         let err = splice_scoped_pipes(&mut empty, &new_pipes).unwrap_err();
         assert!(err.contains("run a full apply first"), "{err}");
+    }
+
+    // ── Bug batch nov19 (item 11): signals read-back + mood provenance ──
+
+    #[test]
+    fn parse_signals_jsonl_roundtrips_and_skips_torn_lines() {
+        let a = SignalRecord {
+            record_id: "r1".into(),
+            kind: SignalKind::Accept,
+            flow_version: 1,
+            target_span: "run-1".into(),
+            note: Some("run accepted".into()),
+            ts: 100,
+        };
+        let b = SignalRecord {
+            record_id: "r2".into(),
+            kind: SignalKind::EditDiff,
+            flow_version: 2,
+            target_span: "p0.scene.0".into(),
+            note: None,
+            ts: 200,
+        };
+        let raw = format!(
+            "{}\n{}\n\n{{torn jsonl tail\n",
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap(),
+        );
+        let out = parse_signals_jsonl(&raw);
+        assert_eq!(out.len(), 2, "malformed + empty lines skipped, never fatal");
+        assert_eq!(out[0].record_id, "r1");
+        assert_eq!(out[1].record_id, "r2");
+        assert_eq!(out[1].kind, SignalKind::EditDiff);
+        assert!(parse_signals_jsonl("").is_empty());
+    }
+
+    #[test]
+    fn build_run_stamps_mood_and_old_docs_load_without_it() {
+        let mut entry = test_entry();
+        entry.mood = 72;
+        let run = entry.build_run();
+        assert_eq!(run.mood, Some(72), "the run carries its G0 mood provenance");
+
+        // New-doc roundtrip: mood survives serialize → deserialize.
+        let json = serde_json::to_value(&run).unwrap();
+        assert_eq!(json["mood"], 72);
+        let back: crate::generation::video_flow::engine::seed::EngineRun =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(back.mood, Some(72));
+
+        // Old doc (pre-item-11): no mood key → None, never a load failure.
+        let mut old = json;
+        old.as_object_mut().unwrap().remove("mood");
+        let legacy: crate::generation::video_flow::engine::seed::EngineRun =
+            serde_json::from_value(old).unwrap();
+        assert_eq!(legacy.mood, None);
     }
 }

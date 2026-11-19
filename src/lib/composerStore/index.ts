@@ -27,6 +27,7 @@ import { SessionServiceImpl } from './session-io';
 import { MigrationServiceImpl } from './migrations';
 import { SubjectReferenceServiceImpl } from './subjectRefs';
 import { GenerationServiceImpl } from './generation';
+import { touchPipeShells } from './pipeRef';
 import { normalizeSession } from './validators';
 import { backfillGeneratedImages } from '$lib/generatedImageBackfill';
 import { recoverVideoDownloads } from '$lib/videoDownloadRecovery';
@@ -92,6 +93,12 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   private notifyUpdate(sessionId: string): void {
+    // Bug batch nov19 (items 1+4): replace pipe shells so the Svelte 5
+    // derived/each equality chain propagates the mutation to pipe-subtree
+    // consumers (previews, keyframe chips, status dots). Runs AFTER every
+    // service mutator and BEFORE the UI callback — the single choke point.
+    const session = sessions.get(sessionId);
+    if (session) touchPipeShells(session);
     unsynced.add(sessionId);
     if (onUpdateCallback) {
       onUpdateCallback(sessionId);

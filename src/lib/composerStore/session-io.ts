@@ -143,6 +143,12 @@ export class SessionServiceImpl implements SessionService {
       // the Rust Pipe.trim_boundary. Absent/legacy rows read as false (the
       // classic lossless splice), so old sessions never change behavior.
       trimBoundary: p.trimBoundary === true,
+      // Bug batch nov19 (item 2): the media-mode lock round-trips through the
+      // Rust Pipe.media_mode. Without this field every load/switch/restart
+      // silently reset Reference-locked pipes to 'keyframes' (normalizePipe
+      // coerces undefined), while the engine kept reading the DB value —
+      // UI and wire disagreed. Absent/legacy rows read as 'keyframes'.
+      mediaMode: p.mediaMode === 'reference' ? 'reference' : 'keyframes',
       // 0012 D2: per-pipe crop-mode override: round-trips through the Rust
       // Pipe.crop_override. Absent/legacy rows read as null = use the
       // session crop mode.
