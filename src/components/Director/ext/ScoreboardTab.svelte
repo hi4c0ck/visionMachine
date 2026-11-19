@@ -311,6 +311,7 @@
 					<span class="bar">
 						<span
 							class="bar-fill {scoreTone(b.avg)}"
+							class:stub={doc.criticModel?.untrained}
 							style="width: {Math.round(b.avg * 100)}%"
 						></span>
 					</span>
@@ -363,6 +364,10 @@
 						<code
 							class="run-rerun"
 							title={`B12 provenance: re-run from ${f.rerunFrom} (C11) — upstream outputs locked from the last doc · S5 re-verified · persisted as v${f.flowVersion}`}>↻ {f.rerunFrom}</code>
+					{:else}
+						<!-- D8: full runs carry a PRINT stamp — the dailies log reads
+						     "first print" vs "retake" at a glance (B12 provenance). -->
+						<code class="run-print" title="Full S0→S5 run — first print">PRINT</code>
 					{/if}
 					<span class="run-src">{f.sectionCount}s · {f.entryText.slice(0, 24)}…</span>
 					<span class="run-anno">
@@ -455,7 +460,8 @@
 			{#each golden as g (g.flowVersion)}
 				<li class="golden-row">
 					<code class="golden-v">v{g.flowVersion}</code>
-					<span class="golden-base">base {fmtScore(g.baselineOverall)}</span>
+					<span class="golden-base grade-ring" class:ring-stub={g.criticModelVersion === 0}
+					title={g.criticModelVersion === 0 ? 'Grade ring dashed — critic v0 (untrained stub), score is neutral' : `Grade ring solid — critic v${g.criticModelVersion}`}>base {fmtScore(g.baselineOverall)}</span>
 					<span class="golden-src" title={g.entryText}>
 						{g.entryText.slice(0, 22)}{g.entryText.length > 22 ? '…' : ''}
 					</span>
@@ -483,7 +489,7 @@
 	     until a trained critic head lands (Phase 2). -->
 	<div class="ab-row">
 		<label class="ab-pick">
-			<code class="ab-label">head A</code>
+			<code class="ab-label">REEL A</code>
 			<select
 				class="ab-select"
 				bind:value={abA}
@@ -500,7 +506,7 @@
 		</label>
 		<code class="ab-vs">vs</code>
 		<label class="ab-pick">
-			<code class="ab-label">head B</code>
+			<code class="ab-label">REEL B</code>
 			<select
 				class="ab-select"
 				bind:value={abB}
@@ -624,10 +630,20 @@
 		color: var(--text-secondary);
 		flex-shrink: 0;
 	}
+	/* D7 · exposure strips — Q1 bars read as film density strips: 10% tick
+	   marks, and the fill's edge grammar carries the honesty rule (dashed =
+	   untrained stub, solid = trained). The B11 hint above still says it. */
 	.bar {
 		flex: 1;
-		height: 6px;
-		background: var(--bg-elevated);
+		height: 12px;
+		border-radius: 2px;
+		background:
+			repeating-linear-gradient(
+				90deg,
+				transparent 0 calc(10% - 1px),
+				color-mix(in srgb, var(--border-color) 70%, transparent) calc(10% - 1px) 10%
+			),
+			var(--bg-elevated);
 		overflow: hidden;
 	}
 	.bar-fill {
@@ -635,6 +651,10 @@
 		height: 100%;
 		background: var(--accent-color);
 		transition: width var(--transition-sin, 0.5s);
+	}
+	.bar-fill.stub {
+		border-right: 1.5px dashed color-mix(in srgb, var(--text-secondary) 75%, transparent);
+		opacity: 0.55;
 	}
 	.bar-fill.tone-warn {
 		background: var(--warning-color);
@@ -739,12 +759,29 @@
 	}
 	/* B12 provenance chip: this run is a C11 per-step re-run. Accent family
 	   (Template A) — quiet at rest, readable against the hairline. */
+	/* D8 · dailies stamps — provenance as rubber stamps: ↻ retake (accent,
+	   rotated) vs PRINT (success). Same B12 data, glanceable grammar. */
 	.run-rerun {
 		font-family: var(--font-mono);
-		font-size: 9px;
-		padding: 1px 6px;
-		border: 1px solid var(--border-color);
+		font-size: 8.5px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		padding: 2px 6px;
+		border: 1.5px solid color-mix(in srgb, var(--accent-color) 55%, transparent);
+		border-radius: 3px;
 		color: var(--accent-color, var(--text-secondary));
+		transform: rotate(-2deg);
+	}
+	.run-print {
+		font-family: var(--font-mono);
+		font-size: 8.5px;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		padding: 2px 6px;
+		border: 1.5px solid color-mix(in srgb, var(--success-color, #22c55e) 55%, transparent);
+		border-radius: 3px;
+		color: var(--success-color, #22c55e);
+		transform: rotate(-2deg);
 	}
 	.run-src {
 		flex: 1;
@@ -782,14 +819,34 @@
 		align-items: center;
 		margin: 0 0 6px;
 	}
+	/* D10 · split dailies — the A/B picks read as reels: letter-spaced REEL
+	   labels under a mini filmstrip edge. Selects/diff behavior unchanged. */
 	.ab-pick {
 		display: flex;
 		gap: 6px;
 		align-items: center;
+		position: relative;
+		padding-top: 6px;
+	}
+	.ab-pick::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 3px;
+		border-radius: 1px;
+		background: repeating-linear-gradient(
+			90deg,
+			color-mix(in srgb, var(--accent-color) 45%, transparent) 0 6px,
+			transparent 6px 10px
+		);
 	}
 	.ab-label {
 		font-family: var(--font-mono);
 		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.12em;
 		color: var(--text-muted);
 	}
 	.ab-select {
@@ -834,14 +891,45 @@
 		flex-direction: column;
 		gap: 4px;
 	}
+	/* D9 · contact-sheet goldens — each golden reads as a sprocketed film
+	   frame; the base score sits in a grade ring (dashed = critic v0 stub,
+	   solid = trained). All fields stay. */
 	.golden-row {
 		display: flex;
 		align-items: baseline;
 		gap: 8px;
-		padding: 4px 8px;
+		position: relative;
+		padding: 9px 10px;
 		border: 1px solid var(--border-color);
-		border-radius: 4px;
+		border-radius: 6px;
+		background: var(--bg-tertiary);
 		font-size: 11px;
+	}
+	.golden-row::before,
+	.golden-row::after {
+		content: '';
+		position: absolute;
+		left: 6px;
+		right: 6px;
+		height: 4px;
+		border-radius: 1px;
+		background: repeating-linear-gradient(
+			90deg,
+			var(--bg-elevated) 0 7px,
+			transparent 7px 13px
+		);
+	}
+	.golden-row::before { top: 2px; }
+	.golden-row::after { bottom: 2px; }
+	.grade-ring {
+		border: 1.5px solid color-mix(in srgb, var(--success-color, #22c55e) 55%, transparent);
+		border-radius: 999px;
+		padding: 1px 8px;
+	}
+	.grade-ring.ring-stub {
+		border-style: dashed;
+		border-color: var(--border-color);
+		color: var(--text-muted);
 	}
 	.golden-v {
 		font-family: var(--font-mono);

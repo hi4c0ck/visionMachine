@@ -1295,4 +1295,22 @@
 	   the dark OS control). */
 		font-synthesis: none;
 	}
+
+	/* D1 · clapper band — the slate's top edge. The accent family becomes a
+	   physical object: diagonal stripes across the frame's top, ONE place,
+	   never repeated. Margins cancel the root padding + one flex gap so the
+	   net layout addition is exactly the 10px band. */
+	.director-root::before {
+		content: '';
+		display: block;
+		height: 10px;
+		margin: -12px -14px -18px;
+		background: repeating-linear-gradient(
+			-55deg,
+			var(--accent-color) 0 14px,
+			transparent 14px 22px
+		);
+		opacity: 0.8;
+		border-bottom: 1px solid var(--border-color);
+	}
 </style>

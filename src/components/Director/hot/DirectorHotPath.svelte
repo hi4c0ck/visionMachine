@@ -315,6 +315,9 @@
 							<header class="scene-card-head">
 								<code class="scene-card-id">S{i + 1}</code>
 								<span class="scene-card-title">{s.title || 'untitled'}</span>
+								{#if doc}
+									<code class="rev-stamp" title="Revision {doc.flowVersion} · flow.v{doc.flowVersion}.json">REV {doc.flowVersion}</code>
+								{/if}
 							</header>
 							<p class="scene-card-prose">{s.prose}</p>
 							<footer class="scene-card-meta">
@@ -345,6 +348,9 @@
 								<code class="scene-row-id">S{i + 1}</code>
 								<span class="scene-row-title">{s.title || 'untitled'}</span>
 								<code class="scene-row-shots">{s.shots.length} shot{s.shots.length !== 1 ? 's' : ''}</code>
+								{#if doc}
+									<code class="rev-stamp" title="Revision {doc.flowVersion} · flow.v{doc.flowVersion}.json">REV {doc.flowVersion}</code>
+								{/if}
 							</div>
 							<p class="scene-row-prose">{s.prose}</p>
 							{#if s.shots.length}
@@ -368,9 +374,31 @@
 		<section class="stage hot" class:compact-stage={compact}>
 			<h3 class="block-heading">
 				⑤ STEP CHAIN
-				<span class="muted">· {doc?.flowVersion ?? '—'}</span>
+				{#if doc}
+					<!-- D2 · slate take line: the run reads as a TAKE on a film
+					     slate — hero numeral + frames/runtime cells + doc chip +
+					     a RETAKE stamp when this doc came from a C11 re-run.
+					     All values from the existing engine/doc props. -->
+					<span class="slate-cells">
+						<span class="slate-take" title="Take {doc.flowVersion} · flow.v{doc.flowVersion}.json">TAKE <b>{doc.flowVersion}</b></span>
+						{#if engine}
+							<span class="slate-cell" title="S4-verified total frames · 24 fps">{engine.verify.total_frames}f · 24fps · {(engine.verify.total_frames / 24).toFixed(1)}s</span>
+						{/if}
+						<code class="slate-doc">flow.v{doc.flowVersion}</code>
+						{#if doc.rerunFrom}
+							<code class="slate-retake" title={`C11 re-run from ${doc.rerunFrom} — upstream outputs locked · S5 re-verified · persisted as v${doc.flowVersion}`}>↻ RETAKE {doc.rerunFrom}</code>
+						{/if}
+					</span>
+				{:else}
+					<span class="muted">· —</span>
+				{/if}
 				{#if runDurationLabel}
 					<span class="muted run-duration" title="Last S0→S5 run duration">· {runDurationLabel}</span>
+				{/if}
+				{#if running}
+					<!-- D4 · leader ring: the run in flight reads as a film-leader
+					     countdown sweep, not a generic spinner. -->
+					<span class="leader-ring" aria-hidden="true"></span>
 				{/if}
 			</h3>
 			{#if compact}
@@ -381,6 +409,7 @@
 								class="step-pip {row.stateClass} {runError ? 'step-fail' : ''}"
 								role="listitem"
 								title="{row.name} {row.ver} · {row.src}">
+								<span class="tally {runError ? 'step-fail' : row.stateClass}" aria-hidden="true"></span>
 								<code class="step-pip-name">{row.name}</code>
 								<span class="step-pip-state">{row.state}</span>
 								{#if onRerunFrom}
@@ -408,6 +437,7 @@
 					{#if stepChain}
 						{#each stepChain as row}
 							<li class="step {row.stateClass} {runError ? 'step-fail' : ''}">
+								<span class="tally {runError ? 'step-fail' : row.stateClass}" aria-hidden="true"></span>
 								<code class="step-name">{row.name}</code>
 								<span class="step-src">{row.src}</span>
 								<span class="step-state">{row.state}</span>
@@ -747,12 +777,32 @@
 	}
 	.step {
 		display: grid;
-		grid-template-columns: 72px 1fr auto auto;
+		/* D3: the tally lamp is the first column (auto → collapses to the
+		   8px dot); the state border-left it replaces is gone. */
+		grid-template-columns: auto 72px 1fr auto auto;
 		gap: 8px;
 		align-items: center;
 		padding: 6px 8px;
 		border: 1px solid var(--border-color);
 		border-radius: 4px;
+	}
+	/* D3 · tally lamps — step state as camera light: green PRINT (ok),
+	   dim amber stub (mut), red fail. Same information the border-left
+	   stripe carried, new grammar. */
+	.tally {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--border-color);
+	}
+	.tally.step-ok {
+		background: var(--success-color, #22c55e);
+		box-shadow: 0 0 6px color-mix(in srgb, var(--success-color, #22c55e) 55%, transparent);
+	}
+	.tally.step-mut { background: var(--warning-color, #fbbf24); opacity: 0.55; }
+	.tally.step-fail {
+		background: var(--danger-color, #ef4444);
+		box-shadow: 0 0 6px color-mix(in srgb, var(--danger-color, #ef4444) 55%, transparent);
 	}
 	/* C11: the per-step "↻ re-run from here" affordance — a small icon
 	   button at each ⑤ row's end. Muted at rest (hairline on hover),
@@ -800,9 +850,79 @@
 	}
 	.step-src { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.step-name, .step-state { color: var(--text-primary); }
-	.step-ok { border-left: 3px solid var(--success-color, #22c55e); }
-	.step-mut { border-left: 3px solid var(--border-color); }
-	.step-fail { border-left: 3px solid var(--danger-color, #ef4444); }
+	/* D3: state lives in the tally lamp now — the border-left stripes are
+	   retired (ok / mut / fail map 1:1 to the lamp colors above). */
+
+	/* D2 · slate take line — the ⑤ heading's run meta reads as slate cells:
+	   TAKE hero numeral · frames/runtime · doc chip · RETAKE stamp. */
+	.slate-cells {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		margin-left: 4px;
+		min-width: 0;
+	}
+	.slate-take {
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.14em;
+		color: var(--text-muted);
+	}
+	.slate-take b {
+		font-size: 17px;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		color: var(--accent-color);
+		margin-left: 4px;
+	}
+	.slate-cell {
+		font-family: var(--font-mono, monospace);
+		font-size: 9.5px;
+		color: var(--text-secondary);
+		border-left: 1px solid var(--border-color);
+		padding-left: 10px;
+		white-space: nowrap;
+	}
+	.slate-doc {
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		color: var(--text-muted);
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		padding: 2px 6px;
+	}
+	.slate-retake {
+		font-family: var(--font-mono, monospace);
+		font-size: 8.5px;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		color: var(--accent-color);
+		border: 1.5px solid color-mix(in srgb, var(--accent-color) 55%, transparent);
+		border-radius: 3px;
+		padding: 2px 6px;
+		transform: rotate(-2deg);
+	}
+
+	/* D4 · leader ring — a film-leader countdown sweep for the run in
+	   flight. One revolution ≈ 1.6s; reduced-motion users get a static
+	   three-quarter ring (still reads as "in flight"). */
+	.leader-ring {
+		width: 22px;
+		height: 22px;
+		flex: none;
+		border-radius: 50%;
+		background: conic-gradient(var(--accent-color) 0 270deg, transparent 270deg 360deg);
+		-webkit-mask: radial-gradient(circle, transparent 52%, #000 54%);
+		mask: radial-gradient(circle, transparent 52%, #000 54%);
+		animation: leader-sweep 1.6s linear infinite;
+	}
+	@keyframes leader-sweep {
+		to { transform: rotate(360deg); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.leader-ring { animation: none; }
+	}
 
 	/* B6: the single slim action row — icon chips (≈28px, 9px mono label,
 	   hairline border). The destructive edge is the regenerate chip (danger
@@ -1261,9 +1381,9 @@
 		background: var(--bg-elevated);
 		min-width: 0;
 	}
-	.step-pip.step-ok { border-top-color: var(--success-color, #22c55e); }
-	.step-pip.step-mut { border-top-color: var(--border-color); }
-	.step-pip.step-fail { border-top-color: var(--danger-color, #ef4444); }
+	/* D3: the pip's state lives in its tally lamp — the border-top color
+	   stripes are retired (same ok/mut/fail mapping as the full rows). */
+	.step-pip .tally { width: 7px; height: 7px; }
 	.step-pip-name {
 		font-family: var(--font-mono, monospace);
 		font-size: 10px;
@@ -1276,4 +1396,49 @@
 		color: var(--text-muted);
 	}
 	.step-pip.step-fail .step-pip-state { color: var(--danger-color, #ef4444); }
+
+	/* D5 · script-page grammar — the novel reads as a screenplay page:
+	   slugline titles (mono, uppercase), a reading-column prose measure,
+	   marginalia beat ticks, and a REV stamp carrying the doc version.
+	   Applies to BOTH the full-mode scene rows and the compact cards. */
+	.scene-row-title,
+	.scene-card-title {
+		font-family: var(--font-mono, monospace);
+		font-size: 11.5px;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+	.scene-row-prose,
+	.scene-card-prose {
+		line-height: 1.7;
+		max-width: 68ch;
+	}
+	.scene-beat-num {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 2px;
+		color: var(--accent-color, var(--text-secondary));
+		opacity: 0.9;
+	}
+	.scene-beat-num::after {
+		content: '';
+		width: 10px;
+		height: 1.5px;
+		border-radius: 1px;
+		background: linear-gradient(90deg, var(--accent-color), transparent);
+	}
+	.rev-stamp {
+		margin-left: auto;
+		flex: none;
+		font-family: var(--font-mono, monospace);
+		font-size: 8.5px;
+		font-weight: 700;
+		letter-spacing: 0.12em;
+		color: var(--accent-color);
+		border: 1.5px solid color-mix(in srgb, var(--accent-color) 55%, transparent);
+		border-radius: 3px;
+		padding: 2px 6px;
+		transform: rotate(-2deg);
+	}
 </style>

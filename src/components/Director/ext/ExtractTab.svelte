@@ -37,6 +37,45 @@
 		effect: 'lane-blue',
 	};
 
+	// D6 · cue-sheet grammar: additive department / gel / lens / motion
+	// chips parsed from the section's OWN text. Pure helpers — the full
+	// prompt/source text is never modified (chips are chrome, not data).
+	const DEPT_OF: Record<string, string> = {
+		scene: 'SC',
+		camera: 'CAM',
+		lighting: 'LGT',
+		motion: 'MOT',
+		transition: 'TRN',
+		effect: 'FX',
+	};
+	/** Kelvin gel chip: luminance encodes temperature (warm = bright),
+	 *  using the text ladder — no new color family. */
+	function gelOf(text: string): { k: number; lum: string } | null {
+		const m = text.match(/(\d{3,4})\s*K\b/);
+		if (!m) return null;
+		const k = Number.parseInt(m[1], 10);
+		const lum = k <= 3500 ? 'gel-warm' : k <= 5000 ? 'gel-mid' : 'gel-cool';
+		return { k, lum };
+	}
+	function lensOf(text: string): string | null {
+		const m = text.match(/(\d{2,3})\s*mm\b/);
+		return m ? `${m[1]}mm` : null;
+	}
+	const MOT_GLYPH: Record<string, string> = {
+		push: '→',
+		pull: '←',
+		pan: '↔',
+		tilt: '↕',
+		hold: '■',
+		drift: '~',
+	};
+	function motionOf(text: string): { glyph: string; speed: string | null } | null {
+		const m = text.trim().toLowerCase().match(/^(push|pull|pan|tilt|hold|drift)\b/);
+		if (!m) return null;
+		const sp = text.toLowerCase().match(/\b(slow|med|medium|fast)\b/);
+		return { glyph: MOT_GLYPH[m[1]], speed: sp ? (sp[1] === 'medium' ? 'med' : sp[1]) : null };
+	}
+
 	// Mirrors the parent's isEdited (also used there by copyExtract /
 	// dirtyCount): a section is "dirty" when its prompt ≠ source.
 	const isEdited = (s: LocalSection) => s.prompt.trim() !== s.source.trim();
@@ -327,7 +366,34 @@
 	     the warning lane when > 0). Copy controls fold into a Copy ▾ menu
 	     (existing handlers); Regenerate stays standalone — the only
 	     destructive edge, with the fixed copy naming it. -->
-	<div class="extract-head">
+	<!-- D6 · cue-sheet chips: department + Kelvin gel + lens + motion vector,
+     parsed from the section's own text. Additive chrome — the full prompt
+     below is untouched. Shared by the localExtract and legacy paths. -->
+{#snippet cueChips(s: { tag: string; prompt: string })}
+	{#if DEPT_OF[s.tag]}
+		<span class="dept-chip">{DEPT_OF[s.tag]}</span>
+	{/if}
+	{#if s.tag === 'lighting'}
+		{@const gel = gelOf(s.prompt)}
+		{#if gel}
+			<span class="gel-chip" title="Colour temperature — dot luminance encodes Kelvin (warm = bright)">
+				<span class="gel-dot {gel.lum}"></span>{gel.k}K
+			</span>
+		{/if}
+	{/if}
+	{#if s.tag === 'camera'}
+		{@const lens = lensOf(s.prompt)}
+		{#if lens}<span class="lens-chip">{lens}</span>{/if}
+	{/if}
+	{#if s.tag === 'motion'}
+		{@const mot = motionOf(s.prompt)}
+		{#if mot}
+			<span class="mot-chip"><span class="mot-vec">{mot.glyph}</span>{#if mot.speed}<span class="mot-speed">{mot.speed}</span>{/if}</span>
+		{/if}
+	{/if}
+{/snippet}
+
+<div class="extract-head">
 		<span class="head-meta" title={`${sessionName} · ${extractPipeCount} shot pipe(s)`}>v{doc.flowVersion} · {localExtract.length}§ · {pipeCount} pipes · <span class="head-edited" class:edited={dirtyCount > 0}>{dirtyCount} edited</span></span>
 		<div class="extract-head-btns">
 			{#if copyMenuOpen}
@@ -469,6 +535,7 @@
 									<article class="extract-block" class:dirty={edited} data-pipe={s.pipeIndex}>
 										<header class="extract-meta">
 											<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}{s.tag === 'scene' ? ` · arc ${s.occurrence + 1}` : ''}</span>
+											{@render cueChips(s)}
 											<code class="range">{s.range}</code>
 											{#if edited}
 												<span class="dirty-mark" title="edited">●</span>
@@ -519,6 +586,7 @@
 			<article class="extract-block">
 				<header class="extract-meta">
 					<span class="tag-word {TAG_LANE_CLASS[s.tag] ?? 'lane-muted'}">{s.tag}</span>
+					{@render cueChips(s)}
 					<code class="range">{String(s.frameStart).padStart(2, '0')}–{s.frameEnd}</code>
 					<span class="provenance" class:active={s.from.length > 0}>
 						{#if s.from.length > 0}
@@ -985,5 +1053,69 @@
 			transition-duration: 0.001ms !important;
 			transition-timing-function: linear !important;
 		}
+	}
+
+	/* D6 · cue-sheet chips — department / Kelvin gel / lens / motion vector.
+	   Additive chrome in the extract-meta row; the section text is untouched.
+	   The gel dot's luminance comes from the TEXT ladder (warm = bright) —
+	   temperature reads as light, not a new color family. */
+	.dept-chip {
+		font-family: var(--font-mono, monospace);
+		font-size: 8px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		color: var(--text-secondary);
+		border: 1px solid var(--border-color);
+		border-radius: 3px;
+		padding: 1.5px 5px;
+		background: var(--bg-tertiary);
+	}
+	.gel-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-secondary);
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		padding: 1.5px 6px;
+		background: var(--bg-tertiary);
+	}
+	.gel-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		border: 1px solid var(--border-color);
+	}
+	.gel-dot.gel-warm { background: var(--text-primary); }
+	.gel-dot.gel-mid { background: var(--text-secondary); }
+	.gel-dot.gel-cool { background: var(--text-muted); }
+	.lens-chip {
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--accent-color);
+		border: 1px solid color-mix(in srgb, var(--accent-color) 40%, transparent);
+		background: var(--accent-bg);
+		border-radius: 4px;
+		padding: 1.5px 6px;
+	}
+	.mot-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		font-family: var(--font-mono, monospace);
+		font-size: 9px;
+		font-weight: 600;
+		color: var(--text-secondary);
+	}
+	.mot-vec { font-weight: 700; color: var(--text-primary); }
+	.mot-speed {
+		font-size: 8px;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: var(--text-muted);
 	}
 </style>
