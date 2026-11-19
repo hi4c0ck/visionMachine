@@ -9,7 +9,7 @@
 
 use crate::generation::video_flow::config::MaterializeParams;
 use crate::generation::video_flow::error::{FlowError, FlowResult};
-use crate::generation::video_flow::plan::{PlanPipe, StructuredVideoPlan};
+use crate::generation::video_flow::plan::{PlanPipe, PlanSection, StructuredVideoPlan};
 use crate::models::composer::{GlobalElement, Pipe, Segment, TagElement, TagType, TimelineElement};
 
 /// A video-engine tag's numeric value on a composer `TagElement`. Text-only
@@ -55,8 +55,59 @@ fn tag_spec_json(t: &TagType) -> serde_json::Value {
     }
 }
 
-/// Lower one plan pipe into a composer `Pipe` with a global style element and a
-/// timeline element whose segments are the plan's sections.
+/// Item 6: group sections into ZONES by STRICT frame-range overlap
+/// (union-find). The engine emits one S3 sub-slice window per beat: the
+/// Scene/Camera/Lighting/Effect arcs share the slice range, the Motion move
+/// is a bounded sub-range of it, and the transition cut-ins overlap the
+/// first/last slice. Strict overlap (NOT touch) recovers those windows:
+/// adjacent slices tile the shot (s1 == next s0) and must stay SEPARATE
+/// zones — merging on touch would rebuild the one-long-timeline bug.
+/// A zone's range = the union of its members; every tag keeps its own
+/// sub-range inside it. Deterministic: members sorted by (start, emission
+/// order), zones sorted by start. Returns (start, end, member indices).
+fn cluster_zones(sections: &[PlanSection]) -> Vec<(u32, u32, Vec<usize>)> {
+    let n = sections.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let a = &sections[i];
+            let b = &sections[j];
+            // STRICT overlap: touching boundaries do not merge zones.
+            if a.frame_start < b.frame_end && b.frame_start < a.frame_end {
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    parent[rj] = ri;
+                }
+            }
+        }
+    }
+    let mut groups: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    let mut zones: Vec<(u32, u32, Vec<usize>)> = groups
+        .into_values()
+        .map(|mut members| {
+            members.sort_by_key(|&i| (sections[i].frame_start, i));
+            let start = members.iter().map(|&i| sections[i].frame_start).min().unwrap_or(0);
+            let end = members.iter().map(|&i| sections[i].frame_end).max().unwrap_or(0);
+            (start, end, members)
+        })
+        .collect();
+    zones.sort_by_key(|z| (z.0, z.1));
+    zones
+}
+
+/// Lower one plan pipe into a composer `Pipe` with a global style element and
+/// a timeline element whose segments are the plan's section ZONES (item 6).
 fn plan_pipe_to_composer(pp: &PlanPipe, index: usize, cfg: &MaterializeParams) -> Pipe {
     let mut pipe = Pipe::new(&pp.title, pipe_length(pp, cfg));
     pipe.id = uuid::Uuid::new_v4().to_string();
@@ -74,25 +125,26 @@ fn plan_pipe_to_composer(pp: &PlanPipe, index: usize, cfg: &MaterializeParams) -
     global.prompt = Some(pp.global_style.clone());
     pipe.elements.push(crate::models::composer::PipeElement::Global(global));
 
-    // ONE concrete zone per pipe = the whole shot [0, pipe_length]. Every
-    // section tag NESTS inside it at its own sub-range: the story/camera
-    // arcs keep their S3 sub-slice windows, the sustained meta (motion /
-    // lighting / effect) fill the zone, and the transition cut-in is a short
-    // leading window. A sub-tag can never exceed the zone's concrete
-    // boundary (the composer invariant). No more one-hidden-segment-per-tag.
-    let len = pipe_length(pp, cfg);
+    // ONE ZONE PER WINDOW (item 6): the nested <timezone><tag1/><tag2/>
+    // structure the prompt engine compiles into per-zone <segments length>.
+    // The old flat single-zone [0, pipe_len] collapsed every slice into one
+    // long timeline block, losing the windowed story/camera arcs. Tags keep
+    // their own sub-ranges and can never exceed their zone's boundary.
     let mut timeline = TimelineElement::new();
-    let mut zone = Segment::new(0, len);
-    for s in &pp.sections {
-        let tag_type = s.tag.to_tag_type();
-        let mut tag = TagElement::new(tag_type.clone(), s.frame_start, s.frame_end, TAG_VALUE);
-        tag.prompt = Some(s.prompt.clone());
-        // Carries the frontend's TAG_SPECIFICATIONS color/name so the pill
-        // renders in its lane color (not the gray #888 fallback).
-        tag.spec = Some(tag_spec_json(&tag_type));
-        zone.tags.push(tag);
+    for (zstart, zend, members) in cluster_zones(&pp.sections) {
+        let mut zone = Segment::new(zstart, zend);
+        for &i in &members {
+            let s = &pp.sections[i];
+            let tag_type = s.tag.to_tag_type();
+            let mut tag = TagElement::new(tag_type.clone(), s.frame_start, s.frame_end, TAG_VALUE);
+            tag.prompt = Some(s.prompt.clone());
+            // Carries the frontend's TAG_SPECIFICATIONS color/name so the pill
+            // renders in its lane color (not the gray #888 fallback).
+            tag.spec = Some(tag_spec_json(&tag_type));
+            zone.tags.push(tag);
+        }
+        timeline.segments.push(zone);
     }
-    timeline.segments.push(zone);
     pipe.elements.push(crate::models::composer::PipeElement::Timeline(timeline));
 
     pipe
@@ -188,23 +240,27 @@ mod tests {
 
         let (g, t) = global_and_timeline(p);
         assert_eq!(g.prompt.as_deref(), Some("cinematic, warm golden hour"));
-        // ONE concrete zone per pipe [0, pipe_length]; every section tag nests
-        // inside it at its own sub-range (no hidden one-segment-per-tag hack).
-        assert_eq!(t.segments.len(), 1, "one concrete zone per pipe");
-        let zone = &t.segments[0];
-        assert_eq!((zone.frame_start, zone.frame_end), (0, 240), "zone = the whole pipe");
-        assert_eq!(zone.tags.len(), 2, "both section tags nest inside the zone");
-        // Sub-tags keep their own video-engine type + prompt + sub-range, and
-        // never exceed the zone's concrete boundary.
-        assert_eq!(zone.tags[0].tag, TagType::Camera);
-        assert_eq!(zone.tags[0].prompt.as_deref(), Some("wide tracking shot"));
-        assert_eq!((zone.tags[0].frame_start, zone.tags[0].frame_end), (0, 24), "camera nests at its sub-range");
-        assert_eq!(zone.tags[1].tag, TagType::Lighting);
-        assert_eq!((zone.tags[1].frame_start, zone.tags[1].frame_end), (24, 48), "lighting nests at its sub-range");
-        assert!(
-            zone.tags.iter().all(|tg| tg.frame_start >= zone.frame_start && tg.frame_end <= zone.frame_end),
-            "no sub-tag exceeds the zone boundary"
-        );
+        // Item 6: the fixture's two sections TOUCH at frame 24 (camera
+        // [0,24], lighting [24,48]) — touching windows are SEPARATE zones,
+        // each carrying its own tag at its own range.
+        assert_eq!(t.segments.len(), 2, "touching windows stay separate zones");
+        let z0 = &t.segments[0];
+        let z1 = &t.segments[1];
+        assert_eq!((z0.frame_start, z0.frame_end), (0, 24));
+        assert_eq!((z1.frame_start, z1.frame_end), (24, 48));
+        assert_eq!(z0.tags.len(), 1);
+        assert_eq!(z1.tags.len(), 1);
+        assert_eq!(z0.tags[0].tag, TagType::Camera);
+        assert_eq!(z0.tags[0].prompt.as_deref(), Some("wide tracking shot"));
+        assert_eq!((z0.tags[0].frame_start, z0.tags[0].frame_end), (0, 24));
+        assert_eq!(z1.tags[0].tag, TagType::Lighting);
+        assert_eq!((z1.tags[0].frame_start, z1.tags[0].frame_end), (24, 48));
+        for zone in &t.segments {
+            assert!(
+                zone.tags.iter().all(|tg| tg.frame_start >= zone.frame_start && tg.frame_end <= zone.frame_end),
+                "no sub-tag exceeds its zone boundary"
+            );
+        }
     }
 
     /// Every materialized tag carries its frontend `TAG_SPECIFICATIONS` entry
@@ -214,18 +270,15 @@ mod tests {
     fn materialized_tags_carry_their_lane_color_spec() {
         let pipes = materialize_pipes(&plan(), &cfg()).unwrap();
         let (_, t) = global_and_timeline(&pipes[0]);
-        // All section tags nest inside the single zone (segments[0]); each must
-        // carry its lane color.
-        let zone = &t.segments[0];
-        let cam_color = zone
-            .tags
+        // Item 6: tags live in their own window zones — search across zones.
+        let all_tags: Vec<_> = t.segments.iter().flat_map(|z| z.tags.iter()).collect();
+        let cam_color = all_tags
             .iter()
             .find(|tg| tg.tag == TagType::Camera)
             .and_then(|tg| tg.spec.as_ref())
             .and_then(|s| s.get("color"))
             .and_then(|v| v.as_str());
-        let lit_color = zone
-            .tags
+        let lit_color = all_tags
             .iter()
             .find(|tg| tg.tag == TagType::Lighting)
             .and_then(|tg| tg.spec.as_ref())
@@ -327,5 +380,123 @@ mod tests {
         let rb = (&b[0].name, &b[0].media_mode, b[0].length_frames, b[0].elements.len());
         assert_eq!(ra, rb);
         let _ = FlowConfig::default_flow();
+    }
+
+    // ── Item 6: window zones (the nested <timezone> structure) ──────────────
+
+    fn plan_with(sections: Vec<(VideoTag, u32, u32, &str)>) -> StructuredVideoPlan {
+        use crate::generation::video_flow::plan::{PlanPipe, PlanSection};
+        StructuredVideoPlan {
+            flow_version: 1,
+            pipes: vec![PlanPipe {
+                index: 0,
+                title: "zones".into(),
+                global_style: "style".into(),
+                media_mode: "text".into(),
+                sections: sections
+                    .into_iter()
+                    .map(|(tag, s, e, p)| PlanSection {
+                        tag,
+                        frame_start: s,
+                        frame_end: e,
+                        prompt: p.into(),
+                        from: Vec::new(),
+                    })
+                    .collect(),
+                length_frames: 0,
+            }],
+        }
+    }
+
+    /// Overlapping tags (the S3 slice pattern: Scene + Camera share the
+    /// window, Motion is a bounded sub-range) nest in ONE zone.
+    #[test]
+    fn overlapping_tags_share_one_zone() {
+        let p = plan_with(vec![
+            (VideoTag::Scene, 0, 48, "beat one"),
+            (VideoTag::Camera, 0, 48, "wide"),
+            (VideoTag::Motion, 0, 36, "dolly in"),
+        ]);
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        let (_, t) = global_and_timeline(&pipes[0]);
+        assert_eq!(t.segments.len(), 1, "one window = one zone");
+        let z = &t.segments[0];
+        assert_eq!((z.frame_start, z.frame_end), (0, 48), "zone = union of members");
+        assert_eq!(z.tags.len(), 3);
+        // The bounded motion keeps its own sub-range inside the zone
+        // (VideoTag::Motion maps to the composer's Zoom lane).
+        let motion = z.tags.iter().find(|tg| tg.tag == TagType::Zoom).unwrap();
+        assert_eq!((motion.frame_start, motion.frame_end), (0, 36));
+    }
+
+    /// Tiling slices (touching at the boundary) stay SEPARATE zones — the
+    /// one-long-timeline bug must not rebuild itself through touch-merging.
+    #[test]
+    fn tiling_slices_stay_separate_zones() {
+        let p = plan_with(vec![
+            (VideoTag::Scene, 0, 48, "beat one"),
+            (VideoTag::Scene, 48, 96, "beat two"),
+            (VideoTag::Camera, 48, 96, "close"),
+        ]);
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        let (_, t) = global_and_timeline(&pipes[0]);
+        assert_eq!(t.segments.len(), 2, "two slices = two zones");
+        assert_eq!((t.segments[0].frame_start, t.segments[0].frame_end), (0, 48));
+        assert_eq!(t.segments[0].tags.len(), 1);
+        assert_eq!((t.segments[1].frame_start, t.segments[1].frame_end), (48, 96));
+        assert_eq!(t.segments[1].tags.len(), 2, "slice 2 carries scene + camera");
+    }
+
+    /// Transition cut-ins overlap the first/last slice and join THAT zone
+    /// (in [0,12] → slice 0; out [84,96] → the last slice).
+    #[test]
+    fn transition_cutins_join_their_slice_zone() {
+        let p = plan_with(vec![
+            (VideoTag::Scene, 0, 48, "beat one"),
+            (VideoTag::Scene, 48, 96, "beat two"),
+            (VideoTag::Transition, 0, 12, "dissolve"),
+            (VideoTag::Transition, 84, 96, "dissolve (out)"),
+        ]);
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        let (_, t) = global_and_timeline(&pipes[0]);
+        assert_eq!(t.segments.len(), 2);
+        assert_eq!(t.segments[0].tags.len(), 2, "slice 0: scene + transition-in");
+        assert_eq!(t.segments[1].tags.len(), 2, "last slice: scene + transition-out");
+        assert!(t.segments[0].tags.iter().any(|tg| tg.tag == TagType::Transition));
+        assert!(t.segments[1].tags.iter().any(|tg| tg.tag == TagType::Transition));
+    }
+
+    /// The no-slice fallback (Scene + base Camera, both full-clip) is ONE
+    /// zone — identical ranges overlap.
+    #[test]
+    fn full_clip_pair_is_one_zone() {
+        let p = plan_with(vec![
+            (VideoTag::Scene, 0, 120, "the whole shot"),
+            (VideoTag::Camera, 0, 120, "static wide"),
+        ]);
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        let (_, t) = global_and_timeline(&pipes[0]);
+        assert_eq!(t.segments.len(), 1);
+        assert_eq!((t.segments[0].frame_start, t.segments[0].frame_end), (0, 120));
+        assert_eq!(t.segments[0].tags.len(), 2);
+    }
+
+    /// Zones are frame-ordered and every tag stays inside its zone, even
+    /// when sections arrive out of order.
+    #[test]
+    fn zones_ordered_and_tags_bounded_with_unsorted_input() {
+        let p = plan_with(vec![
+            (VideoTag::Scene, 48, 96, "beat two"),
+            (VideoTag::Transition, 0, 12, "dissolve"),
+            (VideoTag::Scene, 0, 48, "beat one"),
+            (VideoTag::Camera, 48, 96, "close"),
+        ]);
+        let pipes = materialize_pipes(&p, &cfg()).unwrap();
+        let (_, t) = global_and_timeline(&pipes[0]);
+        assert_eq!(t.segments.len(), 2);
+        assert!(t.segments[0].frame_start < t.segments[1].frame_start, "frame-ordered");
+        for z in &t.segments {
+            assert!(z.tags.iter().all(|tg| tg.frame_start >= z.frame_start && tg.frame_end <= z.frame_end));
+        }
     }
 }

@@ -553,6 +553,26 @@ impl EngineRun {
         let mut pipes: Vec<PlanPipe> = Vec::new();
         let shot_counts: Vec<usize> =
             self.novel.scenes.iter().map(|s| s.shots.len()).collect();
+        // Item 7: the same context-driven dynamics the spec build stamps —
+        // resolved once per run so the move windows below match the speed.
+        let dynamics = {
+            let beat_count: usize = self
+                .novel
+                .scenes
+                .iter()
+                .flat_map(|s| s.shots.iter())
+                .flat_map(|sh| sh.beats.iter())
+                .count();
+            let total_clips: usize = shot_counts.iter().sum();
+            let intent = format!("{} {}", self.novel.film.style, self.novel.film.logline);
+            resolve_dynamics(
+                self.mood.unwrap_or(50),
+                beat_count,
+                total_clips,
+                self.seed.scale.clip_s[0],
+                &intent,
+            )
+        };
 
         // Full-novel meta (user fix): every pipe carries the whole film —
         // logline (the whole idea), world, palette, style — as its global
@@ -789,17 +809,15 @@ impl EngineRun {
                         // "dolly, slow" from claiming a full 5s of motion.
                         if let Some(mc) = state.and_then(|s| s.motion.clone()) {
                             let t = motion_text(&mc);
-                            let slice_len = s1.saturating_sub(s0);
-                            // Move duration by speed: slow = 2s, normal = 1.5s,
-                            // fast = 1s (FRAME_RATE @24). Never longer than
-                            // the slice itself (then it fills it).
-                            let move_f = match mc.speed.as_str() {
-                                "slow" => 48,
-                                "fast" => 24,
-                                _ => 36,
-                            };
-                            let motion_end = (s0 + move_f.min(slice_len)).max(s0 + 1);
-                            add(&mut sections, VideoTag::Motion, &t, s0, motion_end);
+                            // Item 7: the move window comes from the run's
+                            // context-driven dynamics — kinetic runs move
+                            // fast and nearly fill the slice (short hold),
+                            // narrative runs keep the bounded move + long
+                            // hold; kinetic staggers the motion layer off
+                            // the camera window so the layers shift against
+                            // each other instead of locking step.
+                            let (motion_start, motion_end) = dynamics.move_window(s0, s1);
+                            add(&mut sections, VideoTag::Motion, &t, motion_start, motion_end);
                         }
                         // EFFECT event: only where this slice adds an effect.
                         if let Some(efx) = state.and_then(|s| s.effects.clone()) {
@@ -1532,6 +1550,181 @@ fn focal_for_role(camera_role: &str) -> u32 {
     }
 }
 
+/// Item 7: the run's DYNAMICS — resolved from CONTEXT, not the mood band
+/// alone. The old M4 override stamped the cinematic band's `slow` speed on
+/// every shot (10–12s clips, 48f moves, long holds, layers in lockstep), so
+/// even a dramatic trailer read as inert. The energy now comes from:
+///   - INFO DENSITY: story beats per second of the user's run scale
+///     (scenes × shots × clip — the adjustable goal length). A lot of
+///     narrative packed into a short goal → kinetic; a sparse goal →
+///     narrative pacing.
+///   - INTENT: action words in the film's style/logline bump the energy one
+///     level; calm words drop it one level.
+///   - MOOD: the subtle band (≤33) stays restrained (caps at balanced); a
+///     high mood NO LONGER forces slow — it rides the context.
+/// Pure + deterministic; unit-tested below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dynamics {
+    /// Closed speed vocabulary stamped on the shot's MotionConcern.
+    pub speed: &'static str,
+    /// Base move duration in frames (@24fps): slow 48 / normal 36 / fast 24.
+    pub move_f: u32,
+    /// Fraction of a slice left as HOLD after the move (0.5 = half the
+    /// slice holds; 0.15 = the move nearly fills it — kinetic).
+    pub hold_pct: u32,
+    /// Stagger the motion window off the camera window so the layers shift
+    /// against each other instead of moving in lockstep (kinetic only).
+    pub stagger: bool,
+}
+
+const ACTION_WORDS: [&str; 10] = [
+    "action", "chase", "thriller", "fight", "escape", "explosion", "dramatic",
+    "combat", "heist", "race",
+];
+const CALM_WORDS: [&str; 7] = [
+    "quiet", "meditat", "portrait", "landscape", "documentary", "still", "slow",
+];
+
+/// Resolve the run dynamics. `beat_count` = total story beats across all
+/// shots; `total_clips` × `clip_s` = the run's goal seconds (the user's
+/// scale); `intent_text` = the film style + logline (lowercased by caller
+/// or here — matched case-insensitively).
+pub fn resolve_dynamics(
+    mood: u8,
+    beat_count: usize,
+    total_clips: usize,
+    clip_s: u32,
+    intent_text: &str,
+) -> Dynamics {
+    let goal_s = (total_clips.max(1) as f64) * (clip_s.max(1) as f64);
+    let density = beat_count as f64 / goal_s;
+    // 0 = narrative, 1 = balanced, 2 = kinetic.
+    let mut level: i32 = if density > 0.6 {
+        2
+    } else if density >= 0.3 {
+        1
+    } else {
+        0
+    };
+    let lower = intent_text.to_lowercase();
+    let action = ACTION_WORDS.iter().any(|w| lower.contains(w));
+    let calm = CALM_WORDS.iter().any(|w| lower.contains(w));
+    if action && !calm {
+        level += 1;
+    } else if calm && !action {
+        level -= 1;
+    }
+    // The subtle band is restrained by definition — never kinetic.
+    if mood <= 33 {
+        level = level.min(1);
+    }
+    match level.clamp(0, 2) {
+        0 => Dynamics { speed: "slow", move_f: 48, hold_pct: 50, stagger: false },
+        1 => Dynamics { speed: "normal", move_f: 36, hold_pct: 35, stagger: false },
+        _ => Dynamics { speed: "fast", move_f: 24, hold_pct: 15, stagger: true },
+    }
+}
+
+impl Dynamics {
+    /// The move window inside a slice [s0, s1): the move runs for at least
+    /// `move_f` frames and at most the slice minus its hold budget; kinetic
+    /// stagger offsets the start so the motion layer shifts against the
+    /// camera layer (which owns the full slice window).
+    pub fn move_window(&self, s0: u32, s1: u32) -> (u32, u32) {
+        let slice_len = s1.saturating_sub(s0);
+        if slice_len == 0 {
+            return (s0, s0);
+        }
+        let hold_f = slice_len * self.hold_pct / 100;
+        let move_len = self.move_f.max(slice_len.saturating_sub(hold_f)).min(slice_len);
+        let offset = if self.stagger { 6.min(slice_len.saturating_sub(move_len).max(0)) } else { 0 };
+        let start = s0 + offset;
+        let end = (start + move_len).min(s1).max(start + 1);
+        (start, end)
+    }
+}
+
+#[cfg(test)]
+mod dynamics_tests {
+    use super::{resolve_dynamics, Dynamics};
+
+    /// Sparse info over a long goal → narrative pacing (slow, long hold).
+    #[test]
+    fn sparse_goal_is_narrative() {
+        // 3 clips × 10s = 30s goal, 3 beats → 0.1 beats/s.
+        let d = resolve_dynamics(50, 3, 3, 10, "cinematic natural light");
+        assert_eq!(d.speed, "slow");
+        assert_eq!(d.hold_pct, 50);
+        assert!(!d.stagger);
+    }
+
+    /// Dense info packed into a short goal → kinetic (fast, short hold,
+    /// staggered layers) — the trailer case.
+    #[test]
+    fn dense_goal_is_kinetic() {
+        // 8 clips × 4s = 32s goal, 32 beats → 1.0 beats/s.
+        let d = resolve_dynamics(50, 32, 8, 4, "cinematic natural light");
+        assert_eq!(d.speed, "fast");
+        assert_eq!(d.hold_pct, 15);
+        assert!(d.stagger);
+    }
+
+    /// A HIGH mood no longer forces slow: dense + dramatic reads kinetic
+    /// even at mood 100 (the old cinematic band stamped slow crane on all).
+    #[test]
+    fn high_mood_dense_action_is_kinetic_not_slow() {
+        let d = resolve_dynamics(100, 32, 8, 4, "dramatic chase thriller");
+        assert_eq!(d.speed, "fast", "high mood must not force inertia");
+        assert!(d.stagger);
+    }
+
+    /// Action intent bumps one level; calm intent drops one level.
+    #[test]
+    fn intent_words_shift_the_energy() {
+        // Mid density (0.4/s) = balanced baseline.
+        let base = resolve_dynamics(50, 12, 3, 10, "cinematic");
+        assert_eq!(base.speed, "normal");
+        let action = resolve_dynamics(50, 12, 3, 10, "action chase");
+        assert_eq!(action.speed, "fast", "action bumps balanced → kinetic");
+        let calm = resolve_dynamics(50, 12, 3, 10, "quiet portrait");
+        assert_eq!(calm.speed, "slow", "calm drops balanced → narrative");
+    }
+
+    /// The subtle band (mood ≤33) stays restrained — never kinetic.
+    #[test]
+    fn subtle_band_caps_at_balanced() {
+        let d = resolve_dynamics(20, 32, 8, 4, "action chase");
+        assert_eq!(d.speed, "normal", "subtle caps at balanced");
+        assert!(!d.stagger);
+    }
+
+    /// Move windows: narrative keeps a bounded move + hold; kinetic nearly
+    /// fills the slice and staggers off the camera window.
+    #[test]
+    fn move_windows_match_the_energy() {
+        let narrative = Dynamics { speed: "slow", move_f: 48, hold_pct: 50, stagger: false };
+        let (s, e) = narrative.move_window(0, 96);
+        assert_eq!((s, e), (0, 48), "half the slice moves, half holds");
+
+        let kinetic = Dynamics { speed: "fast", move_f: 24, hold_pct: 15, stagger: true };
+        let (s, e) = kinetic.move_window(0, 96);
+        // hold = 14f → move ≥ 82f, stagger offset 6 → [6, 88).
+        assert_eq!(s, 6, "kinetic staggers off the camera window");
+        assert!(e - s >= 80, "kinetic move nearly fills the slice, got {}..{}", s, e);
+        assert!(e <= 96, "never exceeds the slice");
+    }
+
+    /// Tiny slices stay valid (end > start, inside the slice).
+    #[test]
+    fn move_window_degenerate_slices() {
+        let k = Dynamics { speed: "fast", move_f: 24, hold_pct: 15, stagger: true };
+        let (s, e) = k.move_window(10, 12);
+        assert!(e > s && s >= 10 && e <= 12);
+        let (s, e) = k.move_window(10, 10);
+        assert_eq!((s, e), (10, 10), "empty slice → empty window");
+    }
+}
+
 fn shot_motion(g: usize) -> MotionConcern {
     let moves = ["static", "pan", "track", "dolly", "static"];
     let speeds = ["normal", "slow", "normal", "slow", "normal"];
@@ -1981,6 +2174,28 @@ fn build_specs_and_timeline(
         Some(p) => p.clip_range[0].clamp(4, 10),
         None => seed.scale.clip_s[0].clamp(4, 10),
     };
+    // Item 7: context-driven dynamics — info density (beats per goal-second
+    // of the user's scale) + intent words steer the energy; the mood band
+    // only caps the subtle end. Replaces the band's uniform speed stamp.
+    let dynamics = {
+        let beat_count: usize = novel
+            .scenes
+            .iter()
+            .flat_map(|s| s.shots.iter())
+            .flat_map(|sh| sh.beats.iter())
+            .count();
+        let total_clips: usize = novel.scenes.iter().map(|s| s.shots.len()).sum();
+        let intent = format!("{} {}", novel.film.style, novel.film.logline);
+        // The profile carries no raw mood value — map the band back to its
+        // representative slider value (subtle ≤33 caps the energy).
+        let mood_val = match mood {
+            Some(p) if p.effect_count == 0 => 0,
+            Some(p) if p.effect_count == 1 => 50,
+            Some(_) => 100,
+            None => 50,
+        };
+        resolve_dynamics(mood_val, beat_count, total_clips, clip, &intent)
+    };
     // M4: transitions from the band's closed pair — [0] = the first shot's
     // in, [1] = every other in + every out. `None` = the pre-M4 defaults
     // (first hard_cut, rest crossfade, out crossfade).
@@ -2063,16 +2278,17 @@ fn build_specs_and_timeline(
                 },
             };
             // M4: the mood band OVERRIDES the deterministic defaults — the
-            // shot's base move/speed come from the band (with the band's
-            // `camera_move` standing in when its base motion is static, so a
-            // static band still carries a closed camera move), and the shot
-            // effects start as the scene's mood-scaled `effects_base`.
+            // shot's base MOVE comes from the band (with the band's
+            // `camera_move` standing in when its base motion is static), but
+            // the SPEED now comes from the context-driven dynamics (item 7):
+            // a dense/action run reads kinetic even at a high mood, instead
+            // of the band's uniform slow crane inertia.
             if let Some(p) = mood {
                 let move_ = if p.motion == "static" { p.camera_move } else { p.motion };
                 concerns.motion = MotionConcern {
                     r#move: move_.to_string(),
                     zoom: "static".into(),
-                    speed: p.speed.to_string(),
+                    speed: dynamics.speed.to_string(),
                 };
                 // Shots inherit the scene's effects_base as their own
                 // effects (the delta form stays empty; the S4 merge
@@ -2640,9 +2856,10 @@ mod seed_tests {
         let pipes = materialize_pipes(&plan, &cfg.materialize).expect("engine plan materializes");
         assert_eq!(pipes.len(), total_shots, "one composer pipe per shot");
 
-        // Each materialized pipe lowers its concrete concern sections into ONE
-        // zone, whose sub-tags are real concrete text (>3 chars) and all nest
-        // inside the zone's concrete boundary.
+        // Item 6: each materialized pipe lowers its sections into WINDOW
+        // ZONES (one per S3 slice; touching slices stay separate). Every
+        // sub-tag is real concrete text (>3 chars) and nests inside its own
+        // zone's boundary; zones are frame-ordered and non-overlapping.
         let p0m = &pipes[0];
         let timeline = p0m
             .elements
@@ -2650,20 +2867,28 @@ mod seed_tests {
             .find(|e| matches!(e, crate::models::composer::PipeElement::Timeline(_)))
             .expect("timeline element present");
         if let crate::models::composer::PipeElement::Timeline(t) = timeline {
-            assert_eq!(t.segments.len(), 1, "one concrete zone per shot pipe");
-            let zone = &t.segments[0];
-            assert!(zone.tags.len() >= 3, "zone nests the concrete concern tags");
-            for tg in &zone.tags {
-                let prompt = tg.prompt.as_deref().unwrap_or("");
+            assert!(!t.segments.is_empty(), "at least one window zone per shot pipe");
+            let total_tags: usize = t.segments.iter().map(|z| z.tags.len()).sum();
+            assert!(total_tags >= 3, "zones nest the concrete concern tags");
+            for w in t.segments.windows(2) {
                 assert!(
-                    prompt.trim().len() > 3,
-                    "section prompt is concrete concern text, got: '{prompt}'"
+                    w[0].frame_end <= w[1].frame_start,
+                    "window zones are frame-ordered and non-overlapping"
                 );
-                assert!(
-                    tg.frame_start >= zone.frame_start && tg.frame_end <= zone.frame_end,
-                    "sub-tag {} nests inside the zone boundary",
-                    tg.tag
-                );
+            }
+            for zone in &t.segments {
+                for tg in &zone.tags {
+                    let prompt = tg.prompt.as_deref().unwrap_or("");
+                    assert!(
+                        prompt.trim().len() > 3,
+                        "section prompt is concrete concern text, got: '{prompt}'"
+                    );
+                    assert!(
+                        tg.frame_start >= zone.frame_start && tg.frame_end <= zone.frame_end,
+                        "sub-tag {} nests inside its zone boundary",
+                        tg.tag
+                    );
+                }
             }
         }
     }
@@ -2757,11 +2982,15 @@ mod seed_tests {
         assert_eq!((lts[1].frame_start, lts[1].frame_end), (120, shot_f), "warm close window");
         let mts: Vec<_> = p0.sections.iter().filter(|s| s.tag == VideoTag::Motion).collect();
         assert_eq!(mts.len(), 2, "motion event only where the slice moves");
-        // FINITE moves (speed-bounded, front-loaded): the dolly occupies ~2s
-        // (48f) of its [48,120] slice then holds; the track ~1.5s (36f) of
-        // its [120,192] slice. Neither slabs the whole slice.
-        assert_eq!((mts[0].frame_start, mts[0].frame_end), (48, 96), "develop dolly: 48f move, then hold");
-        assert_eq!((mts[1].frame_start, mts[1].frame_end), (120, 156), "close track: 36f move, then hold");
+        // FINITE moves, context-sized (item 7): this run resolves to
+        // BALANCED dynamics (its beat density over the 3×8s goal sits in
+        // 0.3..0.6 b/s) — each 72f slice keeps a 35% hold (25f), so the move
+        // fills 47f (the 36f base floor raised to slice−hold), then holds.
+        // Neither slabs the whole slice; a dense/action run would resolve
+        // kinetic (fast, 15% hold, staggered) instead of the old uniform
+        // band speed.
+        assert_eq!((mts[0].frame_start, mts[0].frame_end), (48, 95), "develop dolly: 47f move, then 25f hold");
+        assert_eq!((mts[1].frame_start, mts[1].frame_end), (120, 167), "close track: 47f move, then 25f hold");
         // No Effect event in the deterministic seed (effects_base empty) —
         // the genre ambience bed moved to the sustained base in global_style.
         assert!(
