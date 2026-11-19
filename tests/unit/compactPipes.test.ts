@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupStaleUiState, isStaleGroup, pipeTaskId, togglePipeExpanded, groupComposeUiState, stageStatusWord, stageStateClass } from '../../src/lib/compactPipes';
+import { groupStaleUiState, isStaleGroup, pipeTaskId, togglePipeExpanded, groupComposeUiState, stageStatusWord, stageStateClass, fmtElapsed, nextExpandedId } from '../../src/lib/compactPipes';
 
 describe('compact pipe row state', () => {
   it('toggles expansion without mutating the previous state', () => {
@@ -90,5 +90,27 @@ describe('compact pipe row state', () => {
       expect(stageStatusWord('weird')).toBe('weird');
       expect(stageStateClass('weird')).toBeNull();
     });
+  });
+});
+
+describe('item 5: pinned-strip elapsed + single-expand accordion', () => {
+  it('fmtElapsed renders m:ss from Unix ms', () => {
+    const start = 1_000_000;
+    expect(fmtElapsed(start, start + 41_000)).toBe('0:41');
+    expect(fmtElapsed(start, start + 125_000)).toBe('2:05');
+  });
+  it('fmtElapsed: unknown/zero start → empty (pre-migration rows)', () => {
+    expect(fmtElapsed(0, 9_999_999)).toBe('');
+    expect(fmtElapsed(-5, 9_999_999)).toBe('');
+  });
+  it('fmtElapsed clamps a future start to 0:00', () => {
+    expect(fmtElapsed(5_000, 1_000)).toBe('0:00');
+  });
+  it('nextExpandedId: opening a row closes the previous (single-expand)', () => {
+    expect(nextExpandedId('t1', 't2')).toBe('t2');
+    expect(nextExpandedId(null, 't2')).toBe('t2');
+  });
+  it('nextExpandedId: clicking the open row collapses it', () => {
+    expect(nextExpandedId('t2', 't2')).toBeNull();
   });
 });

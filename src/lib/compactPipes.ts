@@ -123,3 +123,18 @@ export function groupComposeUiState(
       return { visible: false, tone: null, label: '', detail: null };
   }
 }
+
+/** Compact "m:ss" elapsed from a Unix-ms start (item 5). 0/unknown start →
+ *  '' (pre-migration rows show no timer). Pure + clock-injected for tests. */
+export function fmtElapsed(startedAtMs: number, nowMs: number): string {
+  if (!startedAtMs || startedAtMs <= 0) return '';
+  const s = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** The single-expand accordion rule (item 5): clicking a row opens it and
+ *  closes whatever was open; clicking the open row closes it. Returns the
+ *  next expanded taskId (null = all collapsed). Pure for unit tests. */
+export function nextExpandedId(currentExpanded: string | null, clicked: string): string | null {
+  return currentExpanded === clicked ? null : clicked;
+}
