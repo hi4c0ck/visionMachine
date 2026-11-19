@@ -3165,42 +3165,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			{:else}
 				<!-- Director badge is the run dot on the tab itself (gap B). -->
 			{/if}
-			<span class="meta-spacer" aria-hidden="true"></span>
-			<!-- Director's-harness tabs (design doc §1): right-aligned so the
-			     active underline points down at the composer body. -->
-			<!-- Phase 4: Scoreboard is stub-only; hide it in production
-			     builds. Keep it in dev for the A/B/critic tooling. -->
-			<div class="harness-tabs" role="tablist" aria-label="Composer">
-				{#each (import.meta.env.DEV
-					? [
-							{ id: 'pipes', label: 'Pipes' },
-							{ id: 'director', label: 'Director' },
-							{ id: 'extract', label: 'Extract' },
-							{ id: 'scoreboard', label: 'Scoreboard' },
-						]
-					: [
-							{ id: 'pipes', label: 'Pipes' },
-							{ id: 'director', label: 'Director' },
-							{ id: 'extract', label: 'Extract' },
-						]) as tab}
-					<button
-						class="harness-tab {composerTab === tab.id ? 'is-active' : ''}"
-						role="tab"
-						aria-selected={composerTab === tab.id}
-						onclick={() => {
-							composerTab = tab.id as DirectorTab;
-							rememberTab(selectedSessionId ?? '', composerTab);
-						}}
-					>
-						{tab.label}
-						<!-- Gap B (design §1 guard): in-flight run stays visible
-						     even when the user sits on another tab of the session. -->
-						{#if tab.id === 'director' && directorRunning}
-							<span class="tab-run-dot" aria-label="run in progress"></span>
-						{/if}
-					</button>
-				{/each}
-			</div>
 		</div>
 	</div>
 	{/if}
@@ -3237,6 +3201,44 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		</div>
 
 		<div class="composer-area">
+			<!-- Attached harness tabs (v0.7.11 redesign): folder tabs sitting
+			     directly on the composer's top edge — Pipes flush with the left
+			     border, Director/Extract flush right. Sticky so they stay put
+			     while the composer scrolls. Phase 4: Scoreboard is stub-only;
+			     hidden in production builds, kept in dev for A/B/critic tooling. -->
+			{#if selectedSession && selectedProject}
+				<div class="harness-tabs" role="tablist" aria-label="Composer">
+					{#each (import.meta.env.DEV
+						? [
+								{ id: 'pipes', label: 'Pipes' },
+								{ id: 'director', label: 'Director' },
+								{ id: 'extract', label: 'Extract' },
+								{ id: 'scoreboard', label: 'Scoreboard' },
+							]
+						: [
+								{ id: 'pipes', label: 'Pipes' },
+								{ id: 'director', label: 'Director' },
+								{ id: 'extract', label: 'Extract' },
+							]) as tab}
+						<button
+							class="harness-tab {composerTab === tab.id ? 'is-active' : ''}"
+							role="tab"
+							aria-selected={composerTab === tab.id}
+							onclick={() => {
+								composerTab = tab.id as DirectorTab;
+								rememberTab(selectedSessionId ?? '', composerTab);
+							}}
+						>
+							{tab.label}
+							<!-- Gap B (design §1 guard): in-flight run stays visible
+							     even when the user sits on another tab of the session. -->
+							{#if tab.id === 'director' && directorRunning}
+								<span class="tab-run-dot" aria-label="run in progress"></span>
+							{/if}
+						</button>
+					{/each}
+				</div>
+			{/if}
 			<!-- PHASE 2 (session-scoped isolation): key the composer/director
 			     subtree on the session so switching sessions DESTROYS and
 			     RECREATES it. Every session-scoped $state (DirectorPanel
@@ -3500,18 +3502,21 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		gap: 16px;
 	}
 
-	/* ── Director's-harness tabs (design doc §1) ──
-	   Right-aligned in the 24px strip; the spacer pushes them to the far
-	   right so the active underline sits above the composer body. */
-	.meta-spacer {
-		flex: 1;
-	}
-
+	/* ── Attached harness tabs (v0.7.11 redesign) ──
+	   Folder tabs sitting directly on the composer's top edge: Pipes flush
+	   with the left border, Director/Extract flush right. The row is sticky
+	   inside the scrolling composer-area. The active tab merges into the
+	   body (same background, no bottom border); inactive tabs keep the
+	   bottom border and a darker fill. */
 	.harness-tabs {
+		position: sticky;
+		top: 0;
+		z-index: 6;
 		display: flex;
-		align-items: center;
-		gap: 2px;
-		height: 24px;
+		align-items: flex-end;
+		height: 28px;
+		background: var(--bg-primary);
+		border-bottom: 1px solid var(--border-light, #3a3a4a);
 	}
 
 	.harness-tab {
@@ -3519,15 +3524,32 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		font-size: 12px;
 		font-weight: 400;
 		color: var(--text-secondary);
-		background: none;
-		border: none;
-		border-bottom: 1px solid transparent;
-		padding: 0 8px;
-		height: 100%;
+		background: var(--bg-tertiary);
+		border: 1px solid var(--border-light, #3a3a4a);
+		border-radius: 6px 6px 0 0;
+		padding: 0 16px;
+		height: 26px;
+		margin-bottom: -1px;
 		cursor: pointer;
 		transition: color var(--transition-sin, 0.3s),
-			border-color var(--transition-sin, 0.3s),
-			font-weight var(--transition-sin, 0.3s);
+			background var(--transition-sin, 0.3s);
+	}
+
+	/* Pipes flush with the composer's left border; the right group flush
+	   with the right border — the tab border replaces the panel border at
+	   the seam instead of doubling it. */
+	.harness-tab:first-child {
+		margin-left: -1px;
+	}
+	.harness-tab:last-child {
+		margin-right: -1px;
+	}
+	.harness-tab + .harness-tab {
+		margin-left: 4px;
+	}
+	/* The gap between Pipes and the right-aligned group. */
+	.harness-tab:nth-child(2) {
+		margin-left: auto;
 	}
 
 	.harness-tab:hover {
@@ -3537,7 +3559,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	.harness-tab.is-active {
 		color: var(--text-primary);
 		font-weight: 600;
-		border-bottom: 1px solid var(--accent-color);
+		background: var(--bg-primary);
+		border-bottom-color: var(--bg-primary);
+		height: 27px;
 	}
 
 	/* In-flight run indicator on the Director tab (design §1 badge guard). */
@@ -3681,6 +3705,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		background: var(--panel-center-bg, transparent);
 		border-left: 1px solid var(--panel-center-border, var(--border, #2a2a3a));
 		border-right: 1px solid var(--panel-right-border, var(--border, #2a2a3a));
+		/* v0.7.11: outer bottom corners rounded; the top edge is the attached
+		   tab row's border, so top corners stay square. */
+		border-radius: 0 0 8px 8px;
 	}
 
 	.composer-empty {
