@@ -11,10 +11,6 @@ Open the **Generate session** action in the tool panel. The generation box
 lists every pipe in the session with its own row:
 
 - **Include checkbox** — pick which pipes run this time.
-- **Q / C sliders** — Quality and Creativity per pipe. These are the *same*
-  values the tool panel shows for the selected pipe: edit them in either
-  place and the other stays in sync (fixed in v0.7.11 — the box used to seed
-  stale values and ship phantom overrides).
 - **Force last frame** — overwrite the pipe's settled first keyframe with the
   previous pipe's last frame (the continuity catch).
 - **Boundary trim (experimental)** — drop the model's first-frame settle
@@ -29,21 +25,12 @@ Above the pipe list, two master controls flip **every** pipe at once:
 
 Individual rows still override the master afterwards.
 
-### What the Q/C values actually do
+Press **Generate** — the run starts with the session's current settings.
+(The Quality/Creativity knobs were removed in v0.7.11: the provider ignores
+them on almost every route, so they only added noise. Keyframe generation
+uses fixed sensible values behind the scenes.)
 
-A note under the Pipes heading tells you the truth about the current image
-model (live-probed against the provider):
-
-- **img2img keyframes** (a reference image present): Creativity rides the
-  provider's guidance scale — *inverted*, so higher Creativity = more
-  dreaming, exactly as the slider reads. Quality maps to inference steps.
-- **txt2img and video**: the provider rejects these knobs; the values are
-  logged only, and the note says so at the sliders instead of pretending.
-
-Press **Generate** — your edits are saved first, then the run starts with
-exactly the values you see.
-
-<!-- SCREENSHOT PENDING: session-generate-modal.png — generation box with masters + Q/C note -->
+<!-- SCREENSHOT PENDING: session-generate-modal.png — generation box with masters -->
 
 ## 2. Following the run — the redesigned progress view
 

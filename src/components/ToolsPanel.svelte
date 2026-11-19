@@ -7,8 +7,6 @@
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
 	import { availableResolutionsForModel, videoRatiosForOrientation, effectiveVideoAspect } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
-	import { Q_RANGE, C_RANGE } from '$lib/composerStore/validators';
-	import { qcSupport } from '$lib/settings/qcSupport';
 	import { onMount } from 'svelte';
 	import ChromeIcon from './ChromeIcon.svelte';
 
@@ -33,11 +31,6 @@
 		oncropmodechange,
 		onvideoratiochange,
 		sessionVideoStale = false,
-		qValue,
-		cValue,
-		pipeName,
-		onqvaluechange,
-		oncvaluechange,
 		unsynced = false,
 		sessionVideo = null,
 		onopensessionpreview,
@@ -78,16 +71,6 @@
 		/** 0012 G8: the session video was composed with a different target/crop
 		 *  than the session currently has — flag it for re-compose. */
 		sessionVideoStale?: boolean;
-		/** Quality (inference steps) of the active pipe */
-		qValue?: number;
-		/** Creativity (cfg scale) of the active pipe */
-		cValue?: number;
-		/** Item 3 (RC5): name of the pipe the Q/C sliders edit — the panel
-		 *  targets the ACTIVE pipe, which may differ from the pipe a
-		 *  generation modal was opened for; label it so the values read honest. */
-		pipeName?: string;
-		onqvaluechange?: (q: number) => void;
-		oncvaluechange?: (c: number) => void;
 		unsynced?: boolean;
 		/** Composed session video to show in the Output section. null = none. */
 		sessionVideo?: { url: string; label: string } | null;
@@ -319,22 +302,6 @@
 	const compiledLines = $derived(compiledOutput ? compiledOutput.split('\n').length : 0);
 
 	// Last-gen preview (D9): served through the media:// protocol.
-	// Item 8: honest Q/C support note — the knobs are real wires on img2img
-	// keyframes only (Agnes txt2img + every video route reject them). The
-	// note sits AT the sliders so a no-op tune is never silent.
-	const qcNote = $derived.by(() => {
-		void settingsRev; // re-derive on settings changes
-		const s = getSettings();
-		const preset = getPreset(s.providers.image.preset);
-		const spec = preset?.models.find((m) => m.id === s.providers.image.model) ?? null;
-		const support = qcSupport(spec);
-		return support === 'img2img-only'
-			? APP_CONSTANTS.strings.qcSupportImg2ImgOnly
-			: support === 'none'
-				? APP_CONSTANTS.strings.qcSupportNone
-				: null;
-	});
-
 	let lastVideoUrl = $state<string | null>(null);
 	// True while lastVideoUrl is in flight — the <video> is then hidden so a
 	// stale/failed 0:00 shell can't sit in the panel.
@@ -603,24 +570,6 @@
 					</select>
 				</label>
 
-				{#if pipeName}
-				<div class="set-target" title="The Q/C sliders below edit this pipe (the active pipe)">Editing · {pipeName}</div>
-			{/if}
-			<div class="set-slider">
-					<span class="set-lab">Quality</span>
-					<input type="range" min={Q_RANGE.min} max={Q_RANGE.max} step={Q_RANGE.step} value={qValue ?? 18} class="set-range"
-						onchange={(e) => onqvaluechange?.(Number(e.currentTarget.value))} />
-					<b class="set-val">{qValue ?? 18}</b>
-				</div>
-				<div class="set-slider">
-					<span class="set-lab">Creativity</span>
-					<input type="range" min={C_RANGE.min} max={C_RANGE.max} step={C_RANGE.step} value={cValue ?? 7} class="set-range"
-						onchange={(e) => oncvaluechange?.(Number(e.currentTarget.value))} />
-					<b class="set-val">{cValue ?? 7}</b>
-				</div>
-				{#if qcNote}
-					<p class="set-note">{qcNote}</p>
-				{/if}
 			</div>
 		{:else}
 			<p class="set-empty">Select a session to configure settings.</p>
@@ -1243,76 +1192,6 @@
 		box-shadow: 0 0 0 3px var(--accent-glow);
 	}
 
-	/* Item 8: honest Q/C support note at the sliders. */
-	.set-note {
-		font-size: 10px;
-		line-height: 1.4;
-		color: var(--text-muted);
-		margin: 2px 0 6px;
-	}
-
-	/* Sliders: label · track · value. A satisfying tactile thumb. */
-	/* Item 3 (RC5): which pipe the Q/C sliders edit — the active pipe may
-	   differ from the pipe a generation modal targets; label it honestly. */
-	.set-target {
-		font-size: 10px;
-		color: var(--text-muted);
-		padding: 2px 0 4px;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.set-slider {
-		display: flex;
-		align-items: center;
-		gap: 9px;
-	}
-	.set-slider .set-lab {
-		min-width: 58px;
-		font-size: 9px;
-	}
-	.set-val {
-		min-width: 22px;
-		text-align: right;
-		font-size: 12px;
-		font-family: var(--font-mono, monospace);
-		color: var(--text-secondary);
-	}
-	.set-range {
-		flex: 1;
-		height: 4px;
-		-webkit-appearance: none;
-		appearance: none;
-		background: var(--bg-tertiary);
-		border-radius: 3px;
-		outline: none;
-	}
-	.set-range::-webkit-slider-thumb {
-		-webkit-appearance: none;
-		width: 14px;
-		height: 14px;
-		border-radius: 50%;
-		background: var(--accent, #ff3e00);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #ff3e00) 22%, transparent), 0 2px 6px var(--accent-glow);
-		cursor: pointer;
-		transition: transform 0.12s ease, box-shadow 0.15s ease;
-	}
-	.set-range::-webkit-slider-thumb:hover {
-		transform: scale(1.18);
-	}
-	.set-range:active::-webkit-slider-thumb {
-		transform: scale(1.25);
-		box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent, #ff3e00) 30%, transparent), 0 2px 8px var(--accent-glow);
-	}
-	.set-range::-moz-range-thumb {
-		width: 14px;
-		height: 14px;
-		border: none;
-		border-radius: 50%;
-		background: var(--accent, #ff3e00);
-		cursor: pointer;
-	}
 	.set-empty {
 		margin: 0;
 		padding: 14px 12px;

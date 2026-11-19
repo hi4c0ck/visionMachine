@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
 	import type { ModelSpec, Orientation, PipeRow, ResolutionPreset, SessionData } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
@@ -7,9 +6,7 @@
 	import { modelsFor, getPreset, resolveSpecs } from '$lib/settings';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
-	import { Q_RANGE, C_RANGE, validateQValue, validateCValue } from '$lib/composerStore/validators';
 	import { masterState, setMaster } from '$lib/sessionMasters';
-	import { qcSupport } from '$lib/settings/qcSupport';
 	import type { ModelSelection } from './GenerateModal.svelte';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
@@ -24,9 +21,6 @@
 	/** Inline icons — no icon dependency in the app. */
 	const CHECK_ICON = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8.5 6.5 12 13 4.5"/></svg>`;
 
-	/** Per-pipe Q/C run-local values keyed by pipe id. */
-	type PipeParamState = Record<string, { q: number; c: number }>;
-
 	let {
 		open = $bindable(false),
 		session,
@@ -37,8 +31,6 @@
 		onFpsChange,
 		onResolutionChange,
 		onOrientationChange,
-		onPipeQChange,
-		onPipeCChange,
 	} = $props<{
 		open: boolean;
 		session: SessionData;
@@ -57,8 +49,6 @@
 		onFpsChange?: (fps: number) => void;
 		onResolutionChange?: (res: string) => void;
 		onOrientationChange?: (o: string) => void;
-		onPipeQChange?: (pipeId: string, q: number) => void;
-		onPipeCChange?: (pipeId: string, c: number) => void;
 	}>();
 
 	let policy = $state<'stop' | 'continue'>('stop');
@@ -105,52 +95,6 @@
 		return out;
 	});
 
-	// ── Per-pipe Q/C run-local values (seeded from the pipe rows) ──
-	// Bug batch nov19 (item 3, RC1): per-field DIRTY tracking. The old seed
-	// ran once at open and the diff compared stale locals against the live
-	// rows — a ToolsPanel edit while the modal was open became a PHANTOM
-	// override that reverted the user's edit on the wire. Now: unedited
-	// fields re-sync to the row whenever it changes (the pipes prop is a
-	// fresh array per store mutation since the item-1 pipe-ref bridge);
-	// only fields the user actually typed ride the diff.
-	let pipeParamsLocal = $state<PipeParamState>({});
-	let paramDirty = $state<Record<string, { q?: boolean; c?: boolean }>>({});
-	$effect(() => {
-		if (!open) return;
-		const rows = pipes; // tracked: fresh array identity per store mutation
-		// untrack the locals: reading-what-we-write would loop the effect.
-		const cur = untrack(() => pipeParamsLocal);
-		const dirty = untrack(() => paramDirty);
-		const next: PipeParamState = {};
-		let changed = Object.keys(cur).length !== rows.length;
-		for (const p of rows) {
-			const existing = cur[p.id];
-			const q = dirty[p.id]?.q && existing ? existing.q : p.qValue;
-			const c = dirty[p.id]?.c && existing ? existing.c : p.cValue;
-			next[p.id] = { q, c };
-			if (!existing || existing.q !== q || existing.c !== c) changed = true;
-		}
-		// Write only on a real change → the effect converges (no loop).
-		if (changed) pipeParamsLocal = next;
-	});
-	/** The Q/C diff map: only DIRTY fields whose local value differs from
-	 *  the row value. Empty → null on the wire. An unedited field can never
-	 *  ship an override (it mirrors the row by construction). */
-	const pipeParams: Record<string, PipeParamOverride> = $derived.by(() => {
-		const out: Record<string, PipeParamOverride> = {};
-		for (const p of pipes) {
-			const local = pipeParamsLocal[p.id];
-			if (!local) continue;
-			const dirty = paramDirty[p.id];
-			const entry: PipeParamOverride = {};
-			if (dirty?.q && local.q !== p.qValue) entry.qValue = local.q;
-			if (dirty?.c && local.c !== p.cValue) entry.cValue = local.c;
-			if (Object.keys(entry).length > 0) out[p.id] = entry;
-		}
-		return out;
-	});
-	const hasPipeParamEdits = $derived(Object.keys(pipeParams).length > 0);
-
 	// ── Per-pipe "force first keyframe" (re-snap) — offered on every INTERIOR
 	//    keyframe-mode pipe (not the group's first, and not reference-mode,
 	//    which doesn't consume slot-1). Ticked → this pipe's first keyframe is
@@ -183,7 +127,6 @@
 		if (!open) return;
 		forceLastFramesLocal = {};
 		trimBoundaryLocal = {};
-		paramDirty = {};
 	});
 
 	// ── Per-pipe "experimental compose pipes" boundary-trim (run-scoped).
@@ -258,18 +201,6 @@
 	let imageModel = $state('');
 	let videoModel = $state('');
 	let imageModels = $state<ModelSpec[]>([]);
-	// Item 8: honest Q/C note for the picked image model — the per-pipe Q/C
-	// inputs above edit real values, but the wire only carries them on
-	// img2img keyframes (Agnes txt2img + video routes reject the knobs).
-	const qcNote = $derived.by(() => {
-		const spec = imageModels.find((m) => m.id === imageModel) ?? null;
-		const support = qcSupport(spec);
-		return support === 'img2img-only'
-			? APP_CONSTANTS.strings.qcSupportImg2ImgOnly
-			: support === 'none'
-				? APP_CONSTANTS.strings.qcSupportNone
-				: null;
-	});
 	let videoModels = $state<ModelSpec[]>([]);
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
@@ -336,25 +267,6 @@
 		runStats.fps !== undefined || runStats.resolution !== undefined || runStats.orientation !== undefined,
 	);
 
-	function handlePipeQ(pipeId: string, e: Event) {
-		const raw = Number((e.target as HTMLInputElement).value);
-		if (Number.isFinite(raw) && pipeParamsLocal[pipeId]) {
-			// Item 3 (RC2): clamp to the ONE range source — the wire can
-			// never carry a value the panel/store would reject.
-			const next = validateQValue(raw);
-			pipeParamsLocal = { ...pipeParamsLocal, [pipeId]: { ...pipeParamsLocal[pipeId], q: next } };
-			paramDirty = { ...paramDirty, [pipeId]: { ...paramDirty[pipeId], q: true } };
-		}
-	}
-	function handlePipeC(pipeId: string, e: Event) {
-		const raw = Number((e.target as HTMLInputElement).value);
-		if (Number.isFinite(raw) && pipeParamsLocal[pipeId]) {
-			const next = validateCValue(raw);
-			pipeParamsLocal = { ...pipeParamsLocal, [pipeId]: { ...pipeParamsLocal[pipeId], c: next } };
-			paramDirty = { ...paramDirty, [pipeId]: { ...paramDirty[pipeId], c: true } };
-		}
-	}
-
 	function handleFps(e: Event) {
 		const next = Number((e.target as HTMLSelectElement).value);
 		if (Number.isFinite(next)) fps = next;
@@ -395,14 +307,10 @@
 				if (runStats.fps !== undefined) onFpsChange?.(fps);
 				if (runStats.resolution !== undefined) onResolutionChange?.(resolution);
 				if (runStats.orientation !== undefined) onOrientationChange?.(orientation);
-				for (const [pipeId, entry] of Object.entries(pipeParams)) {
-					if (entry.qValue !== undefined) onPipeQChange?.(pipeId, entry.qValue);
-					if (entry.cValue !== undefined) onPipeCChange?.(pipeId, entry.cValue);
-				}
 			}
 			await onConfirm({ imageModel, videoModel }, seed, policy, autoCompose, stats,
 				Object.keys(runStats).length > 0 ? runStats : null,
-				hasPipeParamEdits ? pipeParams : null,
+				null,
 				Object.keys(forceLastFrames).length > 0 ? forceLastFrames : null,
 				Object.keys(trimBoundary).length > 0 ? trimBoundary : null);
 		} catch (e) {
@@ -425,9 +333,6 @@
 				<div class="sg-split">
 					<div class="sg-pane sg-pipes">
 						<span class="gen-section-title">{APP_CONSTANTS.strings.sessionPipes} · {rows.length}</span>
-						{#if qcNote}
-							<p class="sg-qc-note">{qcNote}</p>
-						{/if}
 						<!-- Item 9: master check-all controls above the pipe list. -->
 						{#if forceEligible.size > 0 || (composeGateOn && trimEligible.size > 0)}
 							<div class="sg-masters">
@@ -449,19 +354,10 @@
 						{/if}
 						<div class="gen-pipe-list">
 							{#each rows as row, i (row.pipe.id)}
-								{@const local = pipeParamsLocal[row.pipe.id]}
 								<div class="gen-pipe-row">
 									<span class="gen-pipe-index" aria-hidden="true">{i + 1}</span>
 									<span class="gen-pipe-name">{row.pipe.name}</span>
 									<span class="gen-chips"><span>{row.pipe.lengthFrames}f</span></span>
-									<span class="gen-pipe-params" aria-label="Pipe Q / C">
-										<label>Q<input type="number" min={Q_RANGE.min} max={Q_RANGE.max} step={Q_RANGE.step} value={local?.q ?? row.pipe.qValue}
-											class:changed={local && local.q !== row.pipe.qValue}
-											onchange={(e) => handlePipeQ(row.pipe.id, e)} /></label>
-										<label>C<input type="number" min={C_RANGE.min} max={C_RANGE.max} step={C_RANGE.step} value={local?.c ?? row.pipe.cValue}
-											class:changed={local && local.c !== row.pipe.cValue}
-											onchange={(e) => handlePipeC(row.pipe.id, e)} /></label>
-									</span>
 									{#if forceEligible.has(row.pipe.id)}
 										<label class="gen-check sg-force" title={APP_CONSTANTS.strings.sessionPipeForceLastFrameHint}>
 											<input type="checkbox" checked={!!forceLastFramesLocal[row.pipe.id]}
@@ -588,7 +484,7 @@
 						</div>
 
 						<!-- ── Persist toggle (only when there's something to persist) ── -->
-						{#if hasStatsEdits || hasPipeParamEdits}
+						{#if hasStatsEdits}
 							<label class="gen-check apply-toggle" aria-label="Apply to session">
 								<input type="checkbox" bind:checked={applyToSession} />
 								{APP_CONSTANTS.strings.sessionApplyToSession}
@@ -708,39 +604,6 @@
 		}
 	}
 
-	.gen-pipe-params {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.gen-pipe-params label {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
-		font-size: 11px;
-		color: var(--text-muted, #71717a);
-	}
-
-	.gen-pipe-params input {
-		width: 52px;
-		padding: 3px 5px;
-		font-size: 12px;
-		color: var(--text-primary, #fff);
-		background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-		border: 1px solid var(--border-color, #3f3f46);
-		border-radius: 4px;
-	}
-
-	.gen-pipe-params input:focus {
-		outline: none;
-		border-color: var(--accent-color, #ff3e00);
-	}
-
-	.gen-pipe-params input.changed {
-		border-color: var(--warning-color, #fbbf24);
-	}
-
 	/* Per-pipe "force first keyframe" toggle (shown only on eligible settled
 	   non-first pipes). A compact inline checkbox inside the pipe row. */
 	.sg-pipes .sg-force {
@@ -756,14 +619,6 @@
 	.sg-pipes .sg-force input {
 		width: auto;
 		margin: 0;
-	}
-
-	/* Item 8: honest Q/C support note under the Pipes heading. */
-	.sg-qc-note {
-		font-size: 10px;
-		line-height: 1.4;
-		color: var(--text-muted);
-		margin: 2px 0 6px;
 	}
 
 	/* Item 9: master check-all row above the pipe list — same gen-check

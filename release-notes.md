@@ -14,7 +14,7 @@
 ### Fixes
 - Previews update the moment a generation finishes — no more reselecting to see the result.
 - Switching a pipe between keyframes and references mode now sticks.
-- Quality and Creativity show the same values in the tool panel and the generation box, and Creativity now truly reaches the provider on reference-based keyframes.
+- The Quality and Creativity knobs are gone — the provider ignores them almost everywhere, so they only added noise; generation uses sensible fixed values behind the scenes.
 - Finished videos keep downloading even when the provider's link acts up.
 
 # VisionMachine v0.7.10

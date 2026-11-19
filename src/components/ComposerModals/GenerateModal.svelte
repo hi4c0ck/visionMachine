@@ -10,7 +10,6 @@
 	import { getSettings } from '$lib/settings/store';
 	import { modelsFor, getPreset } from '$lib/settings/catalog';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
-	import { qcSupport } from '$lib/settings/qcSupport';
 	import '../composer-modal.css';
 
 	export interface ModelSelection {
@@ -41,17 +40,6 @@
 	// open; the user may switch models for just this run (regenerating a
 	// piece, A/B between models). The choice is logged, never written back.
 	let imageModel = $state('');
-	// Item 8: honest Q/C note for the picked image model (the chips below
-	// show the pipe's values; the note says what the wire actually does).
-	const qcNote = $derived.by(() => {
-		const spec = imageModels.find((m) => m.id === imageModel) ?? null;
-		const support = qcSupport(spec);
-		return support === 'img2img-only'
-			? APP_CONSTANTS.strings.qcSupportImg2ImgOnly
-			: support === 'none'
-				? APP_CONSTANTS.strings.qcSupportNone
-				: null;
-	});
 	let videoModel = $state('');
 	let imageModels = $state<ModelSpec[]>([]);
 	let videoModels = $state<ModelSpec[]>([]);
@@ -223,13 +211,8 @@
 						<span>{session.fps} fps</span>
 						<span>{session.resolution}</span>
 						<span>{session.orientation}</span>
-						<span title={qcNote ?? undefined}>Q {pipe.qValue}</span>
-						<span title={qcNote ?? undefined}>C {pipe.cValue}</span>
 						<span>{pipe.lengthFrames} frames</span>
 					</div>
-					{#if qcNote}
-						<p class="gen-qc-note">{qcNote}</p>
-					{/if}
 				</div>
 			</div>
 			<div class="modal-footer">
@@ -245,13 +228,6 @@
 {/if}
 
 <style>
-	/* Item 8: honest Q/C support note under the preset chips. */
-	.gen-qc-note {
-		font-size: 10px;
-		line-height: 1.4;
-		color: var(--text-muted);
-		margin: 4px 0 0;
-	}
 	/* ── GenerateModal-specific chrome. The shared anatomy
 	   (.modal-overlay / .modal / .modal-header / .modal-body /
 	   .modal-footer / .gen-section-title / .gen-grid / .gen-fieldrow /

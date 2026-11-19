@@ -34,7 +34,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { pipeEvent, tripEffect, logComponentEndpoint } from '$lib/pipelineDiag';
 	import { setDashExtra } from '$lib/dashStore';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
-	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
@@ -1124,31 +1124,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		} else if (e.key === 'ArrowRight') {
 			selectedFrame = Math.min(totalFrames - 1, (selectedFrame || 0) + 8);
 		}
-	}
-
-	// Quality / Creativity edits target the ACTIVE pipe (per-pipe fields)
-	async function handleQValueChange(q: number) {
-		if (!selectedSession || !activePipe) return;
-		const r = await updateQ(selectedSession.id, activePipe.id, q);
-		if (r.errors.length > 0) console.error('[Workspace] updateQ:', r.errors);
-	}
-
-	// Per-pipe Q/C edits from the session-generation modal (any pipe, not just
-	// the active one) — same store path as the panel above.
-	async function handlePipeQValueChange(sessionId: string, pipeId: string, q: number) {
-		const r = await updateQ(sessionId, pipeId, q);
-		if (r.errors.length > 0) console.error('[Workspace] updateQ (modal):', r.errors);
-	}
-
-	async function handlePipeCValueChange(sessionId: string, pipeId: string, c: number) {
-		const r = await updateC(sessionId, pipeId, c);
-		if (r.errors.length > 0) console.error('[Workspace] updateC (modal):', r.errors);
-	}
-
-	async function handleCValueChange(c: number) {
-		if (!selectedSession || !activePipe) return;
-		const r = await updateC(selectedSession.id, activePipe.id, c);
-		if (r.errors.length > 0) console.error('[Workspace] updateC:', r.errors);
 	}
 
 	// Load projects from backend
@@ -3316,11 +3291,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				{activeTool}
 				{focus}
 				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
-				qValue={activePipe?.qValue}
-				pipeName={activePipe?.name}
-				cValue={activePipe?.cValue}
-				onqvaluechange={handleQValueChange}
-				oncvaluechange={handleCValueChange}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
 				ongeneratepipe={openGenerateModal}
@@ -3363,9 +3333,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					onFpsChange={handleFpsChange}
 					onResolutionChange={handleResolutionChange}
 					onOrientationChange={handleOrientationChange}
-					onPipeQChange={(pipeId: string, q: number) => selectedSession && handlePipeQValueChange(selectedSession.id, pipeId, q)}
-					onPipeCChange={(pipeId: string, c: number) => selectedSession && handlePipeCValueChange(selectedSession.id, pipeId, c)}
-				/>
+					/>
 			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
 				<GenerateModal

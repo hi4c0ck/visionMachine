@@ -3,7 +3,6 @@
 	// generation defaults + display name. These seed NEW sessions; existing
 	// sessions keep their own values. Stateless: parent owns the draft.
 	import type { Settings } from '$types';
-	import { Q_RANGE, C_RANGE } from '$lib/composerStore/validators';
 
 	let {
 		draft,
@@ -68,32 +67,6 @@
 				<option value="vertical">Vertical</option>
 			</select>
 		</div>
-	</div>
-
-	<div class="field">
-		<label for="sd-q">Quality (inference steps) — {g.qValue}</label>
-		<input
-			id="sd-q"
-			type="range"
-			min={Q_RANGE.min}
-			max={Q_RANGE.max}
-			step={Q_RANGE.step}
-			value={g.qValue}
-			oninput={(e) => setG({ qValue: Number(e.currentTarget.value) })}
-		/>
-	</div>
-
-	<div class="field">
-		<label for="sd-c">Creativity (guidance scale) — {g.cValue}</label>
-		<input
-			id="sd-c"
-			type="range"
-			min={C_RANGE.min}
-			max={C_RANGE.max}
-			step={C_RANGE.step}
-			value={g.cValue}
-			oninput={(e) => setG({ cValue: Number(e.currentTarget.value) })}
-		/>
 	</div>
 
 	<div class="field">
@@ -202,11 +175,6 @@
 
 	.check-row input {
 		flex-shrink: 0;
-		accent-color: var(--accent-color, #ff3e00);
-	}
-
-	.field input[type='range'] {
-		width: 100%;
 		accent-color: var(--accent-color, #ff3e00);
 	}
 
