@@ -1,3 +1,22 @@
+# VisionMachine v0.7.11
+
+### Director mode feels like a film set
+- The Director now wears a slate: take numbers, tally lamps for every step, script-page scene cards, cue-sheet chips, and a contact-sheet scoreboard.
+- Your Director work survives a restart — idea, look settings, mood, and every take come back exactly as you left them.
+- Timelines are split into per-beat windows instead of one long block, so each moment carries its own camera, light, and motion cues.
+- Pacing reads your story: a dense action idea moves fast with shifting layers, a quiet one breathes — a high mood no longer slows everything down.
+
+### Generation you can follow
+- The session progress view was rebuilt: the working pipe is always pinned in view, one pipe opens at a time, and overall progress stays visible through composing.
+- Compose now lets you pick which pipes to join and set how much to trim at each junction — preview the first three of ten without generating the rest.
+- Check-all switches flip "Force last frame" and the boundary trim for every pipe at once.
+
+### Fixes
+- Previews update the moment a generation finishes — no more reselecting to see the result.
+- Switching a pipe between keyframes and references mode now sticks.
+- Quality and Creativity show the same values in the tool panel and the generation box, and Creativity now truly reaches the provider on reference-based keyframes.
+- Finished videos keep downloading even when the provider's link acts up.
+
 # VisionMachine v0.7.10
 
 ### Your work stays put
