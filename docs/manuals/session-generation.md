@@ -75,7 +75,7 @@ The list is a single-expand accordion:
 **Minimize** shrinks the modal to a pill so you can keep working; the run
 continues and the pill tracks it. **Cancel all** stops the run.
 
-<!-- SCREENSHOT PENDING: session-progress-live.png — live mid-run capture replacing the design frame -->
+![Live progress view — the pinned NOW GENERATING strip with elapsed time, the Overall band with its GENERATING phase chip, and the single-expand accordion (shot 1 open on its keyframe + video stages, shots 2–4 collapsed)](img/session-progress-live.png)
 
 ## 3. After the run
 
