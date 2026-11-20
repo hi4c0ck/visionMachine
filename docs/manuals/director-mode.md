@@ -114,24 +114,30 @@ The **regenerate** chip opens a two-choice menu:
 
 ### Extract — the cue sheet
 
-The **Extract** tab lists every section of the plan as a cue-sheet row.
-Alongside the full text (never truncated) you get department chips:
+The **Extract** tab lists every section of the plan as a cue-sheet card.
+The header reads `v1 · 49§ · 4 pipes · 0 edited` — take, section count,
+pipe count, and how many sections you've edited. Alongside the full text
+(never truncated):
 
-- **SC / CAM / LGT / MOT / TRN / FX** — which department the cue belongs to
-- **4500K** gel chip with a luminance dot on lighting cues
-- **35mm** lens chip on camera cues
-- **→ fast** motion vector glyph + speed on motion cues
+- **Department filter chips** — all / scene / camera / lighting / motion /
+  transition, each with its count; click to filter the sheet.
+- **Film context (all pipes)** — the shared story paragraph every pipe
+  inherits.
+- **Per-pipe groups** — `pipe 00 · 11 section(s)` with an **apply this
+  pipe** action, and timed section cards (`t0.0s`, `t2.0s`…) carrying the
+  department, lens chips (**35mm / 85mm**), and frame ranges (`00–48`).
 
-From here you can copy all, save, or diff against a previous take.
+From the header you can **Copy** the whole sheet or **Regenerate pipes**
+(replace · replay of the shown take) into the composer.
 
-<!-- SCREENSHOT PENDING: director-extract.png — Extract tab with cue-sheet chips -->
+![Extract tab — department filter chips, film context, per-pipe cue-sheet cards with lens chips and frame ranges](img/director-extract.png)
 
 ## 5. Re-runs
 
 Every step row offers **re-run from here**: only that step and the ones
-after it execute again. The take line shows the RETAKE stamp, the previous
-take stays intact, and you can diff the two in Extract. Use it when one
-stage of the plan looks wrong — you don't pay for the whole chain again.
+after it execute again. The take line shows the RETAKE stamp and the
+previous take stays intact on disk — every take coexists as its own
+versioned file, so a re-run never destroys the plan you had.
 
 ## 6. Pacing that reads your intent (new in v0.7.11)
 
@@ -162,7 +168,7 @@ session and the Director is exactly where you left it.
 |---|---|
 | Amber lamps on critic steps | The critic model is untrained — scores are honest stubs, not failures |
 | The novel chip says "template" | No text provider answered (the run log records why); the template result is always valid |
-| A take looks wrong | Diff it against the previous take in Extract, or re-run from the offending step |
+| A take looks wrong | Re-run from the offending step — the previous take stays intact on disk |
 | regenerate is disabled | Run the chain first — there is no plan to apply yet |
 
 ---
