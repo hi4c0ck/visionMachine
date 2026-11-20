@@ -17,6 +17,7 @@
 	// gatesShown, engine, localExtract seeding) stay here.
 
 	import { invoke } from '@tauri-apps/api/core';
+	import { untrack } from 'svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { ask, save, open } from '@tauri-apps/plugin-dialog';
 	import {
@@ -913,8 +914,10 @@
 		// re-trigger re-issued listFlows in a loop (the "[DIRECTOR]
 		// list_flows start/done × N" log storm). The once-per-session
 		// `flowsLoadedFor` latch makes the effect terminal after ONE
-		// settled list, whatever the result.
-		if (doc || flowsLoadedFor === sessionId) {
+		// settled list, whatever the result. The latch read is UNTRACKED:
+		// writing it below must not re-trigger this effect (that self-
+		// retrigger cancelled the in-flight restore — see seedFromDisk).
+		if (doc || untrack(() => flowsLoadedFor) === sessionId) {
 			return;
 		}
 		// SETTLED-FLOW CACHE (2026-11-10 "generated data doesn't sustain
@@ -947,13 +950,25 @@
 		// First visit for this session: settle it exactly once. Per-session
 		// key: 5 distinct sessions each seeding once is a swing, not a loop.
 		tripEffect(`director:seed:${sessionId}`);
-		let cancelled = false;
 		const sid = sessionId;
-		flowsLoadedFor = sid; // latch BEFORE await: prevents re-entry if effect re-runs
-		void (async () => {
-			try {
-				const listed = await listFlows(sid);
-				if (cancelled || sid !== sessionId) return;
+		flowsLoadedFor = sid; // latch BEFORE await — untracked read above, no self-cancel
+		void seedFromDisk(sid);
+	});
+
+	// Restart restore: list the persisted flows, then LOAD the newest
+	// readable doc. Plain async function, not an effect closure — the old
+	// inline IIFE was killed by its own latch write: `flowsLoadedFor = sid`
+	// re-triggered the seed effect (the latch was a tracked read at the
+	// top), the cleanup set cancelled=true, and the continuation bailed
+	// right after listFlows resolved. App logs proved it: 450 list_flows
+	// calls, ZERO load_flow calls — the restore loop never ran, so every
+	// restart fell back to the G0 draft ("generated data lost"). Staleness
+	// is guarded by `sid !== sessionId` after every await; `doc` bails the
+	// seed if a live run settled while the disk read was in flight.
+	async function seedFromDisk(sid: string) {
+		try {
+			const listed = await listFlows(sid);
+			if (sid !== sessionId || doc) return;
 				if (listed.length > 0) {
 					flows = listed;
 					// 2026-11-11 "persisted data disappears after restart":
@@ -966,7 +981,7 @@
 					let settledDoc: FlowDocument | null = null;
 					let settled: FlowSummary | null = null;
 					for (const cand of listed) {
-						if (cancelled || sid !== sessionId) return;
+						if (sid !== sessionId || doc) return;
 						try {
 							settledDoc = await loadFlow(sid, cand.flowVersion);
 							settled = cand;
@@ -975,7 +990,7 @@
 							console.warn('director load_flow', cand.flowVersion, loadErr);
 						}
 					}
-					if (cancelled || sid !== sessionId) return;
+					if (sid !== sessionId || doc) return;
 					if (settledDoc && settled) {
 						doc = settledDoc;
 						activeRun = settled.flowVersion;
@@ -1019,29 +1034,26 @@
 					// a still-0-flow session must not re-storm listFlows.
 					rememberSettled(sid, { flows: [], doc: null, activeRun: null });
 				}
-			} catch (e) {
-				if (cancelled || sid !== sessionId) return;
-				console.warn('director load_latest', e);
-				// Item 11 (link B): a transient listFlows failure (cold-start DB
-				// not ready, flow_dir race) used to leave flowsLoadedFor latched
-				// with no retry path — the persisted run stayed unread until a
-				// session switch. Bounded delayed retry: clear the latch after
-				// 1500ms so this effect re-runs; at most 2 attempts, then the
-				// latch stays (a session switch still recovers).
-				if (seedRetryCount < 2) {
-					seedRetryCount += 1;
-					setTimeout(() => {
-						if (sid === sessionId && !doc && flowsLoadedFor === sid) {
-							flowsLoadedFor = null;
-						}
-					}, 1500);
-				}
+		} catch (e) {
+			if (sid !== sessionId) return;
+			console.warn('director load_latest', e);
+			// Item 11 (link B): a transient listFlows failure (cold-start DB
+			// not ready, flow_dir race) used to leave flowsLoadedFor latched
+			// with no retry path — the persisted run stayed unread until a
+			// session switch. Bounded delayed retry: clear the latch and
+			// re-run the seed directly (the latch is untracked, so clearing
+			// it alone would not re-trigger anything). At most 2 attempts.
+			if (seedRetryCount < 2) {
+				seedRetryCount += 1;
+				setTimeout(() => {
+					if (sid === sessionId && !doc && flowsLoadedFor === sid) {
+						flowsLoadedFor = null;
+						void seedFromDisk(sid);
+					}
+				}, 1500);
 			}
-		})();
-		return () => {
-			cancelled = true;
-		};
-	});
+		}
+	}
 
 	function backfillEntryFromEngine(d: FlowDocument, summary?: FlowSummary) {
 		const e = d.engine;
