@@ -50,6 +50,7 @@ import { flashToast } from '$lib/flashToast';
 			session,
 			totalFrames: propTotalFrames = 241,
 			selectedFrame,
+			playheadPipeIdx = null,
 			activePipeIdx = $bindable(null),
 			focus = $bindable({ level: 'project' } as ComposerFocus),
 			onframechange,
@@ -64,6 +65,10 @@ import { flashToast } from '$lib/flashToast';
 			session?: SessionData;
 			totalFrames?: number;
 			selectedFrame?: number;
+			/** Scroll-only follow target: the pipe owning the global playhead
+			 *  (session-video mode). Drives scrollIntoView WITHOUT changing
+			 *  activePipeIdx/focus, so scrubbing never cascades a media re-eval. */
+			playheadPipeIdx?: number | null;
 			activePipeIdx?: number | null;
 			/** Context-sensitive tool-panel focus. The panel is the source of
 			 * truth for what the user has selected in the composer; the tool
@@ -216,6 +221,15 @@ import { flashToast } from '$lib/flashToast';
 	$effect(() => {
 		if (activePipeIdx === null) return;
 		pipeEls.get(activePipeIdx)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	});
+	// Follow the global playhead: as the session-video carousel sweeps across
+	// pipe boundaries, scroll the owning pipe into view so the composer tracks
+	// the frame pins. Keys ONLY on playheadPipeIdx (changes at pipe boundaries,
+	// not per frame) and never writes activePipeIdx — restoring the scroll hook
+	// without reviving the per-tick mediaActive cascade.
+	$effect(() => {
+		if (playheadPipeIdx === null) return;
+		pipeEls.get(playheadPipeIdx)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 	});
 
 	// ── Focus for the context-sensitive tool panel ─────────────────────────

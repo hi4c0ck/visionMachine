@@ -30,9 +30,7 @@
 		videoAspect = null,
 		isSessionVideo = false,
 		onplayoutside,
-		sessionVideoDetached = false,
-		onopensessionpreview,
-	} = $props<{
+		} = $props<{
 		userName: string;
 		selectedTheme: string;
 		layoutMode: string;
@@ -96,14 +94,7 @@
 		 * backend call; this just fires the intent. Absent = button hidden.
 		 */
 		onplayoutside?: () => void;
-		/**
-		 * A composed session video exists for this session but the top panel
-		 * is currently showing a single-pipe clip — surface the "Open in
-		 * preview" restore affordance as a pill (2f). */
-		sessionVideoDetached?: boolean;
-		/** Re-attach the composed session video to the top panel (2f). */
-		onopensessionpreview?: () => void;
-	}>();
+		}>();
 
 	const layouts = [
 		{ id: 'landscape', label: 'Landscape', iconId: 'layout-landscape' },
@@ -267,13 +258,6 @@
 	// only fires the intent.
 	function handlePlayOutside() {
 		onplayoutside?.();
-	}
-
-	// ── 2f — "Open in preview" restore pill. ────────────────────────────
-	// A composed session video exists for this session but the top panel
-	// shows a single-pipe clip: the pill re-attaches the session video.
-	function handleOpenSessionPreview() {
-		onopensessionpreview?.();
 	}
 
 	// ── 2e — keyboard layer (Space / Esc). ─────────────────────────────
@@ -458,13 +442,7 @@
 						<ChromeIcon id="external" size={16} />
 					</button>
 				{/if}
-				{#if sessionVideoDetached}
-					<button class="session-pill" onclick={handleOpenSessionPreview}
-						title={APP_CONSTANTS.strings.openSessionPreviewHint}>
-						<ChromeIcon id="session-pill" size={14} /> {APP_CONSTANTS.strings.openInPreview}
-					</button>
-				{/if}
-			{:else}
+				{:else}
 			<div class="frame-video-wrap">
 				<!-- Spinner overlay while the <video> element is still probing.
 				     The element itself always mounts when video is present so
@@ -508,15 +486,6 @@
 					<!-- Frame position readout (playback mode): the top panel's
 						 frame-step buttons need a visible position to act on. -->
 					<span class="frame-position">{carouselFrame ?? 0} / {totalFrames}</span>
-				{/if}
-				{#if sessionVideoDetached}
-					<!-- 2f: a composed session video exists for this session but
-					     the panel shows a single-pipe clip — the pill restores the
-					     session video without leaving the top panel. -->
-					<button class="session-pill" onclick={handleOpenSessionPreview}
-						title={APP_CONSTANTS.strings.openSessionPreviewHint}>
-						<ChromeIcon id="session-pill" size={14} /> {APP_CONSTANTS.strings.openInPreview}
-					</button>
 				{/if}
 				<!-- 2a/2b cluster, professional composition: a time chip floats
 					 bottom-LEFT, one compact control pill bottom-RIGHT, and the
@@ -1034,31 +1003,6 @@
 		border-radius: 3px;
 		margin-right: 6px;
 		vertical-align: middle;
-	}
-
-	/* 2f — "Open in preview" restore pill: a composed session video exists
-	   but the panel shows a pipe clip. Sits under the top-right readout / exit
-	   button, in both modes. */
-	.session-pill {
-		position: absolute;
-		top: 34px;
-		right: 8px;
-		z-index: 5;
-		padding: 4px 10px;
-		font-size: 0.68rem;
-		font-family: inherit;
-		border: 1px solid var(--accent-color, #ff3e00);
-		border-radius: 12px;
-		background: rgba(0, 0, 0, 0.55);
-		color: var(--text-primary);
-		cursor: pointer;
-		white-space: nowrap;
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-	}
-	.session-pill:hover {
-		background: var(--bg-hover);
 	}
 
 	/* Play-outside float for carousel mode (in playback mode the button lives

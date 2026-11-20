@@ -292,16 +292,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		previewMediaPath = lastComposedSessionVideo.path;
 		toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
 	}
-	// 2f: a composed session video exists for the CURRENT session while the
-	// top panel shows a single-pipe clip — surface the "Open in preview"
-	// restore pill in the top panel (and keep the tool-panel button). A
-	// record from another session must not light the pill: that is the
-	// same cross-session leak the restore path guards against above.
-	const sessionVideoDetached = $derived(
-		!!lastComposedSessionVideo &&
-		lastComposedSessionVideo.sessionId === selectedSessionId &&
-		!previewIsSessionVideo
-	);
 	// Play outside (2a+): open the currently-attached preview's on-disk file
 	// in the OS's default player. The backend command re-validates the path
 	// against the media roots (same guard as read_media_file) and spawns the
@@ -503,9 +493,21 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		if (lastPinnedGlobalFrame === f) return;
 		lastPinnedGlobalFrame = f;
 		activePipeIdx = sessionVideoLayout.frameToPipe(f);
-	});
+		});
 
-	// A per-pipe ruler renders its own frame space (0..pipe.lengthFrames). In
+		// Scroll-follow hint: the pipe owning the global playhead, recomputed as the
+		// carousel sweeps. Unlike activePipeIdx (writing it per scrub tick cascaded
+		// an 11-pipe mediaActive/localFrameForPipe re-eval — the 700ms flush above),
+		// this is a lightweight scroll-only target: it changes only when the playhead
+		// crosses a pipe boundary, and ComposerPanel uses it purely for scrollIntoView
+		// so the pipes column follows the frame pins without touching focus/media.
+		const playheadPipeIdx = $derived(
+		previewIsSessionVideo && sessionVideoLayout
+			? sessionVideoLayout.frameToPipe(selectedFrame ?? 0)
+			: null
+		);
+
+		// A per-pipe ruler renders its own frame space (0..pipe.lengthFrames). In
 	// session-video mode the global playhead is offset by that pipe's start in
 	// the spliced timeline, clamped to the pipe's bounds — so the pin sits at
 	// the right local position on whichever pipe owns the current frame. null
@@ -3129,13 +3131,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		carouselFrame={selectedFrame ?? 0}
 		videoAspect={videoAspect}
 		isSessionVideo={previewIsSessionVideo}
-		sessionVideoDetached={sessionVideoDetached}
 		oncarouselSelect={(f: number) => (selectedFrame = f)}
 		onframeSelect={(f: number) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onplayoutside={handlePlayOutside}
-		onopensessionpreview={openSessionPreview}
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
@@ -3267,6 +3267,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				{tabMeta}
 				{totalFrames}
 				{selectedFrame}
+				playheadPipeIdx={playheadPipeIdx}
 				bind:activePipeIdx
 				bind:focus
 				onframechange={(f: number) => (selectedFrame = f)}

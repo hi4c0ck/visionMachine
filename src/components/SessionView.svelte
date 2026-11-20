@@ -38,6 +38,7 @@
 		tabMeta,
 		totalFrames,
 		selectedFrame,
+		playheadPipeIdx = null,
 		activePipeIdx = $bindable(null),
 		focus = $bindable({ level: 'project' } as ComposerFocus),
 		onframechange,
@@ -63,6 +64,7 @@
 		tabMeta: { extractSections: number; stale: boolean };
 		totalFrames: number;
 		selectedFrame: number;
+		playheadPipeIdx?: number | null;
 		activePipeIdx: number | null;
 		focus: ComposerFocus;
 		onframechange: (frame: number) => void;
@@ -102,6 +104,7 @@
 			{session}
 			{totalFrames}
 			{selectedFrame}
+			{playheadPipeIdx}
 			bind:activePipeIdx
 			bind:focus
 			{onframechange}

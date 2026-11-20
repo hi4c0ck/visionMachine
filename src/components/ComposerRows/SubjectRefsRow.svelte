@@ -94,6 +94,11 @@
 	// URLs). Excluded from srSrc so the chip falls back to the dot placeholder
 	// instead of the browser's broken-image glyph.
 	let failedSrSources = $state<Set<string>>(new Set());
+	// Refs whose preview sibling (.thumb.jpg) 404'd and were retried against the
+	// full-resolution original. User-picked reference images have no generated
+	// thumbnail sibling, so the preview variant must fall back to the original
+	// instead of stranding the chip on a dead placeholder.
+	let srOriginalTried = $state<Set<string>>(new Set());
 	$effect(() => {
 		if (!mediaActive) return;
 		for (const sr of refs) {
@@ -101,6 +106,9 @@
 			if (!src || !isLocalPath(src)) continue;
 			if (srImageUrlsFor.get(sr.id) === src) continue;
 			if (srAttempted.get(sr.id) === src) continue;
+			// New source for this ref: retry the preview first, clearing any prior
+			// original-fallback mark so a fresh artifact re-attempts the thumbnail.
+			srOriginalTried = new Set([...srOriginalTried].filter((k) => k !== sr.id));
 			srAttempted = new Map([...srAttempted, [sr.id, src]]);
 			// Preview variant: subject-ref chips show the small `.thumb.jpg`
 			// sibling (320px), not the full-resolution image — the composer
@@ -126,6 +134,30 @@
 			return cached !== undefined && srImageUrlsFor.get(sr.id) === src ? cached : null;
 		}
 		return src;
+	}
+
+	/** A thumbnail failed to load. If it was the preview sibling (.thumb.jpg)
+	 *  of a local source, fall back to the full-resolution original — user-picked
+	 *  reference images carry no generated thumbnail, so the preview variant
+	 *  404s but the original loads fine. Only mark the chip failed when the
+	 *  original ALSO fails (or the source is remote and already failed). */
+	function handleSrImgError(sr: SubjectReference) {
+		const src = srSourceFor(sr) || null;
+		if (!src) return;
+		if (isLocalPath(src) && !srOriginalTried.has(sr.id)) {
+			srOriginalTried = new Set([...srOriginalTried, sr.id]);
+			void toMediaUrl(src).then((url) => {
+				if (url) {
+					failedSrSources = new Set([...failedSrSources].filter((k) => k !== sr.id));
+					srImageUrls = new Map([...srImageUrls, [sr.id, url]]);
+					srImageUrlsFor = new Map([...srImageUrlsFor, [sr.id, src]]);
+				} else {
+					markSrImageFailed(sr);
+				}
+			});
+			return;
+		}
+		markSrImageFailed(sr);
 	}
 
 	/** Drop the cached entry so srSrc() falls back to the placeholder instead
@@ -236,7 +268,7 @@
 								style={aspect ? `aspect-ratio: ${aspect};` : ''}
 								alt="subject ref"
 								onclick={(e) => { e.stopPropagation(); openSrPreview(sr); }}
-								onerror={() => markSrImageFailed(sr)}
+								onerror={() => handleSrImgError(sr)}
 							/>
 						{:else}
 							<span class="sr-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>
