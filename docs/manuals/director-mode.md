@@ -57,7 +57,7 @@ run will use.
 The **export / import** chips save and load the whole setup as a shareable
 seed file.
 
-<!-- SCREENSHOT PENDING: director-structure.png — ③ FILM STRUCTURE with pins -->
+![③ FILM STRUCTURE expanded — thesis, continuity, driver · target · auto scale, the resolving shot window with its temperature arc, and the Pins override drawer; ④ NOVEL script-page card below](img/director-structure.png)
 
 ## 3. Running — ⑤ STEP CHAIN
 
