@@ -1,5 +1,12 @@
 # Handoff — Video-Generation Pipeline Run
 
+> **SUPERSEDED (2026-11-11):** this handoff describes the 2026-09-21
+> video-generation pipeline run on `develop` @ `b94eac6`. Its one open bug
+> ("Cancel all can't quit the app") was fixed and committed long ago
+> (`e9f98e4`), and the "uncommitted" tree state it references no longer
+> exists. Kept for history only — do not act on it. Current release prep
+> lives in `docs/ROADMAP.md` + `docs/agnes-model-catalog.md`.
+
 Last updated: 2026-09-21 (post-compaction re-investigation, tree verified clean).
 
 ## 1. Goal

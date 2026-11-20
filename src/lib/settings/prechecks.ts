@@ -3,7 +3,6 @@
 // docs/provider-engine-tasks.md, Phase A.
 
 import type { ModelSpec, PipeRow, SessionData } from '$types';
-import { snapTo8nPlus1 } from '$types';
 import { effectiveMediaMode } from './mediaMode';
 
 /** A concrete, user-fixable generation conflict (E4). */
@@ -12,16 +11,9 @@ export interface PipeConflict {
     | 'spec-pending'
     | 'spec-missing'
     | 'spec-locked'
-    | 'not-8n1'
-    | 'frames-overflow'
-    | 'fps-off-grid'
     | 'media-cap'
     | 'txt2img-no-prompt';
   message: string;
-}
-
-function is8n1(frames: number): boolean {
-  return (frames - 1) % 8 === 0;
 }
 
 /**
@@ -68,31 +60,10 @@ export function pipePrechecks(
     });
   }
 
-  // ── Frames-based video model (video-job-frames) checks ────────────────
-  if (video && !video.pending && video.requestFormat === 'video-job-frames') {
-    const max = video.limits.maxFrames;
-    if (max !== undefined && pipe.lengthFrames > max) {
-      out.push({
-        code: 'frames-overflow',
-        message: `pipe length ${pipe.lengthFrames} exceeds ${video.label ?? video.id} max of ${max} frames`,
-      });
-    }
-    if (!is8n1(pipe.lengthFrames)) {
-      const low = snapTo8nPlus1(pipe.lengthFrames - 4);
-      const high = snapTo8nPlus1(pipe.lengthFrames + 4);
-      out.push({
-        code: 'not-8n1',
-        message: `pipe length ${pipe.lengthFrames} is not 8n+1; use ${low} or ${high}`,
-      });
-    }
-    const fps = video.limits.fps;
-    if (fps && fps.length > 0 && !fps.includes(session.fps)) {
-      out.push({
-        code: 'fps-off-grid',
-        message: `session fps ${session.fps} is not in ${video.label ?? video.id}'s supported set (${fps.join(', ')})`,
-      });
-    }
-  }
+  // (The legacy frames-based video model `video-job-frames` — 8n+1 /
+  // maxFrames / fps-grid checks — was removed with the V2.0 model, P1-7
+  // 2026-11-11: the V2.5-series is the only video engine, so a frames model
+  // can no longer be selected and those checks are unreachable.)
 
   // ── Media caps (E4) ──────────────────────────────────────────────────────
   // Cap + subject-prompt checks run against the EFFECTIVE wire mode (the

@@ -6,6 +6,7 @@ use tauri::{Emitter, Manager, WindowEvent};
 mod preflight;
 pub use preflight::{run_preflight_checks, PreflightReport};
 mod commands;
+mod dashboard;
 mod models;
 mod storage;
 pub use storage::db::Database;
@@ -27,6 +28,15 @@ pub struct AppState {
     pub close_watchdog_armed: Arc<AtomicBool>,
     /// Unix ms of the last renderer heartbeat (`ui_heartbeat`); 0 = none yet.
     pub last_ui_heartbeat_ms: Arc<AtomicU64>,
+    /// Cached media roots for the `media://` protocol handler. The handler is
+    /// synchronous and must never `block_on` an async DB lock (deadlock at
+    /// startup when the DB mutex is contended). Roots are populated at
+    /// startup and refreshed when sessions/projects change.
+    pub media_roots_cache: Arc<std::sync::RwLock<Vec<std::path::PathBuf>>>,
+    /// Live dashboard shared state (backend server + renderer-reported
+    /// snapshot + log ring). Read live at request time; the server thread is
+    /// started in `setup` once the registry/group handles exist.
+    pub dashboard: Arc<dashboard::DashboardShared>,
 }
 
 fn now_unix_ms() -> u64 {
@@ -56,6 +66,8 @@ impl AppState {
             close_force: Arc::new(AtomicBool::new(false)),
             close_watchdog_armed: Arc::new(AtomicBool::new(false)),
             last_ui_heartbeat_ms: Arc::new(AtomicU64::new(0)),
+            media_roots_cache: Arc::new(std::sync::RwLock::new(Vec::new())),
+            dashboard: Arc::new(dashboard::DashboardShared::new()),
         }
     }
 }
@@ -123,9 +135,11 @@ fn cleanup_legacy_webview_profiles() {
         }
         // Freshness guard: if ANY file under it was modified within the last
         // 2 hours, a legacy instance may still own it → leave it alone.
-        let newest =
-            newest_item_mtime(&path, 3).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        if fresh.duration_since(newest).is_ok_and(|d| d < std::time::Duration::from_secs(2 * 3600)) {
+        let newest = newest_item_mtime(&path, 3).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if fresh
+            .duration_since(newest)
+            .is_ok_and(|d| d < std::time::Duration::from_secs(2 * 3600))
+        {
             skipped += 1;
             continue;
         }
@@ -151,7 +165,9 @@ fn cleanup_legacy_webview_profiles() {
 fn newest_item_mtime(root: &std::path::Path, depth: u32) -> Option<std::time::SystemTime> {
     let mut newest: Option<std::time::SystemTime> = None;
     fn walk(dir: &std::path::Path, depth: u32, newest: &mut Option<std::time::SystemTime>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let mtime = entry.metadata().ok().and_then(|m| m.modified().ok());
             if let Some(m) = mtime {
@@ -177,7 +193,10 @@ fn newest_item_mtime(root: &std::path::Path, depth: u32) -> Option<std::time::Sy
 /// build the source may be in use, so this is best-effort and never
 /// blocks startup.
 fn migrate_legacy_webview_profile(stable_dir: &std::path::Path) {
-    let target = stable_dir.join("EBWebView").join("Default").join("Local Storage");
+    let target = stable_dir
+        .join("EBWebView")
+        .join("Default")
+        .join("Local Storage");
     if target.exists() {
         return; // stable profile already owns a Local Storage — don't clobber
     }
@@ -189,10 +208,17 @@ fn migrate_legacy_webview_profile(stable_dir: &std::path::Path) {
     let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     for entry in entries.flatten() {
         let fname = entry.file_name(); // owned, outlives the `to_string_lossy` borrow
-        if !fname.to_string_lossy().starts_with("visionmachine_webview_") {
+        if !fname
+            .to_string_lossy()
+            .starts_with("visionmachine_webview_")
+        {
             continue;
         }
-        let ls = entry.path().join("EBWebView").join("Default").join("Local Storage");
+        let ls = entry
+            .path()
+            .join("EBWebView")
+            .join("Default")
+            .join("Local Storage");
         if !ls.join("leveldb").exists() {
             continue;
         }
@@ -200,23 +226,17 @@ fn migrate_legacy_webview_profile(stable_dir: &std::path::Path) {
             .metadata()
             .and_then(|m| m.modified())
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        if newest
-            .as_ref()
-            .map(|(t, _)| *t)
-            .is_none_or(|t| mtime > t)
-        {
+        if newest.as_ref().map(|(t, _)| *t).is_none_or(|t| mtime > t) {
             newest = Some((mtime, ls));
         }
     }
     match newest {
-        Some((_, src)) => {
-            match copy_dir_recursive(&src, &target) {
-                Ok(()) => log::info!(
-                    "[Migration] restored Local Storage into the stable webview profile (from {src:?})"
-                ),
-                Err(e) => log::warn!("[Migration] could not copy {src:?} -> {target:?}: {e}"),
-            }
-        }
+        Some((_, src)) => match copy_dir_recursive(&src, &target) {
+            Ok(()) => log::info!(
+                "[Migration] restored Local Storage into the stable webview profile (from {src:?})"
+            ),
+            Err(e) => log::warn!("[Migration] could not copy {src:?} -> {target:?}: {e}"),
+        },
         None => {}
     }
 }
@@ -348,6 +368,11 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        // Custom `media://` protocol: streams media-tree artifacts to the
+        // webview with HTTP Range support (video seeking). Registered on
+        // the Builder because config windows are created before `setup`
+        // runs — a plugin registered in `setup` would miss the main window.
+        .register_asynchronous_uri_scheme_protocol("media", generation::media_protocol::handler)
         .manage(AppState::new(db))
         .on_window_event(|window, event| {
             // Close guard: closing the app while a generation task is live
@@ -428,6 +453,35 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // Populate the media-roots cache for the `media://` handler.
+            // The handler is synchronous and must never block_on an async DB
+            // lock (deadlock at startup). Roots are cached here and refreshed
+            // when sessions/projects change.
+            {
+                let state = app.state::<AppState>();
+                let cache = state.media_roots_cache.clone();
+                let db = state.db.clone();
+                tauri::async_runtime::spawn(async move {
+                    let db_guard = db.lock().await;
+                    let roots = generation::media_protocol::collect_media_roots(&db_guard).await;
+                    if let Ok(mut c) = cache.write() {
+                        *c = roots;
+                    }
+                });
+            }
+            // Start the live dashboard server (auto-opens in the OS browser
+            // so a wedged webview can be diagnosed from a separate process).
+            // DEV ONLY by default: a release build must not bind a localhost
+            // diagnostic port or auto-open a browser tab. Support can still
+            // opt in on any build with VM_DASHBOARD=1.
+            if cfg!(debug_assertions) || std::env::var("VM_DASHBOARD") == Ok("1".into()) {
+                let st = app.state::<AppState>();
+                let shared = st.dashboard.clone();
+                let gen = st.generation.clone();
+                let group = st.group.clone();
+                let auto_open = std::env::var("VM_DASHBOARD") != Ok("0".into());
+                dashboard::start(gen, group, shared, auto_open);
+            }
             // Wire the generation state machine's event sink to the UI window
             // ("backend owns state, frontend renders"): every meaningful
             // task transition is pushed to `main` on the `gen-task` event so
@@ -481,6 +535,11 @@ pub fn run() {
             commands::app::close_dismissed,
             commands::app::ui_heartbeat,
             commands::app::js_error_log,
+            commands::app::memory_probe,
+            commands::app::log_stall_report,
+            commands::app::log_pipeline_diag,
+            commands::app::report_renderer_metrics,
+            commands::app::log_dashboard_line,
             commands::auth::login_user,
             commands::auth::logout_user,
             commands::accounts::list_accounts,
@@ -498,6 +557,20 @@ pub fn run() {
             commands::sessions::duplicate_session,
             commands::composer::get_composer,
             commands::composer::save_composer,
+            commands::director::director_run_flow,
+            commands::director::director_list_flows,
+            commands::director::director_load_flow,
+            commands::director::director_log_signal,
+            commands::director::director_apply_flow,
+            commands::director::director_apply_flow_edited,
+            commands::director::director_apply_flow_scoped,
+            commands::director::director_save_seed_card,
+            commands::director::director_load_seed_card,
+            commands::director::director_flag_golden,
+            commands::director::director_list_golden,
+            commands::director::director_save_scratch,
+            commands::director::director_load_scratch,
+            commands::director::director_list_signals,
             commands::generation::start_generation,
             commands::generation::start_session_generation,
             commands::generation::get_generation_group,
@@ -517,6 +590,9 @@ commands::generation::extract_pipe_last_frame,
             commands::generation::read_media_file,
             commands::generation::open_media_in_player,
             commands::generation::reveal_media_folder,
+            commands::generation::backfill_media_proxies,
+commands::generation::retry_failed_video_downloads,
+            commands::generation::retry_failed_video_downloads,
             // Settings & provider system (Phase 1)
             commands::settings::get_settings,
             commands::settings::save_settings,

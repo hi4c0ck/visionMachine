@@ -2,10 +2,11 @@
 //! remains in TaskRegistry so the existing task lifecycle and terminal sink
 //! ordering stay authoritative.
 use crate::generation::{
-    compose_session_video, BOUNDARY_TRIM_FRAMES, ComposeRegistry, GenerationService,
-    GenerationTaskView, ModelSpecWire, SourceVideo, TaskStatus,
+    compose_session_video, is_remote_media_ref, BOUNDARY_TRIM_FRAMES, ComposeRegistry,
+    GenerationService, GenerationTaskView, ModelSpecLimits, ModelSpecWire, SourceVideo,
+    TaskStatus,
 };
-use crate::models::composer::LastGeneration;
+use crate::models::composer::{Keyframe, LastGeneration, Pipe};
 use crate::storage::{db::Database, generation_groups_db::GenerationGroupRow};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -29,6 +30,95 @@ fn resilient_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
             log::error!("[Generation] group: recovering a poisoned mutex; continuing");
             p.into_inner()
         }
+    }
+}
+
+/// ━━━ TEMPORARY WORKAROUND — REMOVE WHEN THE i2v ROUTE GRID FIX SHIPS ━━━
+///
+/// Agnes team confirmed (2026-11-02): the i2v model processes video at an
+/// internal resolution of 1344×768, then resizes to 720-pixel short side
+/// while preserving aspect ratio → **1260×720** (native 7:4). t2v and
+/// multi-reference are NOT affected (they output true 1280×720). This is
+/// a model-side behavior, not a client bug.
+///
+/// WORKAROUND: seed pipe 0 onto the i2v route (via a txt2img slot-1
+/// keyframe) so the ENTIRE session runs on the 1260×720 grid. Without
+/// this, pipe 0 = t2v = 1280×720, all other pipes = i2v = 1260×720 →
+/// one dimensional seam at compose time (the "jump" / "stretch" the user
+/// sees).
+///
+/// REMOVAL CONDITION: after the next model update, ffprobe-verify that
+/// i2v output dims match t2v. If they do (both 1280×720), delete:
+///   - `opening_keyframe_needed` (this function)
+///   - `bootstrap_opening_keyframe` (the seed method)
+///   - `fallback_image_spec` (the spec fallback)
+///   - the bootstrap call in `start_group`
+///   - the "TEMPORARY" grid note in docs/agnes-model-catalog.md
+/// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+///
+/// Pure decision: should the OPENING pipe be seeded with a `txt2img`
+/// slot-1 keyframe so its video stage runs on the i2v route?
+///
+/// Deliberately NOT gated on the run's image spec: the seed is pure data.
+/// When an image spec IS available the image stage generates the opening
+/// frame and the video runs keyframe mode (i2v grid). When it is NOT, the
+/// image stage errors and the group's "continue" policy lets the video fall
+/// back to text mode - exactly today's behavior. Never worse, sometimes
+/// uniform.
+///
+/// Deliberately NOT gated on `media_mode` either: the shaper's wire-mode
+/// decision (`seconds_mode_wire`) routes to `"keyframe"` whenever a
+/// settled keyframe is present, regardless of the pipe's stored mode -
+/// so a TEXT-mode opening pipe (the flow-materialized pipes, e.g. the
+/// Director/LLM flow's one-pipe-per-shot plan) takes the same i2v route
+/// once its slot-1 keyframe is generated. `reference` mode is the only
+/// exclusion: its media rides `images[]`/`audios[]`, not keyframes, so a
+/// seeded keyframe would be dead weight there (and the model has no such
+/// keyframe route).
+fn opening_keyframe_needed(pipe: &Pipe) -> bool {
+    if pipe.media_mode == "reference" {
+        return false;
+    }
+    // A settled slot-1 (user-provided or previously caught) is kept as-is -
+    // mirrors auto-catch's non-destructive rule, never overwrites it.
+    !pipe.has_settled_slot1()
+}
+
+/// A bounded image-gen spec fallback for the Agnes image model contract.
+///
+/// The frontend owns the model catalog (specs are DATA in
+/// `catalog.ts`) and normally hands a resolved `image_spec` to Rust. When it
+/// does NOT (the 11:35 "pipe 0 ran t2v" bug - a null `imageSpec` passthrough),
+/// a seeded opening keyframe's image stage hard-fails and the video falls
+/// back to text mode -> the t2v native grid. To make the uniform-grid
+/// invariant hold regardless of the frontend's spec passthrough, synthesize a
+/// minimal-but-correct image-gen spec from the named image model.
+///
+/// Only the fields the `image-gen` shaper actually reads are set (id/kind/
+/// endpoint/sync/request_format). `limits` is left empty on purpose: the
+/// shaper's `guard_supported` then drops size/ratio and the request goes out
+/// as model+prompt+extra_body, and the provider generates a default-size
+/// frame. The opening frame's exact pixel grid is NOT the deliverable - the
+/// i2v video route re-synthesizes the frame anyway; what matters is that a
+/// valid `first_frame` EXISTS so the route is keyframe, not text.
+fn fallback_image_spec(model_id: &str) -> ModelSpecWire {
+    ModelSpecWire {
+        id: model_id.to_string(),
+        kind: "image".into(),
+        endpoint: "/v1/images/generations".into(),
+        sync: true,
+        poll_endpoint: None,
+        request_format: "image-gen".into(),
+        limits: ModelSpecLimits::default(),
+        pending: None,
+        label: Some("Agnes Image (fallback spec)".into()),
+        read_only: None,
+        supports_seed: None,
+        guidance: None,
+        steps: None,
+        guidance_range: None,
+        img2img_only: None,
+        media: None,
     }
 }
 
@@ -79,6 +169,31 @@ pub struct GenerationGroupView {
     pub sources: Vec<crate::storage::generation_groups_db::GroupSourceRecord>,
     pub started_at: i64,
 }
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardGroupPipe {
+    pub pipe_id: String,
+    pub task_id: Option<String>,
+    pub status: String,
+    pub progress: f32,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardGroup {
+    pub group_id: String,
+    pub session_id: String,
+    pub status: String,
+    pub live: bool,
+    pub queue_len: usize,
+    pub current: Option<String>,
+    pub compose_state: Option<String>,
+    pub compose_error: Option<String>,
+    pub session_video_path: Option<String>,
+    pub pipes: Vec<DashboardGroupPipe>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupEvent {
@@ -190,6 +305,7 @@ fn completed_source(pipe_id: &str, event: &crate::generation::GenTaskEvent) -> O
             // StartSessionGenerationInput.trim_frames when present; 0 here
             // keeps the classic lossless splice for non-trimmed runs.
             trim_frames: 0,
+            tail_trim_frames: 0,
             // 0012 D2: per-pipe crop override is wired on the staged-source
             // path (where the composer's pipe map is available); this
             // fallback keeps the session-global crop mode (None).
@@ -234,6 +350,20 @@ fn stage_source_clip(out_dir: &Path, source: &SourceVideo, order_index: u32) -> 
     std::fs::create_dir_all(out_dir).ok()?;
     std::fs::copy(&source.path, &staged_path).ok()?;
     Some(staged_path.to_string_lossy().into_owned())
+}
+
+/// Pure, testable filter for the auto-compose source set: keep only records
+/// whose `source_path` is a LOCAL media-tree file (never a degraded remote
+/// url), so a CDN-gated clip is dropped from the concat manifest instead of
+/// hard-failing the whole session compose. A gated pipe's render is still
+/// safe on the provider's url and is recovered by the L3 re-heal.
+fn filter_local_group_sources(
+    records: Vec<crate::storage::generation_groups_db::GroupSourceRecord>,
+) -> Vec<crate::storage::generation_groups_db::GroupSourceRecord> {
+    records
+        .into_iter()
+        .filter(|r| !is_remote_media_ref(&r.source_path))
+        .collect()
 }
 
 /// Session-video output dir for a group run. Mirrors the standalone
@@ -451,6 +581,28 @@ impl GroupCoordinator {
         //    whole run; a mid-run settings edit no longer changes the shape.
         let pinned = resolve_run_stats(&composer, &input.run_stats);
         input.run_stats = Some(pinned);
+        // Uniform-grid spec fallback: the frontend normally hands a resolved
+        // image spec, but a null passthrough (the 11:35 pipe-0-t2v bug) makes
+        // every image stage hard-fail ("no resolved image spec") and the
+        // seeded opening keyframe can't generate - so the video falls back
+        // to text mode and the session seam returns. When a model is NAMED
+        // but its spec is missing, synthesize the bounded Agnes image-gen
+        // spec so the keyframe route stays reachable. No model named at all
+        // = no image stages = text-mode fallback, which is today's behavior
+        // (harmless, not a regression).
+        if input.image_spec.is_none() {
+            if let Some(model) = input
+                .image_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+            {
+                input.image_spec = Some(fallback_image_spec(model));
+                log::info!(
+                    "[Generation] group: image spec missing - synthesized bounded image-gen spec for '{model}' (uniform-grid bootstrap stays reachable)"
+                );
+            }
+        }
         // When a group will compose, the session-video output dir is shared
         // with the standalone "compose session" button. Reset any stale
         // manifest/output AND any staged clips a PREVIOUS group run left
@@ -535,6 +687,11 @@ impl GroupCoordinator {
         // every later app restart as a phantom stale group and keep
         // re-opening the progress modal over it. The in-memory run is rolled
         // back on the error path for the same reason.
+        // Uniform-grid bootstrap: seed a generated opening keyframe into the
+        // first pipe when it would otherwise fall back to text mode, so the
+        // whole session runs on the i2v native grid (no t2v|i2v seam).
+        self.bootstrap_opening_keyframe(&input, &composer, &first)
+            .await;
         let (tid, view) = match self.start_pipe(&input, &first).await {
             Ok(r) => r,
             Err(e) => {
@@ -559,6 +716,88 @@ impl GroupCoordinator {
         });
         Ok((gid, tid, view))
     }
+    /// Uniform-grid bootstrap (the "no t2v|i2v seam" fix).
+    ///
+    /// The opening pipe has no previous clip to auto-catch, so an empty slot-1
+    /// would make its video stage fall back to TEXT mode -> the t2v native
+    /// grid, while every interior clip is i2v. That asymmetry is the one seam
+    /// in a composed session. This seeds a `txt2img` slot-1 keyframe on the
+    /// opening pipe (persisted to the composer so the image stage is real and
+    /// survives a restart); the existing keyframe->video pipeline then
+    /// generates the frame and feeds it as the video's `first_frame`,
+    /// carrying pipe 0 onto the SAME i2v grid as the rest of the session.
+    ///
+    /// Purely additive and non-destructive: it only acts when
+    /// `opening_keyframe_needed` is true (text or keyframes mode - not
+    /// reference - + slot-1 not settled). A settled slot-1 is never
+    /// touched. Best-effort - a persist failure just leaves the pipe in
+    /// today's text-mode behavior.
+    async fn bootstrap_opening_keyframe(
+        &self,
+        input: &StartSessionGenerationInput,
+        composer: &crate::models::ComposerConfig,
+        first_pipe_id: &str,
+    ) {
+        let Some(pipe) = composer.pipes.iter().find(|p| p.id == first_pipe_id) else {
+            return;
+        };
+        // Record WHY we skip so a future "why is pipe 0 still 1280x720?" is
+        // answerable from the app log instead of a code read.
+        if !opening_keyframe_needed(pipe) {
+            log::info!(
+                "[Generation] uniform-grid bootstrap: skip pipe {first_pipe_id} (mode={}, settled_slot1={})",
+                pipe.media_mode,
+                pipe.has_settled_slot1()
+            );
+            return;
+        }
+        // The opening frame's prompt is the pipe's video prompt itself (the
+        // most descriptive available text); the image model renders the scene
+        // so the i2v stage has a concrete first frame to synthesize from.
+        // `txt2img` kind = generated image stage (vs `url` = user file).
+        let prompt = input
+            .prompts
+            .get(first_pipe_id)
+            .cloned()
+            .filter(|p| !p.trim().is_empty());
+        let kf = Keyframe {
+            id: uuid::Uuid::new_v4().to_string(),
+            frame: 0,
+            slot_index: 1,
+            kind: "txt2img".into(),
+            image_src: None,
+            prompt,
+            reference_url: None,
+            preview_remote_url: None,
+            preview_local_path: None,
+            status: "pending".into(),
+            force_regen: false,
+            image_size: None,
+            image_ratio: None,
+        };
+        if let Ok(mut c) = self.db.get_composer(&input.session_id).await {
+            if let Some(target) = c.pipes.iter_mut().find(|p| p.id == first_pipe_id) {
+                // Repoint / add slot-1 ONLY - never clobber the pipe's other
+                // keyframes or a settled slot-1 (the gate already ruled that
+                // out, but belt-and-suspenders against a stale read).
+                if let Some(existing) = target.keyframes.iter_mut().find(|k| k.slot_index == 1) {
+                    *existing = kf.clone();
+                } else {
+                    target.keyframes.push(kf.clone());
+                }
+                if self.db.save_composer(&c).await.is_ok() {
+                    log::info!(
+                        "[Generation] uniform-grid bootstrap: seeded opening txt2img keyframe on pipe {first_pipe_id} (i2v route)"
+                    );
+                } else {
+                    log::warn!(
+                        "[Generation] uniform-grid bootstrap persist failed for {first_pipe_id} (kept text-mode fallback)"
+                    );
+                }
+            }
+        }
+    }
+
     /// Start one pipe through the SHARED normal generation-start path
     /// (`commands::generation::build_pipe_start`) — the exact same
     /// prompt/specs/media/task construction `start_generation` uses, so a
@@ -1218,6 +1457,60 @@ impl GroupCoordinator {
                         .collect()
                 })
                 .unwrap_or_default();
+            // Degraded-download resilience (2026-11-11): the CDN egress gate
+            // can leave a FINISHED pipe clip stored only as the provider's
+            // remote URL (the `download_failed` marker degrades
+            // `last_generation.videoPath` to the url so a completed render is
+            // never lost to a client-side gate). Such a value is NOT a
+            // composable source: staging it makes `fs::copy` warn + drop the
+            // record, and the fallback set would hand the remote url to
+            // `compose_session_video`'s existence check and hard-fail the
+            // WHOLE session compose over one gated clip. Exclude degraded
+            // clips from BOTH the staged and the fallback sets; when nothing
+            // local remains the compose is a clean "skipped" (the gated clip
+            // stays previewable/recoverable via the L3 re-heal).
+            let group_sources = filter_local_group_sources(group_sources);
+            let sources = sources
+                .iter()
+                .filter(|s| !is_remote_media_ref(&s.path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if sources.is_empty() {
+                let skip_note = "no locally-stored clips (video download degraded to remote url)".to_string();
+                {
+                    let mut m = resilient_lock(&this.state);
+                    if let Some(r) = m.get_mut(&gid_owned) {
+                        r.compose_state = Some("skipped".into());
+                        r.compose_error = Some(skip_note.clone());
+                    }
+                }
+                this.db
+                    .update_generation_group_composition(
+                        &gid_owned,
+                        None,
+                        Some("skipped"),
+                        Some(&skip_note),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .ok();
+                this.emit(GroupEvent {
+                    group_id: gid_owned.clone(),
+                    kind: "compose-terminal".into(),
+                    pipe_id: None,
+                    task_id: None,
+                    status: Some("skipped".into()),
+                });
+                log::info!(
+                    "[Generation] group {gid_owned} session compose skipped: {}",
+                    skip_note
+                );
+                this.finish_group(&gid_owned, GroupStatus::Done, None);
+                return;
+            }
             // The concat manifest must reference THIS run's staged clips, in
             // `order_index` order (which is the pipe's timeline position, not
             // the completion order they happened to be recorded in). Sort
@@ -1237,6 +1530,7 @@ impl GroupCoordinator {
                     // head-trim (0 = keep the whole clip). Pipe 0 is never
                     // offered the toggle, but a stored value still applies.
                     trim_frames: boundary_trim_of(trim_map.get(&r.pipe_id).copied().unwrap_or(false)),
+                    tail_trim_frames: 0,
                     // 0012 D2: this pipe's crop override (session crop if none).
                     crop_mode: crop_override_map
                         .get(&r.pipe_id)
@@ -1365,6 +1659,25 @@ impl GroupCoordinator {
                 )
                 .await
                 .ok();
+            // Also persist the composed artifact at the SESSION level (the
+            // composer row): the group row alone is unreachable on re-open
+            // for sessions without a restorable group, so a restart would
+            // leave the tool panel empty even though the video exists.
+            if let Some(path) = output_path.as_ref() {
+                if let Ok(mut c) = this.db.get_composer(&session_id).await {
+                    c.session_video_path = Some(path.clone());
+                    // Item 10: persist the bool-trim-derived signed map so the
+                    // playhead→pipe layout stays trim-aware after a restart
+                    // (each opted-in interior pipe = +8 head frames).
+                    let ov: std::collections::HashMap<String, i32> = trim_map
+                        .iter()
+                        .filter(|(_, on)| **on)
+                        .map(|(k, _)| (k.clone(), crate::generation::BOUNDARY_TRIM_FRAMES as i32))
+                        .collect();
+                    c.session_video_overlap = if ov.is_empty() { None } else { Some(ov) };
+                    let _ = this.db.save_composer(&c).await;
+                }
+            }
             this.emit(GroupEvent {
                 group_id: gid_owned.clone(),
                 kind: "compose-terminal".into(),
@@ -1453,6 +1766,36 @@ impl GroupCoordinator {
             },
             started_at: r.started_at,
         })
+    }
+    /// All currently-LIVE group runs (finished groups are removed from
+    /// memory by `finish_group`, so this list is bounded by concurrent runs,
+    /// not history — the count itself is a dashboard signal).
+    pub fn live_groups(&self) -> Vec<DashboardGroup> {
+        let m = resilient_lock(&self.state);
+        m.iter()
+            .map(|(gid, run)| DashboardGroup {
+                group_id: gid.clone(),
+                session_id: run.session_id.clone(),
+                status: "running".to_string(),
+                live: true,
+                queue_len: run.queue.len(),
+                current: run.current.clone(),
+                compose_state: run.compose_state.clone(),
+                compose_error: run.compose_error.clone(),
+                session_video_path: run.session_video_path.clone(),
+                pipes: run
+                    .pipes
+                    .iter()
+                    .map(|p| DashboardGroupPipe {
+                        pipe_id: p.0.clone(),
+                        task_id: p.1.clone(),
+                        status: p.2.clone(),
+                        progress: p.3,
+                        error: p.4.clone(),
+                    })
+                    .collect(),
+            })
+            .collect()
     }
     pub fn has_task(&self, tid: &str) -> bool {
         resilient_lock(&self.index).contains_key(tid)
@@ -1554,6 +1897,123 @@ mod tests {
         assert!(!cancel.load(Ordering::Acquire));
         cancel.store(true, Ordering::Release);
         assert!(cancel.load(Ordering::Acquire));
+    }
+
+    // --- uniform-grid bootstrap: the pure `opening_keyframe_needed` rule ---
+
+    fn base_input() -> StartSessionGenerationInput {
+        StartSessionGenerationInput {
+            session_id: "s1".into(),
+            prompts: Default::default(),
+            media_root: None,
+            image_model: None,
+            video_model: None,
+            seed: None,
+            profile_id: None,
+            image_spec: Some(
+                serde_json::from_value(serde_json::json!({ "id": "img" })).unwrap(),
+            ),
+            video_spec: None,
+            pipe_ids: None,
+            failure_policy: "continue".into(),
+            auto_compose: true,
+            run_stats: None,
+            pipe_params: None,
+            force_last_frames: std::collections::HashMap::new(),
+            trim_boundary: std::collections::HashMap::new(),
+        }
+    }
+
+    fn keyframes_pipe() -> crate::models::composer::Pipe {
+        crate::models::composer::Pipe::new("Pipe 1", 121)
+    }
+
+    #[test]
+    fn opening_keyframe_needed_seeds_an_unsettled_keyframes_pipe() {
+        let pipe = keyframes_pipe(); // media_mode defaults to "keyframes", empty keyframes
+        assert_eq!(pipe.media_mode, "keyframes");
+        assert!(!pipe.has_settled_slot1());
+        assert!(
+            opening_keyframe_needed(&pipe),
+            "an unsettled keyframes pipe must be seeded (no image-spec gate: \
+             a txt2img keyframe is harmless when no image spec is present - \
+             the image stage errors and the run falls back to text mode)"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_seeds_even_without_an_image_spec() {
+        let pipe = keyframes_pipe();
+        // Regression: the 11:35 "pipe 0 ran t2v" bug - the old gate coupled
+        // the seed to the run's image_spec passthrough, which was null, so
+        // the bootstrap silently no-op'd.
+        assert!(
+            opening_keyframe_needed(&pipe),
+            "the seed must not depend on the run's image spec"
+        );
+        let _ = base_input(); // image_spec presence must be irrelevant
+    }
+
+    #[test]
+    fn opening_keyframe_needed_skips_a_settled_slot1() {
+        let mut pipe = keyframes_pipe();
+        let mut kf = crate::models::composer::Keyframe::new(1, 0);
+        kf.image_src = Some("https://example.com/open.png".into());
+        pipe.keyframes.push(kf);
+        assert!(pipe.has_settled_slot1(), "precondition: slot-1 is settled");
+        assert!(
+            !opening_keyframe_needed(&pipe),
+            "a settled opening keyframe must never be re-seeded"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_seeds_a_text_mode_pipe() {
+        // The flow-materialized pipes are `media_mode: "text"` (Director/
+        // LLM plan). The 14:30 "Hangar Descent · shot 1" regression: the old
+        // `!= "keyframes"` gate skipped them, so the opening clip ran t2v
+        // (1280x720) while the auto-caught interior clips ran i2v. A
+        // generated slot-1 keyframe drives the shaper to the keyframe
+        // route regardless of the stored mode, so text-mode opening pipes
+        // MUST be seeded too.
+        let mut pipe = keyframes_pipe();
+        pipe.media_mode = "text".into();
+        assert!(
+            opening_keyframe_needed(&pipe),
+            "a text-mode opening pipe must be seeded (content drives the wire route)"
+        );
+    }
+
+    #[test]
+    fn opening_keyframe_needed_skips_a_reference_mode_pipe() {
+        let mut pipe = keyframes_pipe();
+        pipe.media_mode = "reference".into();
+        assert!(
+            !opening_keyframe_needed(&pipe),
+            "keyframes are inert in reference mode - no seed"
+        );
+    }
+
+    #[test]
+    fn fallback_image_spec_is_a_valid_image_gen_spec() {
+        // The spec fallback is what keeps the i2v route reachable when the
+        // frontend omits the image spec (the 11:35 bug). It must be a
+        // well-formed image-gen spec the shaper can shape against.
+        let spec = fallback_image_spec("agnes-image-2.5-flash");
+        assert_eq!(spec.id, "agnes-image-2.5-flash");
+        assert_eq!(spec.kind, "image");
+        assert_eq!(spec.endpoint, "/v1/images/generations");
+        assert!(spec.sync);
+        assert_eq!(spec.request_format, "image-gen");
+        // limits left empty on purpose -> the shaper's guard_supported drops
+        // size/ratio; the provider still generates a default-size frame.
+        assert!(spec.limits.resolutions.is_none());
+        assert!(spec.limits.ratios.is_none());
+        // It must survive the wire round-trip serde the group input uses.
+        let v = serde_json::to_value(&spec).unwrap();
+        let back: ModelSpecWire = serde_json::from_value(v).unwrap();
+        assert_eq!(back.id, spec.id);
+        assert_eq!(back.request_format, "image-gen");
     }
 
     // Regression: a follow-up pipe started mid-run must have its task id
@@ -1667,6 +2127,7 @@ mod tests {
             path: src_path.to_string_lossy().into_owned(),
             task_id: "task-9".into(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         };
         let staged = stage_source_clip(&out_dir, &source, 0);
@@ -1702,6 +2163,7 @@ mod tests {
                 .into_owned(),
             task_id: "task-9".into(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         };
         assert!(
@@ -1709,6 +2171,54 @@ mod tests {
             "a missing clip must never yield a staged record"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // P1-4 (2026-11-11): a degraded pipe's clip is stored as the provider's
+    // REMOTE url (the CDN egress gate blocked the local download; the render
+    // still completed). The auto-compose source set must drop such records
+    // instead of feeding the url to `compose_session_video`'s existence
+    // check and hard-failing the whole session over one gated clip.
+    #[test]
+    fn filter_local_group_sources_drops_degraded_remote_urls() {
+        use crate::storage::generation_groups_db::GroupSourceRecord;
+        let rec = |pipe: &str, src: &str| GroupSourceRecord {
+            pipe_id: pipe.into(),
+            task_id: "task-1".into(),
+            source_path: src.into(),
+            staged_path: String::new(),
+            order_index: 0,
+        };
+        let local_a = "C:\\vm\\s\\pipe-a\\t1\\video.mp4";
+        let local_b = "C:\\vm\\s\\pipe-b\\t1\\video.mp4";
+        let gated = "https://platform-outputs.agnes-ai.space/videos/clip.mp4";
+        let kept = filter_local_group_sources(vec![
+            rec("pipe-a", local_a),
+            rec("pipe-gated", gated),
+            rec("pipe-b", local_b),
+        ]);
+        // The gated record is dropped; the two local clips survive IN ORDER
+        // (the concat manifest relies on order_index, so a partial set must
+        // never reorder the surviving clips).
+        let pipes: Vec<&str> = kept.iter().map(|r| r.pipe_id.as_str()).collect();
+        assert_eq!(pipes, vec!["pipe-a", "pipe-b"]);
+        // Only gated pipes remain when the whole run degraded: the caller
+        // then takes the clean "skipped" compose path.
+        assert!(filter_local_group_sources(vec![rec("pipe-gated", gated)]).is_empty());
+    }
+
+    // P1-4: the same remote-detection rule that drops a degraded record must
+    // also recognize a plain local path as local (case/trim-insensitive on
+    // the url prefix).
+    #[test]
+    fn is_remote_media_ref_classification() {
+        assert!(is_remote_media_ref(
+            "https://platform-outputs.agnes-ai.space/videos/x.mp4"
+        ));
+        assert!(is_remote_media_ref("http://cdn.example.com/x.mp4"));
+        assert!(is_remote_media_ref("  https://cdn.example.com/x.mp4 "));
+        assert!(!is_remote_media_ref("C:\\vm\\media\\s\\pipe\\t\\video.mp4"));
+        assert!(!is_remote_media_ref("/home/u/media/s/session.mp4"));
+        assert!(!is_remote_media_ref(""));
     }
 
     // Regression: a compose "success" path that does not exist on disk must
@@ -1749,6 +2259,7 @@ mod tests {
             path: src.to_string_lossy().into_owned(),
             task_id: "t1".into(),
             trim_frames: 0,
+            tail_trim_frames: 0,
             crop_mode: None,
         };
         let staged = stage_source_clip(&out_dir, &source, 0).unwrap();
@@ -1984,6 +2495,49 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "qValue": 24 })).unwrap();
         assert_eq!(back.q_value, Some(24), "qValue key deserializes");
         assert_eq!(back.c_value, None, "absent cValue = None");
+    }
+
+    /// Bug batch nov19 (item 3, RC2): run-scoped Q/C overrides are clamped
+    /// to the SAME range the UI/store enforce — a stale or malformed client
+    /// can never push an out-of-range value into the engine.
+    #[test]
+    fn out_of_range_pipe_param_overrides_are_clamped() {
+        use crate::commands::generation::{build_pipe_start, PipeParamOverride, PipeStartParams};
+        let composer: crate::models::ComposerConfig = serde_json::from_value(serde_json::json!({
+            "id": "c1", "sessionId": "s1", "name": "S",
+            "fps": 24, "resolution": "720p", "orientation": "horizontal",
+            "pipes": [{ "id": "p1", "name": "Pipe 1", "orderIndex": 0, "qValue": 18, "cValue": 7.0 }]
+        }))
+        .unwrap();
+        let pipe = composer.pipes[0].clone();
+
+        let high = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            pipe_params: Some(PipeParamOverride {
+                q_value: Some(99),
+                c_value: Some(40.0),
+            }),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &high);
+        assert_eq!(engine.q_value, 30, "q clamps to the range ceiling");
+        assert_eq!(engine.c_value, 15.0, "c clamps to the range ceiling");
+
+        let low = PipeStartParams {
+            session_id: "s1".into(),
+            pipe_id: "p1".into(),
+            prompt: "x".into(),
+            pipe_params: Some(PipeParamOverride {
+                q_value: Some(1),
+                c_value: Some(0.1),
+            }),
+            ..Default::default()
+        };
+        let (_, engine) = build_pipe_start(&composer, &pipe, &low);
+        assert_eq!(engine.q_value, 5, "q clamps to the range floor");
+        assert_eq!(engine.c_value, 0.5, "c clamps to the range floor");
     }
 
     /// The run-stats pin resolves `run_stats ?? composer` into a fully

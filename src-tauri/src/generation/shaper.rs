@@ -107,7 +107,11 @@ pub struct StageContext {
 pub fn shape_request(spec: &ModelSpecWire, ctx: &StageContext) -> Result<Value, String> {
     match spec.request_format.as_str() {
         "image-gen" => Ok(shape_image_gen(spec, ctx)),
-        "video-job-frames" => Ok(shape_video_job_frames(spec, ctx)),
+        // `video-job-frames` (V2.0 fps-native) was removed with the legacy
+        // V2.0 model (P1-7, 2026-11-11): no catalog model declares it — the
+        // V2.5-series is the only video engine. An old payload naming it now
+        // surfaces a concrete "unsupported request format" error instead of
+        // silently shaping a retired route.
         "video-job-seconds" => Ok(shape_video_job_seconds(spec, ctx)),
         "video-job" => Ok(shape_video_job_generic(spec, ctx)),
         "chat" => Ok(shape_chat(spec, ctx)),
@@ -318,13 +322,63 @@ fn seed_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<i64> {
 
 /// cValue under the spec's `guidance` param name, only when the flag is set
 /// (E7). Absent → the value is logged only, never sent.
+///
+/// Item 8 (live-probed 2026-11-19): two refinements at this SINGLE wire
+/// chokepoint —
+/// 1. img2img-only gate: the Agnes TEXT-image queue 400s on guidance_scale;
+///    the IMG2IMG queue accepts it. When the spec declares img2img_only,
+///    the knob rides only requests carrying a reference image.
+/// 2. INVERSION: product semantics are higher C = more dreaming; provider
+///    CFG semantics are higher guidance = stronger prompt adherence = less
+///    dreaming. With a declared guidanceRange [lo, hi] (product units),
+///    wire = (lo + hi) − cValue. UI/store/log values stay in PRODUCT units —
+///    the inversion lives HERE only. No range → verbatim (a provider whose
+///    semantics already match the product).
 fn guidance_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<(String, f32)> {
-    spec.guidance.clone().map(|name| (name, ctx.c_value))
+    let name = spec.guidance.clone()?;
+    if spec.img2img_only() && ctx.reference_url.is_none() {
+        return None;
+    }
+    let val = match spec.guidance_range {
+        Some([lo, hi]) => (lo + hi) - ctx.c_value,
+        None => ctx.c_value,
+    };
+    Some((name, val))
+}
+
+/// Item 8: qValue under the spec's `steps` param name (inference steps),
+/// same img2img gate as guidance. Steps direction matches the product Q
+/// (more steps = more quality) — sent verbatim, no inversion.
+fn steps_value(spec: &ModelSpecWire, ctx: &StageContext) -> Option<(String, u32)> {
+    let name = spec.steps.clone()?;
+    if spec.img2img_only() && ctx.reference_url.is_none() {
+        return None;
+    }
+    Some((name, ctx.q_value))
 }
 
 // ── `image-gen` (agnes image 2.5-flash / 2.1-flash) ────────────────────────
 
 fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
+    // Ask for the image as a remote CDN `url` — the FLUENT chain. The image
+    // stage's CDN URL becomes `UpstreamOutput.primary`, so the video stage's
+    // `first_frame`/`last_frame` carry a fetchable URL that the Agnes video
+    // backend retrieves SERVER-SIDE (their infra, un-gated). That is how the
+    // i2v route has always worked.
+    //
+    // The 403 is client-egress-only: our desktop client cannot download the
+    // CDN url (live-verified 2026-11-09 — fresh AND stale urls, plain GET,
+    // Bearer GET, and Chrome/reqwest/curl UAs all 403 from our IP, while the
+    // provider's own video backend fetches it fine server-side). So the
+    // image stage treats the local materialization as BEST-EFFORT: a failed
+    // CDN download degrades the local preview cache, never the task — the
+    // fluent remote chain (url → video API) is what carries the i2v route.
+    //
+    // Live-verified 2026-11-09: the image API returns `url` XOR `b64_json`
+    // per response in every request shape we can build (response_format=url
+    // → url only; =b64_json → b64 only; return_base64 does not stack).
+    // `url` mode keeps `remote_url` populated, which is what the video stage
+    // needs.
     let mut extra_body = json!({ "response_format": "url" });
     // PITFALL (catalog-locked): response_format lives INSIDE extra_body,
     // never top-level (top-level → HTTP 400).
@@ -363,81 +417,9 @@ fn shape_image_gen(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
     if let Some((name, val)) = guidance_value(spec, ctx) {
         payload[name] = json!(val);
     }
-    payload
-}
-
-// ── `video-job-frames` (agnes-video-v2.0 — fps-native) ────────────────────
-
-/// Collect the merged media URLs for a frames-based video stage: keyframe
-/// URLs (slot order) + subject URLs, respecting the spec's shared-array cap.
-/// Returns `(first_image_option, image_array_option)` for the 0/1/2-3
-/// branches (O3).
-fn frames_media(spec: &ModelSpecWire, ctx: &StageContext) -> (Option<String>, Option<Vec<String>>) {
-    // Upstream is a stable Vec: keyframes (slot order) then subjects (pipe
-    // order). The <Picture N> numbering (O5) follows this list.
-    let cap = spec
-        .media
-        .as_ref()
-        .and_then(|m| m.max_keyframes.or(m.max_refs))
-        .unwrap_or(3) as usize;
-    let urls: Vec<String> = ctx
-        .upstream
-        .iter()
-        .filter(|u| !u.primary.is_empty())
-        .take(cap)
-        .map(|u| u.primary.clone())
-        .collect();
-    match urls.len() {
-        0 => (None, None),
-        1 => (Some(urls[0].clone()), None),
-        _ => (None, Some(urls)),
-    }
-}
-
-fn shape_video_job_frames(spec: &ModelSpecWire, ctx: &StageContext) -> Value {
-    let num_frames = ctx.length_frames; // E6: 8n+1 guaranteed by pre-check
-    let (first_image, image_array) = frames_media(spec, ctx);
-
-    let refs_total = ctx
-        .upstream
-        .iter()
-        .filter(|u| !u.primary.is_empty())
-        .count();
-    // Mode selection (O3): 0 refs -> ti2vid (text-only); 1 ref -> ti2vid +
-    // top-level image; 2-3 refs -> keyframes + extra_body.image + mode.
-    let mut payload = json!({
-        "model": spec.id,
-        "prompt": ctx.prompt,
-        "num_frames": num_frames,
-        "frame_rate": ctx.fps,
-    });
-
-    match refs_total {
-        0 => {
-            payload["mode"] = json!("ti2vid");
-        }
-        1 => {
-            payload["mode"] = json!("ti2vid");
-            if let Some(url) = &first_image {
-                payload["image"] = json!(url);
-            }
-        }
-        _ => {
-            payload["mode"] = json!("keyframes");
-            if let Some(arr) = &image_array {
-                let mut extra = json!({ "mode": "keyframes" });
-                extra["image"] = json!(arr);
-                payload["extra_body"] = extra;
-            }
-        }
-    }
-
-    // width/height + num_inference_steps are OMITTED (O4: server defaults).
-    if let Some((name, val)) = guidance_value(spec, ctx) {
+    // Item 8: quality (inference steps) rides the same img2img gate.
+    if let Some((name, val)) = steps_value(spec, ctx) {
         payload[name] = json!(val);
-    }
-    if let Some(seed) = seed_value(spec, ctx) {
-        payload["seed"] = json!(seed);
     }
     payload
 }
@@ -734,6 +716,9 @@ mod tests {
             read_only: None,
             supports_seed: None,
             guidance: None,
+            steps: None,
+            guidance_range: None,
+            img2img_only: None,
             media: None,
         };
         extra(&mut s);
@@ -792,6 +777,9 @@ mod tests {
         });
         let p = shape_request(&s, &ctx(|_| {})).unwrap();
         assert_eq!(p["model"], "agnes-image-2.5-flash");
+        // url mode: the CDN url feeds the fluent video chain (first_frame).
+        // (Live-verified 2026-11-09: the image API returns url XOR b64_json;
+        // url mode keeps remote_url populated so the video stage can use it.)
         assert_eq!(p["extra_body"]["response_format"], "url");
         // PITFALL: response_format is NEVER top-level.
         assert!(p.get("response_format").is_none());
@@ -815,17 +803,21 @@ mod tests {
         let c = ctx(|c| c.reference_url = Some("https://a.com/ref.png".into()));
         let p = shape_request(&s, &c).unwrap();
         assert_eq!(p["extra_body"]["image"][0], "https://a.com/ref.png");
+        // url mode: the CDN url feeds the fluent video chain.
         assert_eq!(p["extra_body"]["response_format"], "url");
     }
 
     #[test]
     fn image_gen_guidance_gated_by_spec_flag() {
+        // No guidance declared → omitted (logged only).
         let without = spec("image-gen", |m| m.id = "img".into());
         assert!(shape_request(&without, &ctx(|_| {}))
             .unwrap()
             .get("guidance_scale")
             .is_none());
 
+        // Guidance declared, no range, no img2img gate → verbatim (custom
+        // providers whose semantics already match the product).
         let with = spec("image-gen", |m| {
             m.id = "img".into();
             m.guidance = Some("guidance_scale".into());
@@ -834,85 +826,61 @@ mod tests {
         assert_eq!(p["guidance_scale"], 7.0);
     }
 
-    // ── video-job-frames (0/1/2–3 media branches) ────────────────────────
-
-    fn frames_spec() -> ModelSpecWire {
-        spec("video-job-frames", |m| {
-            m.id = "agnes-video-v2.0".into();
-            m.limits.max_frames = Some(441);
-            m.supports_seed = Some(true);
-            m.media = Some(ModelSpecMedia {
-                modes: vec!["keyframes".into()],
-                dual: None,
-                shared_array: Some(true),
-                max_keyframes: Some(3),
-                max_refs: Some(3),
-                max_audios: None,
-                max_videos: None,
-                wire_modes: None,
-                min_refs: None,
-                min_keyframes: None,
-                image_field: None,
-            });
-        })
-    }
-
+    /// Item 8 (live-probed 2026-11-19): the Agnes img2img queue accepts
+    /// guidance_scale + num_inference_steps; the txt2img queue 400s on both.
+    /// The shaper gates on the reference image and INVERTS guidance at the
+    /// wire (product higher C = more dreaming → lower CFG guidance).
     #[test]
-    fn frames_zero_refs_text_only_ti2vid() {
-        let p = shape_request(&frames_spec(), &ctx(|c| c.upstream = vec![])).unwrap();
-        assert_eq!(p["mode"], "ti2vid");
-        assert_eq!(p["num_frames"], 121);
-        assert_eq!(p["frame_rate"], 24);
-        assert!(p.get("image").is_none());
-        assert!(p.get("extra_body").is_none());
-    }
-
-    #[test]
-    fn frames_one_ref_ti2vid_plus_top_level_image() {
-        let c = ctx(|c| c.upstream = vec![up("keyframe", "k1", "https://a.com/k1.png")]);
-        let p = shape_request(&frames_spec(), &c).unwrap();
-        assert_eq!(p["mode"], "ti2vid");
-        assert_eq!(p["image"], "https://a.com/k1.png");
-        assert!(p.get("extra_body").is_none());
-    }
-
-    #[test]
-    fn frames_two_three_refs_keyframes_extra_body() {
-        let c = ctx(|c| {
-            c.upstream = vec![
-                up("keyframe", "k1", "https://a.com/k1.png"),
-                up("keyframe", "k2", "https://a.com/k2.png"),
-                up("subject", "s1", "https://a.com/s1.png"),
-            ];
-        });
-        let p = shape_request(&frames_spec(), &c).unwrap();
-        assert_eq!(p["mode"], "keyframes");
-        assert_eq!(p["extra_body"]["mode"], "keyframes");
-        assert_eq!(p["extra_body"]["image"].as_array().unwrap().len(), 3);
-        assert!(p.get("image").is_none());
-    }
-
-    #[test]
-    fn frames_seed_and_guidance_gating() {
-        let s = frames_spec();
-        let c = ctx(|c| c.seed = Some(42));
-        let p = shape_request(&s, &c).unwrap();
-        assert_eq!(p["seed"], 42);
-        assert!(p.get("guidance_scale").is_none());
-
-        let s2 = spec("video-job-frames", |m| {
-            m.id = "agnes-video-v2.0".into();
+    fn image_gen_qc_knobs_img2img_gated_and_guidance_inverted() {
+        let agnes = spec("image-gen", |m| {
+            m.id = "agnes-image-2.5-flash".into();
             m.guidance = Some("guidance_scale".into());
+            m.steps = Some("num_inference_steps".into());
+            m.guidance_range = Some([0.5, 15.0]);
+            m.img2img_only = Some(true);
         });
-        assert_eq!(shape_request(&s2, &c).unwrap()["guidance_scale"], 7.0);
+
+        // txt2img (no reference): BOTH knobs omitted — the queue rejects them.
+        let t2i = shape_request(&agnes, &ctx(|_| {})).unwrap();
+        assert!(t2i.get("guidance_scale").is_none(), "txt2img omits guidance");
+        assert!(t2i.get("num_inference_steps").is_none(), "txt2img omits steps");
+
+        // img2img (reference present): guidance INVERTED (c=7 → 15.5−7=8.5),
+        // steps verbatim (q=18).
+        let i2i = shape_request(
+            &agnes,
+            &ctx(|c| c.reference_url = Some("https://a.com/ref.png".into())),
+        )
+        .unwrap();
+        assert_eq!(i2i["guidance_scale"], 8.5, "wire = (0.5+15) − cValue");
+        assert_eq!(i2i["num_inference_steps"], 18, "steps direction matches Q");
+
+        // Inversion endpoints: product C 0.5 → wire 15; C 15 → wire 0.5.
+        let lo = shape_request(
+            &agnes,
+            &ctx(|c| {
+                c.c_value = 0.5;
+                c.reference_url = Some("https://a.com/ref.png".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(lo["guidance_scale"], 15.0);
+        let hi = shape_request(
+            &agnes,
+            &ctx(|c| {
+                c.c_value = 15.0;
+                c.reference_url = Some("https://a.com/ref.png".into());
+            }),
+        )
+        .unwrap();
+        assert_eq!(hi["guidance_scale"], 0.5);
     }
 
-    #[test]
-    fn frames_8n1_passthrough_no_snap() {
-        let c = ctx(|c| c.length_frames = 441);
-        let p = shape_request(&frames_spec(), &c).unwrap();
-        assert_eq!(p["num_frames"], 441);
-    }
+    // `video-job-frames` (the legacy V2.0 fps-native route) was removed with
+    // the V2.0 model (P1-7, 2026-11-11): the V2.5-series is the only video
+    // engine, so the frames shaper + its tests are gone. A payload naming
+    // the retired format now gets the concrete "unsupported request format"
+    // error instead of a silently-shaped legacy request.
 
     // ── video-job-seconds (mode field-exclusion + 1-dec + 720P) ──────────
 

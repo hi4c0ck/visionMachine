@@ -284,11 +284,13 @@ no-engine path (D1).
 - **Tests**:
   - [x] cargo golden-payload tests — image-gen (response_format INSIDE
         extra_body, size/ratio maps, img2img referenceUrl, guidance gating),
-        video-job-frames (0/1/2–3 media branches, 8n+1 passthrough, seed/
-        guidance gating), video-job-seconds (keyframe/reference/text
+        video-job-seconds (keyframe/reference/text
         field-exclusion, 1-dec clamped seconds, 720P size, seed gating);
+        the legacy `video-job-frames` branch (0/1/2–3 media) was removed
+        with the V2.0 model (P1-7, 2026-11-11);
         helper unit tests (format/clamp/round, template substitution).
-        19 tests in `shaper.rs`.
+        19 tests in `shaper.rs` at initial landing; frames-branch tests
+        removed with the P1-7 cut.
 
 ### Phase D — provider engine (HTTP)
 - [x] `src-tauri/src/generation/provider.rs`: `ProviderEngine`
@@ -317,12 +319,22 @@ no-engine path (D1).
 
     ### Phase F — live verification (real keys, no mocks)
     One small generation per model against the real API, then record results
-    back into `docs/agnes-model-catalog.md` (a "Verified" section):
-    - [ ] CDN URL TTL (1 h vs 2 weeks) + the local-copy resilience path.
-    - [ ] 2.x long-prompt 422 quirk (shorter-is-safer boundary).
-    - [ ] Keyframe validation (min/max image counts per mode).
-    - [ ] Seed reproducibility (same seed → same output).
-    - [ ] 503 backoff on v2.0 in practice.
+    back into `docs/agnes-model-catalog.md` (a "Verified" section).
+    Status re-checked 2026-11-11:
+    - [x] ~~CDN URL TTL~~ — INVALIDATED as a desktop test: the platform-outputs
+          CDN IP-gates desktop egress (live 2026-11-09/11), so the provider-side
+          TTL is unmeasurable from the client. The local-copy + L3
+          `retry_failed_video_downloads` re-heal architecture (Q8, 2026-11-11)
+          is the resilience path instead.
+    - [ ] 2.x long-prompt 422 quirk (shorter-is-safer boundary) — server-side
+          probe needed (gate-independent).
+    - [ ] Keyframe validation (min/max image counts per mode) — server-side
+          probe.
+    - [ ] Seed reproducibility (same seed → same output) — server-side probe.
+    - [x] ~~503 backoff on v2.0 in practice~~ — DEAD: the V2.0 model was
+          removed 2026-11-11 (P1-7); the 2.5-series is the only video engine
+          (503 backoff sequencing itself is cargo-tested via the stub HTTP
+          transport, not live).
     - [ ] Does each endpoint accept `guidance_scale`? (E7 — set the spec
           flag per model on the result.)
 

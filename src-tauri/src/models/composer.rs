@@ -174,14 +174,6 @@ fn default_ref_status() -> String {
     "pending".to_string()
 }
 
-fn default_true() -> bool {
-    true
-}
-
-fn default_false() -> bool {
-    false
-}
-
 impl SubjectReference {
     pub fn new(image_url: String, use_frames: bool) -> Self {
         Self {
@@ -625,6 +617,21 @@ pub struct ComposerConfig {
     pub video_ratio: Option<String>,
     #[serde(default)]
     pub total_generated_frames: u32,
+    /// Session-level composed video artifact (the `<session>/session-video/
+    /// session.mp4` path), persisted so re-opening the session re-attaches
+    /// it in the tool panel — a manual compose otherwise lived only in the
+    /// (optional) generation-group row and was lost on restart. Absent on
+    /// legacy blobs (defaults None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_video_path: Option<String>,
+    /// Item 10: the SIGNED per-boundary overlap map the session video was
+    /// composed with (key = the NEW pipe's id at the boundary; positive =
+    /// frames cut off that pipe's head, negative = frames cut off the
+    /// PREVIOUS pipe's tail). Persisted alongside session_video_path so the
+    /// playhead→pipe layout stays trim-aware after a restart. Absent on
+    /// legacy blobs / untrimmed composes (None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_video_overlap: Option<std::collections::HashMap<String, i32>>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -664,6 +671,8 @@ impl ComposerConfig {
             custom_height: None,
             video_ratio: None,
             total_generated_frames: 0,
+            session_video_path: None,
+            session_video_overlap: None,
             created_at: Some(now),
             updated_at: Some(now),
         }
@@ -1009,5 +1018,28 @@ mod tests {
         assert!(prepared.keyframes[0].preview_remote_url.is_none());
         assert!(prepared.keyframes[0].preview_local_path.is_none());
         assert_eq!(prepared.keyframes[0].status, "pending");
+    }
+
+    /// A legacy composer blob (no session_video_path key) deserializes with
+    /// None; a blob that carries the composed artifact round-trips it, and
+    /// the field is skipped on serialize when None (legacy shape stays byte
+    /// identical).
+    #[test]
+    fn composer_session_video_path_legacy_and_round_trip() {
+        let legacy = json!({
+            "id": "s1", "sessionId": "s1", "name": "S", "pipes": [],
+            "fps": 24, "resolution": "720p", "orientation": "horizontal",
+            "cropMode": "center", "totalGeneratedFrames": 0
+        });
+        let mut c: ComposerConfig = serde_json::from_value(legacy).expect("legacy blob deserializes");
+        assert!(c.session_video_path.is_none());
+        let out = serde_json::to_value(&c).expect("serialize");
+        assert!(out.get("sessionVideoPath").is_none(), "None is skipped on serialize");
+
+        c.session_video_path = Some("C:/media/S/session-video/session.mp4".into());
+        let out = serde_json::to_value(&c).expect("serialize with path");
+        assert_eq!(out["sessionVideoPath"], "C:/media/S/session-video/session.mp4");
+        let back: ComposerConfig = serde_json::from_value(out).expect("round-trip");
+        assert_eq!(back.session_video_path.as_deref(), Some("C:/media/S/session-video/session.mp4"));
     }
 }

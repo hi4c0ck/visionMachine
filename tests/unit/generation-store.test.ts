@@ -123,7 +123,9 @@ describe('Generation result service', () => {
       await attachLastGeneration(session.id, pipe.id, GEN);
       const second: PipeLastGeneration = { ...GEN, taskId: 't10', videoPath: 'C:/out/2.mp4' };
       await attachLastGeneration(session.id, pipe.id, second);
-      expect(pipe.lastGeneration).toEqual(second);
+      // Item 1 (pipe-ref bridge): the store replaces pipe shells on every
+      // mutation — re-read the array instead of asserting on a held ref.
+      expect(session.pipes[0].lastGeneration).toEqual(second);
     });
   });
 

@@ -27,13 +27,28 @@ import { SessionServiceImpl } from './session-io';
 import { MigrationServiceImpl } from './migrations';
 import { SubjectReferenceServiceImpl } from './subjectRefs';
 import { GenerationServiceImpl } from './generation';
+import { touchPipeShells } from './pipeRef';
 import { normalizeSession } from './validators';
 import { backfillGeneratedImages } from '$lib/generatedImageBackfill';
+import { recoverVideoDownloads } from '$lib/videoDownloadRecovery';
 
 // ── Shared State ──────────────────────────────────────────────────────────────
 
 export const sessions = new Map<string, SessionData>();
 export const unsynced = new Set<string>();
+
+// BOUNDED: sessions swing in and out for the app lifetime, so without a cap
+// this Map is the "module-level asset that outlives the {#key} remount and
+// ratchets up" leak. On insert, evict oldest plain entries past the bound.
+const SESSIONS_CAP = 64;
+
+function evictOldSessions(): void {
+  if (sessions.size <= SESSIONS_CAP) return;
+  for (const key of sessions.keys()) {
+    if (sessions.size <= SESSIONS_CAP) break;
+    sessions.delete(key);
+  }
+}
 
 let onUpdateCallback: ((sessionId: string) => void) | null = null;
 
@@ -78,6 +93,12 @@ class ComposerStoreImpl implements ComposerStore {
   }
 
   private notifyUpdate(sessionId: string): void {
+    // Bug batch nov19 (items 1+4): replace pipe shells so the Svelte 5
+    // derived/each equality chain propagates the mutation to pipe-subtree
+    // consumers (previews, keyframe chips, status dots). Runs AFTER every
+    // service mutator and BEFORE the UI callback — the single choke point.
+    const session = sessions.get(sessionId);
+    if (session) touchPipeShells(session);
     unsynced.add(sessionId);
     if (onUpdateCallback) {
       onUpdateCallback(sessionId);
@@ -111,6 +132,7 @@ class ComposerStoreImpl implements ComposerStore {
         totalGeneratedFrames: 0,
       };
       sessions.set(sessionId, session);
+      evictOldSessions();
     }
     return session;
   }
@@ -666,7 +688,23 @@ class ComposerStoreImpl implements ComposerStore {
         // keyframes/subjects from the media-tree log (runs before the first
         // render so the chips show thumbnails on the next app run).
         const backfilled = await backfillGeneratedImages(result.session);
+        // One-time: re-fetch video artifacts whose provider download was
+        // blocked by the CDN egress gate (the backend rewrites the marker,
+        // the DB row and the composer `last_generation`). No-op / empty
+        // when nothing is gated; runs AFTER the image backfill so a healed
+        // local file is already on disk for the preview.
+        const recovered = await recoverVideoDownloads(sessionId);
+        if (recovered && recovered.healed.length > 0) {
+          // The backend persisted the repaired composer; re-load so the
+          // preview + `last_generation` flip to the recovered local clip.
+          const reloaded = await this.services.session.load(sessionId);
+          if (reloaded.session) {
+            normalizeSession(reloaded.session);
+            Object.assign(result.session, reloaded.session);
+          }
+        }
         sessions.set(sessionId, result.session);
+        evictOldSessions();
         if (backfilled) {
           // Recovery filled previewLocalPath/previewRemoteUrl that the DB row
           // doesn't have yet — persist it immediately so a later save (or the
@@ -803,12 +841,14 @@ class ComposerStoreImpl implements ComposerStore {
 
   async hydrateSessions(sessionList: any[]): Promise<void> {
     for (const session of sessionList) {
-      // Normalize session-level fields (fps/resolution/orientation) AND pipes
-      // so legacy/localStorage session shapes are always valid before they
-      // enter the store (prevents empty selects and undefined-field crashes
-      // on the render path when the user re-enters the app).
       normalizeSession(session as SessionData);
-      sessions.set(session.id, session);
+      // PHASE 1: only insert sessions NOT already in the store — prevents
+      // tree index shells (pipes: []) from clobbering real composer data
+      // that loadSession / update* / attach* already populated.
+      if (!sessions.has(session.id)) {
+        sessions.set(session.id, session);
+        evictOldSessions();
+      }
     }
   }
 

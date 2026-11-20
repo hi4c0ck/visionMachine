@@ -10,6 +10,7 @@ import {
   nextFreePipeName,
   reindexPipes,
 } from './validators';
+import { getSettings } from '$lib/settings/store';
 
 export class PipeServiceImpl implements PipeService {
   private session: SessionData;
@@ -26,8 +27,12 @@ export class PipeServiceImpl implements PipeService {
         this.session.pipes[0]?.lengthFrames ?? 121,
         this.session.resolution,
       ),
-      qValue: 18,
-      cValue: 7,
+      // Item 3 (RC4): new pipes seed from the profile's generation defaults
+      // (was hardcoded 18/7, so a user default never reached later pipes).
+      // Range-validated like every Q/C write; defaults themselves are
+      // clamped in normalizeSettings, so this is belt-and-braces.
+      qValue: validateQValue(getSettings().generationDefaults.qValue),
+      cValue: validateCValue(getSettings().generationDefaults.cValue),
       keyframes: [],
       subjectReferences: [],
       elements: [],

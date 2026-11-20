@@ -125,12 +125,13 @@ describe('Subject Reference Service', () => {
       await addSubjectRef(session.id, pipe.id, 'https://example.com/ref1.jpg', false);
       await addSubjectRef(session.id, pipe.id, 'https://example.com/ref2.jpg', false);
 
-      const refId = pipe.subjectReferences[0].id;
+      const refId = session.pipes[0].subjectReferences[0].id;
       const result = await removeSubjectRef(session.id, pipe.id, refId);
 
       expect(result.errors).toHaveLength(0);
-      expect(pipe.subjectReferences).toHaveLength(1);
-      expect(pipe.subjectReferences.some(r => r.id === refId)).toBe(false);
+      // Item 1: re-read the store shell (pipe refs are replaced per mutation).
+      expect(session.pipes[0].subjectReferences).toHaveLength(1);
+      expect(session.pipes[0].subjectReferences.some(r => r.id === refId)).toBe(false);
     });
 
     it('should handle removing last reference', async () => {
@@ -141,10 +142,11 @@ describe('Subject Reference Service', () => {
       const pipe = session.pipes[0];
       await addSubjectRef(session.id, pipe.id, 'https://example.com/ref.jpg', false);
 
-      const refId = pipe.subjectReferences[0].id;
+      const refId = session.pipes[0].subjectReferences[0].id;
       await removeSubjectRef(session.id, pipe.id, refId);
 
-      expect(pipe.subjectReferences).toHaveLength(0);
+      // Item 1: re-read the store shell (pipe refs are replaced per mutation).
+      expect(session.pipes[0].subjectReferences).toHaveLength(0);
     });
   });
 

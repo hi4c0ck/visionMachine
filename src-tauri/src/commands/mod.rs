@@ -3,6 +3,7 @@ pub mod app;
 pub mod artifacts;
 pub mod auth;
 pub mod composer;
+pub mod director;
 pub mod generation;
 pub mod profiles;
 pub mod projects;

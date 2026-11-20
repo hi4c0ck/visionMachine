@@ -1,6 +1,6 @@
 [package]
 name = "vision-machine"
-version = "0.7.10"
+version = "0.7.11"
 description = "VisionMachine - AI-powered video generation desktop app"
 authors = []
 edition = "2021"
@@ -28,7 +28,7 @@ once_cell = "1.19"
 thiserror = "2.0"
 futures = "0.3"
 async-trait = "0.1"
-sysinfo = "0.39"
+sysinfo = "0.40"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-log = "2"
 
@@ -43,7 +43,7 @@ bundled-ffmpeg = []
 winapi = { version = "0.3", features = ["winbase"] }
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["fs"] }
+nix = { version = "0.32", features = ["fs"] }
 
 [profile.dev]
 incremental = true

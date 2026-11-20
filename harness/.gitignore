@@ -1,0 +1,14 @@
+# Local dev secrets for the video harness. NEVER commit.
+# Root .gitignore also covers `.env`, but this is belt-and-suspenders.
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Generated test outputs
+testout*.txt
+out/
+
+# Scratch scripts
+scan_*.ps1
+scan_*.py

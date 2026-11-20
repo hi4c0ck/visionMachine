@@ -1,0 +1,22 @@
+{
+  "_comment": "EXACT response envelope Node B receives. data.choices[0].message.content parses to ShotSpec (== golden/shot_spec.json).",
+  "model": "agnes-2.5-flash",
+  "object": "chat.completion",
+  "usage": {
+    "prompt_tokens": 540,
+    "completion_tokens": 720,
+    "total_tokens": 1260
+  },
+  "data": {
+    "choices": [
+      {
+        "index": 0,
+        "finish_reason": "stop",
+        "message": {
+          "role": "assistant",
+          "content": "{\"shot_id\":\"tl_01_shot_1\",\"novel_ref\":\"scene_1.shot_1\",\"content\":{\"prose\":\"Golden light pierces the forest floor. Birds chirp melodiously. The girl moves with innocent curiosity, surrounded by wildlife.\",\"beats\":[\"extreme close-up: dew on a spiderweb shimmers, morning light rays penetrate\",\"medium: a red fox pauses, ears twitch, watching her pass\",\"wide: the girl steps over a mossy log, birds take flight from above\"]},\"clip_s\":10,\"transition_in\":\"hard_cut\",\"transition_out\":\"crossfade\",\"concerns\":{\"camera\":{\"size\":\"wide\",\"angle\":\"eye\",\"framing\":\"rule_of_thirds\",\"dof\":\"shallow\"},\"lens\":{\"focal_mm\":35,\"distortion\":\"none\"},\"motion\":{\"zoom\":\"in\",\"move\":\"dolly\",\"speed\":\"normal\"},\"lighting\":{\"key\":\"soft\",\"contrast\":\"medium\",\"color_temp_K\":4800,\"pattern\":\"dappled sunlight through pines\"},\"grade\":{\"palette\":\"warm_amber_golden_hour\",\"saturation\":\"saturated\",\"contrast\":\"medium\",\"film_stock\":\"kodak_250d\"},\"effects\":[\"lens_flare\"],\"audio\":{\"foley\":\"footsteps, branch rustle\",\"sfx\":\"bird call\",\"music_cue\":\"gentle ambient strings, sparse\",\"silence\":false}},\"sub_timeline\":[{\"from_s\":0,\"to_s\":4,\"note\":\"ECU on dew at the spiderweb, then the girl enters\",\"state\":{\"camera\":{\"size\":\"close-up\",\"framing\":\"fill_frame\",\"dof\":\"shallow\"},\"lens\":{\"focal_mm\":85},\"lighting\":{\"color_temp_K\":4500}}},{\"from_s\":4,\"to_s\":7,\"note\":\"medium on the red fox watching\",\"state\":{\"camera\":{\"size\":\"medium\",\"framing\":\"rule_of_thirds\"},\"lens\":{\"focal_mm\":50}}},{\"from_s\":7,\"to_s\":10,\"note\":\"wide: girl steps the log, birds take flight\",\"state\":{\"camera\":{\"size\":\"wide\",\"dof\":\"deep\"},\"lens\":{\"focal_mm\":35},\"lighting\":{\"color_temp_K\":5200}}}]}"
+        }
+      }
+    ]
+  }
+}

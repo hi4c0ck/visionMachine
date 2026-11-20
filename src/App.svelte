@@ -8,7 +8,9 @@
 	import WelcomeDeleteModal from './components/WelcomeDeleteModal.svelte';
 	import WindowControls from './components/WindowControls.svelte';
 	import DesignLab from './design-lab/DesignLab.svelte';
+	import RamMonitor from './components/RamMonitor.svelte';
 	import { APP_CONSTANTS } from '$constants';
+	import { setBgIdle as setBgIdleModule } from '$lib/bgIdle';
 	
 	// State declarations - explicit reactive state
 	// Show the name card only when no name is persisted; otherwise the
@@ -184,6 +186,50 @@
 			applyTheme(selectedTheme);
 			loadAccounts();
 
+			// ── Background/idle GPU gate (items 1+2) ─────────────────────────
+			// When the window loses focus (alt-tab) or is hidden (minimized):
+			//   · the global `vm-bg-idle` class pauses EVERY CSS animation
+			//     (bg-idle.css) — the ~20 infinite keyframe loops stop
+			//     re-compositing on an unseen window;
+			//   · the display <video> decode surfaces pause, releasing their
+			//     hardware video-engine + texture memory;
+			//   · the shared bgIdle flag is set so the FrameCarousel auto-
+			//     scroll rAF loop (item 3) also stops.
+			// On focus return: animations resume, looping previews replay,
+			// and the carousel re-arms its transport. The offscreen capture
+			// <video> in frameDecoder.ts is NEVER in the DOM, so it is
+			// excluded by construction.
+			const pauseDisplayVideos = () => {
+				for (const v of Array.from(document.querySelectorAll('video[data-vm-display]'))) {
+					(v as HTMLVideoElement).pause();
+				}
+			};
+			const resumeDisplayVideos = () => {
+				for (const v of Array.from(document.querySelectorAll('video[data-vm-display]'))) {
+					const el = v as HTMLVideoElement;
+					if (el.hasAttribute('autoplay')) void el.play().catch(() => {});
+				}
+			};
+			const applyBgIdle = (idle: boolean) => {
+				document.documentElement.classList.toggle('vm-bg-idle', idle);
+				if (idle) pauseDisplayVideos();
+				else resumeDisplayVideos();
+				setBgIdleModule(idle);
+			};
+			const onVisChange = () => applyBgIdle(document.visibilityState === 'hidden');
+			const onWinBlur = () => { if (document.visibilityState !== 'hidden') applyBgIdle(true); };
+			const onWinFocus = () => { if (document.visibilityState === 'visible') applyBgIdle(false); };
+			document.addEventListener('visibilitychange', onVisChange);
+			window.addEventListener('blur', onWinBlur);
+			window.addEventListener('focus', onWinFocus);
+			if (document.visibilityState === 'hidden') applyBgIdle(true);
+			onDestroy(() => {
+				document.removeEventListener('visibilitychange', onVisChange);
+				window.removeEventListener('blur', onWinBlur);
+				window.removeEventListener('focus', onWinFocus);
+				document.documentElement.classList.remove('vm-bg-idle');
+			});
+
 			// One-time reclaim of the legacy global `vm-projects` key. Older
 			// builds mirrored the whole composer tree (now carrying base64
 			// data URIs) into that key, and a single oversized value eats the
@@ -333,12 +379,36 @@
 					onlayoutChange={handleLayoutChange}
 				/>
 			</div>
+			<!-- The in-app RAM/leak/stall chip — DEV ONLY. Mounted in the
+				 live-app branch so its 8 s tick runs: it drives
+				 reportToDashboard() (feeds the live dashboard's renderer
+				 card) and flushPipelineDiag() (the backend log ring). It was
+				 previously never rendered, so neither ran — the dashboard's
+				 "renderer not reporting" + near-empty pipeline log were both
+				 caused by this missing mount. Release builds ship without
+				 the chip AND without its polling/reporting side effects. -->
+			{#if import.meta.env.DEV}
+				<div class="ram-chip-host">
+					<RamMonitor />
+				</div>
+			{/if}
 		{/if}
 </ErrorHandler>
 {/if}
 
 <style>
 	* { margin: 0; padding: 0; box-sizing: border-box; }
+
+	/* The RAM/leak/stall chip lives in the top-right corner of the workspace:
+	   diagnostic, never in the layout flow (position:fixed so it can't
+	   reflow the composer or steal a click). */
+	.ram-chip-host {
+		position: fixed;
+		top: 6px;
+		right: 10px;
+		z-index: 50;
+		opacity: 0.92;
+	}
 
 	.app {
 		display: flex;

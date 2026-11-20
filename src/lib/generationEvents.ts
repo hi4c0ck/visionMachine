@@ -33,5 +33,27 @@ export function subscribeGenTask(onEvent: (event: GenTaskEvent) => void): Promis
   if (!isTauri()) {
     return Promise.resolve(() => {});
   }
-  return listen<GenTaskEvent>('gen-task', (e) => onEvent(e.payload));
+  // Async-settle race guard (same class as runProgress.ts): `listen` resolves
+  // LATER than a synchronous teardown, so without this a late-resolving
+  // listener leaks — it holds the subscriber closure (and its component tree)
+  // and keeps firing on every `gen-task` tick: the unbounded renderer-RAM
+  // class. `disposed` closes that race; `unlisten` handles the resolved case.
+  let disposed = false;
+  let unlisten: UnlistenFn | null = null;
+  listen<GenTaskEvent>('gen-task', (e) => onEvent(e.payload))
+    .then((u) => {
+      if (disposed) {
+        u();
+        return;
+      }
+      unlisten = u;
+    })
+    .catch(() => {});
+  return Promise.resolve(() => {
+    disposed = true;
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+  });
 }

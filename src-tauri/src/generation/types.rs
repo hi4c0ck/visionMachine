@@ -165,7 +165,11 @@ pub fn resolution_dims(resolution: &str, orientation: &str) -> (u32, u32) {
     let base: (u32, u32) = match resolution.to_ascii_lowercase().as_str() {
         "480p" => (480, 854),
         "1080p" => (1080, 1920),
-        // 720p is the historical default.
+        // 720p = 1280x720: the provider's actual 720P output height is 720 on
+        // BOTH routes (measured: text -> 1280x720, keyframe -> 1260x720).
+        // Off-grid clips are letterboxed to this grid at ingest
+        // (0012 D5 normalize_clip_to_grid), keeping every session clip on one
+        // canvas instead of drifting to the provider's native sizes.
         _ => (720, 1280),
     };
     match orientation {
@@ -234,7 +238,8 @@ mod tests {
 
     #[test]
     fn resolution_dims_matches_frontend_table() {
-        // horizontal: (long, short) of the preset base.
+        // horizontal: (long, short) of the preset base. 720p = 1280x720
+        // (the provider's actual 720P output height on both routes).
         assert_eq!(resolution_dims("720p", "horizontal"), (1280, 720));
         assert_eq!(resolution_dims("1080p", "horizontal"), (1920, 1080));
         // vertical is the transposed pair.

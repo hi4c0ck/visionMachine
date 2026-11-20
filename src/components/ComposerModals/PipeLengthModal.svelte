@@ -40,10 +40,12 @@
 	// Seconds → frames step (1 tick = one frame at the session fps). Display is
 	// rounded to 1 decimal; the value itself keeps full precision for the
 	// cross-calculation back to frames.
-	const SEC_STEP = 1 / Math.max(1, fps);
+	const SEC_STEP = $derived(1 / Math.max(1, fps));
 	const FRAME_STEP = 8; // frame arrows snap on the 8-frame grid
 
+	// svelte-ignore state_referenced_locally — intentional: seed from pipe, sync via effect
 	let frames = $state(pipe.lengthFrames);
+	// svelte-ignore state_referenced_locally — intentional: seed from pipe/fps, sync via effect
 	let seconds = $state(pipe.lengthFrames / Math.max(1, fps));
 
 	// Seed both inputs from the pipe when the modal opens.

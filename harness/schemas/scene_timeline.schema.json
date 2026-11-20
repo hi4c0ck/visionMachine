@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "SceneTimeline",
+  "title": "SceneTimeline",
+  "description": "S2 output: divide the novel into meaningful scene parts at transition points. Each shot inherits its content (prose+beats) from the novel — this step ONLY assigns duration + transition + base look. No camera/lens/zoom/effects here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["timeline_id", "total_s", "scenes"],
+  "properties": {
+    "timeline_id": { "type": "string" },
+    "total_s": { "type": "integer", "description": "sum of all clip_s" },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scene_id", "title", "transition_in", "transition_note", "time_of_day", "weather", "shots"],
+        "properties": {
+          "scene_id": { "type": "string" },
+          "title": { "type": "string" },
+          "transition_in": {
+            "enum": ["hard_cut", "crossfade", "dissolve", "wipe", "match_cut", "jump_cut", "whip_pan", "l_cut", "j_cut", "cut_on_action"],
+            "description": "How we ENTER this scene part. First scene = hard_cut."
+          },
+          "transition_note": {
+            "type": "string",
+            "description": "ONE sentence: why this is a new scene part (what changed from the previous)."
+          },
+          "time_of_day": { "enum": ["dawn", "morning", "midday", "afternoon", "evening", "night"] },
+          "weather": { "type": "string", "description": "from the novel prose: clear, clouds, rain, etc." },
+          "shots": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["shot_id", "novel_ref", "clip_s", "transition_out", "transition_note"],
+              "properties": {
+                "shot_id": { "type": "string", "description": "e.g. shot_01" },
+                "novel_ref": {
+                  "type": "string",
+                  "description": "Which novel shot this is (e.g. 'scene_1.shot_2'). 1-to-1 with the novel — no invented shots, no duplicates."
+                },
+                "clip_s": { "type": "integer", "minimum": 4, "maximum": 10, "description": "Duration of this shot in seconds. Max 10s = 240 frames @24fps, fits the 720p engine cap (~241f)." },
+                "transition_out": {
+                  "enum": ["hard_cut", "crossfade", "dissolve", "wipe", "match_cut", "jump_cut", "whip_pan", "l_cut", "j_cut", "cut_on_action"],
+                  "description": "How we LEAVE this shot."
+                },
+                "transition_note": {
+                  "type": "string",
+                  "description": "ONE sentence: why this cut happens (what triggers it in the narrative)."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

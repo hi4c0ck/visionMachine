@@ -55,9 +55,10 @@ model, zero UI/engine rework).
   parameter at all. → Q/C are recorded in the log but engine-omitted for
   Agnes video models.
 - Q5. Confirmed: image default = `agnes-image-2.5-flash` (2.1-flash =
-  fallback); video default = `agnes-video-2.5-flash` (v2.0 = active
-  alternate, free, fps-native); text `agnes-2.5-flash` is cataloged but
-  inert for now.
+  fallback); video default = `agnes-video-2.5-flash` (the legacy `v2.0`
+  alternate was removed 2026-11-11, P1-7 — provider retired it; saved
+  slots self-heal to the 2.5-flash default); text `agnes-2.5-flash` is
+  cataloged but inert for now.
 - Q6. Single unified URL configuration — host-root `baseUrl`, all endpoints
   relative paths, poll template with `{videoId}`/`{model}` placeholders
   (deep-dive in "URL composition" section below).
@@ -86,7 +87,7 @@ model, zero UI/engine rework).
 | text  | `agnes-2.5-flash`       | `POST /v1/chat/completions` | sync    | $0.05/M in, $0.15/M out → **$0** | active (inert) |
 | image | `agnes-image-2.5-flash` | `POST /v1/images/generations` | sync  | $0.010–0.024/img by tier → **$0** | active, DEFAULT |
 | image | `agnes-image-2.1-flash` | `POST /v1/images/generations` | sync  | same as 2.5 → **$0**     | active (fallback) |
-| video | `agnes-video-v2.0`      | `POST /v1/videos`     | async   | $0.005/s → **$0**        | active (legacy ID, 2.5 config) |
+| video | ~~`agnes-video-v2.0`~~ — REMOVED 2026-11-11 (P1-7; provider retired it 2026-09-25, saved settings self-heal to the default) |
 | video | `agnes-video-2.5-flash` | `POST /v1/videos`     | async   | $0.025/s → **$0**        | active, DEFAULT |
 | video | `agnes-video-2.5`       | `POST /v1/videos`     | async   | $0.025–0.055/s (paid)   | **READ-ONLY**       |
 
@@ -127,16 +128,24 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
 - Provisional res mapping (Q2, harden later): 480p/720p → `"1K"`,
   1080p → `"2K"`; orientation → ratio (horizontal `16:9`, vertical `9:16`).
 
-### video — `agnes-video-v2.0` (legacy ID · 2.5 config — user decision 2026-10-04)
+### video — `agnes-video-v2.0` (REMOVED 2026-11-11, P1-7 — historical reference only)
 
-> Official docs mark V2.0 "retired" (migrate to the 2.5 series), but the
-> provider keeps serving the model ID through the 2.5-series engine (live
-> log 2026-10-03: HTTP 200, 2.5-style perf_params). Decision: the catalog
-> runs `agnes-video-v2.0` on the **2.5 config** — `video-job-seconds` wire
-> shape (seconds/size/aspect_ratio), `keyframe`/`reference` media modes,
-> 720P-only size map. The legacy frames shape (num_frames/frame_rate/
-> extra_body keyframes array) is no longer maintained; the v2.0 notes
-> below stay as the historical reference only.
+> **REMOVED from the catalog** (P1-7, 2026-11-11): the provider retired
+> V2.0 (2026-09-25) and the 2.5-series is now the only video engine.
+> Saved settings that still name `agnes-video-v2.0` self-heal on load
+> (`normalizeSettings` migrates a missing model id to the preset's default
+> generable model = `agnes-video-2.5-flash`). The notes below stay as the
+> historical reference (legacy frames shape + live 400 probes); they no
+> longer describe a shippable model.
+>
+> Original decision (2026-10-04, superseded): Official docs mark V2.0
+> "retired" (migrate to the 2.5 series), but the provider kept serving the
+> model ID through the 2.5-series engine (live log 2026-10-03: HTTP 200,
+> 2.5-style perf_params). The catalog had run `agnes-video-v2.0` on the
+> **2.5 config** — `video-job-seconds` wire shape (seconds/size/
+> aspect_ratio), `keyframe`/`reference` media modes, 720P-only size map.
+> The legacy frames shape (num_frames/frame_rate/ extra_body keyframes
+> array) was no longer maintained.
 
 - Create `POST /v1/videos`. Poll `GET /agnesapi?video_id={videoId}`
   (model_name optional); legacy `GET /v1/videos/{taskId}` — hermes: most
@@ -167,6 +176,33 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
   `seconds` (STRING `"4"`–`"12"`, def `"5"`), `size` (`"720P"` ONLY —
   else 400), `aspect_ratio` (`21:9` `16:9` `4:3` `1:1` `3:4` `9:16`,
   def `16:9`; measured 16:9 → `1280x704`), `seed`, `n` (=1).
+   > **VERIFIED GRID NOTE (bundled ffprobe, 2026-11-02)** — conspicuous, do
+   > NOT chase a target table to "fix" the 704 guess: the `1280x704` figure
+   > above is a catalog guess, NOT the measured output. The model's native
+   > pixel grid is mode-dependent, confirmed by probing real Session 8 clips
+   > with the app's bundled ffprobe:
+   > - **text (t2v)** route -> `1280x720` (true 16:9)
+   > - **keyframe (i2v)** route -> `1260x720` (native 7:4; the requested
+   >   `aspect_ratio` is NOT honored on the i2v route)
+   > The API response carries only `size`/`quality` strings - never pixel
+   > dims - so this was invisible without probing the returned MP4.
+   >
+   > **Root cause (confirmed by the Agnes team, 2026-11-02):** the i2v
+   > model processes video internally at 1344x768, then resizes to a
+   > 720-pixel short side while preserving aspect ratio -> 1260x720.
+   > t2v and multi-reference are NOT affected (both stay 1280x720).
+   >
+   > **TEMPORARY WORKAROUND - remove after the model fix ships.** Until
+   > then, `GroupCoordinator::bootstrap_opening_keyframe` seeds pipe 0
+   > onto the i2v route (txt2img slot-1 keyframe) so the whole session
+   > runs on one native grid; compose letterboxes any residual seam.
+   >
+   > **Removal checklist (once a model update ships):**
+   > 1. ffprobe one fresh i2v clip -> if it now reports 1280x720, fixed.
+   > 2. Delete `opening_keyframe_needed`, `bootstrap_opening_keyframe`,
+   >    `fallback_image_spec` + the bootstrap call in `start_group`
+   >    (group.rs) and their tests.
+   > 3. Delete this TEMPORARY block.
 - Mode rules: `keyframe` → `first_frame`/`last_frame` (≥1; no
   images/audios/videos); `reference` → `images[]` ≤5 + `audios[]` ≤3,
   `videos` FORBIDDEN (400); `text` → no media fields.
@@ -327,17 +363,82 @@ enforced by the compose step, not the provider.
 - TTL: user says ~2 weeks, hermes saw 1 h cache-control → VERIFY in
   Phase 6; the local copy is the resilience path (re-host later).
 - Base64 inputs (V2.5 accepts Data-URIs) = explicitly FUTURE.
+- **CDN client-egress gate (live-verified 2026-11-09):** the desktop
+  client cannot DOWNLOAD `platform-outputs.agnes-ai.space` URLs — fresh
+  AND stale objects 403 for plain GET, Bearer GET, and Chrome/reqwest/
+  curl UAs (an IP-gate on OUR egress; the provider's own video backend
+  fetches the same URLs server-side fine). Consequences locked in code:
+  1. image stage requests `response_format: "url"` (the fluent chain:
+     CDN URL → `UpstreamOutput.primary` → video `first_frame`);
+  2. local materialization is BEST-EFFORT — a 403 download degrades the
+     preview cache, never the task (architectural idempotency);
+  3. a failure-only **b64 rescue** re-issues the same prompt in
+     `b64_json` mode and writes in-band bytes to the same dest, keeping
+     previews alive;
+  4. `data:`-URI inlining of local media (last-resort) remains as the
+     documented path for local-only pieces (the catch-prev-last-frame
+     flow already ships `data:image/png;base64` as `image_src` /
+     `first_frame`, catalog "bytes VERBATIM");
+  5. **video final download (live-verified 2026-11-11): the gate
+     FLAPS.** The same `platform-outputs.agnes-ai.space` video URL that
+     downloaded fine 2026-11-10 21:05 returned 403 for plain AND Bearer
+     GETs on 2026-11-11 00:42/00:57 (and the Nov-10 "working" URL now
+     403s too) — an intermittent IP-egress gate, not a permanent block.
+     The video API re-poll returns `completed` with `expires_at: null`
+     and only a bare `url` (no signed URL, no download endpoint, no b64
+     for video), so resilience is a 3-layer architecture:
+     - **L1** in-run bounded download retry (`VIDEO_DOWNLOAD_ATTEMPTS =
+       4`, cancel-aware backoff) rides out a short flap;
+     - **L2** if still gated after L1, the task NEVER hard-fails a
+       completed render: `output.json` carries `status:"download_failed"`
+       + `videoUrl` + `providerTaskId` (the L3 trigger) and the stage
+       degrades to the remote URL — the same "task success decoupled
+       from CDN client-download policy" rule as the image stage;
+     - **L3** `retry_failed_video_downloads(sessionId)` (called on
+       session load) walks the session media tree for `download_failed`
+       markers, re-GETs each `videoUrl` (bounded 2 outer passes), and on
+       success rewrites the marker to `done`, regenerates the 240p
+       proxy, and repairs the task row (`error`→`done` + local path),
+       the generation_logs piece record, and the composer
+       `last_generation` (re-pointed to the local file). Idempotent;
+       markers still gated are retried free on the next load.
+- **url XOR b64_json (live-verified 2026-11-09):** the image API returns
+  exactly one of the two fields in every request shape we can build
+  (`response_format=url` → url only, `b64_json:""`; `=b64_json` → b64
+  only, `url:""`; top-level `return_base64` does not stack with either).
+  A single response can never carry both — hence the rescue is a second
+  call, not a dual-field read.
 
-## Q4 fact flag (keep as-is, configure later)
+## Q4 fact flag — SUPERSEDED by live re-probe 2026-11-19 (item 8)
 
-Q/C have NO wire mapping on the V2.5 family (sending
-`num_inference_steps`/`quality` → 400). V2.0 exposes `num_inference_steps`
-(default 8; 12–14 for keyframes per hermes) — a future `qValue → steps`
-map is optional and deferred per user.
-USER MAPPING (2026-09-16): **`cValue` → `guidance_scale`** — the engine
-sends cValue as `guidance_scale` where the model/endpoint accepts it;
-verify per-endpoint in Phase 6 live tests. Until then both Q/C stay in
-the portable log unchanged.
+The original Q4 flag ("no Agnes model exposes a CFG/creativity knob") was
+over-generalized from txt2img probes. A full re-probe (22 requests,
+2026-11-19, request ids in the session scratch `agnes-probe-results/`)
+established the real matrix:
+
+| route | guidance_scale | num_inference_steps | alt names (guidance/creativity/cfg/cfg_scale) |
+|---|---|---|---|
+| image **txt2img** | 400 "not supported by text image queue" | 400 same | 400 same |
+| image **img2img** | **200** at 0 / 0.5 / 15 / 20 / 30 | **200** at 18 | — |
+| video flash `mode:text` | 400 "not an allowed request field" | 400 "forbidden field" | 400 |
+| video flash `mode:keyframe` | 400 | — | — |
+| video paid 2.5 | 400 (field check precedes size check) | — | — |
+
+`quality` on video: 400 "forbidden field". `GET /v1/models`: no video
+engine newer than the 2.5 series.
+
+**Implemented (bug batch nov19, item 8):** the image 2.5-flash spec declares
+`guidance: 'guidance_scale'`, `steps: 'num_inference_steps'`,
+`guidanceRange: [0.5, 15]`, `img2imgOnly: true`. The shaper gates both knobs
+on the reference image (img2img) and INVERTS guidance at the single wire
+chokepoint: `wire = (0.5 + 15) − cValue` (product higher C = more dreaming →
+lower CFG guidance = less prompt adherence). UI/store/log stay in product
+units. Video routes carry no knobs; the UI badges say so at the sliders.
+Effect magnitude on the bytes is unverified (CDN client-egress 403 gate);
+acceptance + range are live-verified.
+
+Historical note (2026-09-16): **`cValue` → `guidance_scale`** was the agreed
+user mapping; it is now live on img2img with the inversion above.
 
 ## Proposed catalog data (paste target, `src/lib/settings/catalog.ts`)
 
@@ -362,9 +463,9 @@ export const AGNES_PRESET: PresetSpec = {
     { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash (fallback)',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
       limits: { /* identical tiers/ratios as 2.5 */ }, supportsSeed: false },
-    // VIDEO — 2.5-flash first = default; v2.0 = legacy ID on the 2.5
-    // config (user decision 2026-10-04: the provider serves the legacy
-    // ID through the 2.5-series engine; the frames shape is unmaintained).
+    // VIDEO — 2.5-flash = default; the legacy `agnes-video-v2.0` entry was
+    // REMOVED 2026-11-11 (P1-7): the 2.5-series is the only video engine,
+    // and saved settings naming the retired id self-heal to the default.
     { id: 'agnes-video-2.5-flash', kind: 'video', label: 'Agnes Video 2.5 Flash',
       endpoint: '/v1/videos', sync: false,
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
@@ -372,17 +473,6 @@ export const AGNES_PRESET: PresetSpec = {
       limits: { seconds: [4, 12], resolutions: ['720P'],
                  ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
       supportsSeed: true },
-    { id: 'agnes-video-v2.0', kind: 'video', label: 'Agnes Video V2.0 (legacy · 2.5 config)',
-      endpoint: '/v1/videos', sync: false,
-      pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
-      requestFormat: 'video-job-seconds',
-      limits: { seconds: [4, 12], resolutions: ['720P'],
-                 ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-                 sizeMap: { '480p': '720P', '720p': '720P', '1080p': '720P' },
-                 ratioMap: { horizontal: '16:9', vertical: '9:16' } },
-      supportsSeed: true,
-      media: { modes: ['keyframes', 'reference'],
-               maxKeyframes: 2, maxRefs: 5, maxAudios: 3 } },
     // VIDEO — paid, READ-ONLY (Q3): inspect in Settings, never generable.
     { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid · read-only)',
       endpoint: '/v1/videos', sync: false,
@@ -438,14 +528,26 @@ placeholders are replaced by the above.
       level (catalog `readOnly` flag + the per-run `.filter`); no
       dedicated e2e yet — add with the first real-engine run.
 
-**D. Deferred to the engine phase (no mocks — Phase 6)**
-- [ ] request shapers per `requestFormat` (chat / image-gen /
-      video-job-frames / video-job-seconds)
-- [ ] poll template substitution (`{videoId}`/`{model}`), seconds clamp,
+**D. Engine phase (Phase 6) — status re-checked 2026-11-11**
+- [x] request shapers per `requestFormat` (chat / image-gen /
+      video-job-seconds; the legacy `video-job-frames` route was removed
+      with the V2.0 model on 2026-11-11, P1-7)
+- [x] poll template substitution (`{videoId}`/`{model}`), seconds clamp,
       res+orientation → tier/ratio mapping
-- [ ] real pings + one small generation per model; VERIFY: CDN URL TTL
-      (1 h vs 2 weeks), 422 long-image-prompt quirk, keyframe validation,
-      seed reproducibility, 503 backoff on v2.0
+- [x] CDN client-download gate: live-verified 2026-11-09/2026-11-11 and
+      handled in code (Q8 above — image b64 rescue + best-effort local
+      materialization; video L1 in-run retry + L2 `download_failed`
+      marker + L3 `retry_failed_video_downloads` re-heal). Because the
+      gate is CLIENT-SIDE, the provider-side CDN URL TTL cannot be
+      measured from the desktop anymore — the live-verify item below is
+      INVALIDATED as a desktop test; the local-copy + L3 re-heal
+      architecture is the resilience path instead.
+- [ ] real pings + one small generation per model (server-side, unrun
+      since the CDN gate): 422 long-image-prompt quirk, keyframe
+      validation, seed reproducibility, 503 backoff. Deferred: these
+      need a provider-side probe or a gate-open window, not desktop
+      code. (The "503 backoff on v2.0" sub-item is dead — the V2.0
+      model no longer exists.)
 
 ## Open items — RESOLVED (GO, 2026-09-16)
 1. **Q6 option (a)** — GO (host-root base + relative endpoints +

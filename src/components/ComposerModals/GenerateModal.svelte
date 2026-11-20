@@ -211,8 +211,6 @@
 						<span>{session.fps} fps</span>
 						<span>{session.resolution}</span>
 						<span>{session.orientation}</span>
-						<span>Q {pipe.qValue}</span>
-						<span>C {pipe.cValue}</span>
 						<span>{pipe.lengthFrames} frames</span>
 					</div>
 				</div>

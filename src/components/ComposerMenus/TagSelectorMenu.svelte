@@ -53,6 +53,7 @@
 	// Target zone. The menu attaches to the INVOKING zone only (the zone
 	// pill that opened it). Picking a tag type adds it immediately — the
 	// intermediate "Add" button was removed as a redundant step.
+	// svelte-ignore state_referenced_locally — intentional: seed from props, then sync via effect
 	let selectedSegId = $state<string>(defaultSegmentId ?? segments[0]?.id ?? '');
 	$effect(() => {
 		// Touch menuVersion so re-opens re-run the seeding.
@@ -156,10 +157,6 @@
 		flex-shrink: 0;
 	}
 
-	.dropdown-item.tag-item.active {
-		background: var(--accent-bg);
-		color: var(--accent-color);
-	}
 	/* Declared types: greyed but still clickable (choice A). */
 	.dropdown-item.tag-item.declared {
 		opacity: 0.45;
@@ -167,10 +164,6 @@
 
 	.dropdown-item.tag-item.declared:hover {
 		opacity: 0.7;
-	}
-
-	.dropdown-item.tag-item.declared.active {
-		opacity: 1;
 	}
 
 	/* Physically unavailable types: disabled, with the hint in the title. */
@@ -203,36 +196,4 @@
 		letter-spacing: 0.5px;
 	}
 
-	.dropdown-actions {
-		display: flex;
-		gap: 8px;
-		padding: 8px;
-		border-top: 1px solid var(--border-color);
-	}
-
-	.dropdown-actions .btn-confirm,
-	.dropdown-actions .btn-cancel {
-		flex: 1;
-		padding: 8px;
-		border-radius: 6px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-
-	.dropdown-actions .btn-confirm {
-		background: var(--accent-color);
-		color: white;
-		border: none;
-	}
-
-	.dropdown-actions .btn-confirm:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-
-	.dropdown-actions .btn-cancel {
-		background: var(--bg-tertiary);
-		color: var(--text-primary);
-		border: 1px solid var(--border-color);
-	}
 </style>

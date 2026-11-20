@@ -19,6 +19,7 @@
 		onRefresh,
 		onReset,
 		logEntry = null,
+		onRetryDownload,
 	} = $props<{
 		/** Latest polled task view (null = first tick pending) */
 		task: GenerationTaskView | null;
@@ -41,6 +42,10 @@
 		 * each piece + the taskId, so a later re-generation knows what to
 		 * match or swap. null until the log write lands. */
 		logEntry?: GenerationLogEntry | null;
+		/** Re-fetch a degraded video download (the CDN egress gate blocked
+		 * the local file, the render completed on the provider's url).
+		 * Shown only when the task terminal `done` output is a remote url. */
+		onRetryDownload?: () => void;
 	}>();
 
 	// ── Provider-overload notice ──────────────────────────────────────────────
@@ -55,6 +60,32 @@
 		if (!video?.saturatedSince) return false;
 		return now - video.saturatedSince >= SATURATION_WARN_MS;
 	});
+
+	// ── Degraded download recovery (2026-11-11) ───────────────────────────────
+	// The CDN egress gate can block the local video download while the render
+	// COMPLETES on the provider's url. The task terminal is `done` with a
+	// REMOTE `outputPath` (not a local media-tree path). That is a "pending
+	// download" state, not a failure — offer a bounded re-fetch (the L3
+	// `retry_failed_video_downloads` pass) that re-heals the marker, the DB
+	// row and the composer last_generation once the gate lifts.
+	const isRemoteRef = (v?: string | null) =>
+		!!v && /^https?:\/\//i.test(v.trim());
+	const degradedDownload = $derived(
+		!busy && task?.status === 'done' && isRemoteRef(task.outputPath),
+	);
+	let retrying = $state(false);
+	let retryNote = $state<string | null>(null);
+	async function runRetryDownload() {
+		if (!onRetryDownload || retrying) return;
+		retrying = true;
+		retryNote = null;
+		try {
+			const out = await onRetryDownload();
+			if (out) retryNote = out;
+		} finally {
+			retrying = false;
+		}
+	}
 
 	// ── Live elapsed timer + "last activity" (drives the user's "is it alive?"
 	//    question during long provider queue-full waits) ─────────────────────
@@ -236,6 +267,26 @@
 					{:else if task.status === 'cancelled'}
 						<p class="gen-task-cancelled" role="status">Generation cancelled</p>
 					{/if}
+					{#if degradedDownload}
+						<div class="gen-degraded" role="status">
+							<p>
+								The video finished, but the local download is pending — the
+								provider's CDN blocked it. It stays safe as the remote link,
+								and the app re-fetches it automatically when you open this
+								session again.
+							</p>
+							<button
+								class="btn-confirm gen-retry-download"
+								onclick={runRetryDownload}
+								disabled={retrying}
+							>
+							{retrying ? 'Retrying download…' : 'Retry download now'}
+						</button>
+						{#if retryNote}
+							<p class="gen-degraded-note">{retryNote}</p>
+						{/if}
+					</div>
+					{/if}
 					{#if task.requestLog}
 						{@const logKnown = logTextForTask === task.taskId}
 						{@const logEmpty = logKnown && (!logText || !logText.trim())}
@@ -365,5 +416,50 @@
 	.gen-refresh:hover {
 		color: var(--text-primary, #fff);
 		background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+	}
+
+	/* Degraded-download band (2026-11-11): the render completed on the
+	   provider's url; only the local fetch is pending. Mirrors .gen-overload
+	   geometry; a calmer accent-tinted surface (not the error red) since this
+	   is a "waiting for the CDN gate to lift" state, not a failure. */
+	.gen-degraded {
+		margin-top: 14px;
+		padding: 12px 14px;
+		border: 1px solid var(--border-color, #3f3f46);
+		border-left: 3px solid var(--accent-color, #59b5ff);
+		border-radius: 8px;
+		background: var(--accent-bg, rgba(89, 181, 255, 0.08));
+	}
+
+	.gen-degraded p {
+		margin: 0 0 10px;
+		font-size: 12px;
+		line-height: 1.5;
+		color: var(--text-secondary, #a0a0b0);
+	}
+
+	.gen-degraded .gen-retry-download {
+		display: inline-block;
+		padding: 6px 14px;
+		font-size: 12px;
+		border-radius: 6px;
+		border: none;
+		background: var(--accent-color, #59b5ff);
+		color: #0b0b0f;
+		font-weight: 600;
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.gen-degraded .gen-retry-download:disabled {
+		opacity: 0.6;
+		cursor: default;
+	}
+
+	.gen-degraded-note {
+		margin: 10px 0 0;
+		font-size: 11px;
+		font-family: var(--font-mono, 'JetBrains Mono', monospace);
+		color: var(--text-muted, #71717a);
 	}
 </style>

@@ -1,22 +1,25 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 	import Frame from './Frame.svelte';
+	import ErrorModal from './ErrorModal.svelte';
 	import ProjectsPanel from './ProjectsPanel.svelte';
-	import ComposerPanel from './ComposerPanel.svelte';
+	import SessionView from './SessionView.svelte';
+import { type DirectorTab } from '$lib/directorStore';
 	import ProfilePanel from './ProfilePanel.svelte';
 	import ToolsPanel from './ToolsPanel.svelte';
-	import ChromeIcon from './ChromeIcon.svelte';
 	import GenerateModal from './ComposerModals/GenerateModal.svelte';
 	import type { ModelSelection } from './ComposerModals/GenerateModal.svelte';
 	import GenerationProgressModal from './ComposerModals/GenerationProgressModal.svelte';
 	import SessionGenerateModal from './ComposerModals/SessionGenerateModal.svelte';
 	import type { SessionGenerateStats } from './ComposerModals/SessionGenerateModal.svelte';
 	import CompactPipesProgress from './ComposerModals/CompactPipesProgress.svelte';
+	import ComposeSelectModal from './ComposerModals/ComposeSelectModal.svelte';
 	import SettingsModal from './Settings/SettingsModal.svelte';
-	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece, ResolutionPreset, Orientation } from '$types';
+	import type { ProjectData, SessionData, PipeRow, ComposerFocus, ProjectFile, GenerationTaskView, Settings, GenerationLogEntry, GenerationLogPiece, ResolutionPreset, Orientation, MediaMode } from '$types';
 	import { getMaxFramesForResolution, RESOLUTION_DIMS } from '$types';
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
+import { recoverVideoDownloads } from '$lib/videoDownloadRecovery';
 	import { summarizePipe } from '$lib/promptEngine';
 	import { collectRemoteUrls, checkRemoteUrls, type RefUrlTarget } from '$lib/refCheck';
 	import { pollTask, isTerminalTaskStatus, type PollHandle } from '$lib/taskPoller';
@@ -26,9 +29,12 @@
 import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
-	import { toMediaUrl, invalidateMediaUrlCache } from '$lib/mediaUrl';
+	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';
+	import { resetStallMeter } from '$lib/stallWatch';
+	import { pipeEvent, tripEffect, logComponentEndpoint } from '$lib/pipelineDiag';
+	import { setDashExtra } from '$lib/dashStore';
 	import { migratePipe, attachLastGeneration, markRefStatus, attachGeneratedImage } from '$lib/composerStore';
-	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateQ, updateC, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
+	import { hydrateSessions, setOnUpdate, loadSession, saveSession, sessions, composerStore, updateFPS, updateResolution, updateOrientation, updateCropMode, updateVideoRatio, setMediaMode } from '$lib/composerStore';
 		import { getSettings, loadSettings, setOnSettingsChange, unregisterSettingsChange, knownResolution, knownOrientation, logGeneration, getGenerationLog, getPreset, getModel, resolveSpecs, pipePrechecks, getProfileId, getProviderStatus, isSettingsLoading } from '$lib/settings';
 		import { generationFailureMessage, stageErrorLines } from '$lib/generationErrors';
 	import { computeSessionVideoLayout, localFrameForPipe as localFrameForPipeLib, pipeStartForPipe as pipeStartForPipeLib } from '$lib/sessionVideoLayout';
@@ -59,12 +65,53 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	 *  switch (different userName) forces the id to re-resolve. */
 	let lastLoadedProfile = $state<string | null>(null);
 	let userProjectsFiles = $state<Record<string, ProjectFile[]>>({});
+	const PROJECTS_FILES_CAP = 64;
+	function evictOldUserProjectsFiles(): void {
+		const keys = Object.keys(userProjectsFiles);
+		if (keys.length <= PROJECTS_FILES_CAP) return;
+		const toDelete = keys.slice(0, keys.length - PROJECTS_FILES_CAP);
+		for (const k of toDelete) delete userProjectsFiles[k];
+	}
 
 	// State
 	let projects = $state<ProjectData[]>([]);
 	let selectedProjectId = $state<string | null>(null);
 	let selectedSessionId = $state<string | null>(null);
 	let activeTool = $state<string | null>(null);
+	// Director's-harness tabs (design doc §1): one $state owns both the
+	// right-aligned tab group in .preview-meta and the composer body slot.
+	// Per-session state lives in the director store (runStates map).
+	let composerTab = $state<DirectorTab>('pipes');
+	// Per-session tab memory (design: opening a session restores the tab the
+	// user last had open in THAT session, not always Pipes). Keyed by session
+	// id; a session with no recorded tab falls back to 'pipes'. Bounded cap so
+	// a long-lived app switching across many sessions can't grow it without
+	// limit (mirrors the other module Maps).
+	const SESSION_TAB_CAP = 64;
+	let sessionTabMemory = $state<Record<string, DirectorTab>>({});
+	function rememberTab(id: string, tab: DirectorTab): void {
+		if (!id) return;
+		if (sessionTabMemory[id] === tab) return; // no-op
+		const next = { ...sessionTabMemory, [id]: tab };
+		const keys = Object.keys(next);
+		if (keys.length > SESSION_TAB_CAP) delete next[keys[0]];
+		sessionTabMemory = next;
+	}
+	// Director-tab running indicator for the strip badge (design §1 guard:
+	// an in-flight run must stay visible while the user is on another tab
+	// of the same session). Session switch resets it with the tab.
+	let directorRunning = $state(false);
+	// Design §1 "badge ownership": the non-Pipes tab's own quiet badge (Extract
+	// "n sections" / Scoreboard "stale"), pushed up from DirectorPanel so the
+	// .preview-meta row shows it in place of pipe-count.
+	let tabMeta = $state({ extractSections: 0, stale: false });
+	// Reset the tab badge when the active tab or session changes (session-keyed
+	// state, design §1 guard 2 — never carry a hidden tab's badge).
+	$effect(() => {
+		void composerTab;
+		void selectedSessionId;
+		tabMeta = { extractSections: 0, stale: false };
+	});
 	let error = $state<string | null>(null);
 	let loading = $state(false);
 
@@ -72,11 +119,67 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	let selectedProject = $derived(
 		projects.find(p => p.id === selectedProjectId) || null
 	);
-	
+
+	// PHASE 1 single-producer bridge. The composer DATA lives in the
+	// `sessions` Map (composerStore) — loadSession / hydrateSessions / every
+	// update* / attach* / markRefStatus path writes there. The `projects`
+	// tree is demoted to a read-only INDEX (id / name / mtime / pipes:[]).
+	// We must NOT deep-copy the composer row back into the tree (that was
+	// Producer A/B and the heap ratchet). Instead: a per-session revision
+	// counter, bumped by the store's single mutation trigger
+	// (notifyUpdate → setOnUpdate) and the load/hydrate paths. `selectedSession`
+	// tracks that revision and reads the store directly, returning a fresh
+	// SHALLOW top-level shell so child props re-render — while the heavy
+	// pipes/refs arrays stay shared by reference with the store (one copy
+	// at a time, no deep clone, no whole-projects rebuild).
+	let sessionRevisions = $state<Record<string, number>>({});
+	// Idempotent: set when the store has real data for a session (beyond
+	// the pre-load shell). Effects keyed on this fire exactly ONCE per
+	// session load (empty→populated transition), not on every revision.
+	// Plain object (not Set) because Svelte 5 reliably tracks plain-object
+	// property sets in effects; Set.has() is not a reliable effect dep.
+	let sessionLoaded = $state<Record<string, boolean>>({});
+	function markSessionLoaded(id: string) {
+		if (!sessionLoaded[id]) sessionLoaded[id] = true;
+	}
+	function clearSessionLoaded(id: string) {
+		delete sessionLoaded[id];
+	}
+	function touchSession(id: string) {
+		sessionRevisions[id] = (sessionRevisions[id] ?? 0) + 1;
+	}
+
+	// PHASE 1 FIX (v4, final) — single-producer bridge, PURE, no loop hazard.
+	//
+	// v1 (lazy $derived over the plain Map) got stuck on one session. v2/v3
+	// replaced it with a $state written by an $effect that produces a fresh
+	// `{...}` object every re-run — a WRITE at the root of the tree that feeds
+	// `pipes`, `activePipe` and every child prop. Combined with the child
+	// effects that write back (e.g. DirectorPanel onApplied → touchSession),
+	// that write-what-you-read shape pins the main thread — and on the
+	// mount/restore path it freezes the app at STARTUP.
+	//
+	// v4: a pure $derived.by. It READS three reliably-tracked reactive inputs
+	// — selectedSessionId ($state string), sessionRevisions[id] ($state
+	// property bumped by touchSession on every store mutation), and the
+	// projects index ($state array) — and returns store-first with a
+	// pre-load shell fallback. A derived never writes, so this node cannot
+	// participate in a write cycle; it re-evaluates only when a tracked
+	// input changes and is cached otherwise. Fewer writes = less churn.
 	let selectedSession = $derived.by(() => {
-		if (!selectedProject || !selectedSessionId) return null;
-		const sess = selectedProject.sessions.find(s => s.id === selectedSessionId);
-		return sess || null;
+		const id = selectedSessionId;
+		// Track the revision so any store mutation of this session re-runs
+		// the derived; Svelte 5 tracks the in-place $state property read.
+		const rev = id ? sessionRevisions[id] ?? 0 : 0;
+		void rev;
+		const proj = projects.find((p) => p.id === selectedProjectId) || null;
+		if (!proj || !id) return null;
+		const s = sessions.get(id);
+		if (s) return { ...s };
+		// Pre-load shell (pipes: []) while loadSession is in flight. The
+		// shell is read-only here — a placeholder, not a second producer.
+		const shell = proj.sessions.find((x) => x.id === id);
+		return shell ? { ...shell } : null;
 	});
 
 	// Keyboard navigation for playhead
@@ -89,22 +192,36 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// Project level = summary only; session = video settings + generation.
 	let focus = $state<ComposerFocus>({ level: 'project' });
 	$effect(() => {
+		// Depend ONLY on the session ID. The effect reads session.id, which
+		// is stable in both the pre-load tree shell and the loaded store data,
+		// so no revision/loaded signal is needed here. Reading the session
+		// via untrack avoids tracking the fresh shell object (infinite loops).
+		void selectedSessionId;
+		const session = untrack(() => selectedSession);
 		// No active session → project summary view.
-		if (!selectedSession) {
+		if (!session) {
 			focus = { level: 'project' };
 			return;
 		}
 		// With a session, the panel drives session/pipe/tag; on session
 		// change, fall back to the session level until the panel refines it.
-		if (focus.level === 'project' || (focus.level === 'session' && focus.id !== selectedSession.id)) {
-			focus = { level: 'session', id: selectedSession.id };
+		if (focus.level === 'project' || (focus.level === 'session' && focus.id !== session.id)) {
+			focus = { level: 'session', id: session.id };
 		}
 	});
 	// Restore the latest pipe preview after backend hydration. The preview is
 	// scoped per session so switching away and back returns to the SAME pipe
 	// the user last opened here (lastPreviewPipeBySession), not the first
 	// pipe that happens to have a last-gen video.
+	const LAST_PREVIEW_CAP = 24;
 	let lastPreviewPipeBySession = new Map<string, string>();
+	function evictOldLastPreview(): void {
+		if (lastPreviewPipeBySession.size <= LAST_PREVIEW_CAP) return;
+		for (const key of lastPreviewPipeBySession.keys()) {
+			if (lastPreviewPipeBySession.size <= LAST_PREVIEW_CAP) break;
+			lastPreviewPipeBySession.delete(key);
+		}
+	}
 	// True when the top-panel preview shows the composed session video
 	// (all pipes spliced) instead of a single pipe's last-gen clip. Drives
 	// the frame bounds: a composed video spans the SUM of the pipes.
@@ -117,21 +234,38 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// attached on the NEW session (attachSessionVideo is async).
 	async function attachSessionVideo(path: string, label: string): Promise<boolean> {
 		const before = selectedSessionId;
-		// A group run overwrites the SAME session.mp4 in place; force a fresh
-		// read so the top panel shows THIS run, not the previous one's cached blob.
-		invalidateMediaUrlCache(path);
-		const url = await toMediaUrl(path).catch(() => null);
+		logComponentEndpoint(`[GEN] step ${selectedSessionId ?? '-'} attach-start path=${path}`);
+		// Preview variant: the top-panel video uses the small `.proxy.mp4`
+		// sibling (≈218KB, bounded by panel height) NOT the full-res
+		// session.mp4 (10MB, 1280×720). This is the dominant GPU texture
+		// term per switch: full-res video decode allocates ~80MB of
+		// GPU textures for reference frames, the proxy ~15MB. Over 13
+		// fast switches the old textures haven't been reclaimed before
+		// the new ones start → 669MB GPU process spike → AMD driver
+		// watchdog crash. If no proxy sibling exists the media handler
+		// serves the original (backfill creates proxies on session open).
+		const url = await toMediaUrl(path, { variant: 'preview' }).catch(() => null);
+		logComponentEndpoint(`[GEN] step ${selectedSessionId ?? '-'} attach-toMediaUrl-done url=${url ? 'yes' : 'null'}`);
 		if (url && before !== selectedSessionId) {
 			// The user switched sessions mid-flight: only honor the attach when
 			// it still targets the session that was selected at call time.
 			return false;
 		}
 		if (!url) return false;
+		// Bug batch nov19 (item 1): the composed session video lives at a FIXED
+		// path (session-video/session.mp4 + its .proxy sibling), so every
+		// re-compose resolves to the IDENTICAL URL string — the <video> src
+		// attribute never changes and the element never reloads the new file
+		// (the "loading…" overlay could stick over the OLD clip). A run-unique
+		// query forces a fresh attribute + a new HTTP cache key. Safe: the
+		// media handler decodes only request.uri().path() (media_protocol.rs),
+		// the query is ignored server-side.
+		const bustedUrl = `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}`;
 		previewIsSessionVideo = true;
-		previewVideo = { url, label };
+		previewVideo = { url: bustedUrl, label };
 		previewMediaPath = path;
-		toolsSessionVideo = { url, label };
-		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url, label, path };
+		toolsSessionVideo = { url: bustedUrl, label };
+		if (selectedSessionId) lastComposedSessionVideo = { sessionId: selectedSessionId, url: bustedUrl, label, path };
 		return true;
 	}
 	// Flip the top-panel ownership back off the session video when the user
@@ -158,22 +292,26 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		previewMediaPath = lastComposedSessionVideo.path;
 		toolsSessionVideo = { url: lastComposedSessionVideo.url, label: lastComposedSessionVideo.label };
 	}
-	// 2f: a composed session video exists for the CURRENT session while the
-	// top panel shows a single-pipe clip — surface the "Open in preview"
-	// restore pill in the top panel (and keep the tool-panel button). A
-	// record from another session must not light the pill: that is the
-	// same cross-session leak the restore path guards against above.
-	const sessionVideoDetached = $derived(
-		!!lastComposedSessionVideo &&
-		lastComposedSessionVideo.sessionId === selectedSessionId &&
-		!previewIsSessionVideo
-	);
 	// Play outside (2a+): open the currently-attached preview's on-disk file
 	// in the OS's default player. The backend command re-validates the path
 	// against the media roots (same guard as read_media_file) and spawns the
 	// platform opener. Browser/dev: no backend → affordance stays hidden.
 	async function handlePlayOutside() {
 		if (!isTauri() || !previewMediaPath) return;
+		// A degraded generation (CDN egress gate blocked the local download)
+		// leaves a REMOTE url in `lastGeneration.videoPath` — the backend
+		// media-root guard rejects it, so a remote value must open in the
+		// default browser instead of the OS player.
+		if (!isLocalPath(previewMediaPath)) {
+			try {
+				const w = window.open(previewMediaPath, '_blank', 'noopener,noreferrer');
+				if (w) flashToast('Opened in browser (local download pending)', 'info');
+				else flashToast('Browser blocked the popup — copy the URL from the clip panel', 'error');
+			} catch {
+				flashToast('Could not open the remote video', 'error');
+			}
+			return;
+		}
 		try {
 			await invoke('open_media_in_player', { input: { path: previewMediaPath } });
 			flashToast('Opened in system player', 'info');
@@ -190,15 +328,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// attach runs through attachSessionVideo so it is also mirrored into
 		// the ToolsPanel preview section (see syncCompose / compose button).
 		//
-		// IMPORTANT: run this check for the CURRENT session, not just "some
-		// session video is set". `groupSessionVideoPath`/`groupComposeState`
-		// are armed by the last RESTORED group, which can belong to a DIFFERENT
-		// session (the user just switched away from a composed one). Without the
-		// sid guard a stale path from the previous session would re-attach that
-		// session's video to the top panel — exactly the "preview doesn't change
-		// when I switch sessions" bug. The path's owning session is implicit:
-		// it is only ever armed for the session currently being restored.
-		if (groupSessionVideoPath && groupComposeState === 'done') {
+		// P3 cross-session leak guard: `groupSessionVideoPath`/`groupComposeState`
+		// are GLOBAL state armed asynchronously by the LAST finished group-restore,
+		// so on a fast A→B swing they can still point at session A's video while we
+		// are restoring session B. The owning session is tracked in
+		// `groupSessionVideoOwner`; only attach when the owner matches the session
+		// being restored (or no owner was claimed — the safe legacy behavior). A
+		// foreign path falls through to B's own session video below, so B's panel
+		// never shows A's composed video ("preview doesn't switch" bug).
+		if (groupSessionVideoPath && groupComposeState === 'done' &&
+			(!groupSessionVideoOwner || groupSessionVideoOwner === sid)) {
 			// A composed session video owns the top panel even when a pipe
 			// preview was attached earlier — always re-attach (refreshing
 			// the tool-panel mirror too), never early-return.
@@ -224,6 +363,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			toolsSessionVideo = null;
 			lastComposedSessionVideo = null;
 		}
+		// Session-level composed video persisted in the composer row: a manual
+		// "Compose video" (or a group auto-compose after a restart, when the
+		// group row itself is not restorable) re-attaches here, so the tool
+		// panel shows the full-session video on every re-open of the session.
+		// A missing file falls through to the pipe-clip fallback.
+		if (session.sessionVideoPath) {
+			const ok = await attachSessionVideo(session.sessionVideoPath, `${session.name} — session video`);
+			if (ok) return;
+		}
 		// Fall back to a single-pipe last-gen video only when nothing is
 		// attached yet; a session video that's already showing wins. Note the
 		// `previewIsSessionVideo` reset: single-pipe previews span only that
@@ -241,8 +389,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				: undefined) ??
 			session.pipes.find((p) => p.lastGeneration?.videoPath);
 		if (!pipe?.lastGeneration?.videoPath) return;
-		invalidateMediaUrlCache(pipe.lastGeneration.videoPath);
-		const url = await toMediaUrl(pipe.lastGeneration.videoPath);
+		// Preview variant: the top-panel <video> uses the small `.proxy.mp4`
+		// sibling (≈218KB) so the decode buffer stays small on switch. The
+		// media handler serves the original if the proxy is missing.
+		const url = await toMediaUrl(pipe.lastGeneration.videoPath, { variant: 'preview' });
 		if (url) {
 			previewVideo = { url, label: pipe.name };
 			previewMediaPath = pipe.lastGeneration.videoPath;
@@ -250,15 +400,26 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	}
 
 	$effect(() => {
-		// Track the session AND the compose outcome so the preview re-renders
-		// both when a group's auto-compose finishes/persists session_video_path
-		// AND when the user switches to a session that has no composed video
-		// (the clear-branch below must run on the session change itself).
-		const session = selectedSession;
-		void session; // effect dep: re-run when the selected session changes
-		void groupComposeState; // effect dep: re-run when compose outcome changes
-		void groupSessionVideoPath; // effect dep: re-run when the path lands
-		void restoreSelectedPreview(session);
+		// Depend on the session ID and the idempotent loaded-flip so this
+		// effect re-runs exactly ONCE when the store populates the session
+		// (loadSession → markSessionLoaded), not on every composer keystroke
+		// (which the per-mutation revision would cause).
+		//
+		// CRITICAL (Session-8 freeze root cause): the effect's ONLY reactive
+		// deps must be `selectedSessionId` + the loaded-flip. restoreSelectedPreview
+		// reads AND writes the preview $state (previewIsSessionVideo /
+		// toolsSessionVideo / lastComposedSessionVideo / previewVideo); if this
+		// effect tracked those reads, the attach write would invalidate its own
+		// reads → re-run → re-attach → write → re-fire: a write-what-you-read
+		// loop that pins the main thread (the 1300× attach-start flood in the
+		// log). Group-state changes are handled by the group event handlers
+		// directly, so this effect must NOT re-fire on them. Wrap the whole
+		// restore in untrack() so no preview/group read becomes a tracked dep —
+		// the effect is a single terminal producer, exactly once per load.
+		void selectedSessionId;
+		if (selectedSessionId) void sessionLoaded[selectedSessionId];
+		const session = untrack(() => selectedSession);
+		void untrack(() => restoreSelectedPreview(session));
 	});
 
 	// the generated pieces (its own artifact length) — NOT a mechanical sum of
@@ -306,23 +467,47 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// unit-tested in src/lib/sessionVideoLayout.ts; the deriveds below just
 	// thread it through the session-video vs. composer-mode switch.
 	const sessionVideoLayout = $derived.by(() =>
-		previewIsSessionVideo ? computeSessionVideoLayout(pipes) : null
+		previewIsSessionVideo
+			? computeSessionVideoLayout(pipes, selectedSession?.sessionVideoOverlap ?? null)
+			: null
 	);
 
 	// Sliding the session-video carousel (or the top-panel frame step / arrow
 	// keys) moves the GLOBAL playhead. When the spliced video is the preview
 	// target, that move selects the pipe whose segment the frame lands in, so
 	// the composer highlights the owning pipe as the user sweeps.
+	// Pin the active pipe to the session-video playhead ONCE when session-video
+	// mode activates (attachSessionVideo / session switch). The selectedFrame
+	// read is UNTRACKED: the effect fires only on previewIsSessionVideo /
+	// sessionVideoLayout changes, NOT on every carousel scrub tick. The old
+	// tracked read re-ran the effect on every frame step → wrote activePipeIdx
+	// → 11-pipe mediaActive / localFrameForPipe re-eval → 700 ms Svelte
+	// scheduler flush (the "fed"-session cascade confirmed by the stallWatch
+	// stack ring: `Fy` = Svelte scheduler, 703 ms RTT, every cycle). In
+	// composer mode the pipe highlight follows the user's pipe-click directly;
+	// in session-video mode it pins to the playhead on attach only.
 	let lastPinnedGlobalFrame = $state<number | null>(null);
 	$effect(() => {
 		if (!previewIsSessionVideo || !sessionVideoLayout) return;
-		const f = selectedFrame;
-		if (lastPinnedGlobalFrame === f) return; // only act on real moves
+		const f = untrack(() => selectedFrame);
+		if (lastPinnedGlobalFrame === f) return;
 		lastPinnedGlobalFrame = f;
 		activePipeIdx = sessionVideoLayout.frameToPipe(f);
-	});
+		});
 
-	// A per-pipe ruler renders its own frame space (0..pipe.lengthFrames). In
+		// Scroll-follow hint: the pipe owning the global playhead, recomputed as the
+		// carousel sweeps. Unlike activePipeIdx (writing it per scrub tick cascaded
+		// an 11-pipe mediaActive/localFrameForPipe re-eval — the 700ms flush above),
+		// this is a lightweight scroll-only target: it changes only when the playhead
+		// crosses a pipe boundary, and ComposerPanel uses it purely for scrollIntoView
+		// so the pipes column follows the frame pins without touching focus/media.
+		const playheadPipeIdx = $derived(
+		previewIsSessionVideo && sessionVideoLayout
+			? sessionVideoLayout.frameToPipe(selectedFrame ?? 0)
+			: null
+		);
+
+		// A per-pipe ruler renders its own frame space (0..pipe.lengthFrames). In
 	// session-video mode the global playhead is offset by that pipe's start in
 	// the spliced timeline, clamped to the pipe's bounds — so the pin sits at
 	// the right local position on whichever pipe owns the current frame. null
@@ -373,6 +558,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// hashed profile id, and loadProjects lazily re-resolves it on next
 	// call). The store then recomputes providerStatus + notifies, refreshing
 	// the chip. Skips the initial run (the onMount path already loaded).
+	// svelte-ignore state_referenced_locally — intentional: capture initial userName to detect changes
 	let lastLoadedUserName = $state(userName);
 	$effect(() => {
 		if (userName === lastLoadedUserName) return;
@@ -446,6 +632,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// on-demand refresh (focus / refresh button) + the fallback poll don't
 	// double-apply the terminal side-effects.
 	let terminalHandled = new Set<string>();
+	// P4: groups whose terminal (error/cancelled) reopen has already been
+	// surfaced (toast + red pill) in this app session. The restore body runs on
+	// EVERY visit to a session whose last group failed, so without this the
+	// "Generation failed: …" toast + error pill re-fire on every switch away
+	// and back — the "stale generation error on every session move" noise.
+	// First visit surfaces it; later visits keep the pill marker (state, not a
+	// re-toast). Bounded like the other module Maps.
+	let terminalNotified = new Set<string>();
 	let previewVideo = $state<{ url: string; label: string } | null>(null);
 	// The on-disk path of the file currently attached to the top-panel preview
 	// (the source of `previewVideo`'s blob URL). "Play outside" hands this to
@@ -463,6 +657,8 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// can replay the exact same run without re-opening the generate modal.
 	let lastGenerateParams = $state<{ pipeId: string; models: ModelSelection; seed: number | null } | null>(null);
 	let showSessionGenerateModal = $state(false);
+	// Item 10: the compose-select modal (pipe selection + signed boundary cuts).
+	let composeSelectOpen = $state(false);
 	let activeGroupId = $state<string | null>(null);
 	let groupUnlisten: (() => void) | null = null;
 	let groupTaskId: string | null = null;
@@ -481,6 +677,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// so a "stubbed with error" run is not silently invisible.
 	let groupRunError = $state<string | null>(null);
 	let groupSessionVideoPath = $state<string | null>(null);
+	// P3: the session that `groupSessionVideoPath` belongs to. The path is a
+	// GLOBAL armed asynchronously by the LAST finished group-restore, so it can
+	// transiently point at a DIFFERENT session than the one currently being
+	// restored (a fast A→B swing). The restore effect must only attach it when
+	// the owner matches the session it is restoring — otherwise a foreign
+	// session's composed video leaks into the new session's top panel ("preview
+	// doesn't switch / another session's video shows"). null = no owner claimed.
+	let groupSessionVideoOwner = $state<string | null>(null);
 	// 0012 G8: the video-normalization params the last compose ran with,
 	// snapshotted on the group row. Compared against the session's CURRENT
 	// target + crop mode to flag a stale session video (the user changed
@@ -503,13 +707,60 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	let groupProgress = $state(0);
 	let groupComposePhase = $state<string | null>(null);
 	let restoredGroupSessionId = $state<string | null>(null);
+	// P2 (bounded): a per-GROUP live snapshot, keyed by group id, written on
+	// every poll tick of the displayed group. When the user switches AWAY from
+	// a still-running group and BACK, the restore hydrates the display globals
+	// synchronously from this record (O(1), no 0% flash, no re-fetch window)
+	// instead of waiting for the async re-fetch to land. The record persists
+	// across switches, so the "coming back shows correct live progress" case
+	// is instant. Bounded like the other module Maps (the live group is the
+	// hot one; terminal groups drop out on the next visit).
+	type GroupLiveSnapshot = {
+		pipeTaskIds: Record<string, string>;
+		taskViews: Record<string, GenerationTaskView>;
+		status: string | null;
+		progress: number;
+		composeState: string | null;
+		composeError: string | null;
+		sessionVideoPath: string | null;
+		at: number;
+	};
+	let groupLiveRecords = new Map<string, GroupLiveSnapshot>();
+	// ARCHITECTURE (single-transaction session switch):
+	//   sessionEpoch  — monotonic counter, bumped on every handleSessionSelect.
+	//   sessionSwitching — while true, no other user-initiated async work
+	//                      (generation start, compose, …) may begin.
+	// Every async body that outlives a switch captures `sessionEpoch` at
+	// entry and aborts if it has advanced (cheap, no Svelte reactivity, no
+	// closure capture). This replaces the scattered `isStale()` closures
+	// and per-call `sid !== sessionId` re-checks with ONE serialization point
+	// at the top of the UI tree.
+	let sessionEpoch = 0;
+	// generationArmEpoch — a monotonic counter bumped every time a NEW user-
+	// initiated run arms its task watcher (startWatchingTask, both the
+	// per-pipe and the session-group confirm paths). An in-flight
+	// session-restore captures it at entry (via `isStale`, so EVERY
+	// checkpoint inherits the check); a bump mid-restore means a new run
+	// started for this session AFTER the restore began, and the restore's
+	// async tail must NOT clobber that run's live UI (the no-group teardown's
+	// stopWatching / activeTask=null / showProgressModal=false = the "press
+	// Generate on a freshly-switched session → instantly minimized, no
+	// progress bar" symptom). The restore's own re-arm of an EXISTING live
+	// group (subscribeGroupWatcher) does NOT bump — only a new task start
+	// does, so a restore can never invalidate itself.
+	let generationArmEpoch = 0;
+	let sessionSwitching = $state(false);
 	// Live poll timer: while a group is running the per-pipe task views +
 	// the group progress only move on terminal events, so the modal's bars
 	// would sit at 0% for a whole pipe. A 2 s poll of the authoritative
 	// group view (live in-memory, persisted fallback) keeps them accurate.
 	let groupPollTimer: number | null = null;
-	function stopGroupPoll() {
-		if (groupPollTimer !== null) { window.clearInterval(groupPollTimer); groupPollTimer = null; }
+	function stopGroupPoll(reason?: string) {
+		if (groupPollTimer !== null) {
+			window.clearInterval(groupPollTimer);
+			groupPollTimer = null;
+			if (reason) pipeEvent(`group poll disarmed: ${reason}`);
+		}
 	}
 	function startGroupPoll() {
 		stopGroupPoll();
@@ -537,6 +788,29 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					}
 				}
 				groupTaskViews = merged;
+			// P2: persist the group's live display state so a switch-away +
+			// switch-back can re-hydrate the modal/pill synchronously (no 0%
+			// flash). One record per group; the live group is the only one that
+			// ticks, so the map stays tiny.
+			groupLiveRecords.set(gid, {
+				pipeTaskIds: { ...groupPipeTaskIds },
+				taskViews: merged,
+				status: groupStatus,
+				progress: groupProgress,
+				composeState: groupComposeState,
+				composeError: groupComposeError,
+				sessionVideoPath: groupSessionVideoPath,
+				at: Date.now(),
+			});
+			// P2 bound: the map is per-LIVE-group and drops on terminal, but a
+			// pathological many-group lifetime should still be capped. Keep the
+			// most recent 32.
+			if (groupLiveRecords.size > 32) {
+				for (const k of groupLiveRecords.keys()) {
+					if (groupLiveRecords.size <= 32) break;
+					groupLiveRecords.delete(k);
+				}
+			}
 				// Recompute the "Overall" bar from the LIVE per-pipe views. The
 				// backend's `g.progress` is a terminal-only average (per-pipe
 				// values sit at 0 until each pipe finishes), so trusting it
@@ -563,9 +837,14 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				groupComposeState = g.composeState ?? groupComposeState;
 				groupComposeError = g.composeError ?? groupComposeError;
 				groupSessionVideoPath = g.sessionVideoPath ?? groupSessionVideoPath;
+				// P3: this poller drives the currently-displayed session's group;
+				// claim its id as the owner so a later restore can reject a
+				// foreign session's path.
+				if (g.sessionVideoPath) groupSessionVideoOwner = selectedSessionId;
 				// Group reached a terminal state — stop polling.
 				if (!['running'].includes(g.status)) {
 					stopGroupPoll();
+					groupLiveRecords.delete(gid); // P2: terminal group's snapshot no longer useful
 					if (gid !== activeGroupId) return; // a new group took over mid-flight
 					// Safety net: if the group-terminal event was lost (the
 					// subscription dropped mid-session), the poller is the only
@@ -619,6 +898,10 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						groupComposeState = g.composeState ?? null;
 						groupComposeError = g.composeError ?? null;
 						groupSessionVideoPath = g.sessionVideoPath ?? null;
+						// P3: arm the owner from the session in front of us when
+						// this event actually attached something, so a later
+						// restore of a DIFFERENT session rejects the path.
+						if (g.composeState === 'done' && g.sessionVideoPath) groupSessionVideoOwner = selectedSessionId;
 						if (progressMinimized) {
 							if (g.composeState === 'error' || g.composeState === 'cancelled') pillTerminal = 'error';
 							// Compose success must not mask a failed pipe: a
@@ -635,6 +918,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			}
 			if (event.kind === 'group-terminal') {
 				groupUnlisten?.(); groupUnlisten = null; activeGroupId = null; groupTaskId = null;
+				groupLiveRecords.delete(gid); // P2: terminal group's snapshot no longer useful
 				groupStatus = event.status ?? 'done'; groupStale = false;
 				// Final pill marker: green only on a clean 'done' — 'error'
 				// (stop policy), 'done_with_errors' (continue policy) and
@@ -681,6 +965,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	// minimized, the pill flips to done/error so the outcome is visible in the
 	// top panel even without re-opening the modal. Reset on the next task.
 	let pillTerminal = $state<'done' | 'error' | null>(null);
+	// Generation error for ToolsPanel indicator (shown once, cleared on new generation).
+	let generationError = $state<string | null>(null);
+	let showErrorModal = $state(false);
 	// A live group keeps the UI actionable even when the per-task watcher was
 	// closed (modal OK/X mid-run): a null `activeTask` must not read as
 	// "nothing running" while the session group is still in flight.
@@ -841,31 +1128,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		}
 	}
 
-	// Quality / Creativity edits target the ACTIVE pipe (per-pipe fields)
-	async function handleQValueChange(q: number) {
-		if (!selectedSession || !activePipe) return;
-		const r = await updateQ(selectedSession.id, activePipe.id, q);
-		if (r.errors.length > 0) console.error('[Workspace] updateQ:', r.errors);
-	}
-
-	// Per-pipe Q/C edits from the session-generation modal (any pipe, not just
-	// the active one) — same store path as the panel above.
-	async function handlePipeQValueChange(sessionId: string, pipeId: string, q: number) {
-		const r = await updateQ(sessionId, pipeId, q);
-		if (r.errors.length > 0) console.error('[Workspace] updateQ (modal):', r.errors);
-	}
-
-	async function handlePipeCValueChange(sessionId: string, pipeId: string, c: number) {
-		const r = await updateC(sessionId, pipeId, c);
-		if (r.errors.length > 0) console.error('[Workspace] updateC (modal):', r.errors);
-	}
-
-	async function handleCValueChange(c: number) {
-		if (!selectedSession || !activePipe) return;
-		const r = await updateC(selectedSession.id, activePipe.id, c);
-		if (r.errors.length > 0) console.error('[Workspace] updateC:', r.errors);
-	}
-
 	// Load projects from backend
 	async function loadProjects() {
 		try {
@@ -953,6 +1215,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 						addedAt: new Date(f.added_at).getTime()
 					}));
 					userProjectsFiles = { ...userProjectsFiles, [proj.id]: files };
+					// Live dashboard: report the two workspace-local Map sizes
+					// truthfully (they persist for the app lifetime).
+					setDashExtra(lastPreviewPipeBySession.size, Object.keys(userProjectsFiles).length);
 				} catch (e) {
 					console.error(`[Workspace] Failed to load files for project ${proj.id}:`, e);
 				}
@@ -968,6 +1233,18 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					selectedProjectId = savedProject;
 					if (savedSession) {
 						selectedSessionId = savedSession;
+						// PHASE 1: `selectedSession` now reads the store, and
+						// the tree shells carry `pipes: []`. Load the restored
+						// session's composer data into the store so the composer
+						// renders real data on startup (not an empty shell).
+						const r = await loadSession(savedSession);
+						if (r.errors.length === 0) {
+							touchSession(savedSession);
+							markSessionLoaded(savedSession);
+						} else {
+							const local = found.sessions.find((s: any) => s.id === savedSession);
+							if (local) { hydrateSessions([local as any]); touchSession(savedSession); markSessionLoaded(savedSession); }
+						}
 					}
 				}
 			}
@@ -1028,22 +1305,20 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	//  2. Persist composer mutations to SQLite via saveSession (debounced).
 	//     SQLite is the source of truth; no longer routes through saveProjects.
 	const saveTimers = new Map<string, number>();
+	// PHASE 1 single-producer bridge. The store is the sole writer of
+	// composer data; its single mutation trigger (notifyUpdate → setOnUpdate)
+	// is the ONLY place that must fire the UI. Instead of the old
+	// reconcileComposerIntoProjects (Producer B) which deep-copied the
+	// composer row back into the projects tree on every keystroke (the heap
+	// ratchet that froze the renderer on a session swing), we just bump the
+	// per-session revision: `selectedSession` re-reads the store and returns
+	// a fresh shallow shell. One copy at a time — the tree never holds a
+	// second composer copy.
+
 	setOnUpdate((sessionId) => {
-		// 1) UI re-sync - only for the session the user is currently viewing
-		if (selectedSessionId === sessionId && selectedProject) {
-			const freshSession = sessions.get(sessionId);
-			if (freshSession) {
-				projects = (projects || []).map((p: any) => {
-					if (p.id !== selectedProject.id) return p;
-					return {
-						...p,
-						sessions: (p.sessions || []).map((s: any) =>
-							s.id === sessionId ? { ...freshSession } : s
-						)
-					};
-				});
-			}
-		}
+		// 1) UI re-sync: bump the revision so `selectedSession` re-reads
+		//    the store. No tree-copy — the store is the single producer.
+		touchSession(sessionId);
 
 		// 2) Persistence - debounced per session
 		const pending = saveTimers.get(sessionId);
@@ -1104,7 +1379,58 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		saveProjects();
 	}
 
+	// [GEN] endpoint (Phase 3). The generation/preview machinery is
+	// DELIBERATELY app-level (survives a session switch so a live run keeps
+	// running), so it cannot be keyed under SessionView. Instead this
+	// diagnostic logs the live listener + taskView counts at the real
+	// teardown/ready points so the capture trace reads:
+	//   [SV] destroy <old> → [GEN] disarm <old> listeners=N taskViews=M
+	//     → [SV] mount <new> → [GEN] ready <new> listeners=N taskViews=M
+	// A leak = listeners or taskViews NOT returning to 0 after a disarm
+	// when no group is live (the Tauri-listener ratchet).
+	function logGenEndpoint(phase: string, sessionId: string) {
+		const listeners =
+			(groupUnlisten !== null ? 1 : 0) +
+			(compositionUnlisten !== null ? 1 : 0) +
+			(genUnlisten !== null ? 1 : 0) +
+			(groupPollTimer !== null ? 1 : 0);
+		logComponentEndpoint(
+			`[GEN] ${phase} ${sessionId} listeners=${listeners} ` +
+			`taskViews=${Object.keys(groupTaskViews).length} ` +
+			`pipeTaskIds=${Object.keys(groupPipeTaskIds).length} ` +
+			`activeTask=${activeTaskId ?? '-'}`,
+		);
+	}
+
+	// DIAGNOSTIC (Session-8 freeze): a plain step marker on the same ledger.
+	// The switch path is where the event loop freezes with 0% CPU (blocked,
+	// not spinning — [RENDER] heartbeats stop). Placing a marker at every
+	// await + every silent return in the restore/load chain means the LAST
+	// [GEN] step line before total silence IS the stuck line. Logging-only:
+	// no behavior change.
+	function logGenStep(step: string, sessionId: string) {
+		logComponentEndpoint(`[GEN] step ${sessionId} ${step}`);
+	}
+
 	async function restoreSessionGenerationGroup(sessionId: string) {
+		// Cancellation guard (single-transaction model): this call belongs to
+		// the switch transaction that fired it. `sessionEpoch` advances on
+		// every handleSessionSelect, so an in-flight restore from an
+		// ABANDONED switch detects itself at its next checkpoint via a single
+		// plain-number compare (no per-call closure state). The
+		// `selectedSessionId` half covers the clear path (project select →
+		// no session). Check after each await — if stale, abort silently.
+		const myEpoch = sessionEpoch;
+		const myArmEpoch = generationArmEpoch;
+		// `generationArmEpoch` is part of staleness: if a NEW run armed its
+		// task watcher while this restore was in flight (user pressed
+		// Generate on the settled session — the "restore still pending, run
+		// already started" race), every checkpoint below bails instead of
+		// the tail clobbering that run's live progress UI.
+		const isStale = () =>
+			myEpoch !== sessionEpoch ||
+			selectedSessionId !== sessionId ||
+			myArmEpoch !== generationArmEpoch;
 		const key = `visionmachine:generation-group:${sessionId}`;
 		const groupId = localStorage.getItem(key);
 		// The localStorage key is only set for a run that STARTED in this
@@ -1114,19 +1440,40 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// row is the source of truth that survives, so when the bridge is gone
 		// fall back to the session's newest group row from the backend.
 		let group: Awaited<ReturnType<typeof fetchGenerationGroup>> | null = null;
+		logGenStep('restore-start', sessionId);
 		if (groupId) {
 			try {
+				const t0 = performance.now();
+				logGenStep('fetchGroup-await start', sessionId);
 				group = await fetchGenerationGroup(groupId);
-			} catch {
+				logGenStep(`fetchGroup-await done ${Math.round(performance.now() - t0)}ms`, sessionId);
+				if (isStale()) { logGenStep('bail stale after fetchGroup', sessionId); return; } // session changed mid-flight
+			} catch (err) {
+				logGenStep(`fetchGroup-await THREW ${String(err).slice(0, 80)}`, sessionId);
 				localStorage.removeItem(key);
 			}
 		}
 		if (!group && isTauri()) {
 			// Pure-read DB fallback: the session's most recent group row. Null
 			// when the session has never run a group — nothing to restore.
-			group = await fetchLatestGenerationGroupForSession(sessionId).catch(() => null);
+			const t0 = performance.now();
+			logGenStep('fetchLatest-await start', sessionId);
+			group = await fetchLatestGenerationGroupForSession(sessionId).catch((err: any) => { logGenStep(`fetchLatest-await THREW ${String(err).slice(0, 80)}`, sessionId); return null; });
+			logGenStep(`fetchLatest-await done ${Math.round(performance.now() - t0)}ms group=${group ? 'yes' : 'null'}`, sessionId);
+			if (isStale()) { logGenStep('bail stale after fetchLatest', sessionId); return; } // session changed mid-flight
 		}
 		if (!group) {
+			// CROSS-SESSION GUARD: this restore may be STALE (a newer session
+			// was selected while the fetch above was in flight). A stale
+			// session must NOT tear down the CURRENT session's just-armed
+			// group machinery, and must NOT write restoredGroupSessionId
+			// (claiming the latch early in the trigger effect means this is
+			// already set to the newer session's id by the time we get here
+			// for a stale one) — the clobber that made the restore-once
+			// effect re-fire and ratcheted the poller/listeners under fast
+			// swings.
+			if (isStale()) { logGenStep('bail stale no-group', sessionId); return; }
+			logGenStep('no-group teardown start', sessionId);
 			// No group run for this session: drop the previous session's group
 			// machinery (event watcher + poller + state). Otherwise a foreign
 			// live `activeGroupId` survives the session switch, the group-
@@ -1146,6 +1493,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			groupComposeState = null;
 			groupComposeError = null;
 			groupSessionVideoPath = null;
+			groupSessionVideoOwner = null;
 			groupRunError = null;
 			stopGroupPoll();
 			stopWatching();
@@ -1156,8 +1504,19 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			progressMinimized = false;
 			pillTerminal = null;
 			restoredGroupSessionId = sessionId;
+			// [GEN] endpoint: after tearing down the previous session's group
+			// machinery. A healthy no-group transition shows listeners=0 and
+			// taskViews=0 — anything else is the Tauri-listener ratchet.
+			logGenEndpoint('released', sessionId);
 			return;
 		}
+		// CROSS-SESSION GUARD: a group WAS fetched, but this restore may still
+		// be STALE (a newer session was picked while the group fetch was in
+		// flight). A stale session must not arm/tear the CURRENT session's
+		// group machinery or clobber its latch. The fetch above is guarded, so
+		// staleness can only change at the await points below — this entry
+		// check closes the no-await path.
+		if (isStale()) return;
 		// A group that is LIVE (running with a task) owns the session — arm the
 		// active-group machinery (poller, watcher, cancel guard, Generate block).
 		// A TERMINAL group restored from the DB (the common cross-restart case)
@@ -1184,10 +1543,61 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		groupStatus = group.status;
 		groupStale = isStaleGroup(group.status, group.live);
 		groupTaskId = null;
-		groupPipeTaskIds = isLiveGroup
-			? Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []))
-			: {};
+		// P2: hydrate the live-group display from the last poll-tick snapshot when
+		// one exists (warm start on switch-back); fall back to the group's own
+		// pipe→task map otherwise (cold reopen after a restart has no snapshot
+		// yet — the P1 re-fetch below fills it).
 		groupTaskViews = {};
+		groupPipeTaskIds = {};
+		if (isLiveGroup) {
+			// P2: synchronously re-hydrate the live display from the last poll
+			// tick's snapshot so the user does not see a 0% / empty-rows flash
+			// while the P1 re-fetch is in flight. The snapshot holds exactly
+			// what the poller would have written (views + merged progress +
+			// compose phase), so it is a warm start, not a second source of
+			// truth — the P1 fetch immediately after overwrites each view as
+			// it lands and the poller keeps ticking.
+			const snap = groupLiveRecords.get(group.groupId);
+			if (snap && snap.at && Date.now() - snap.at < 30_000) {
+				groupPipeTaskIds = snap.pipeTaskIds;
+				groupTaskViews = snap.taskViews;
+				groupStatus = snap.status;
+				groupProgress = snap.progress;
+				groupComposeState = snap.composeState;
+				groupComposeError = snap.composeError;
+				groupSessionVideoPath = snap.sessionVideoPath;
+				groupSessionVideoOwner = snap.sessionVideoPath ? sessionId : null;
+				// Never inherit the previous session's activeTask: null it first,
+				// then adopt only a view that actually exists in the snapshot.
+				activeTask = null;
+				const lastTaskId = Object.values(snap.pipeTaskIds).pop() ?? null;
+				activeTaskId = lastTaskId;
+				if (lastTaskId) {
+					const pipeKey = Object.entries(snap.pipeTaskIds).find(([, t]) => t === lastTaskId)?.[0];
+					const view = pipeKey ? snap.taskViews[pipeKey] : null;
+					if (view) activeTask = view;
+				}
+			} else {
+				groupPipeTaskIds = Object.fromEntries(group.pipes.flatMap((pipe) => pipe.pipeId && pipe.taskId ? [[pipe.pipeId, pipe.taskId]] : []));
+			}
+			// P1: re-fetch the live task views for every pipe that still has an
+			// in-flight task. Before this, a switch into a running session wiped
+			// `groupTaskViews` to {} and the 2 s poller only merged progress for
+			// pipes ALREADY present in that map — so the compact rows and the
+			// "Overall" bar sat at 0% (the backend's pipe progress only advances
+			// at pipe-terminal) until the first pipe-terminal event or a manual
+			// row fetch: the "coming back shows incorrect progress" symptom.
+			// Display the newest pipe task in the pill/modal immediately.
+			const liveTaskIds = Object.values(groupPipeTaskIds);
+			if (!activeTaskId) activeTaskId = liveTaskIds.length ? liveTaskIds[liveTaskIds.length - 1] : null;
+			for (const taskId of liveTaskIds) {
+				void fetchGenerationTask(taskId).then((view) => {
+					if (group.groupId !== activeGroupId) return; // a newer session took over mid-flight
+					if (view.pipeId) groupTaskViews[view.pipeId] = view;
+					if (view.taskId === activeTaskId) activeTask = view;
+				}).catch(() => {});
+			}
+		}
 		groupComposeState = group.composeState ?? null;
 		groupComposeError = group.composeError ?? null;
 		// Surface a terminal group's run-level error on reopen. The group
@@ -1198,18 +1608,34 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// pill as errored and toast the reason so the user sees it immediately.
 		groupRunError = group.error ?? null;
 		if (!isLiveGroup && (group.status === 'error' || group.status === 'cancelled')) {
+			// P4 once-per-app-session surfacing: the first reopen of a failed
+			// group toasts + marks the red pill; later visits keep the pill
+			// marker (state) but do NOT re-fire the "Generation failed: …" toast,
+			// which previously re-fired on every switch away and back — the
+			// "stale generation error on every session move" noise.
 			pillTerminal = 'error';
 			const detail = group.error ?? group.composeError ?? 'unknown reason';
-			flashToast(
-				`${group.status === 'cancelled' ? 'Generation cancelled' : 'Generation failed'}: ${detail}`,
-				'error',
-			);
+			generationError = detail; // Show in ToolsPanel indicator
+			if (!terminalNotified.has(group.groupId)) {
+				terminalNotified.add(group.groupId);
+				if (terminalNotified.size > 64) {
+					const first = terminalNotified.values().next();
+					if (!first.done) terminalNotified.delete(first.value);
+				}
+				flashToast(
+					`${group.status === 'cancelled' ? 'Generation cancelled' : 'Generation failed'}: ${detail}`,
+					'error',
+				);
+			}
 		}
 		// The session video path is only meaningful when the compose SUCCEEDED.
 		// A failed / cancelled latest compose must not leave a stale path from
 		// another session attached — clear it so the preview can fall back (or
 		// blank) rather than showing the previous session's video.
 		groupSessionVideoPath = (group.composeState === 'done') ? (group.sessionVideoPath ?? null) : null;
+		// P3: claim the owning session so a later restore can reject a path that
+		// belongs to a DIFFERENT session (the cross-session leak).
+		groupSessionVideoOwner = (group.composeState === 'done' && group.sessionVideoPath) ? sessionId : null;
 		// 0012 G8: capture the compose-normalization snapshot so the stale
 		// badge (ToolsPanel) can flag a session video that was produced with
 		// a different target/crop than the session currently has.
@@ -1233,6 +1659,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			if (!ok) {
 				flashToast(`Session video unavailable: ${path} (missing file or outside media roots)`, 'error');
 			}
+			// CROSS-SESSION GUARD: this was the LAST await in the function —
+			// a fast A→B switch interleaves here. Without the re-check the
+			// tail below runs with A's stale values while the user is on B:
+			// `showProgressModal` adopts A's group flags, and
+			// `restoredGroupSessionId = A` clobbers B's latch → the trigger
+			// effect re-fires for A → its `stopGroupPoll('session change
+			// disarm')` disarms B's freshly-armed live-group poller (B's
+			// progress UI freezes / Generate no-ops).
+			if (isStale()) return;
 		}
 		stopWatching();
 		// A stale (persisted, no live task) running group re-opens its
@@ -1242,14 +1677,54 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// no progress UI at all.
 		showProgressModal = (groupStale && group.live === false && group.status === 'running') || isLiveGroup;
 		restoredGroupSessionId = sessionId;
+		// [GEN] endpoint: capture the generation-machinery counts AFTER
+		// restore for THIS session. A healthy transition shows listeners
+		// + taskViews consistent with `isLiveGroup` (0 when no live group).
+		logGenEndpoint('ready', sessionId);
 	}
 
 	$effect(() => {
 		const sessionId = selectedSessionId;
 		if (sessionId && restoredGroupSessionId !== sessionId) {
-			stopGroupPoll();
+			// [GEN] endpoint: capture the generation-machinery counts BEFORE
+			// the disarm so a leaked listener/taskView from the PREVIOUS
+			// session is visible in the trace (the ratchet signature).
+			logGenEndpoint('disarm', sessionId);
+			stopGroupPoll('session change disarm');
 			groupProgress = 0;
 			groupComposePhase = null;
+			// Start a fresh stall window for THIS selection so the in-app
+			// monitor attributes any longtask / freeze to the session just
+			// picked (the record carries the session id).
+			resetStallMeter(sessionId);
+			// CLAIM THE LATCH SYNCHRONOUSLY, BEFORE the async restore. This is
+			// the "blocking gate set BEFORE the work, commit = one atomic
+			// write" invariant: the latch makes THIS session's restore
+			// exactly-once and stops a fast A→B→A swing from re-entering the
+			 // root [GEN] machinery (subscribeGroupWatcher / startGroupPoll /
+			// fetchLatestGenerationGroupForSession) N times per visit. The
+			// latch was previously written only at the restore's async tail,
+			// so during an in-flight restore the session read as "unlatched"
+			// and rapid swings kept re-arming the poller + Tauri listeners —
+			// the cumulative IPC churn that pins the main thread mid-restore
+			// (the [SV] mount … list_flows done … no [GEN] ready signature).
+			// The restore body still guards every post-await write with
+			// isStale(), so claiming early cannot clobber a newer session:
+			// a stale tail returns before it touches the shared state.
+			restoredGroupSessionId = sessionId;
+			// SYNCHRONOUSLY clean up the previous session's Tauri event listeners
+			// + task watcher BEFORE any async restore work. The old code deferred
+			// these to the restore body's teardown block, so a fast A→B→C swing
+			// that abandoned B's restore at isStale() orphaned B's listeners —
+			// they kept firing on group events, ratcheting IPC work per swing
+			// until the main thread pinned (~13 swings in ~30s). Making the
+			// cleanup synchronous guarantees every switch releases the PREVIOUS
+			// session's handles regardless of whether the in-flight restore
+			// ever completes.
+			groupUnlisten?.();
+			groupUnlisten = null;
+			stopWatching();
+			logGenStep('trigger-sync-done', sessionId);
 			void restoreSessionGenerationGroup(sessionId);
 		}
 	});
@@ -1260,36 +1735,56 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		);
 
 		if (foundProject) {
-			selectedProjectId = foundProject.id;
-			selectedSessionId = sessionId;
+			// Single-transaction switch: bump the epoch so any in-flight
+			// async work (group restore, in-flight media, pending composer
+			// save) recognizes itself as stale at its next checkpoint.
+			// `sessionSwitching` gates user-initiated generation entry
+			// points for the duration of the load, so a mid-switch click
+			// cannot start a run against a half-updated session.
+			sessionEpoch += 1;
+			const myEpoch = sessionEpoch;
+			sessionSwitching = true;
+			try {
+				selectedProjectId = foundProject.id;
+				selectedSessionId = sessionId;
+				// Harness tabs: restore the tab the user last had open in THIS
+				// session (per-session memory), not a global default — so a
+				// session the user left on Director re-opens on Director. A
+				// session with no recorded tab falls back to Pipes. A stale
+				// Extract/Scoreboard view of a DIFFERENT session must not
+				// carry over (the memory is keyed by id, so it can't).
+				composerTab = sessionTabMemory[sessionId] ?? 'pipes';
+				directorRunning = false;
 
-			// Load fresh data from backend
-			const loadResult = await loadSession(sessionId);
+				// Load fresh data from backend
+				const loadResult = await loadSession(sessionId);
+				// The effect below (keyed on selectedSessionId) fired already
+				// on the write above; if the user switched AGAIN mid-load,
+				// myEpoch is stale and this tail must not run.
+				if (myEpoch !== sessionEpoch) return;
 
-			if (loadResult.errors.length === 0) {
-				const loadedSession = sessions.get(sessionId);
-				if (loadedSession) {
-					const updatedProjects = (projects || []).map((p: any) => {
-						if (p.id !== foundProject.id) return p;
-						return {
-							...p,
-							sessions: (p.sessions || []).map((s: any) =>
-								s.id === sessionId ? { ...s, ...loadedSession } : s
-							)
-						};
-					});
-					projects = updatedProjects;
+				if (loadResult.errors.length === 0) {
+					// The store now holds the session. Bump the revision so
+					// the `selectedSession` derived re-reads it. No tree-copy.
+					touchSession(sessionId);
+					markSessionLoaded(sessionId);
 					saveProjects();
+				} else {
+					// Backend load failed (no Tauri backend in browser/E2E mode, or
+					// the composer row doesn't exist yet). Fall back to the local
+					// tree metadata so the composer store has the session's data
+					// instead of a blank phantom.
+					if (!sessions.get(sessionId)) {
+						const local = foundProject.sessions.find((s: any) => s.id === sessionId);
+						if (local) {
+							hydrateSessions([local as any]);
+							touchSession(sessionId);
+							markSessionLoaded(sessionId);
+						}
+					}
 				}
-			} else {
-				// Backend load failed (no Tauri backend in browser/E2E mode, or the
-				// composer row doesn't exist yet). Fall back to the local projects
-				// copy so the composer store always has the session's real data
-				// instead of a blank phantom.
-				if (!sessions.get(sessionId)) {
-					const local = foundProject.sessions.find((s: any) => s.id === sessionId);
-					if (local) hydrateSessions([local as any]);
-				}
+			} finally {
+				if (myEpoch === sessionEpoch) sessionSwitching = false;
 			}
 		}
 	}
@@ -1476,6 +1971,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 
 			selectedSessionId = newSession.id;
 			hydrateSessions([newSession]);
+			// Bump the revision so `selectedSession` re-reads the store now
+			// that it holds the new session (hydrateSessions does not fire
+			// the revision; only the store's notifyUpdate / explicit touches do).
+			touchSession(newSession.id);
+			markSessionLoaded(newSession.id);
 			await saveProjects();
 		} catch (e) {
 			console.error('[Workspace] Failed to create session:', e);
@@ -1559,6 +2059,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		const storeSession = sessions.get(sessionId);
 		if (storeSession) {
 			storeSession.name = newName;
+			// Bump the revision so the `selectedSession` derived picks up the
+			// new name (in-place store mutation that bypasses notifyUpdate).
+			touchSession(sessionId);
 		}
 
 		const updatedSessions = (selectedProject?.sessions || []).map((s: any) =>
@@ -1616,6 +2119,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		if (selectedSessionId === sessionId) {
 			selectedSessionId = null;
 		}
+		// Clear the loaded-flip so the preview-restore effect re-fires if
+		// this session is ever re-selected (e.g. after a copy/recreate).
+		clearSessionLoaded(sessionId);
 		hydrateSessions(updatedSessions);
 		saveProjects();
 	}
@@ -1680,35 +2186,35 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			});
 			if (!newId) return;
 
-			// Deep-clone the pipes so the copy's in-memory snapshot is fully
-			// independent of the source (no shared array refs). The backend
-			// re-minted the piece ids with artifacts blanked; `loadSession`
-			// below pulls that authoritative copy into the store.
-			const clonePipe = (p: any) => JSON.parse(JSON.stringify(p));
+			// PHASE 1: the tree gets a read-only index shell (pipes: []),
+			// NOT a deep clone of the composer data. The store is the
+			// single producer — `loadSession(newId)` below puts the
+			// backend's authoritative data into the sessions Map, and
+			// `touchSession` fires the revision so `selectedSession`
+			// re-reads it. No second copy of pipes ever enters the tree.
 			const copySession: any = {
 				...src,
 				id: newId,
 				name: newName,
-				pipes: (src.pipes ?? []).map(clonePipe),
+				pipes: [], // index shell — the store holds the real data
 			};
 			projects = (projects || []).map((p: any) =>
 				p.id === projectId ? { ...p, sessions: [...p.sessions, copySession] } : p
 			);
 			// Select the copy immediately so it opens without a second click, and
-			// load the backend's rekeyed + re-rooted composer.
+			// load the backend's rekeyed + re-rooted composer into the store.
 			selectedSessionId = newId;
 			selectedProjectId = projectId;
 			const loadResult = await loadSession(newId);
 			if (loadResult.errors.length === 0) {
-				const loaded = sessions.get(newId);
-				if (loaded) {
-					projects = (projects || []).map((p: any) =>
-						p.id === projectId
-							? { ...p, sessions: p.sessions.map((s: any) => s.id === newId ? { ...s, ...loaded } : s) }
-						: p
-					);
-				}
+				// The store now holds the new session. Bump the revision so
+				// `selectedSession` re-reads it. No tree-copy.
+				touchSession(newId);
+				markSessionLoaded(newId);
 			}
+			// Hydrate the store from the tree index so the ProjectsPanel's
+			// session list stays complete (metadata only; composer data
+			// already lives in the store after loadSession).
 			hydrateSessions((projects || []).flatMap((p: any) => p.sessions || []));
 			flashToast(`Copied as "${newName}"`, 'success');
 		} catch (e) {
@@ -1732,7 +2238,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 
 	async function confirmSessionGenerate(models: ModelSelection, seed: number | null, failurePolicy: FailurePolicy, autoCompose: boolean, _stats: SessionGenerateStats, runStats: RunStats | null, pipeParams: Record<string, PipeParamOverride> | null, forceLastFrames: Record<string, boolean> | null, trimBoundary: Record<string, boolean> | null) {
 		if (!selectedSession) return;
+		// Single-transaction gate: a session switch is in flight (loadSession
+		// pending, project not yet settled). Starting a paid generation run
+		// against a half-updated session would race the switch's own writes,
+		// so block until the switch commits.
+		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		if (groupActive) { flashToast('Session generation is already in progress', 'info'); return; }
+		// Item 3 (RC3): the engine reads per-pipe q/c from SQLite — flush the
+		// 800ms-debounced save so a slider edit made right before Generate is
+		// not lost to the race (best-effort; the run reads the DB regardless).
+		await saveSession(selectedSession.id);
 		// Read-only (paid) model gate: the session flow's "continue" policy
 		// tolerates per-pipe conflicts, but a paid-only model can never run —
 		// block the whole run instead.
@@ -1775,6 +2290,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			groupComposeState = null;
 			groupComposeError = null;
 			groupSessionVideoPath = null;
+			groupSessionVideoOwner = null;
 			subscribeGroupWatcher(result.groupId, { models, seed });
 		} catch (e) { flashToast(e instanceof Error ? e.message : String(e), 'error'); }
 	}
@@ -1839,6 +2355,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 
 	function composeSessionVideo() {
 		if (!selectedSession || composing) return;
+		// Single-transaction gate: don't start a compose against a session
+		// that is still mid-switch (loadSession pending, project unsettled).
+		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		const hasSources = selectedSession.pipes?.some((p: any) => p.lastGeneration?.videoPath);
 		if (!hasSources) {
 			flashToast(APP_CONSTANTS.strings.composeSessionNoSources, 'info');
@@ -1848,23 +2367,28 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			flashToast(APP_CONSTANTS.strings.composeSessionNoFfmpeg, 'error');
 			return;
 		}
+		// Item 10: open the compose-select modal — the user picks WHICH pipes
+		// to splice (partial sessions compose their generated subset) and sets
+		// a signed cut per boundary. The invoke lives in runComposeSelected.
+		composeSelectOpen = true;
+	}
+
+	/** Item 10: run the compose with the modal's selection + signed boundary
+	 *  map. pipe_ids rides explicitly (backend keeps the requested order);
+	 *  overlap_frames: negative cuts the PREVIOUS pipe's tail, positive the
+	 *  NEW pipe's head, null = classic lossless splice. */
+	function runComposeSelected(pipeIds: string[], overlap: Record<string, number> | null) {
+		if (!selectedSession || composing) return;
 		composing = true;
 		compositionProgress = { phase: 'preparing', progress: 0, detail: 'Preparing sources' };
-		// Experimental "compose pipes" boundary-trim: when the master gate is
-		// on, interior pipes with the per-pipe switch ON have one 8n+1
-		// interval dropped off their clip head (the first pipe is never
-		// trimmed). Empty map = the classic lossless splice.
-		const s = getSettings();
-		const trimMap = buildTrimBoundaryMap(selectedSession.pipes ?? [], s.experimental?.composePipes === true);
-		const hasTrim = Object.values(trimMap).some(Boolean);
 		invoke<{ outputPath: string; ffmpegSource: string; sourcePipes: string[] }>(
 			'compose_session_video',
-			{ input: { session_id: selectedSession.id, pipe_ids: null, trim_boundary: hasTrim ? trimMap : null } },
+			{ input: { session_id: selectedSession.id, pipe_ids: pipeIds, trim_boundary: null, overlap_frames: overlap } },
 		)
 		.then((r) => {
 			compositionProgress = { phase: 'complete', progress: 1, detail: 'Complete' };
 			flashToast(
-				hasTrim ? 'Session video ready (boundary-trimmed)' : APP_CONSTANTS.strings.composeSessionDone,
+				overlap ? 'Session video ready (boundary-trimmed)' : APP_CONSTANTS.strings.composeSessionDone,
 				'success',
 			);
 			// Point the top panel at the composed file (served via read_media_file).
@@ -1872,6 +2396,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			// 0012 G8: the manual compose just ran with the CURRENT target/crop,
 			// so the snapshot is no longer stale — clear it.
 			groupComposeSnapshot = null;
+			// Item 10: refresh the session row so the trim-aware playhead
+			// layout picks up the persisted boundary map immediately.
+			void loadSession(selectedSession.id);
 		})
 		.catch((e) => {
 			flashToast(e instanceof Error ? e.message : String(e), 'error');
@@ -1897,7 +2424,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	/** D5 gate: unreachable reference → no task, red-out chips, keep the modal open. */
 	async function confirmGenerate(models: ModelSelection, seed: number | null = null) {
 		if (!generatePipe || !selectedSession) return;
+		// Single-transaction gate: block starting a per-pipe run against a
+		// session that is still mid-switch.
+		if (sessionSwitching) { flashToast('Session is switching — wait a moment', 'info'); return; }
 		const pipe = generatePipe;
+		// Item 3 (RC3): flush the debounced composer save before the engine
+		// reads q/c from SQLite (slider edit → immediate Generate race).
+		await saveSession(selectedSession.id);
 		// Pass the video media spec so collectRemoteUrls can skip subjects
 		// when the model is in plain keyframe mode (subjects are inert there).
 		const videoSpecForCheck = getPreset(settings.providers.video.preset) ?
@@ -2102,6 +2635,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	 *  dropped (webview reloaded, tab backgrounded). Both drive the same
 	 *  `activeTask` view; terminal side-effects apply once via `reconcileTerminal`. */
 	function startWatchingTask(taskId: string, initialView?: GenerationTaskView | null) {
+		// NEW run armed: any in-flight session-restore for this session must
+		// now bail at its next `isStale()` checkpoint instead of clobbering
+		// this run's live progress UI (the "press Generate → instantly
+		// minimized, no progress bar" race). The restore's own re-arm of an
+		// EXISTING live group goes through subscribeGroupWatcher (no bump),
+		// so a restore can never invalidate itself.
+		generationArmEpoch += 1;
 		stopWatching();
 		lastTaskView = initialView ?? null;
 		activeTaskId = taskId;
@@ -2111,6 +2651,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// A fresh task: clear the previous task's terminal marker + minimize
 		// flag so the pill reads as a new running task, not a stale outcome.
 		pillTerminal = null;
+		generationError = null; // Clear error indicator on new generation
 		progressMinimized = false;
 		// Seed with the authoritative view right now (the machine may already be
 		// ahead of the first event / tick), then follow the live stream.
@@ -2180,6 +2721,45 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		}
 	}
 
+	/** Degraded-download retry (2026-11-11): the progress modal's "Retry
+	 *  download now" affordance. The backend pass re-fetches every
+	 *  `download_failed` marker in the session (bounded), repairs the task
+	 *  row / piece log / composer last_generation, and returns which
+	 *  markers healed vs. are still gated. On a heal, re-load the session
+	 *  so the preview + `last_generation` flip to the recovered local
+	 *  clip; return a note the modal can show. */
+	async function retryVideoDownloads(): Promise<string | null> {
+		const sid = activeTask?.sessionId ?? selectedSessionId;
+		if (!isTauri() || !sid) return null;
+		const result = await recoverVideoDownloads(sid);
+		if (!result) return null; // browser dev / Tauri invoke failed
+		if (result.healed.length > 0) {
+			const reloaded = await loadSession(sid);
+			const task = activeTask; // local capture: the .find() closure would
+			// otherwise drop the `activeTask` null-narrowing (Svelte 5 `let`).
+			if (reloaded.session && task) {
+				// Re-point the live task view's terminal output at the local
+				// file so the degraded band disappears on the next render.
+				const local = reloaded.session.pipes.find(
+					(p: any) => p.id === task.pipeId,
+				)?.lastGeneration?.videoPath;
+				if (local && /^https?:/i.test(task.outputPath ?? '')) {
+					activeTask = { ...task, outputPath: local };
+				}
+			}
+			flashToast(
+				`Recovered ${result.healed.length} video download(s)`,
+				'success',
+			);
+			return result.stillGated.length
+				? `${result.stillGated.length} clip(s) still gated — retry again when the CDN frees up`
+				: null;
+		}
+		return result.stillGated.length
+			? `Still gated (${result.stillGated.length} clip(s)) — the CDN block is active right now; it re-heals automatically on the next session open`
+			: 'No pending video downloads in this session';
+	}
+
 	/** Window focus may have let events be coalesced/throttled; re-sync. */
 	function onWindowFocus() {
 		if (activeTaskId && activeTask && !isTerminalTaskStatus(activeTask.status)) {
@@ -2231,6 +2811,23 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				if (saved.errors.length > 0) {
 					console.error('[Workspace] generated video persistence failed:', saved.errors);
 					flashToast('Generated video was created but could not be saved', 'error');
+				}
+			}
+			// Bug batch nov19 (item 1): auto-refresh the top-panel preview on
+			// terminal. The store attach above updates the DATA, but before
+			// this nothing re-attached the preview — the panel kept whatever
+			// was attached before the run. Rules: only the selected session;
+			// never clobber a composed session video (session-video
+			// precedence); attach when the panel is empty or shows THIS
+			// pipe's previous clip (same pipe media dir). Another pipe the
+			// user is inspecting is left alone. Group runs reach this same
+			// hook via pipe-terminal → reconcileTerminal.
+			if (view.sessionId === selectedSessionId && !previewIsSessionVideo) {
+				const pipeDir = view.outputPath.replace(/[\\/][^\\/]+[\\/][^\\/]+$/, '');
+				const showingThisPipe = !!previewMediaPath && previewMediaPath.startsWith(pipeDir);
+				if (!previewVideo || showingThisPipe) {
+					const freshPipe = selectedSession?.pipes.find((p) => p.id === view.pipeId);
+					if (freshPipe) openPreview(freshPipe);
 				}
 			}
 			flashToast(APP_CONSTANTS.strings.generationComplete, 'success');
@@ -2386,7 +2983,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		// Remember which pipe the user opened for THIS session, so a
 		// session switch away + back restores the same preview.
 		const sid = selectedSessionId;
-		if (sid) lastPreviewPipeBySession.set(sid, pipe.id);
+		if (sid) { lastPreviewPipeBySession.set(sid, pipe.id); evictOldLastPreview(); setDashExtra(lastPreviewPipeBySession.size, Object.keys(userProjectsFiles).length); }
 		// Clear the current preview first: a fresh blob URL is about to take
 		// over, and a stale/failed shell (0:00 <video>) must not linger in
 		// the top panel while the new one loads.
@@ -2409,8 +3006,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		previewVideo = null;
 		previewIsSessionVideo = false;
 		previewMediaPath = null;
-		invalidateMediaUrlCache(pipe.lastGeneration?.videoPath ?? null);
-		toMediaUrl(pipe.lastGeneration?.videoPath ?? null)
+		// Preview variant: top-panel <video> uses the small `.proxy.mp4`
+		// sibling (≈218KB) so the decode buffer stays small on switch.
+		toMediaUrl(pipe.lastGeneration?.videoPath ?? null, { variant: 'preview' })
 			.then((url) => {
 				if (url) {
 					previewVideo = { url, label: pipe.name };
@@ -2533,13 +3131,11 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		carouselFrame={selectedFrame ?? 0}
 		videoAspect={videoAspect}
 		isSessionVideo={previewIsSessionVideo}
-		sessionVideoDetached={sessionVideoDetached}
-		oncarouselSelect={(f) => (selectedFrame = f)}
-		onframeSelect={(f) => (selectedFrame = f)}
+		oncarouselSelect={(f: number) => (selectedFrame = f)}
+		onframeSelect={(f: number) => (selectedFrame = f)}
 		showRuler={showGlobalRuler}
 		ruler={selectedSession ? { ticks: previewTicks, total: totalFrames, frame: selectedFrame ?? 0 } : null}
 		onplayoutside={handlePlayOutside}
-		onopensessionpreview={openSessionPreview}
 		onlogout={handleLogout}
 		onthemeChange={handleThemeChange}
 		onlayoutChange={handleLayoutChange}
@@ -2556,7 +3152,56 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	<div class="preview-area">
 		<div class="preview-meta">
 			<span class="frame-indicator">Frame: <strong>{selectedFrame ?? 0}</strong> / {totalFrames}</span>
-			<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
+			{#if composerTab === 'pipes'}
+				<span class="pipe-count">{pipes.length} pipe{(pipes.length !== 1 ? 's' : '')}</span>
+			{:else if composerTab === 'extract'}
+				<span class="pipe-count tab-badge">
+					{tabMeta.extractSections} section{(tabMeta.extractSections !== 1 ? 's' : '')}
+				</span>
+			{:else if composerTab === 'scoreboard'}
+				<span class="pipe-count tab-badge {tabMeta.stale ? 'tab-badge-stale' : ''}">
+					{tabMeta.stale ? 'stale' : 'in sync'}
+				</span>
+			{:else}
+				<!-- Director badge is the run dot on the tab itself (gap B). -->
+			{/if}
+			<!-- Harness tabs (v0.7.11): stay on the meta strip, but positioned
+			     against the composer's borders — Pipes anchored at the composer's
+			     left border (the project column's edge), Director/Extract at its
+			     right border. Absolute inside the strip so the frame badges keep
+			     their flow. Phase 4: Scoreboard is stub-only; hidden in production
+			     builds, kept in dev for A/B/critic tooling. -->
+			<div class="harness-tabs" role="tablist" aria-label="Composer">
+				{#each (import.meta.env.DEV
+					? [
+							{ id: 'pipes', label: 'Pipes' },
+							{ id: 'director', label: 'Director' },
+							{ id: 'extract', label: 'Extract' },
+							{ id: 'scoreboard', label: 'Scoreboard' },
+						]
+					: [
+							{ id: 'pipes', label: 'Pipes' },
+							{ id: 'director', label: 'Director' },
+							{ id: 'extract', label: 'Extract' },
+						]) as tab}
+					<button
+						class="harness-tab {composerTab === tab.id ? 'is-active' : ''}"
+						role="tab"
+						aria-selected={composerTab === tab.id}
+						onclick={() => {
+							composerTab = tab.id as DirectorTab;
+							rememberTab(selectedSessionId ?? '', composerTab);
+						}}
+					>
+						{tab.label}
+						<!-- Gap B (design §1 guard): in-flight run stays visible
+						     even when the user sits on another tab of the session. -->
+						{#if tab.id === 'director' && directorRunning}
+							<span class="tab-run-dot" aria-label="run in progress"></span>
+						{/if}
+					</button>
+				{/each}
+			</div>
 		</div>
 	</div>
 	{/if}
@@ -2593,32 +3238,52 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		</div>
 
 		<div class="composer-area">
-		<!-- SAFE: Check session exists AND has project -->
-			{#if selectedSession && selectedProject}
-				<ComposerPanel
-					session={selectedSession}
-					{totalFrames}
-					{selectedFrame}
-					bind:activePipeIdx
-					bind:focus
-					onframechange={(f) => selectedFrame = f}
-					localFrameForPipe={localFrameForPipe}
-					pipeStartForPipe={pipeStartForPipe}
-					brokenRefs={brokenRefs}
-					workingRefs={workingRefs}
-					onRefSaved={recheckRef}
-					videoModel={videoModelSpec}
-					onmediamodechange={(pipeId, mode) => {
-						if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
-					}}
-				/>
-			{:else}
-				<div class="composer-empty">
-					<div class="empty-icon"><ChromeIcon id="proj-reel" size={40} /></div>
-					<h2>Select a Session</h2>
-					<p>Create a project and add a session to start editing</p>
-				</div>
-			{/if}
+			<!-- PHASE 2 (session-scoped isolation): key the composer/director
+			     subtree on the session so switching sessions DESTROYS and
+			     RECREATES it. Every session-scoped $state (DirectorPanel
+			     entry/doc/flows/lastSession, ComposerPanel local ref
+			     state, per-pipe UI) re-initializes instead of surviving
+			     the switch and leaking into the new session. The
+			     persistent generation/preview machinery — the top
+			     <Frame> panel, groupTaskViews/activeTask, the progress
+			     modal, restoreSessionGenerationGroup — lives OUTSIDE
+			     this boundary, so a live generation run survives a
+			     session switch and the "I switch away mid-run" case
+			     keeps working. -->
+		<!-- LAYER-2: SessionView is permanently mounted. The {#key} destroy+create
+		     cycle was the root of the Blink main-renderer ratchet (#18623 —
+		     detached DOM subtrees retained after every destroy). Removing the
+		     key means Svelte never destroys the subtree; instead the
+		     session-change flows down as a prop change and ComposerPanel /
+		     DirectorPanel do an in-place reset ($effect on session?.id).
+		     The generation/preview machinery below this line stays outside
+		     this boundary so a live run survives a switch. -->
+		<SessionView
+				session={selectedSession}
+				project={selectedProject}
+				epoch={sessionEpoch}
+				composerTab={composerTab}
+				directorRunning={directorRunning}
+				{tabMeta}
+				{totalFrames}
+				{selectedFrame}
+				playheadPipeIdx={playheadPipeIdx}
+				bind:activePipeIdx
+				bind:focus
+				onframechange={(f: number) => (selectedFrame = f)}
+				{localFrameForPipe}
+				{pipeStartForPipe}
+				{brokenRefs}
+				{workingRefs}
+				onRefSaved={recheckRef}
+				videoModel={videoModelSpec}
+				onmediamodechange={(pipeId: string, mode: 'keyframes' | 'reference') => {
+					if (selectedSession) void setMediaMode(selectedSession.id, pipeId, mode);
+				}}
+				onRunningChange={(b: boolean) => (directorRunning = b)}
+				onMetaChange={(meta: { extractSections: number; stale: boolean }) => (tabMeta = meta)}
+				onApplied={(id: string) => touchSession(id)}
+			/>
 		</div>
 
 		{#if layoutMode === 'landscape'}
@@ -2628,10 +3293,6 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				{activeTool}
 				{focus}
 				unsynced={selectedSession ? (composerStore.unsynced.has(selectedSession.id) ?? false) : false}
-				qValue={activePipe?.qValue}
-				cValue={activePipe?.cValue}
-				onqvaluechange={handleQValueChange}
-				oncvaluechange={handleCValueChange}
 				onselect={handleToolSelect}
 				ongenerate={handleGenerate}
 				ongeneratepipe={openGenerateModal}
@@ -2650,11 +3311,21 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onvideoratiochange={handleVideoRatioChange}
 				sessionVideo={toolsSessionVideo}
 				sessionVideoStale={sessionVideoStale}
-				onfocuschange={(f: ComposerFocus) => (focus = f)}
-				/>
+			onfocuschange={(f: ComposerFocus) => (focus = f)}
+			generationError={generationError}
+			onshowerror={() => (showErrorModal = true)}
+		/>
 			{/if}
 
 			<!-- ── Generation flow modals (pipe-level, D1–D9) ── -->
+			{#if composeSelectOpen && selectedSession}
+				<ComposeSelectModal
+					bind:open={composeSelectOpen}
+					session={selectedSession}
+					pipes={selectedSession.pipes}
+					onConfirm={runComposeSelected}
+				/>
+			{/if}
 			{#if showSessionGenerateModal && selectedSession}
 				<SessionGenerateModal
 					bind:open={showSessionGenerateModal}
@@ -2664,9 +3335,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					onFpsChange={handleFpsChange}
 					onResolutionChange={handleResolutionChange}
 					onOrientationChange={handleOrientationChange}
-					onPipeQChange={(pipeId, q) => handlePipeQValueChange(selectedSession.id, pipeId, q)}
-					onPipeCChange={(pipeId, c) => handlePipeCValueChange(selectedSession.id, pipeId, c)}
-				/>
+					/>
 			{/if}
 			{#if showGenerateModal && generatePipe && selectedSession}
 				<GenerateModal
@@ -2691,7 +3360,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 					groupProgress={groupProgress}
 					composePhase={groupComposePhase}
 					onFetch={fetchGenerationTask}
-					onLoaded={(view) => { groupTaskViews[view.pipeId] = view; }}
+					onLoaded={(view: GenerationTaskView) => { groupTaskViews[view.pipeId] = view; }}
 					onCancel={cancelSessionGenerationGroup}
 					onClose={closeProgressModal}
 					onMinimize={minimizeProgressModal}
@@ -2707,6 +3376,7 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 				onRefresh={refreshActiveTask}
 				logEntry={activeLogEntry}
 				onReset={resetGeneration}
+				onRetryDownload={retryVideoDownloads}
 			/>
 			{/if}
 
@@ -2792,6 +3462,13 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 			{/if}
 
 			<SettingsModal bind:open={showSettings} initialTab={settingsTab} />
+
+		<ErrorModal
+			open={showErrorModal}
+			title="Generation Error"
+			message={generationError ?? ''}
+			onclose={() => (showErrorModal = false)}
+		/>
 	</div>
 </div>
 
@@ -2823,6 +3500,96 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		align-items: center;
 		padding: 0 12px;
 		gap: 16px;
+		position: relative;
+	}
+
+	/* ── Harness tabs (v0.7.11): on the meta strip, positioned against the
+	   composer's borders ──
+	   The row is absolute inside the strip so the frame badges keep their
+	   flow: Pipes anchors at the composer's left border (the 240px project
+	   column's edge), Director/Extract at its right border (the tools panel's
+	   edge in landscape). Small 1px border, rounded top corners; the active
+	   tab keeps the accent underline pointing down at the composer body. */
+	.harness-tabs {
+		position: absolute;
+		left: 240px;
+		right: 0;
+		bottom: 0;
+		height: 24px;
+		display: flex;
+		align-items: flex-end;
+	}
+
+	/* Landscape: the composer's right border sits at the tools panel's edge
+	   (264px panel, border-box — its 1px border is inside the width). */
+	:global(.workspace.landscape) .harness-tabs {
+		right: 264px;
+	}
+
+	/* Single: no project column — the badges own the left of the strip, so
+	   the tab group falls back to right-aligned flow instead of overlapping
+	   them at x=0. */
+	:global(.workspace.single) .harness-tabs {
+		position: static;
+		margin-left: auto;
+	}
+
+	.harness-tab {
+		font: inherit;
+		font-size: 12px;
+		font-weight: 400;
+		color: var(--text-muted);
+		background: var(--bg-secondary);
+		border: 1px solid var(--border, #2a2a3a);
+		border-radius: 6px 6px 0 0;
+		padding: 0 14px;
+		height: 22px;
+		margin-bottom: -1px;
+		cursor: pointer;
+		transition: color var(--transition-sin, 0.3s),
+			background var(--transition-sin, 0.3s);
+	}
+
+	.harness-tab + .harness-tab {
+		margin-left: 4px;
+	}
+	/* The gap between Pipes and the right-aligned group. */
+	.harness-tab:nth-child(2) {
+		margin-left: auto;
+	}
+
+	.harness-tab:hover {
+		color: var(--text-secondary);
+		background: var(--bg-tertiary);
+	}
+
+	/* Active = raised: the lighter fill, bright label, accent underline.
+	   Inactive = recessed: darker fill, muted label (the hierarchy was
+	   inverted in the first pass — active read as disabled). */
+	.harness-tab.is-active {
+		color: var(--text-primary);
+		font-weight: 600;
+		background: var(--bg-tertiary);
+		border-color: var(--border-light, #3a3a4a);
+		border-bottom: 1px solid var(--accent-color);
+		height: 23px;
+	}
+
+	/* In-flight run indicator on the Director tab (design §1 badge guard). */
+	.tab-run-dot {
+		display: inline-block;
+		width: 5px;
+		height: 5px;
+		margin-left: 5px;
+		border-radius: 50%;
+		background: var(--accent-color);
+		animation: tab-run-pulse 1.6s ease-in-out infinite;
+		vertical-align: middle;
+	}
+
+	@keyframes tab-run-pulse {
+		0%, 100% { opacity: 0.35; }
+		50% { opacity: 1; }
 	}
 
 	/* ── D10 generation pill (minimized progress modal) ── */
@@ -2912,6 +3679,15 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		margin-left: auto;
 	}
 
+	/* Design §1 "badge ownership": a non-Pipes tab's own quiet badge reuses
+	   the pipe-count slot (mono, 10px, --text-muted; stale = warning). */
+	.tab-badge {
+		font-family: var(--font-mono);
+	}
+	.tab-badge-stale {
+		color: var(--warning-color);
+	}
+
 	.workspace-body {
 		display: flex;
 		flex: 1;
@@ -2950,6 +3726,16 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		height: 100%;
 		color: var(--text-muted, #6b6b80);
 		gap: 16px;
+	}
+
+	/* The harness panel stays mounted (state survives Pipes → back); when
+	   Pipes is active it is display:none. `contents` when visible keeps the
+	   wrapper layout-transparent so .director-root sizes exactly as before. */
+	.harness-mount {
+		display: contents;
+	}
+	.harness-hidden {
+		display: none;
 	}
 
 

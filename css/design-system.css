@@ -81,6 +81,10 @@
   --transition-fast: 0.15s ease;
   --transition-med: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  /* Slow sine interpolation (design doc §6): the harness motion language.
+     Additive token — the Director/Extract/Scoreboard tabs + TextBlock use
+     it for every state change (tab crossfade, lock collapse, icon scale). */
+  --transition-sin: 0.5s cubic-bezier(0.37, 0, 0.63, 1);
 
   /* Typefaces — reserved for genuinely technical values (timecodes, frame
      numbers, seeds, numeric readouts). Composer CSS already references

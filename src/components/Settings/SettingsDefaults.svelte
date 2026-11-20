@@ -70,32 +70,6 @@
 	</div>
 
 	<div class="field">
-		<label for="sd-q">Quality (inference steps) — {g.qValue}</label>
-		<input
-			id="sd-q"
-			type="range"
-			min="5"
-			max="30"
-			step="1"
-			value={g.qValue}
-			oninput={(e) => setG({ qValue: Number(e.currentTarget.value) })}
-		/>
-	</div>
-
-	<div class="field">
-		<label for="sd-c">Creativity (guidance scale) — {g.cValue}</label>
-		<input
-			id="sd-c"
-			type="range"
-			min="0.5"
-			max="15"
-			step="0.5"
-			value={g.cValue}
-			oninput={(e) => setG({ cValue: Number(e.currentTarget.value) })}
-		/>
-	</div>
-
-	<div class="field">
 		<label class="check-row">
 			<input
 				id="sd-newseed"
@@ -201,11 +175,6 @@
 
 	.check-row input {
 		flex-shrink: 0;
-		accent-color: var(--accent-color, #ff3e00);
-	}
-
-	.field input[type='range'] {
-		width: 100%;
 		accent-color: var(--accent-color, #ff3e00);
 	}
 

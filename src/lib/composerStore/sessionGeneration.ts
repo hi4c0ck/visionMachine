@@ -1,6 +1,7 @@
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { GenerationTaskView, ModelSpec } from '$types';
+import { withTimeout, SWITCH_PATH_IPC_TIMEOUT_MS } from '$lib/withTimeout';
 
 export type FailurePolicy = 'stop' | 'continue';
 /** Run-scoped session-stats override (fps/res/orientation). Only fields that
@@ -128,7 +129,11 @@ export async function fetchGenerationGroup(groupId: string): Promise<GenerationG
   // already calls with snake_case keys). The camelCase `{ groupId }` form
   // silently deserializes to an empty string and the command errors — that
   // silent failure is why session-video restore never worked.
-  const raw = await invoke('get_generation_group', { group_id: groupId }) as any;
+  const raw = (await withTimeout(
+    invoke('get_generation_group', { group_id: groupId }),
+    SWITCH_PATH_IPC_TIMEOUT_MS,
+    `get_generation_group ${groupId}`,
+  )) as any;
   return parseGenerationGroup(raw);
 }
 
@@ -142,9 +147,17 @@ export async function fetchLatestGenerationGroupForSession(
   sessionId: string,
 ): Promise<GenerationGroupView | null> {
   // Same snake_case flat-arg convention as get_generation_group above.
-  const raw = (await invoke('get_latest_session_generation_group', {
-    session_id: sessionId,
-  })) as any;
+  // BOUND WITH a hard deadline (switch-path read): a wedged backend DB lock
+  // must not pin the main UI thread. On timeout this throws → the caller's
+  // `.catch(() => null)` degrades to "no group row", i.e. the no-group
+  // teardown path — exactly the non-blocking fallback the invariant needs.
+  const raw = (await withTimeout(
+    invoke('get_latest_session_generation_group', {
+      session_id: sessionId,
+    }),
+    SWITCH_PATH_IPC_TIMEOUT_MS,
+    `get_latest_session_generation_group ${sessionId}`,
+  )) as any;
   if (!raw || raw === null) return null;
   return parseGenerationGroup(raw);
 }
@@ -201,6 +214,9 @@ export function isComposeStale(
   // the resolution-preset dims — same rule as Rust `target_dims`).
   const presetDims: Record<string, Record<string, [number, number]>> = {
     '480p': { horizontal: [854, 480], vertical: [480, 854], square: [480, 480] },
+    // 720p mirrors RESOLUTION_DIMS: 1280x720 (the provider's actual 720P
+    // output height on both text and keyframe routes; off-grid clips are
+    // letterboxed to this grid at ingest).
     '720p': { horizontal: [1280, 720], vertical: [720, 1280], square: [720, 720] },
     '1080p': { horizontal: [1920, 1080], vertical: [1080, 1920], square: [1080, 1080] },
   };
@@ -226,6 +242,29 @@ export async function cancelSessionGeneration(groupId: string): Promise<void> {
 }
 export function subscribeGroupEvent(groupId: string, cb: (event: GroupEvent) => void): Promise<UnlistenFn> {
   if (!isTauri()) return Promise.resolve(() => {});
-  return listen<any>('group-event', (e) => { if (e.payload?.groupId === groupId) cb(e.payload as GroupEvent); });
+  // Async-settle race guard (same class as runProgress.ts / generationEvents.ts):
+  // `listen` resolves later than a synchronous teardown, so a late-resolving
+  // listener leaks — it holds the closure + component tree AND fires on every
+  // `group-event`. Repeated session visits = unbounded renderer RAM.
+  let disposed = false;
+  let unlisten: UnlistenFn | null = null;
+  listen<any>('group-event', (e) => {
+    if (e.payload?.groupId === groupId) cb(e.payload as GroupEvent);
+  })
+    .then((u) => {
+      if (disposed) {
+        u();
+        return;
+      }
+      unlisten = u;
+    })
+    .catch(() => {});
+  return Promise.resolve(() => {
+    disposed = true;
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+  });
 }
 export function groupEventIsTerminal(event: GroupEvent): boolean { return event.kind === 'group-terminal'; }

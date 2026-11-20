@@ -1,0 +1,165 @@
+# =============================================================================
+# gates.yaml — user confirmation & parameter acquisition points
+# =============================================================================
+# Every pipeline step is GATED: the runner stops, shows the user the
+# intermediate output (human report), lets them acquire/adjust parameters,
+# gets explicit confirmation, then proceeds. Any gate can backtrack (re-run
+# an upstream step with modified params). In batch/CI mode all gates can
+# be auto-confirmed.
+#
+# Pipeline shape:
+#
+#   [G0] Entry Params ──► Node A ──► [G1] Novel Review
+#                                        │
+#                                        ▼
+#                                     Node B (per shot) ──► [G2] Spec Review
+#                                                            │
+#                                                            ▼
+#                                                        Media Gen ──► [G3] Clip Review
+#                                                                       │
+#                                                                       ▼
+#                                                                   Assembly ──► [G4] Final Review
+#
+# Each gate declares:
+#   position     : after which step
+#   show         : what human-readable output the user sees
+#   acquirable   : parameters the user can set/adjust at this gate
+#   confirm      : what the user must affirm to proceed
+#   backtrack    : which upstream step(s) can be re-run from here
+#   auto         : default confirmation when in batch/CI mode (true=skip)
+# =============================================================================
+
+gates:
+
+  # ── G0: Entry parameters (before Node A) ──────────────────────────────────
+  G0_entry:
+    position: before: node_a
+    show: "Entry summary: text, genre, ratio, scale"
+    acquirable:
+      - input_text          # the plain-text script
+      - genre.name          # genre (drives style preset)
+      - genre.style         # visual style string
+      - ratio               # 16:9 | 9:16 | 1:1
+      - scale.scenes        # how many scenes
+      - scale.shotsPerScene # shots per scene
+      - scale.clipS         # [min, max] clip seconds
+      - creative_profile    # which preset (cinema, trailer, documentary…)
+      - spec_profile        # which preset (cinema, trailer, documentary…)
+    confirm: "Proceed with these settings?"
+    backtrack: []            # nothing upstream to backtrack to
+    auto: false              # always requires user input (this IS the input)
+
+  # ── G1: Novel review (after Node A, before Node B) ───────────────────────
+  G1_novel_review:
+    position: after: node_a
+    show: "Visual Novel (readable prose: world, scenes, shots, beats)"
+    acquirable:
+      - film.world          # adjust world description
+      - film.palette        # adjust palette
+      - film.time_of_day    # override time
+      - film.weather        # override weather
+      - scenes[].title      # rename scenes
+      - scenes[].prose      # edit scene prose
+      - scenes[].shots[].prose   # edit shot prose
+      - scenes[].shots[].beats   # add/remove/reorder beats
+      - scale.scenes        # change scene count (re-run Node A if changed)
+      - scale.shotsPerScene # change shot count (re-run Node A if changed)
+    confirm: "Does this novel match your vision?"
+    backtrack:
+      - re_run: node_a      # user can say "no, rewrite" → Node A re-runs
+        trigger: "user rejects novel or changes scale"
+        params: "modified entry params from G0 + user's prose edits"
+    auto: false            # in batch mode: auto-accept the novel, proceed
+
+  # ── G2: Spec review (after Node B, before media) ─────────────────────────
+  G2_spec_review:
+    position: after: node_b
+    show: "Structured shot sheets (spec table + image/video prompt per shot)"
+    acquirable:
+      # per-shot, from ShotSpec:
+      # ShotSpec is concern-grouped: tags live under concerns.<group>.<tag>
+      - "shots[].concerns.camera.size"
+      - "shots[].concerns.camera.angle"
+      - "shots[].concerns.camera.framing"
+      - "shots[].concerns.camera.dof"
+      - "shots[].concerns.lens.focal_mm"
+      - "shots[].concerns.motion.zoom"
+      - "shots[].concerns.motion.move"
+      - "shots[].concerns.motion.speed"
+      - "shots[].concerns.lighting.key"
+      - "shots[].concerns.lighting.color_temp_K"
+      - "shots[].concerns.grade.palette"
+      - "shots[].concerns.grade.film_stock"
+      - "shots[].concerns.effects"
+      - "shots[].concerns.audio.music_cue"
+      - "shots[].transition_in"
+      - "shots[].transition_out"
+      - "shots[].clip_s"
+      - "shots[].sub_timeline"        # edit dynamic slices
+    confirm: "Proceed with these specs to media generation?"
+    backtrack:
+      - re_run: node_b      # user can say "re-wrap this shot" → Node B re-runs
+        trigger: "user edits a shot's spec fields"
+        params: "the edited ShotSpec JSON as the re-wrap input"
+      - re_run: node_a      # user can say "the novel was wrong" → full re-run
+        trigger: "user changes novel prose or scale"
+        params: "modified VisualNovel"
+    auto: false
+
+  # ── G3: Clip review (after media generation, before assembly) ────────────
+  G3_clip_review:
+    position: after: media_generation
+    show: "Generated stills + video clips per shot (thumbnails + playback)"
+    acquirable:
+      - "shots[].re_roll"       # re-generate this clip with same/edited prompt
+      - "shots[].prompts.image" # edit prompt before re-roll
+      - "shots[].prompts.video" # edit prompt before re-roll
+      - "shots[].refs"          # swap/add reference images (consistency)
+      - "shots[].clip_s"        # adjust clip length (re-generate)
+    confirm: "All clips acceptable for assembly?"
+    backtrack:
+      - re_run: node_b
+        trigger: "user edits a prompt string"
+        params: "edited ShotSpec"
+      - re_run: media_generation
+        trigger: "user requests re-roll"
+        params: "same or edited prompt + refs"
+    auto: true               # in batch mode: auto-accept clips, proceed
+    note: >
+      Media generation is out of scope for the text-only harness.
+      This gate is declared structurally; the runner implements it when
+      media nodes are wired.
+
+  # ── G4: Final review (after assembly, before export) ────────────────────
+  G4_final_review:
+    position: after: assembly
+    show: "Assembled film (playback) + assembly metadata (transitions, audio, subtitles)"
+    acquirable:
+      - "assembly.transitions[]"  # per-join transition type + duration
+      - "assembly.audio_mix"       # volume, music bed, sfx levels
+      - "assembly.subtitles"       # on/off, language, style
+      - "assembly.output"          # codec, resolution, fps
+    confirm: "Final review — export?"
+    backtrack:
+      - re_run: assembly
+        trigger: "user adjusts transitions/audio/subtitles"
+        params: "edited assembly config"
+      - re_run: media_generation
+        trigger: "user wants to re-roll a clip"
+        params: "the shot's ShotSpec"
+    auto: true
+    note: >
+      Assembly (ffmpeg concat + xfade + audio mix) is out of scope for the
+      text-only harness. Declared structurally; implemented when the
+      ffmpeg stage is wired.
+
+# =============================================================================
+# Batch / CI mode
+# =============================================================================
+# In batch mode the runner auto-confirms every gate where auto: true,
+# and for auto: false gates it uses the current parameter values without
+# prompting. This is how CI/CD and headless runs work.
+batch_mode:
+  auto_confirm: true
+  skip_gates: []            # optionally skip specific gate IDs entirely
+  log_decisions: true       # write all auto-confirmed decisions to a log

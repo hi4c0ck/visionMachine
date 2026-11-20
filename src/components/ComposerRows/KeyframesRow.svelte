@@ -19,11 +19,14 @@
 		containsBroken,
 		containsWorking,
 		onRegenerate,
+		mediaActive = true,
 	} = $props<{
 		pipe: PipeRow;
 		maxKeyframes: number;
 		onEditSlot: (slotIndex: number) => void;
 		onRemoveKeyframe: (kfId: string) => void;
+		/** Lazy-loading gate: false skips toMediaUrl resolution (placeholder). */
+		mediaActive?: boolean;
 		/** Scene aspect ratio ("W / H") — chips size to it so thumbnails
 		 *  preview at the same shape as the generated frame. */
 		aspect?: string;
@@ -71,7 +74,12 @@
 	// URLs). Excluded from kfSrc so the chip falls back to the dashed
 	// placeholder instead of the browser's broken-image glyph.
 	let failedKfSources = $state<Set<string>>(new Set());
+	// Keyframes whose preview sibling (.thumb.jpg) 404'd and were retried against
+	// the full-resolution original (user-picked / new media before the thumbnail
+	// backfill runs have no sibling).
+	let kfOriginalTried = $state<Set<string>>(new Set());
 	$effect(() => {
+		if (!mediaActive) return;
 		for (const kf of pipe.keyframes ?? []) {
 			// Resolve the ACTIVE-mode source for each keyframe.
 			const src = kfSourceFor(kf);
@@ -82,12 +90,20 @@
 			// new path gets a fresh resolve.
 			if (kfImageUrlsFor.get(kf.id) === src) continue;
 			if (kfAttempted.get(kf.id) === src) continue;
+			// New source: retry the preview first, clearing any prior original-
+			// fallback mark so a fresh artifact re-attempts the thumbnail.
+			kfOriginalTried = new Set([...kfOriginalTried].filter((k) => k !== kf.id));
 			// `toMediaUrl` resolves to null on failure (missing/stale path, path
 			// not under a media root) — it never rejects in the null-settling
 			// path, but guard anyway so a rejection can't crash the effect
 			// loop. A null result simply leaves the chip on its placeholder.
 			kfAttempted = new Map([...kfAttempted, [kf.id, src]]);
-			toMediaUrl(src)
+			// Preview variant: the keyframe chip shows a small thumbnail (the
+			// 320px `.thumb.jpg` sibling) so a 6-pipe session's composer rows
+			// don't pull full-resolution image bytes into the renderer's GPU
+			// texture pool. Falls back to the original if no thumb sibling
+			// exists (new media before the backfill runs).
+			toMediaUrl(src, { variant: 'preview' })
 				.then((url) => {
 					if (url) {
 						// A fresh URL supersedes any failed mark for this ref.
@@ -113,6 +129,30 @@
 			return cached !== undefined && kfImageUrlsFor.get(kf.id) === src ? cached : null;
 		}
 		return src;
+	}
+
+	/** A thumbnail failed to load. If it was the preview sibling (.thumb.jpg)
+	 *  of a local source, fall back to the full-resolution original — user-picked
+	 *  keyframes / new media before the backfill carry no thumbnail sibling, so
+	 *  the preview variant 404s but the original loads. Only mark failed when the
+	 *  original ALSO fails (or a remote source already failed). */
+	function handleKfImgError(kf: PipeKeyframe) {
+		const src = kfSourceFor(kf) || null;
+		if (!src) return;
+		if (isLocalPath(src) && !kfOriginalTried.has(kf.id)) {
+			kfOriginalTried = new Set([...kfOriginalTried, kf.id]);
+			void toMediaUrl(src).then((url) => {
+				if (url) {
+					failedKfSources = new Set([...failedKfSources].filter((k) => k !== kf.id));
+					kfImageUrls = new Map([...kfImageUrls, [kf.id, url]]);
+					kfImageUrlsFor = new Map([...kfImageUrlsFor, [kf.id, src]]);
+				} else {
+					markKfImageFailed(kf);
+				}
+			});
+			return;
+		}
+		markKfImageFailed(kf);
 	}
 
 	/** Drop the cached entry so kfSrc() falls back to the placeholder instead
@@ -240,7 +280,7 @@
 								style={aspect ? `aspect-ratio: ${aspect};` : ''}
 								alt="keyframe"
 								onclick={(e) => { e.stopPropagation(); openKfPreview(kf); }}
-								onerror={() => markKfImageFailed(kf)}
+								onerror={() => handleKfImgError(kf)}
 							/>
 						{:else}
 							<span class="kf-placeholder" style={aspect ? `aspect-ratio: ${aspect};` : ''}></span>

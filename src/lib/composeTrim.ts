@@ -43,3 +43,50 @@ export function buildTrimBoundaryMap(pipes: PipeRow[], gateOn: boolean): Record<
 export function trimWillReencode(map: Record<string, boolean>): boolean {
   return Object.values(map).some(Boolean);
 }
+
+// ── Item 10: SIGNED per-boundary overlap (compose-select modal) ─────────────
+// The boolean head-trim above stays for the session-run auto-compose path.
+// The manual compose modal offers a per-boundary slider with these stops:
+// NEGATIVE cuts |v| frames off the PREVIOUS pipe's tail, POSITIVE cuts v
+// frames off the NEW pipe's head, 0 = classic lossless splice. The wire map
+// is keyed by the NEW pipe's id at each boundary (Rust apply_overlap).
+
+/** The slider stops (frames). 0 is the classic splice. */
+export const OVERLAP_STOPS = [-24, -16, -8, 0, 8] as const;
+
+/** Snap an arbitrary slider value to the nearest stop (the UI uses a
+ *  discrete range, but a typed/programmatic value must still be valid). */
+export function snapOverlap(v: number): number {
+  let best: number = OVERLAP_STOPS[0];
+  for (const s of OVERLAP_STOPS) {
+    if (Math.abs(s - v) < Math.abs(best - v)) best = s;
+  }
+  return best;
+}
+
+/** The wire payload: only NON-ZERO boundaries ride (empty → null = the
+ *  classic lossless path). Keys are pipe ids; the backend ignores a key
+ *  on the first selected pipe (nothing precedes it). */
+export function buildOverlapPayload(map: Record<string, number>): Record<string, number> | null {
+  const out: Record<string, number> = {};
+  for (const [id, v] of Object.entries(map)) {
+    const snapped = snapOverlap(v);
+    if (snapped !== 0) out[id] = snapped;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** The top-tier master: set EVERY boundary of the selected set (in
+ *  orderIndex order) to one value. Keyed by the NEW pipe at each boundary;
+ *  the first selected pipe has no boundary and gets no key. */
+export function setAllBoundaries(selectedPipes: PipeRow[], value: number): Record<string, number> {
+  const order = [...selectedPipes].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  const out: Record<string, number> = {};
+  for (const p of order.slice(1)) out[p.id] = snapOverlap(value);
+  return out;
+}
+
+/** True when any boundary is non-zero → the compose re-encodes. */
+export function overlapWillReencode(map: Record<string, number>): boolean {
+  return Object.values(map).some((v) => snapOverlap(v) !== 0);
+}

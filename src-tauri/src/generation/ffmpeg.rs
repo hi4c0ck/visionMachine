@@ -29,6 +29,22 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Build a `Command` for a console-subsystem child (ffmpeg/ffprobe) that does
+/// NOT pop a console window on Windows. In release the app is a GUI-subsystem
+/// process (see main.rs), so spawning a console child without CREATE_NO_WINDOW
+/// makes Windows allocate a visible terminal for every probe/compose call.
+/// On other platforms this is a plain `Command::new`.
+pub(crate) fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 /// Probed availability of an ffmpeg binary.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,7 +161,7 @@ fn ffmpeg_exe_name() -> &'static str {
 /// Probe a single path with a hard timeout. A hung executable must never
 /// block startup, Settings probing, or composition indefinitely.
 pub(crate) fn probe(path: &Path) -> Option<String> {
-    let mut child = Command::new(path)
+    let mut child = silent_command(path)
         .arg("-version")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -218,7 +234,7 @@ pub fn extract_last_frame(
     if ffmpeg.source == "none" {
         return Err("no ffmpeg available (bundled/user/system)".into());
     }
-    let mut cmd = Command::new(&ffmpeg.path);
+    let mut cmd = silent_command(&ffmpeg.path);
     cmd.args([
         "-nostdin",
         "-hide_banner",

@@ -234,21 +234,6 @@
 		background: color-mix(in srgb, var(--tag-color, var(--accent-color)) 14%, transparent);
 		transition: background 0.15s ease;
 	}
-	.tpm-icon svg {
-		position: relative;
-		z-index: 1;
-	}
-
-	/* Slot → grid cell mapping (icons in promptIcons.ts carry the pos). */
-	.slot-nw { grid-column: 1; grid-row: 1; }
-	.slot-n  { grid-column: 2; grid-row: 1; }
-	.slot-ne { grid-column: 3; grid-row: 1; }
-	.slot-w  { grid-column: 1; grid-row: 2; }
-	.slot-e  { grid-column: 3; grid-row: 2; }
-	.slot-sw { grid-column: 1; grid-row: 3; }
-	.slot-s  { grid-column: 2; grid-row: 3; }
-	.slot-se { grid-column: 3; grid-row: 3; }
-
 	/* The card lives in the center cell, stretched to the slot width so the
 	   prompt zone stays the modal's default readable size. */
 	.tpm-center {
@@ -283,11 +268,6 @@
 	.tpm-footer .btn-cancel,
 	.tpm-footer .btn-confirm {
 		flex: 0 0 auto;
-	}
-
-	.tpm-icon:hover svg,
-	.tpm-icon:focus-visible svg {
-		transform: scale(1.15);
 	}
 
 	.tpm-icon:hover,
@@ -335,32 +315,6 @@
 		color: var(--text-primary);
 		text-transform: capitalize;
 		margin-bottom: 1px;
-	}
-
-	/* Bottom-ring tooltips point up; top-ring would collide with the header,
-	   so flip them below the mark instead. */
-	.slot-sw .tpm-icon-tip,
-	.slot-s .tpm-icon-tip,
-	.slot-se .tpm-icon-tip {
-		bottom: auto;
-		top: calc(100% + 8px);
-		transform: translateX(-50%) translateY(-4px);
-	}
-
-	/* Side-ring tooltips: point inward toward the card so they never run off
-	   the screen edge. */
-	.slot-w .tpm-icon-tip {
-		left: auto;
-		right: calc(100% + 8px);
-		bottom: 50%;
-		transform: translateY(50%);
-		text-align: right;
-	}
-	.slot-e .tpm-icon-tip {
-		left: calc(100% + 8px);
-		bottom: 50%;
-		transform: translateY(50%);
-		text-align: left;
 	}
 
 	.tpm-icon:hover .tpm-icon-tip,

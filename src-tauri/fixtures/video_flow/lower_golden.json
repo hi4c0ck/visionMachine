@@ -1,0 +1,32 @@
+{
+  "elements": [
+    {
+      "id": "p0:camera:0..24",
+      "tag": "camera",
+      "frameStart": 0,
+      "frameEnd": 24,
+      "prompt": "wide tracking shot across the meadow a red fox darts forward",
+      "from": [],
+      "pipeIndex": 0
+    },
+    {
+      "id": "p0:lighting:24..48",
+      "tag": "lighting",
+      "frameStart": 24,
+      "frameEnd": 48,
+      "prompt": "sunset, long shadows the river glints in the fading sun",
+      "from": [],
+      "pipeIndex": 0
+    }
+  ],
+  "trace": [
+    {
+      "elementId": "p0:camera:0..24",
+      "sectionId": "p0:camera:0..24"
+    },
+    {
+      "elementId": "p0:lighting:24..48",
+      "sectionId": "p0:lighting:24..48"
+    }
+  ]
+}

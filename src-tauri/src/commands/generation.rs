@@ -7,24 +7,31 @@ use sqlx::Row;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::generation::{
-    BOUNDARY_TRIM_FRAMES, ComposeError, EngineInput, FfmpegAvailability, GenerationStageView,
-    GenerationTaskView, ModelSpecWire, PieceGeneration, StageContext, SourceVideo, TaskStatus,
+    ComposeError, EngineInput, FfmpegAvailability, GenerationStageView, GenerationTaskView,
+    ModelSpecWire, PieceGeneration, SourceVideo, StageContext, TaskStatus, BOUNDARY_TRIM_FRAMES,
 };
 use crate::AppState;
 
 /// Sanitize a human-readable session/pipe name for use as a directory
 /// component (the name-consistent media layout). Rejects path-traversal
-/// characters and empty names; falls back to "unnamed".
+/// characters and Windows-illegal filename characters, and empty names;
+/// falls back to "unnamed".
+///
+/// Shares the exact scrub rule with `media::safe_dir_name` via
+/// `media::scrub_file_component` — one source, so the two name→path
+/// sanitizers cannot drift apart (a session named `My:Session` used to
+/// produce an `ERROR_INVALID_NAME` on `create_dir_all`, the same colon bug
+/// that LLM scene titles like "Scene 1: Departure" hit in `pipe_media_dirs`).
 pub fn safe_session_name(name: &str) -> String {
     let base = std::path::Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let trimmed = base.trim();
-    if trimmed.is_empty() {
+    let scrubbed = crate::generation::scrub_file_component(base);
+    if scrubbed.trim().is_empty() {
         "unnamed".to_string()
     } else {
-        trimmed.to_string()
+        scrubbed
     }
 }
 
@@ -340,16 +347,22 @@ pub fn build_pipe_start(
         // 0012: explicit video aspect-ratio override (None = use orientation
         // ratio map as before).
         video_ratio: composer.video_ratio.clone(),
+        // Item 3 (RC2): run-scoped overrides are clamped to the SAME range
+        // the UI/store enforce (Q 5..30, C 0.5..15) — defense in depth so a
+        // stale/malformed client can never push an out-of-range value into
+        // the engine. Covers both the per-pipe and the session-group paths.
         q_value: params
             .pipe_params
             .as_ref()
             .and_then(|p| p.q_value)
-            .unwrap_or(pipe.q_value),
+            .unwrap_or(pipe.q_value)
+            .clamp(5, 30),
         c_value: params
             .pipe_params
             .as_ref()
             .and_then(|p| p.c_value)
-            .unwrap_or(pipe.c_value),
+            .unwrap_or(pipe.c_value)
+            .clamp(0.5, 15.0),
         image_model: params.image_model.clone(),
         video_model: params.video_model.clone(),
         seed: params.seed,
@@ -682,7 +695,10 @@ fn next_piece_dest(dir: &std::path::Path) -> Result<std::path::PathBuf, String> 
         }
         seq += 1;
         if seq > 10_000 {
-            return Err(format!("no free piece-history name under {}", dir.display()));
+            return Err(format!(
+                "no free piece-history name under {}",
+                dir.display()
+            ));
         }
     }
 }
@@ -723,8 +739,7 @@ pub async fn generate_piece_image(
 
     // Session root for the tree = <mediaRoot>/<session-name>/ (mirror the
     // task flow, so pieces/ sits beside the pipe's images/ + task dirs).
-    let session_root = std::path::Path::new(&media_root)
-        .join(safe_session_name(&composer.name));
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
     let kind = if input.kind.eq_ignore_ascii_case("subject") {
         "subjects"
     } else {
@@ -750,10 +765,20 @@ pub async fn generate_piece_image(
         image_size: None,
         image_ratio: None,
         video_ratio: None,
-        c_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.c_value).unwrap_or(0.0),
-        q_value: composer.pipes.iter().find(|p| p.id == input.pipe_id).map(|p| p.q_value).unwrap_or(0),
+        c_value: composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .map(|p| p.c_value)
+            .unwrap_or(0.0),
+        q_value: composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .map(|p| p.q_value)
+            .unwrap_or(0),
         seed: input.seed,
-        source_kind: kind.to_string(),  // "keyframes" | "subjects"
+        source_kind: kind.to_string(), // "keyframes" | "subjects"
         source_id: input.ref_id.clone(),
         image_type: input.image_type.clone(),
         reference_url: input.reference_url.clone(),
@@ -847,25 +872,19 @@ pub async fn list_piece_history(
     } else {
         "keyframes"
     };
-    let session_root = std::path::Path::new(&media_root)
-        .join(safe_session_name(&composer.name));
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
     let (_piece_dir, manifest) =
-        crate::generation::piece_history_dirs(
-            &session_root,
-            &pipe_name,
-            kind_dir,
-            &input.ref_id,
-        )
-        .ok()
-        .unwrap_or_else(|| {
-            let fallback = session_root
-                .join(crate::generation::safe_dir_name(&pipe_name))
-                .join("pieces")
-                .join(kind_dir)
-                .join(crate::generation::safe_dir_name(&input.ref_id));
-            let _ = std::fs::create_dir_all(&fallback);
-            (fallback.clone(), fallback.join("history.jsonl"))
-        });
+        crate::generation::piece_history_dirs(&session_root, &pipe_name, kind_dir, &input.ref_id)
+            .ok()
+            .unwrap_or_else(|| {
+                let fallback = session_root
+                    .join(crate::generation::safe_dir_name(&pipe_name))
+                    .join("pieces")
+                    .join(kind_dir)
+                    .join(crate::generation::safe_dir_name(&input.ref_id));
+                let _ = std::fs::create_dir_all(&fallback);
+                (fallback.clone(), fallback.join("history.jsonl"))
+            });
     let text = match std::fs::read_to_string(&manifest) {
         Ok(t) => t,
         Err(_) => return Ok(Vec::new()),
@@ -978,7 +997,11 @@ pub fn collect_session_images(
             .or_insert((p.name.clone(), p.id.clone()));
         for (i, kf) in p.keyframes.iter().enumerate() {
             let refd = crate::generation::safe_dir_name(&kf.id);
-            let kind = if kf.kind.is_empty() { "url" } else { kf.kind.as_str() };
+            let kind = if kf.kind.is_empty() {
+                "url"
+            } else {
+                kf.kind.as_str()
+            };
             piece_labels.insert(
                 format!("{dir}/pieces/keyframes/{refd}"),
                 format!("Keyframe slot {} · frame {} · {kind}", i + 1, kf.frame),
@@ -986,9 +1009,15 @@ pub fn collect_session_images(
         }
         for (i, sr) in p.subject_references.iter().enumerate() {
             let refd = crate::generation::safe_dir_name(&sr.id);
-            let kind = if sr.kind.is_empty() { "url" } else { sr.kind.as_str() };
-            piece_labels
-                .insert(format!("{dir}/pieces/subjects/{refd}"), format!("Subject {} · {kind}", i + 1));
+            let kind = if sr.kind.is_empty() {
+                "url"
+            } else {
+                sr.kind.as_str()
+            };
+            piece_labels.insert(
+                format!("{dir}/pieces/subjects/{refd}"),
+                format!("Subject {} · {kind}", i + 1),
+            );
         }
     }
 
@@ -996,7 +1025,11 @@ pub fn collect_session_images(
     // sorting happens at the end).
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     fn is_image(p: &std::path::Path) -> bool {
-        match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+        match p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+        {
             Some(ext) => matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp"),
             None => false,
         }
@@ -1029,7 +1062,11 @@ pub fn collect_session_images(
     let mut piece_files_by_dir: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for f in &files {
-        let rel = f.strip_prefix(session_root).unwrap_or(f).to_string_lossy().replace('\\', "/");
+        let rel = f
+            .strip_prefix(session_root)
+            .unwrap_or(f)
+            .to_string_lossy()
+            .replace('\\', "/");
         let segs: Vec<&str> = rel.split('/').collect();
         if segs.len() >= 4 && segs[1] == "pieces" {
             let key = format!("{}/{}/{}/{}", segs[0], segs[1], segs[2], segs[3]);
@@ -1062,32 +1099,38 @@ pub fn collect_session_images(
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
             // Relative-to-session-root path, forward-slashed for matching.
-            let rel = path.strip_prefix(session_root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+            let rel = path
+                .strip_prefix(session_root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
             let segs: Vec<&str> = rel.split('/').collect();
             // segs[0] = pipe dir; the remainder shapes the classification.
             let pipe_dir = segs[0];
             let (pipe_name, pipe_id) = pipe_dir_to_pipe.get(pipe_dir).cloned().unwrap_or_default();
 
-            let (source_kind, label, generation_no): (&str, String, u32) = if segs.len() >= 4
-                && segs[1] == "pieces"
-            {
-                // <pipe>/pieces/<kind>/<ref>/<file>
-                let key = format!("{pipe_dir}/pieces/{}/{}", segs[2], segs[3]);
-                let file_name = segs[4];
-                let gen = gen_no.get(&format!("{key}/{file_name}")).copied().unwrap_or(0);
-                let label = piece_labels
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| format!("piece · {}", segs[3]));
-                ("piece", label, gen)
-            } else if segs.len() >= 2 && segs[1] == "user-images" {
-                ("user", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
-            } else if segs.len() >= 3 && segs[2] == "images" {
-                // <pipe>/<taskId>/images/<file> → task-scoped output.
-                ("task", format!("generation · task {}", segs[1]), 0)
-            } else {
-                ("other", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
-            };
+            let (source_kind, label, generation_no): (&str, String, u32) =
+                if segs.len() >= 4 && segs[1] == "pieces" {
+                    // <pipe>/pieces/<kind>/<ref>/<file>
+                    let key = format!("{pipe_dir}/pieces/{}/{}", segs[2], segs[3]);
+                    let file_name = segs[4];
+                    let gen = gen_no
+                        .get(&format!("{key}/{file_name}"))
+                        .copied()
+                        .unwrap_or(0);
+                    let label = piece_labels
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| format!("piece · {}", segs[3]));
+                    ("piece", label, gen)
+                } else if segs.len() >= 2 && segs[1] == "user-images" {
+                    ("user", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
+                } else if segs.len() >= 3 && segs[2] == "images" {
+                    // <pipe>/<taskId>/images/<file> → task-scoped output.
+                    ("task", format!("generation · task {}", segs[1]), 0)
+                } else {
+                    ("other", rel.rsplit('/').next().unwrap_or("").to_string(), 0)
+                };
 
             Some(SessionImageEntry {
                 local_path: path.to_string_lossy().into_owned(),
@@ -1146,8 +1189,8 @@ pub async fn read_user_image(
     if src.as_os_str().is_empty() {
         return Err("no file selected".to_string());
     }
-    let meta = std::fs::metadata(&src)
-        .map_err(|e| format!("cannot read {}: {e}", src.display()))?;
+    let meta =
+        std::fs::metadata(&src).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
     if !meta.is_file() {
         return Err(format!("not a file: {}", src.display()));
     }
@@ -1156,8 +1199,7 @@ pub async fn read_user_image(
     }
 
     let mime = mime_from_ext(src.extension().and_then(|e| e.to_str()));
-    let bytes = std::fs::read(&src)
-        .map_err(|e| format!("read {}: {e}", src.display()))?;
+    let bytes = std::fs::read(&src).map_err(|e| format!("read {}: {e}", src.display()))?;
 
     // 0012 D4: preemptive downscale — the API's documented input cap
     // (MAX_INPUT_IMAGE_PX per dim) is enforced BEFORE the request ever
@@ -1201,7 +1243,14 @@ pub async fn read_user_image(
         let db = &state.db.lock().await;
         let media_root = match resolve_media_root(db, &input.session_id).await {
             Some(r) if !r.trim().is_empty() => r,
-            _ => return Ok(result_with_notification(&data_uri, &mime, None, &notification)),
+            _ => {
+                return Ok(result_with_notification(
+                    &data_uri,
+                    &mime,
+                    None,
+                    &notification,
+                ))
+            }
         };
         let composer = db
             .get_composer(&input.session_id)
@@ -1213,18 +1262,31 @@ pub async fn read_user_image(
             .find(|p| p.id == input.pipe_id)
             .map(|p| p.name.clone())
             .unwrap_or(input.pipe_id.clone());
-        let session_root = std::path::Path::new(&media_root)
-            .join(safe_session_name(&composer.name));
+        let session_root =
+            std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
         match crate::generation::user_image_dir(&session_root, &pipe_name) {
             Ok(d) => d,
-            Err(_) => return Ok(result_with_notification(&data_uri, &mime, None, &notification)),
+            Err(_) => {
+                return Ok(result_with_notification(
+                    &data_uri,
+                    &mime,
+                    None,
+                    &notification,
+                ))
+            }
         }
     };
-    let local_path: Option<std::path::PathBuf> = persist_user_image(&user_dir, &input.ref_id, src.extension())
-        .ok()
-        .and_then(|p| std::fs::write(&p, &persist_bytes).ok().map(|_| p));
+    let local_path: Option<std::path::PathBuf> =
+        persist_user_image(&user_dir, &input.ref_id, src.extension())
+            .ok()
+            .and_then(|p| std::fs::write(&p, &persist_bytes).ok().map(|_| p));
 
-    Ok(result_with_notification(&data_uri, &mime, local_path.as_ref(), &notification))
+    Ok(result_with_notification(
+        &data_uri,
+        &mime,
+        local_path.as_ref(),
+        &notification,
+    ))
 }
 
 /// 0012 D4: assemble the read_user_image result, always carrying the
@@ -1257,9 +1319,18 @@ fn persist_user_image(
 ) -> Result<std::path::PathBuf, String> {
     let ext = ext
         .and_then(|e| e.to_str())
-        .filter(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
+        .filter(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp"
+            )
+        })
         .unwrap_or("png");
-    let name = format!("local-{}-{ms}.{ext}", crate::generation::safe_dir_name(ref_id), ms = now_unix_ms());
+    let name = format!(
+        "local-{}-{ms}.{ext}",
+        crate::generation::safe_dir_name(ref_id),
+        ms = now_unix_ms()
+    );
     Ok(dir.join(name))
 }
 
@@ -1310,11 +1381,7 @@ fn read_image_dims(path: &std::path::Path) -> Option<(u32, u32)> {
         }
         if chunk == b"VP8 " {
             // Lossy: start code 0x9D 0x01 0x2A at 16-18; LE16 & 0x3FFF dims.
-            if bytes.len() > 30
-                && bytes[16] == 0x9d
-                && bytes[17] == 0x01
-                && bytes[18] == 0x2a
-            {
+            if bytes.len() > 30 && bytes[16] == 0x9d && bytes[17] == 0x01 && bytes[18] == 0x2a {
                 let w = u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3FFF;
                 let h = u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3FFF;
                 return Some((w, h));
@@ -1356,7 +1423,7 @@ fn downscale_image_to(
     tw: u32,
     th: u32,
 ) -> Result<(), String> {
-    let status = std::process::Command::new(&ffmpeg.path)
+    let status = crate::generation::ffmpeg::silent_command(&ffmpeg.path)
         .args([
             "-y",
             "-i",
@@ -1382,10 +1449,7 @@ fn downscale_image_to(
 /// `max_px`: scale the larger side to `max_px`, the other side
 /// proportionally, both sides rounded to even (ffmpeg yuv/h264 parity).
 /// `None` when no downscale is needed or the dims are unknown.
-fn downscale_box(
-    dims: Option<(u32, u32)>,
-    max_px: u32,
-) -> Option<(u32, u32)> {
+fn downscale_box(dims: Option<(u32, u32)>, max_px: u32) -> Option<(u32, u32)> {
     let (w, h) = dims?;
     let larger = w.max(h);
     if larger <= max_px {
@@ -1466,10 +1530,7 @@ pub async fn extract_pipe_last_frame(
         }
         let src_video = std::path::Path::new(&video);
         if !src_video.is_file() {
-            return Err(format!(
-                "previous pipe's video not found: {}",
-                video
-            ));
+            return Err(format!("previous pipe's video not found: {}", video));
         }
 
         let media_root = match resolve_media_root(db, &input.session_id).await {
@@ -1478,11 +1539,8 @@ pub async fn extract_pipe_last_frame(
         };
         let session_root =
             std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
-        let user_dir = crate::generation::user_image_dir(
-            &session_root,
-            &prev.name,
-        )
-        .map_err(|e| format!("user-images dir: {e}"))?;
+        let user_dir = crate::generation::user_image_dir(&session_root, &prev.name)
+            .map_err(|e| format!("user-images dir: {e}"))?;
 
         let task_id = prev
             .last_generation
@@ -1532,8 +1590,7 @@ pub async fn extract_pipe_last_frame(
     })?;
 
     // Read back the PNG and base64-encode it into the data URI the modal stores.
-    let bytes = std::fs::read(&out_path)
-        .map_err(|e| format!("read extracted frame: {e}"))?;
+    let bytes = std::fs::read(&out_path).map_err(|e| format!("read extracted frame: {e}"))?;
     let data_uri = to_data_uri(&bytes, "image/png");
 
     Ok(serde_json::json!({
@@ -1563,6 +1620,13 @@ pub struct ComposeSessionVideoInput {
     /// the toggle (nothing to trim before it).
     #[serde(default)]
     pub trim_boundary: Option<std::collections::HashMap<String, bool>>,
+    /// Item 10: SIGNED per-boundary overlap (frames), keyed by the NEW pipe's
+    /// id at each boundary. Positive cuts that many frames off the NEW clip's
+    /// head; negative cuts |v| off the PREVIOUS clip's tail; 0 = classic
+    /// splice. When present it WINS over the boolean trim_boundary map.
+    /// Per-boundary sliders in the compose-select modal map 1:1 onto this.
+    #[serde(default)]
+    pub overlap_frames: Option<std::collections::HashMap<String, i32>>,
 }
 
 /// Stable error envelope returned as a JSON string because the existing
@@ -1667,7 +1731,7 @@ pub async fn compose_session_video(
         ));
     }
 
-    let sources: Vec<SourceVideo> = pipes
+    let mut sources: Vec<SourceVideo> = pipes
         .iter()
         .filter_map(|p| {
             p.last_generation.as_ref().and_then(|lg| {
@@ -1675,6 +1739,16 @@ pub async fn compose_session_video(
                 if path.is_empty() {
                     None
                 } else {
+                    // Degraded-download resilience (2026-11-11): a pipe whose
+                    // video download was blocked by the CDN egress gate stores
+                    // the provider's REMOTE url as `videoPath` (the render
+                    // completed; only the local file is pending the L3
+                    // re-heal). It is not a composable source — exclude it and
+                    // report it in the result envelope instead of failing the
+                    // whole session compose over one gated clip.
+                    if crate::generation::is_remote_media_ref(path) {
+                        return None;
+                    }
                     Some(SourceVideo {
                         label: p.name.clone(),
                         path: path.to_string(),
@@ -1700,15 +1774,59 @@ pub async fn compose_session_video(
                         },
                         // 0012 D2: this pipe's per-pipe crop-mode override
                         // (session crop when `None`); blank values -> None.
-                        crop_mode: p
-                            .crop_override
-                            .clone()
-                            .filter(|m| !m.is_empty()),
+                        crop_mode: p.crop_override.clone().filter(|m| !m.is_empty()),
+                        // Item 10: tail trims are resolved by apply_overlap
+                        // from the signed boundary map (negative values cut
+                        // the PREVIOUS clip's tail); 0 at construction.
+                        tail_trim_frames: 0,
                     })
                 }
             })
         })
         .collect();
+    // Item 10: resolve the signed per-boundary overlap map. The source ids
+    // mirror the filter_map predicate above (non-empty local video path).
+    // When the signed map is present it WINS: zero the boolean-derived head
+    // trims first, then apply head (+) / previous-tail (−) cuts per boundary.
+    let source_ids: Vec<String> = pipes
+        .iter()
+        .filter(|p| {
+            p.last_generation
+                .as_ref()
+                .map(|lg| {
+                    let path = lg.video_path.trim();
+                    !path.is_empty() && !crate::generation::is_remote_media_ref(path)
+                })
+                .unwrap_or(false)
+        })
+        .map(|p| p.id.clone())
+        .collect();
+    if let Some(ov) = input.overlap_frames.as_ref() {
+        for s in sources.iter_mut() {
+            s.trim_frames = 0;
+        }
+        crate::generation::apply_overlap(&mut sources, &source_ids, ov);
+    }
+    // The effective signed map persisted with the session video so the
+    // playhead→pipe layout stays trim-aware after a restart (item 10).
+    let effective_overlap: std::collections::HashMap<String, i32> =
+        if let Some(ov) = input.overlap_frames.as_ref() {
+            ov.iter()
+                .filter(|(_, v)| **v != 0)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect()
+        } else {
+            input
+                .trim_boundary
+                .as_ref()
+                .map(|m| {
+                    m.iter()
+                        .filter(|(_, on)| **on)
+                        .map(|(k, _)| (k.clone(), BOUNDARY_TRIM_FRAMES as i32))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
     let missing: Vec<String> = pipes
         .iter()
         .filter(|p| {
@@ -1719,27 +1837,51 @@ pub async fn compose_session_video(
         })
         .map(|p| p.name.clone())
         .collect();
+    // Degraded clips (remote url, local download pending the CDN re-heal)
+    // are NOT "missing" — the render completed. Report them separately so
+    // the user (and the L3 re-heal affordance) can tell a gated pipe apart
+    // from a pipe that never generated a video.
+    let degraded: Vec<String> = pipes
+        .iter()
+        .filter(|p| {
+            p.last_generation
+                .as_ref()
+                .map(|lg| crate::generation::is_remote_media_ref(&lg.video_path))
+                .unwrap_or(false)
+        })
+        .map(|p| p.name.clone())
+        .collect();
     if sources.is_empty() {
         return Err(composition_error(
             "COMPOSITION_NO_SOURCES",
-            "No pipes with a generated video to compose",
-            serde_json::json!({ "missingPipes": missing.clone(), "pipeCount": pipes.len() }),
+            if degraded.is_empty() {
+                "No pipes with a generated video to compose"
+            } else {
+                "No locally-stored clips to compose (video download pending — retry the download, then compose)"
+            },
+            serde_json::json!({
+                "missingPipes": missing.clone(),
+                "degradedPipes": degraded.clone(),
+                "pipeCount": pipes.len()
+            }),
         ));
     }
     // Explicit selection is strict: never silently drop a requested pipe.
-    if input.pipe_ids.is_some() && !missing.is_empty() {
+    if input.pipe_ids.is_some() && (!missing.is_empty() || !degraded.is_empty()) {
         return Err(composition_error(
             "COMPOSITION_MISSING_PIPES",
-            "Cannot compose: selected pipes without a last-gen video",
-            serde_json::json!({ "missingPipes": missing.clone(), "selected": true }),
+            "Cannot compose: selected pipes without a locally-stored last-gen video",
+            serde_json::json!({ "missingPipes": missing.clone(), "degradedPipes": degraded.clone(), "selected": true }),
         ));
     }
-    // All-pipe mode is also strict. A partial session artifact is misleading.
+    // All-pipe mode composes the locally-stored clips and reports the
+    // degraded (gated) + missing pipes in the result envelope instead of
+    // failing the whole session compose over one gated download.
     if input.pipe_ids.is_none() && !missing.is_empty() {
         return Err(composition_error(
             "COMPOSITION_MISSING_PIPES",
             "Cannot compose: some pipes lack a last-gen video",
-            serde_json::json!({ "missingPipes": missing, "selected": false, "pipeCount": pipes.len() }),
+            serde_json::json!({ "missingPipes": missing.clone(), "selected": false, "pipeCount": pipes.len() }),
         ));
     }
 
@@ -1764,6 +1906,14 @@ pub async fn compose_session_video(
     let manifest_entries: Vec<serde_json::Value> = sources
         .iter()
         .map(|s| serde_json::json!({ "label": s.label, "videoPath": s.path }))
+        .collect();
+    // All-pipe mode that skipped gated clips: say so in the success envelope
+    // (and the on-disk output.json mirror) so the user knows which pipes are
+    // waiting on the L3 re-heal instead of assuming the session video is
+    // complete.
+    let skipped_degraded_entries: Vec<serde_json::Value> = degraded
+        .iter()
+        .map(|name| serde_json::json!({ "label": name, "status": "download_degraded" }))
         .collect();
 
     let session_id = input.session_id.clone();
@@ -1841,13 +1991,45 @@ pub async fn compose_session_video(
             "videoPath": result.output_path,
             "ffmpegSource": result.ffmpeg_source,
             "sourcePipes": manifest_entries,
+            "skippedPipes": skipped_degraded_entries,
         }),
     );
+
+    // Persist the composed artifact AT THE SESSION LEVEL (the composer row),
+    // not only in the (optional) generation-group row: re-opening the session
+    // re-attaches it in the tool panel even after a restart.
+    //
+    // NON-FATAL: the video already exists on disk by the time we get here —
+    // a DB hiccough must not reject the command (the frontend would surface
+    // a failure for a compose that actually succeeded, and the progress
+    // badge would be left stranded). Log + continue; re-persistence happens
+    // naturally on the next composer save for that session.
+    match {
+        let db = &state.db.lock().await;
+        let mut composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        composer.session_video_path = Some(result.output_path.clone());
+        // Item 10: persist the effective boundary map with the artifact.
+        composer.session_video_overlap = if effective_overlap.is_empty() {
+            None
+        } else {
+            Some(effective_overlap.clone())
+        };
+        db.save_composer(&composer).await.map_err(|e| e.to_string())
+    } {
+        Ok(()) => {}
+        Err(e) => {
+            log::warn!("compose_session_video: persist session_video_path failed (non-fatal): {e}");
+        }
+    }
 
     Ok(serde_json::json!({
         "outputPath": result.output_path,
         "ffmpegSource": result.ffmpeg_source,
         "sourcePipes": manifest_entries.iter().map(|v| v["label"].clone()).collect::<Vec<_>>(),
+        "skippedPipes": skipped_degraded_entries.iter().map(|v| v["label"].clone()).collect::<Vec<_>>(),
     }))
 }
 
@@ -2044,6 +2226,696 @@ pub async fn open_media_in_player(
     }
 }
 
+/// Input for the `backfill_media_proxies` command.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackfillMediaProxiesInput {
+    pub session_id: String,
+}
+
+/// Counts returned by `backfill_media_proxies` (camelCase on the wire).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackfillMediaProxiesResult {
+    pub videos_done: u64,
+    pub images_done: u64,
+    pub skipped: u64,
+    pub errors: u64,
+}
+
+/// Bound on the backfill walk — a session tree is small in practice; this
+/// protects a pathological tree from an unbounded recursive scan (and from
+/// an unbounded number of ffmpeg encodes).
+const BACKFILL_MAX_FILES: usize = 2000;
+
+/// Proxy sibling for a video original (`video.mp4` -> `video.proxy.mp4`).
+/// Mirrors `crate::generation::media::proxy_path` (not re-exported to this
+/// module); kept local so the backfill walk stays self-contained.
+fn backfill_proxy_path(original: &std::path::Path) -> std::path::PathBuf {
+    let parent = original
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
+    let ext = original.extension().and_then(|s| s.to_str());
+    let name = match ext {
+        Some(e) if !e.is_empty() => format!("{stem}.proxy.{e}"),
+        _ => format!("{stem}.proxy"),
+    };
+    parent.join(name)
+}
+
+/// Thumb sibling for an image original (`ref.png` -> `ref.thumb.jpg`).
+/// Mirrors `crate::generation::media::thumb_path` (see `backfill_proxy_path`).
+fn backfill_thumb_path(original: &std::path::Path) -> std::path::PathBuf {
+    let parent = original
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let stem = original
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ref");
+    parent.join(format!("{stem}.thumb.jpg"))
+}
+
+/// Collect backfill candidates under `dir`: original `*.mp4` videos and
+/// `*.png|jpg|jpeg` images, excluding the derivatives themselves
+/// (`*.proxy.mp4`, `*.thumb.jpg`). `budget` bounds the total scan.
+fn backfill_collect(
+    dir: &std::path::Path,
+    videos: &mut Vec<std::path::PathBuf>,
+    images: &mut Vec<std::path::PathBuf>,
+    budget: &mut usize,
+) {
+    if *budget == 0 {
+        return;
+    }
+    let iter = match std::fs::read_dir(dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    for entry in iter.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            backfill_collect(&path, videos, images, budget);
+        } else if path.is_file() {
+            *budget -= 1;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .unwrap_or_default();
+            if ext == "mp4" && !name.ends_with(".proxy.mp4") {
+                videos.push(path);
+            } else if matches!(ext.as_str(), "png" | "jpg" | "jpeg")
+                && !name.ends_with(".thumb.jpg")
+            {
+                images.push(path);
+            }
+        }
+    }
+}
+
+/// Encode one 240p video proxy on the blocking pool (same args as the
+/// provider engine's `generate_video_proxy`). `Ok(())` when the proxy was
+/// written; `Err` carries the ffmpeg tail.
+async fn backfill_video_proxy(ffmpeg_path: &str, original: &std::path::Path) -> Result<(), String> {
+    let ffmpeg_path = ffmpeg_path.to_string();
+    let original_owned = original.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let proxy = backfill_proxy_path(&original_owned);
+        let out = crate::generation::ffmpeg::silent_command(&ffmpeg_path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=-2:240",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-an",
+                "-y",
+                &proxy.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("proxy worker: {e}"))?
+}
+
+/// Encode one 320px JPEG thumb on the blocking pool (same args as the
+/// provider engine's `generate_image_thumb`).
+async fn backfill_image_thumb(ffmpeg_path: &str, original: &std::path::Path) -> Result<(), String> {
+    let ffmpeg_path = ffmpeg_path.to_string();
+    let original_owned = original.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let thumb = backfill_thumb_path(&original_owned);
+        let out = crate::generation::ffmpeg::silent_command(&ffmpeg_path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=320:-2",
+                "-q:v",
+                "2",
+                "-y",
+                &thumb.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("proxy worker: {e}"))?
+}
+
+/// Backfill missing proxies/thumbs for a session's existing media (legacy
+/// artifacts written before proxy generation existed). Walks the session
+/// media tree and, for every original `*.mp4` without a `.proxy.mp4`
+/// sibling, encodes a 240p proxy; for every original PNG/JPG without a
+/// `.thumb.jpg` sibling, encodes a 320px thumb. Idempotent: files that
+/// already have their derivative are counted as `skipped` and left alone.
+/// Derivative files themselves (`*.proxy.mp4`, `*.thumb.jpg`) are ignored.
+/// Only files under known media roots are processed (same guard as
+/// `read_media_file`). ffmpeg work runs on the blocking pool; per-file
+/// failures are counted in `errors` and never fail the command.
+#[tauri::command]
+pub async fn backfill_media_proxies(
+    input: BackfillMediaProxiesInput,
+    state: State<'_, AppState>,
+) -> Result<BackfillMediaProxiesResult, String> {
+    // Resolve the session root (same precedence as the other commands:
+    // session directory_path -> project directory_path -> default tree,
+    // then the session-name folder).
+    let (media_root, session_name) = {
+        let db = &state.db.lock().await;
+        let media_root = resolve_media_root(db, &input.session_id).await;
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        (media_root, composer.name)
+    };
+    let media_root = match media_root.filter(|r| !r.trim().is_empty()) {
+        Some(r) => r,
+        None => {
+            return Ok(BackfillMediaProxiesResult {
+                videos_done: 0,
+                images_done: 0,
+                skipped: 0,
+                errors: 0,
+            })
+        }
+    };
+    let session_root = std::path::Path::new(&media_root).join(safe_session_name(&session_name));
+    // Media-root guard: only process files under known roots.
+    {
+        let db = &state.db.lock().await;
+        let roots = media_roots(db).await;
+        if !roots.iter().any(|root| session_root.starts_with(root)) {
+            return Err(format!(
+                "session media root not inside a known media root: {}",
+                session_root.display()
+            ));
+        }
+    }
+    if !session_root.is_dir() {
+        return Ok(BackfillMediaProxiesResult {
+            videos_done: 0,
+            images_done: 0,
+            skipped: 0,
+            errors: 0,
+        });
+    }
+    // Resolve ffmpeg once (probing is slow; never per file).
+    let ffmpeg = crate::generation::resolve_ffmpeg();
+    if ffmpeg.source == "none" {
+        return Err(
+            "ffmpeg not available - backfill needs a bundled (Full) build, a user path, or a system ffmpeg"
+                .to_string(),
+        );
+    }
+    // Collect candidates (sync walk; the tree is small and bounded).
+    let mut videos: Vec<std::path::PathBuf> = Vec::new();
+    let mut images: Vec<std::path::PathBuf> = Vec::new();
+    let mut budget = BACKFILL_MAX_FILES;
+    backfill_collect(&session_root, &mut videos, &mut images, &mut budget);
+
+    let mut result = BackfillMediaProxiesResult {
+        videos_done: 0,
+        images_done: 0,
+        skipped: 0,
+        errors: 0,
+    };
+    for video in &videos {
+        if backfill_proxy_path(video).is_file() {
+            result.skipped += 1;
+            continue;
+        }
+        match backfill_video_proxy(&ffmpeg.path, video).await {
+            Ok(()) => result.videos_done += 1,
+            Err(e) => {
+                result.errors += 1;
+                log::warn!("[Backfill] video proxy failed for {}: {e}", video.display());
+            }
+        }
+    }
+    for image in &images {
+        if backfill_thumb_path(image).is_file() {
+            result.skipped += 1;
+            continue;
+        }
+        match backfill_image_thumb(&ffmpeg.path, image).await {
+            Ok(()) => result.images_done += 1,
+            Err(e) => {
+                result.errors += 1;
+                log::warn!("[Backfill] image thumb failed for {}: {e}", image.display());
+            }
+        }
+    }
+    log::info!(
+        "[Backfill] session {}: {} video(s), {} image(s), {} skipped, {} error(s)",
+        input.session_id,
+        result.videos_done,
+        result.images_done,
+        result.skipped,
+        result.errors
+    );
+    Ok(result)
+}
+
+// ── L3 video-download heal (2026-11-11 CDN egress-gate flap) ──────────────
+//
+// `run_video_stage` no longer hard-fails a COMPLETED render when the
+// provider CDN gates our client egress (403): it writes a `download_failed`
+// marker into the task's `output.json` (videoUrl + providerTaskId survive)
+// and degrades to the remote URL. This command heals those markers when
+// the gate lifts — the same URL that 403s at 00:57 downloaded fine hours
+// earlier (Nov 10), so a re-GET on session load recovers the burned
+// render without re-paying for it.
+
+/// Input for the `retry_failed_video_downloads` command. No rename attribute:
+/// the wire arg is `session_id` (snake_case), exactly like the other
+/// session-scoped commands (`BackfillMediaProxiesInput`); only the RESULT
+/// is camelCase. A rename here would silently break deserialization
+/// (`missing field sessionId`), the L3 pass would never run, and the
+/// degraded markers would heal on no session load.
+#[derive(Deserialize)]
+pub struct RetryFailedVideoDownloadsInput {
+    pub session_id: String,
+}
+
+/// Healed markers + a still-gated marker count, returned to the frontend
+/// (camelCase on the wire) so the session can flip its pipe
+/// `last_generation` row from error to done and persist it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryFailedVideoDownloadsResult {
+    /// Task ids whose `download_failed` marker was re-fetched and
+    /// rewritten to `done` (the frontend patches + persists those
+    /// pipes' `last_generation`).
+    pub healed: Vec<String>,
+    /// Markers still 403 after all bounded attempts — the gate is closed
+    /// right now; the next session load retries for free.
+    pub still_gated: Vec<String>,
+}
+
+/// Bound on the heal walk — a session tree is small in practice; this
+/// protects a pathological tree from an unbounded recursive scan (mirrors
+/// `BACKFILL_MAX_FILES`).
+const REHEAL_MAX_FILES: usize = 2000;
+
+/// One pass over a session's media tree: for every task `output.json`
+/// carrying a `download_failed` marker, re-GET the recorded `videoUrl`
+/// (the same hardened plain→Bearer download the task used, bounded) and,
+/// when the bytes land, rewrite the marker to `done`. A successful re-fetch
+/// is the whole heal: the 240p proxy is the next `backfill_media_proxies`
+/// pass's job (it already skips files that have one), and the composer row
+/// is patched by the frontend from the `healed` list. Best-effort: each
+/// marker's failure is logged, never fatal to the pass.
+#[tauri::command]
+pub async fn retry_failed_video_downloads(
+    input: RetryFailedVideoDownloadsInput,
+    state: State<'_, AppState>,
+) -> Result<RetryFailedVideoDownloadsResult, String> {
+    let mut healed: Vec<String> = Vec::new();
+    let mut still_gated: Vec<String> = Vec::new();
+
+    // Same root precedence as the task writer: session dir_path ->
+    // project dir_path -> default tree, then the session-name folder. The
+    // DB lock is held ONLY for this resolve block and dropped BEFORE the
+    // network re-fetch — a heal must never hold the DB mutex across a
+    // multi-minute CDN ride-out (that would stall every other DB op).
+    let (session_root, video_key, session_profile) = {
+        let db = &state.db.lock().await;
+        let media_root = match resolve_media_root(db, &input.session_id).await {
+            Some(r) => r,
+            None => {
+                log::warn!(
+                    "[Reheal] session {}: no media root resolved — L3 heal skipped",
+                    input.session_id
+                );
+                return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+            }
+        };
+        let composer = match db
+            .get_composer(&input.session_id)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!(
+                    "[Reheal] session {}: load composer failed ({e}) — L3 heal aborted",
+                    input.session_id
+                );
+                return Err(format!("load composer: {e}"));
+            }
+        };
+        let session_root =
+            std::path::PathBuf::from(media_root).join(safe_session_name(&composer.name));
+        // P5 cheap pre-check: a session with NO degraded task rows can't have a
+        // `download_failed` marker, so skip the whole (bounded but still O(files)
+        // + per-marker CDN ride-out) walk on session load. The L2 marker is only
+        // ever written for a task whose row's `output_path` degraded to the
+        // remote URL; a healed task flips that row back to a local path. Count
+        // rows whose output is still a remote URL: zero → nothing to scan.
+        let degraded_rows: i64 = sqlx::query(
+            "SELECT COUNT(*) FROM video_generation_tasks \
+             WHERE session_id = ? AND output_path LIKE 'http%'",
+        )
+        .bind(&input.session_id)
+        .fetch_one(&db.pool)
+        .await
+        .map(|r| r.try_get::<i64, _>(0).unwrap_or(0))
+        .unwrap_or(0);
+        if degraded_rows == 0 {
+            log::info!(
+                "[Reheal] session {}: no degraded task rows — skipped file walk (pre-check)",
+                input.session_id
+            );
+            return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+        }
+        // The download key: the SESSION's OWN profile video slot first (the
+        // tasks ran under it — e.g. profile "hi4"), then the default profile
+        // (the task stage's fallback when its own profile carries no key).
+        // An empty key is legal: a plain-GET-only retry. Note:
+        // `profile_settings` is keyed by profile ID, so the session's profile
+        // must be resolved to its ID (the session→project→profile join),
+        // never the human-readable name.
+        fn video_key_of(raw: Option<String>) -> Option<String> {
+            raw.and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
+                .map(|v| crate::commands::settings::normalize_settings(&v).providers.video.api_key)
+                .filter(|k| !k.trim().is_empty())
+        }
+        let session_profile: Option<String> = sqlx::query(
+            "SELECT pr.id FROM sessions s \
+                 JOIN projects p ON p.id = s.project_id \
+                 JOIN profiles pr ON pr.id = p.profile_id \
+                 WHERE s.id = ?",
+        )
+        .bind(&input.session_id)
+        .fetch_optional(&db.pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.try_get::<Option<String>, _>(0).ok())
+        .flatten()
+        .filter(|p| !p.trim().is_empty());
+        let video_key: String = match session_profile.clone() {
+            Some(p) => {
+                if let Some(k) = video_key_of(db.get_profile_settings(&p).await.ok().flatten()) {
+                    k
+                } else {
+                    video_key_of(db.get_profile_settings("default").await.ok().flatten())
+                        .unwrap_or_default()
+                }
+            }
+            None => video_key_of(db.get_profile_settings("default").await.ok().flatten())
+                .unwrap_or_default(),
+        };
+        (session_root, video_key, session_profile)
+    };
+    if !session_root.is_dir() {
+        log::warn!(
+            "[Reheal] session {}: media root {} does not exist — L3 heal skipped",
+            input.session_id,
+            session_root.display()
+        );
+        return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+    }
+    log::info!(
+        "[Reheal] session {} pass start: root={} video_key={} (profile={})",
+        input.session_id,
+        session_root.display(),
+        if video_key.is_empty() { "none (plain GET)" } else { "present" },
+        session_profile.as_deref().unwrap_or("default")
+    );
+
+    // Collect every task `output.json` under the session root (bounded,
+    // no DB lock held).
+    let mut output_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut budget = REHEAL_MAX_FILES;
+    collect_output_json_files(&session_root, &mut output_files, &mut budget);
+    if output_files.is_empty() {
+        // A root with zero output.json is almost always a root-resolution
+        // mismatch (the writer used a different tree) — say so explicitly.
+        log::warn!(
+            "[Reheal] session {}: no output.json under {} — nothing to scan (root mismatch?)",
+            input.session_id,
+            session_root.display()
+        );
+        return Ok(RetryFailedVideoDownloadsResult { healed, still_gated });
+    }
+
+    // Network re-fetch (NO DB lock held): ride out the CDN egress-gate flap.
+    for path in &output_files {
+        let raw = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let marker: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        // Only the L2 marker: status "download_failed" + a re-fetchable URL.
+        if marker.get("status").and_then(|s| s.as_str()) != Some("download_failed") {
+            continue;
+        }
+        let video_url = match marker.get("videoUrl").and_then(|v| v.as_str()) {
+            Some(u) if !u.trim().is_empty() => u.to_string(),
+            _ => continue,
+        };
+        let dest = match marker.get("videoPath").and_then(|v| v.as_str()) {
+            Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+            _ => continue,
+        };
+        // The task id is the task-scoped dir this marker lives in
+        // (<root>/<pipe>/<task_id>/output.json) — the DB row to repair.
+        let task_id = dest
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let ok = crate::generation::ProviderEngine::retry_fetch_video_download(
+            &video_url,
+            &dest,
+            &video_key,
+            2, // one 4xx is already bounded-retried inside; 2 outer passes ride the flap
+        )
+        .await
+        .is_ok();
+        if !ok {
+            log::warn!(
+                "[Reheal] video download still gated for task {task_id} ({video_url}); retried on the next session load"
+            );
+            still_gated.push(task_id);
+            continue;
+        }
+        // Rewrote the artifact: flip the marker to done (the error fields
+        // drop, so the NEXT load finds nothing to re-heal — idempotent).
+        let done = serde_json::json!({
+            "videoPath": dest.to_string_lossy(),
+            "videoUrl": video_url,
+            "status": "done",
+        });
+        if let Err(e) = crate::generation::write_json(path, &done) {
+            log::warn!("[Reheal] task {task_id} marker rewrite failed: {e}");
+            continue;
+        }
+        // 240p proxy for the 180px top panel (non-fatal; blocking pool) —
+        // the next `backfill_media_proxies` pass would otherwise pick this
+        // up, but a same-load refresh should already show the preview.
+        crate::generation::generate_video_proxy(&dest).await;
+        healed.push(task_id.clone());
+        log::info!(
+            "[Reheal] task {task_id} download recovered: {video_url} -> {}",
+            dest.to_string_lossy()
+        );
+        if task_id.is_empty() {
+            continue;
+        }
+        // ── DB repair (brief locks, no network) ─────────────────────────
+        // 1) Task row: the DEGRADED path already persisted status "done"
+        //    with output_path = the remote URL; a pre-fix row says "error".
+        //    Either way the local file now exists → point at it. An
+        //    "error" row becomes "done" (the render DID complete).
+        let task_repair = {
+            let db = &state.db.lock().await;
+            let row = db.get_generation_task_row(&task_id).await.ok().flatten();
+            if let Some(row_ref) = row.as_ref() {
+                let status = if row_ref.status == "error" { "done" } else { row_ref.status.as_str() };
+                let _ = db
+                    .update_generation_task(
+                        &task_id,
+                        status,
+                        row_ref.progress,
+                        row_ref.stages_json.as_deref().unwrap_or("[]"),
+                        Some(&dest.to_string_lossy()),
+                        None,
+                    )
+                    .await;
+            }
+            row
+        };
+        // 2) Piece record (generation_logs): the terminal task event wrote a
+        //    piece with an error / URL outputRef; flip it to done + local
+        //    path so the session's piece history is consistent again.
+        let log_entry = {
+            let db = &state.db.lock().await;
+            db.get_generation_log(&task_id).await.ok().flatten()
+        };
+        if let Some(mut entry) = log_entry {
+            let mut changed = false;
+            if let Some(pieces) = entry.get_mut("pieces").and_then(|p| p.as_array_mut()) {
+                for piece in pieces.iter_mut() {
+                    let is_video_piece = piece
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .is_some_and(|k| k == "video");
+                    if is_video_piece
+                        && piece
+                            .get("status")
+                            .and_then(|s| s.as_str())
+                            .is_some_and(|s| s != "done")
+                    {
+                        piece["status"] = serde_json::json!("done");
+                        piece["outputRef"] =
+                            serde_json::json!(dest.to_string_lossy().into_owned());
+                        if let Some(obj) = piece.as_object_mut() {
+                            obj.remove("error");
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                let db = &state.db.lock().await;
+                let _ = db.add_generation_log(&entry).await;
+            }
+        }
+        // 3) Composer row (pipe.last_generation): the degrade path stored
+        //    the remote URL as video_path with status done; point it at the
+        //    recovered local file so session-video compose can stage it.
+        if let Some(row) = task_repair {
+            let repaired = {
+                let db = &state.db.lock().await;
+                match db.get_composer(&row.session_id).await {
+                    Ok(mut composer) => {
+                        let pipe_id = row.pipe_id.clone();
+                        let mut changed = false;
+                        for pipe in composer.pipes.iter_mut() {
+                            if pipe.id != pipe_id {
+                                continue;
+                            }
+                            if let Some(lg) = pipe.last_generation.as_mut() {
+                                if lg.task_id == task_id
+                                    && (lg.video_path.starts_with("http")
+                                        || lg.video_path != dest.to_string_lossy())
+                                {
+                                    lg.video_path = dest.to_string_lossy().into_owned();
+                                    lg.status = "done".into();
+                                    changed = true;
+                                }
+                            }
+                        }
+                        if changed {
+                            let _ = db.save_composer(&composer).await;
+                        }
+                        changed
+                    }
+                    Err(e) => {
+                        log::warn!("[Reheal] task {task_id} composer repair failed: {e}");
+                        false
+                    }
+                }
+            };
+            if repaired {
+                log::info!(
+                    "[Reheal] task {task_id} composer last_generation re-pointed to {}",
+                    dest.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "[Reheal] session {}: {} marker(s) healed, {} still gated, of {} scanned",
+        input.session_id,
+        healed.len(),
+        still_gated.len(),
+        output_files.len()
+    );
+    Ok(RetryFailedVideoDownloadsResult { healed, still_gated })
+}
+
+/// Recursively collect every `output.json` under `dir` (task-scoped dir),
+/// bounded by `budget` exactly like `backfill_collect` — a pathological
+/// tree must not turn the heal pass into an unbounded scan.
+fn collect_output_json_files(
+    dir: &std::path::Path,
+    out: &mut Vec<std::path::PathBuf>,
+    budget: &mut usize,
+) {
+    if *budget == 0 {
+        return;
+    }
+    let iter = match std::fs::read_dir(dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    for entry in iter.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_output_json_files(&path, out, budget);
+        } else if path.file_name().and_then(|n| n.to_str()) == Some("output.json") {
+            *budget -= 1;
+            out.push(path);
+        }
+    }
+}
+
 /// All known media roots: the session `directory_path` trees (0009 — the
 /// highest-precedence root `resolve_media_root` uses, and where a session's
 /// composed video + generated artifacts land when the user picked a session
@@ -2157,8 +3029,14 @@ mod tests {
         let _ = fs::create_dir_all(&root);
 
         // Piece history (one generation each).
-        write_file(&root, &format!("Pipe A/pieces/keyframes/{kf}/1111111111.png"));
-        write_file(&root, &format!("Pipe A/pieces/subjects/{sr}/2222222222.png"));
+        write_file(
+            &root,
+            &format!("Pipe A/pieces/keyframes/{kf}/1111111111.png"),
+        );
+        write_file(
+            &root,
+            &format!("Pipe A/pieces/subjects/{sr}/2222222222.png"),
+        );
         // User-picked base.
         write_file(&root, "Pipe A/user-images/local-x.png");
         // Task-scoped output.
@@ -2169,12 +3047,12 @@ mod tests {
         let out = collect_session_images(&root, &pipes);
         let _ = fs::remove_dir_all(&root);
 
-        let by_kind: std::collections::HashMap<&str, usize> = out
-            .iter()
-            .fold(std::collections::HashMap::new(), |mut m, e| {
-                *m.entry(e.source_kind.as_str()).or_insert(0) += 1;
-                m
-            });
+        let by_kind: std::collections::HashMap<&str, usize> =
+            out.iter()
+                .fold(std::collections::HashMap::new(), |mut m, e| {
+                    *m.entry(e.source_kind.as_str()).or_insert(0) += 1;
+                    m
+                });
         assert_eq!(by_kind.get("piece"), Some(&2));
         assert_eq!(by_kind.get("user"), Some(&1));
         assert_eq!(by_kind.get("task"), Some(&1));
@@ -2204,7 +3082,10 @@ mod tests {
         assert!(gens.values().any(|&g| g == 2));
         assert!(gens.values().any(|&g| g == 3));
         // The largest (newest) file is the highest generation.
-        let newest = out.iter().find(|e| e.label.ends_with("300.png") || e.local_path.ends_with("300.png")).unwrap();
+        let newest = out
+            .iter()
+            .find(|e| e.label.ends_with("300.png") || e.local_path.ends_with("300.png"))
+            .unwrap();
         assert_eq!(newest.generation_no, 3);
     }
 
@@ -2343,7 +3224,11 @@ mod tests {
 
         // Traversal in the ref id is neutralized by safe_dir_name.
         let evil = persist_user_image(&dir, "../evil", Some(std::ffi::OsStr::new("png"))).unwrap();
-        assert!(evil.starts_with(&dir), "escape prevented: {}", evil.display());
+        assert!(
+            evil.starts_with(&dir),
+            "escape prevented: {}",
+            evil.display()
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

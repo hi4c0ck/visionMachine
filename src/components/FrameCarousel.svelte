@@ -19,10 +19,14 @@
 	 *    cards fall out of focus.
 	 *  - At rest the settled front card gets a subtle breathing halo.
 	 */
-	import { untrack } from 'svelte';
+	import { untrack, onDestroy } from 'svelte';
+	import * as pd from '$lib/pipelineDiag';
+	import { isBgIdle, onBgIdleChange } from '$lib/bgIdle';
 	import { APP_CONSTANTS } from '$constants';
 	import {
 		FrameSource,
+		holdFrameSourceWarm,
+		reclaimFrameSource,
 		CAROUSEL_STEP,
 		carouselCardScaleF,
 		carouselCardX,
@@ -202,6 +206,15 @@
 	const MANUAL_PAUSE_MS = 1500; // manual move → resume only after this
 	let lastManualAt = 0;
 
+	// Item 3: the background/idle gate (bgIdle.ts, driven by App.svelte).
+	// While the window is unfocused/hidden the auto-transport rAF loop must
+	// stand down — a steady roll that keeps seeking the live <video> in an
+	// unseen window is wasted GPU. The flag re-arms the loop on focus.
+	let bgIdle = $state(isBgIdle());
+	$effect(() => onBgIdleChange((next) => {
+		bgIdle = next;
+	}));
+
 	function pauseAuto() {
 		lastManualAt = performance.now();
 	}
@@ -209,7 +222,9 @@
 	$effect(() => {
 		const mode = autoScroll;
 		void totalFrames;
+		void bgIdle; // item 3: re-run on focus return to re-arm the transport
 		if (mode === 'off') return;
+		if (bgIdle) return; // backgrounded/unfocused: stop the auto-transport rAF
 		let cancelled = false;
 
 		// —— FAST: snap to the next stop, dwell 0.8s at each snap. ——
@@ -426,6 +441,36 @@
 	// and "unsupported runtime" instead of showing a generic ellipsis.
 	let thumbDiag = $state<ThumbDiag>('pending');
 
+	// LEAK FIX: `thumbs` owns the carousel's ImageBitmap CLONES (FrameSource
+	// hands us independent clones and owns none of them). The previous code
+	// only ever did `thumbs = { ...thumbs, [f]: b }` (add/overwrite) and
+	// `thumbs = {}` on a url switch — both DROP the reference WITHOUT closing
+	// the GPU texture, so every frame index ever scrolled kept its full-res
+	// bitmap alive → the renderer's texture pool ratcheted to GB-scale.
+	// A single close helper that both frees the textures AND feeds the
+	// pipelineDiag clone ledger so the dashboard's `clonesOutstanding` is
+	// truthful. Only bitmaps that are NOT the new current value are closed.
+	function closeThumbsExcept(keep: Record<number, ImageBitmap | null> = {}): void {
+		let n = 0;
+		for (const [k, b] of Object.entries(thumbs)) {
+			if (b && b !== keep[Number(k)]) {
+				try { b.close(); n++; } catch { /* already closed */ }
+			}
+		}
+		if (n > 0) pd.pipeCloneClosed(n);
+	}
+	// Variant: close every carousel clone whose frame index is NOT in the given
+	// keep-set (used on pool change — scrolled-off frames' bitmaps are freed).
+	function closeThumbsNotIn(keepKeys: Set<number>): void {
+		let n = 0;
+		for (const [k, b] of Object.entries(thumbs)) {
+			if (b && !keepKeys.has(Number(k))) {
+				try { b.close(); n++; } catch { /* already closed */ }
+			}
+		}
+		if (n > 0) pd.pipeCloneClosed(n);
+	}
+
 	// ── Per-video reset (solid pipeline on video switch) ─────────────────────
 	// All per-video state belongs to ONE video.url. When the url (or fps, which
 	// also bounds the frame grid) changes we clear every one of them and
@@ -442,15 +487,22 @@
 	// while the old one's in-flight work is still writing into `thumbs`.
 
 	// (Re)build the decoder source when the media or fps changes. The cleanup
-	// disposes the old FrameSource (closes the WebCodecs decoder + capture
-	// video + LRU bitmaps) BEFORE the reset effect below clears Svelte state,
-	// so no in-flight capture from the previous video races the new one.
+	// HOLDS the old source warm (40s) instead of hard-disposing it, so a quick
+	// exit-and-return to the same video re-attaches the already-decoded
+	// pipeline. The constructor's claimSourceSlot enforces the "one decoder
+	// at a time" cap: a new clip flushes the previous clip's warm source, so
+	// GPU textures never overlap. Reclaim a still-warm source for this exact
+	// video before paying for a fresh FrameSource.
 	$effect(() => {
 		const url = video.url;
-		const s = new FrameSource(url, fps);
+		const warm = reclaimFrameSource(url, fps);
+		const s = warm ?? new FrameSource(url, fps);
 		source = s;
 		return () => {
-			s.dispose();
+			// 40s warm hold + lazy unload: keep the decoded source alive for a
+			// quick re-entry, but stop it occupying the global decode slot so a
+			// different video can claim it immediately.
+			holdFrameSourceWarm(s, url, fps);
 			if (source === s) source = null;
 		};
 	});
@@ -458,6 +510,12 @@
 	$effect(() => {
 		void video.url;
 		void fps;
+		// Close the PREVIOUS video's carousel clones before dropping the refs —
+		// a bare `thumbs = {}` frees the JS refs but NOT the GPU textures, which
+		// is the exact ratchet that fills the renderer heap on a session swing.
+		// untrack: keep `thumbs` out of this effect's dep set so the write below
+		// can't re-trigger it.
+		untrack(() => closeThumbsExcept());
 		thumbs = {};
 		thumbDiag = 'pending';
 
@@ -493,13 +551,32 @@
 		let cancelled = false;
 		let last = src.diag.thumb; // plain local — NOT the reactive state
 		let lastDur: number | null = null; // plain local — NOT the reactive state
-		let lastSize: { width: number; height: number } | null = null; // plain local
+		let lastSizeKey = ''; // value key for mediaSize (identity churn guard)
+		let ticks = 0; // consecutive pending/loading polls; capped so a
+		const MAX_TICKS = 24; // source that never settles stops re-scheduling
 		const poll = () => {
 			if (cancelled) return;
 			const diag = src.diag.thumb;
 			if (diag !== last) {
 				last = diag;
 				thumbDiag = diag; // same-value write is a no-op, no churn
+			}
+			// GIVE UP on a source that will never load: without a cap this
+			// timer re-schedules FOREVER (each Svelte flush re-runs the
+			// effect), the placeholder stays "loading" indefinitely and the
+			// per-tick work is pure burn — the "preview infinite loading".
+			if (diag === 'pending' || diag === 'loading') {
+				if (src.isClosed) {
+					thumbDiag = 'failed';
+					return;
+				}
+				ticks += 1;
+				if (ticks >= MAX_TICKS) {
+					thumbDiag = 'failed';
+					return;
+				}
+			} else {
+				ticks = 0;
 			}
 			// Keep the measured-duration mirror fresh so the decode effect
 			// re-clamps its pool as soon as the source measures the media.
@@ -508,16 +585,21 @@
 			// depends on the $state it writes, so a value change can't re-run
 			// it into a loop. A same-value write is a no-op anyway.
 			const d = src.mediaDurationFrames;
-			if (d !== null && d !== lastDur) {
+			if (d !== lastDur) {
 				lastDur = d;
 				mediaDurFrames = d;
 			}
 			// Same for the ACTUAL media size — card width tracks it so the
 			// strip sizes to the real video, not the session's preset.
+			// Compare by VALUE (width x height), never by object identity:
+			// the getter allocates a fresh object on every call, so an
+			// identity compare writes the $state every tick and re-triggers
+			// the effect (perpetual poll + re-render burn).
 			const s = src.mediaSize;
-			if (s && s !== lastSize) {
-				lastSize = s;
-				mediaSize = s;
+			const sizeKey = s ? `${s.width}x${s.height}` : '';
+			if (sizeKey !== lastSizeKey) {
+				lastSizeKey = sizeKey;
+				mediaSize = s ? { width: s.width, height: s.height } : null;
 			}
 			// Re-poll only while the source can still transition to 'ok'.
 			if (diag === 'pending' || diag === 'loading') {
@@ -557,6 +639,21 @@
 			// since this effect ran, `src` is the old FrameSource and its
 			// in-flight promises must NOT write into the new video's thumbs.
 			if (src !== source) return;
+			// The pool moved on: this frame is no longer displayed. Do not
+			// re-add its bitmap — it would just sit in `thumbs` without
+			// being freed (a residual leak).
+			if (!poolFrames.includes(f)) {
+				if (b) { try { b.close(); } catch { /* already closed */ } pd.pipeCloneClosed(1); }
+				return;
+			}
+			// Overwriting the bitmap for the same frame from a previous decode
+			// (pool re-entry): close the superseded copy — same texture, new
+			// instance.
+			const prev = thumbs[f];
+			if (prev && prev !== b) {
+				try { prev.close(); } catch { /* already closed */ }
+				pd.pipeCloneClosed(1);
+			}
 			thumbs = { ...thumbs, [f]: b };
 		};
 		for (const f of frames) {
@@ -564,8 +661,19 @@
 		}
 		return () => {
 			cancelled = true;
+			// Pool moved / source swapped: free every carousel clone that is no
+			// longer in the CURRENT display pool (scrolled off = no card needs
+			// it). The decode LRU keeps raw bitmaps warm — it is safe for the
+			// carousel side to drop its copies, and they can be re-cloned on
+			// re-entry.
+			const keep = new Set(poolFrames.filter((f): f is number => f !== null));
+			closeThumbsNotIn(keep);
 		};
 	});
+
+	// Teardown: free all remaining carousel clones (the reset effect only
+	// closes on url/fps changes; on unmount everything disappears).
+	onDestroy(() => closeThumbsExcept());
 
 	// A pool slot shows a diagnostic placeholder when its frame has no bitmap
 	// for a KNOWN reason: out of the media's real duration, the capture broke,
@@ -886,6 +994,7 @@
 			<video
 				bind:this={videoEl}
 				class="fc-video"
+				data-vm-display
 				src={video.url}
 				muted
 				playsinline

@@ -50,6 +50,7 @@ import { flashToast } from '$lib/flashToast';
 			session,
 			totalFrames: propTotalFrames = 241,
 			selectedFrame,
+			playheadPipeIdx = null,
 			activePipeIdx = $bindable(null),
 			focus = $bindable({ level: 'project' } as ComposerFocus),
 			onframechange,
@@ -64,6 +65,10 @@ import { flashToast } from '$lib/flashToast';
 			session?: SessionData;
 			totalFrames?: number;
 			selectedFrame?: number;
+			/** Scroll-only follow target: the pipe owning the global playhead
+			 *  (session-video mode). Drives scrollIntoView WITHOUT changing
+			 *  activePipeIdx/focus, so scrubbing never cascades a media re-eval. */
+			playheadPipeIdx?: number | null;
 			activePipeIdx?: number | null;
 			/** Context-sensitive tool-panel focus. The panel is the source of
 			 * truth for what the user has selected in the composer; the tool
@@ -217,6 +222,15 @@ import { flashToast } from '$lib/flashToast';
 		if (activePipeIdx === null) return;
 		pipeEls.get(activePipeIdx)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 	});
+	// Follow the global playhead: as the session-video carousel sweeps across
+	// pipe boundaries, scroll the owning pipe into view so the composer tracks
+	// the frame pins. Keys ONLY on playheadPipeIdx (changes at pipe boundaries,
+	// not per frame) and never writes activePipeIdx — restoring the scroll hook
+	// without reviving the per-tick mediaActive cascade.
+	$effect(() => {
+		if (playheadPipeIdx === null) return;
+		pipeEls.get(playheadPipeIdx)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+	});
 
 	// ── Focus for the context-sensitive tool panel ─────────────────────────
 	// Previous pipe in timeline order (for the slot-1 "use last frame" feature).
@@ -368,6 +382,53 @@ import { flashToast } from '$lib/flashToast';
 		}
 		document.addEventListener('click', handler);
 		return () => document.removeEventListener('click', handler);
+	});
+
+	// ── LAYER-2: in-place session reset ─────────────────────────────────────
+	// SessionView is now permanently mounted (no {#key} destroy+create). On a
+	// session switch the ComposerPanel survives, so we must clear its
+	// disclosure/modal/menu state and re-anchor the playhead + focus to the new
+	// session. Latch on a plain `let` (NOT $state) so writing the latch does
+	// not re-trigger this effect — only the `session?.id` read is tracked.
+	let lastComposerSession: string | null = session?.id ?? null;
+	$effect(() => {
+		const sid = session?.id ?? null;
+		if (sid === lastComposerSession) return; // same session — no reset
+		const prev = lastComposerSession;
+		lastComposerSession = sid; // plain write: untracked, no re-entry
+		// Reset disclosure / modal / menu state so a switched session never
+		// carries the previous session's open panels or selected segment.
+		showKeyframeModal = false;
+		editingKeyframeSlot = null;
+		showSubjectRefModal = false;
+		editingSubjectRefId = null;
+		showSegmentModal = false;
+		segStart = 0;
+		segEnd = 8;
+		segGaps = [];
+		showPipeLengthModal = false;
+		pendingPipeLength = 0;
+		pendingPipeIdx = 0;
+		showTagPromptModal = false;
+		editingTagId = '';
+		editingSegmentId = '';
+		editingTagType = 'scene';
+		tagPrompt = '';
+		showGlobalPromptModal = false;
+		globalPromptLabel = '';
+		globalPromptText = '';
+		showAddMenu = false;
+		addMenuX = 0;
+		addMenuY = 0;
+		showTagMenu = false;
+		selectedSegmentId = '';
+		tagMenuX = 0;
+		tagMenuY = 0;
+		tagMenuVersion = 0;
+		// Re-anchor the playhead + focus to the new session's default.
+		activePipeIdx = null;
+		focus = { level: 'session', id: sid ?? '' };
+		pipeEls.clear(); // stale element map from the previous session
 	});
 
 	// ── Helpers ─────────────────────────────────────────────────────────────
@@ -887,6 +948,7 @@ import { flashToast } from '$lib/flashToast';
 					{pipe}
 					maxKeyframes={MAX_KEYFRAMES}
 					aspect={sceneAspect}
+					mediaActive={activePipeIdx === pipeIdx}
 					onEditSlot={(slotIndex) => openKeyframeModal(pipeIdx, slotIndex)}
 					onRemoveKeyframe={(kfId) => handleRemoveKeyframe(pipeIdx, kfId)}
 					onRegenerate={(kfId) => handleQueueRegen(pipe, 'keyframe', kfId)}
@@ -901,6 +963,7 @@ import { flashToast } from '$lib/flashToast';
 					{pipe}
 					maxSubjectRefs={MAX_SUBJECT_REFS}
 					aspect={sceneAspect}
+					mediaActive={activePipeIdx === pipeIdx}
 					onRemove={(refId) => handleRemoveSubjectRef(pipeIdx, refId)}
 					onAdd={() => openSubjectRefModal(pipeIdx)}
 					onEdit={(refId) => openSubjectRefModal(pipeIdx, refId)}

@@ -6,12 +6,21 @@ import type { SessionService, ServiceResult } from './interfaces';
 import type { SessionData, PipeRow, ResolutionPreset, Orientation, CropMode } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
 import { normalizePipe } from './validators';
+import { withTimeout, SWITCH_PATH_IPC_TIMEOUT_MS } from '$lib/withTimeout';
 
 export class SessionServiceImpl implements SessionService {
   async load(sessionId: string): Promise<ServiceResult & { session?: SessionData }> {
     try {
-      // get_composer takes session_id directly (Tauri camelCase arg matching)
-      const result = await invoke('get_composer', { sessionId });
+      // get_composer takes session_id directly (Tauri camelCase arg matching).
+      // BOUND WITH a hard deadline: a wedged backend DB lock on this read
+      // must not pin the main UI thread (the "non-blocking UI even under a
+      // blocking operation" invariant). On timeout this throws → loadSession's
+      // catch → errors → handleSessionSelect's local-tree fallback.
+      const result = await withTimeout(
+        invoke('get_composer', { sessionId }),
+        SWITCH_PATH_IPC_TIMEOUT_MS,
+        `get_composer ${sessionId}`,
+      );
       const backendData = result as any;
 
       const rawPipes: PipeRow[] = this.mapBackendPipes(backendData.pipes || []);
@@ -40,6 +49,18 @@ export class SessionServiceImpl implements SessionService {
         // 0012: explicit video aspect-ratio (a model `limits.ratios` entry).
         // Absent on legacy blobs → null (shaper derives from orientation).
         videoRatio: typeof backendData.videoRatio === 'string' && backendData.videoRatio ? backendData.videoRatio : null,
+        // Session-level composed video artifact (persisted in the composer
+        // row by both compose writer paths). Absent on legacy rows → null.
+        sessionVideoPath:
+          typeof backendData.sessionVideoPath === 'string' && backendData.sessionVideoPath
+            ? backendData.sessionVideoPath
+            : null,
+        // Item 10: the signed boundary map rides with the artifact so the
+        // trim-aware playhead layout survives a restart. Legacy rows → null.
+        sessionVideoOverlap:
+          backendData.sessionVideoOverlap && typeof backendData.sessionVideoOverlap === 'object'
+            ? (backendData.sessionVideoOverlap as Record<string, number>)
+            : null,
         createdAt: backendData.createdAt || Date.now(),
         updatedAt: backendData.updatedAt || Date.now(),
         directoryPath: backendData.directoryPath || '',
@@ -128,6 +149,12 @@ export class SessionServiceImpl implements SessionService {
       // the Rust Pipe.trim_boundary. Absent/legacy rows read as false (the
       // classic lossless splice), so old sessions never change behavior.
       trimBoundary: p.trimBoundary === true,
+      // Bug batch nov19 (item 2): the media-mode lock round-trips through the
+      // Rust Pipe.media_mode. Without this field every load/switch/restart
+      // silently reset Reference-locked pipes to 'keyframes' (normalizePipe
+      // coerces undefined), while the engine kept reading the DB value —
+      // UI and wire disagreed. Absent/legacy rows read as 'keyframes'.
+      mediaMode: p.mediaMode === 'reference' ? 'reference' : 'keyframes',
       // 0012 D2: per-pipe crop-mode override: round-trips through the Rust
       // Pipe.crop_override. Absent/legacy rows read as null = use the
       // session crop mode.

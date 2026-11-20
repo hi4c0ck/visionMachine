@@ -1,0 +1,27 @@
+{
+  "film": {
+    "title": "The Grizzly's Forest",
+    "logline": "A naive girl walks a sunlit forest among animals and birds; at dusk a grizzly appears under brief clouds, but she keeps it calm and friendly.",
+    "style": "warm nature documentary, natural available light, golden hour into dusk",
+    "world": "a dense deciduous forest, mossy trails, tall pines, dappled sun turning to cool blue dusk",
+    "palette": "warm amber daylight fading to cool teal dusk, earthy browns and leaf greens",
+    "time_of_day": "evening",
+    "weather": "brief passing clouds, light drizzle"
+  },
+  "scenes": [
+    {
+      "title": "The Forest",
+      "prose": "A young girl walks slowly through a sunlit forest, birds lifting off the branches, a deer watching from the undergrowth; as the light cools into dusk and brief clouds gather, a grizzly rises from the shadows and she gently keeps it calm and friendly.",
+      "shots": [
+        {
+          "prose": "wide shot, the girl walks down a sunlit forest corridor, birds scatter from the pines, a deer stands watching, lens flare threads through the leaves, warm golden light",
+          "beats": ["establish forest", "girl walks", "birds scatter"]
+        },
+        {
+          "prose": "medium-low shot, a grizzly emerges as brief clouds gather and the light cools; the girl lowers her arms and stays still, the bear approaches, she soothes it and it settles calm and friendly",
+          "beats": ["grizzly appears", "clouds gather", "she calms it"]
+        }
+      ]
+    }
+  ]
+}

@@ -21,14 +21,120 @@
 // feels heavy at the session fps, the perf lever is to sub-sample the step
 // (e.g. 4 instead of 8) — same API, one constant flip in the carousel.
 
+import * as pd from './pipelineDiag';
+
 /** Carousel step in frames (the composer 8n grid). */
 export const CAROUSEL_STEP = 8;
 
-/** LRU size for decoded frame thumbnails. */
-const LRU_SIZE = 16;
+/** LRU size for decoded frame thumbnails.
+ *  1280×720×4 = 3.7 MB per bitmap. With 6 pipes:
+ *    LRU_SIZE=16 → 6×16×3.7MB = 355MB GPU texture memory per session
+ *    LRU_SIZE=4  → 6×4×3.7MB  =  89MB  (a fast switch can overlay the old
+ *                                   session's 89MB with the new session's 89MB
+ *                                   = 178MB peak — well within AMD's 669MB budget
+ *                                   before the driver watchdog fires)
+ *  The carousel strip only shows ~5 visible cards, so 4 LRU slots (center + 3
+ *  neighbors) is sufficient. */
+const LRU_SIZE = 4;
 
 /** Guard so a stuck decode can't hold the UI hostage. */
 const DECODE_TIMEOUT_MS = 5000;
+
+/**
+ * GLOBAL DECODER CONCAP (the "synced" invariant). At most ONE FrameSource
+ * (WebCodecs VideoDecoder + capture <video> + LRU bitmaps) may be live at any
+ * moment app-wide. A new source claims the slot synchronously and disposes the
+ * previous occupant FIRST, so a video switch never starts decoding the new
+ * clip while the old clip's GPU textures are still in flight — the exact
+ * overlap that spiked the AMD GPU process to 669MB on a fast session swing.
+ * There is only ever one top-panel FrameCarousel, so this is normally 1:1;
+ * the cap is the architectural guarantee that makes it so even if the mount
+ * order ever regresses.
+ */
+let activeSource: FrameSource | null = null;
+
+/**
+ * Warm source cache (40s hold + lazy unload). A carousel the user just exited
+ * keeps its already-decoded source "warm" for WARM_HOLD_MS so a quick
+ * re-entry to the SAME video re-attaches the existing decoder + capture
+ * video + LRU instead of re-allocating the expensive GPU pipeline. After the
+ * hold, the source is lazily unloaded (hard dispose). A DIFFERENT video claims
+ * the slot and immediately flushes the warm cache — the "synced" invariant:
+ * you never start decoding clip B while clip A's GPU textures are live.
+ */
+const WARM_HOLD_MS = 40_000;
+const warmSources = new Map<string, FrameSource>();
+let warmTimer: ReturnType<typeof setTimeout> | null = null;
+function warmKey(url: string, fps: number): string {
+  return url + '|' + fps;
+}
+function flushWarm(): void {
+  if (warmTimer) {
+    clearTimeout(warmTimer);
+    warmTimer = null;
+  }
+  for (const src of warmSources.values()) if (!src.isClosed) src.dispose();
+  warmSources.clear();
+}
+/** Stash a source for a 40s warm hold; schedule the lazy unload. */
+function holdSourceWarm(s: FrameSource, url: string, fps: number): void {
+  if (s.isClosed) return;
+  warmSources.set(warmKey(url, fps), s);
+  if (warmTimer) clearTimeout(warmTimer);
+  warmTimer = setTimeout(() => {
+    warmTimer = null;
+    flushWarm();
+  }, WARM_HOLD_MS);
+}
+/** Reclaim a still-warm source for the given video, or null. */
+function reclaimWarmSource(url: string, fps: number): FrameSource | null {
+  const k = warmKey(url, fps);
+  const s = warmSources.get(k);
+  if (s && !s.isClosed) {
+    warmSources.delete(k);
+    if (warmSources.size === 0 && warmTimer) {
+      clearTimeout(warmTimer);
+      warmTimer = null;
+    }
+    return s;
+  }
+  warmSources.delete(k);
+  return null;
+}
+
+function claimSourceSlot(s: FrameSource): void {
+  if (activeSource && activeSource !== s && !activeSource.isClosed) {
+    activeSource.dispose();
+  }
+  // A new source (a different video) flushes any warm-held sources: those
+  // belong to a now-stale clip and must not keep GPU textures alive.
+  flushWarm();
+  activeSource = s;
+}
+function releaseSourceSlot(s: FrameSource): void {
+  if (activeSource === s) activeSource = null;
+}
+
+/**
+ * Exposed for FrameCarousel. When the carousel unmounts (a fast
+ * exit-to-playback toggle, or a session switch) the source is NOT disposed
+ * immediately: it is stashed for the 40s warm hold so a quick re-entry to the
+ * same video re-attaches the already-decoded pipeline instead of re-allocating
+ * the GPU textures. A re-claim promotes the warm source back to the active
+ * slot; the 40s timer (or any different-video claim) disposes it.
+ */
+export function holdFrameSourceWarm(s: FrameSource, url: string, fps: number): void {
+  // Drop the active-slot ref (another source may now take the slot) but keep
+  // the source ALIVE in the warm cache for the hold window.
+  releaseSourceSlot(s);
+  holdSourceWarm(s, url, fps);
+}
+/** Reclaim a still-warm source for this exact video, or null if none. */
+export function reclaimFrameSource(url: string, fps: number): FrameSource | null {
+  const s = reclaimWarmSource(url, fps);
+  if (s) activeSource = s; // promote back to the active slot
+  return s;
+}
 
 /** Top-panel preview strip height in px — the frame-preview band in Frame.svelte. */
 export const CAROUSEL_STRIP_H = 180;
@@ -124,7 +230,9 @@ interface LRUEntry {
 async function cloneImageBitmap(bitmap: ImageBitmap | null): Promise<ImageBitmap | null> {
   if (!bitmap) return null;
   try {
-    return await createImageBitmap(bitmap);
+    const c = await createImageBitmap(bitmap);
+    pd.pipeCloneCreated();
+    return c;
   } catch {
     return null;
   }
@@ -173,6 +281,10 @@ export class FrameSource {
   private readonly outputQueue: VideoFrame[] = [];
   private outputQueueNotifier: (() => void) | null = null;
   private closed = false;
+  /** Ledger id (pipelineDiag): tracks active-vs-created FrameSource count,
+   *  the prime "churn" metric — >1 active while one video is shown means
+   *  an undisposed source survived a session switch. */
+  private readonly sourceId = pd.pipeSourceCreated();
 
   /**
    * @param url  A loadable media URL (blob: / https: / asset:).
@@ -181,6 +293,11 @@ export class FrameSource {
   constructor(url: string, fps: number) {
     this.url = url;
     this.fps = fps > 0 ? fps : 24;
+    // Claim the single global decode slot: if another live FrameSource exists
+    // (a previous top-panel video still tearing down), dispose it NOW so the
+    // new source's GPU textures can't overlap the old ones. This is the
+    // "synced" invariant — one decoder at a time.
+    claimSourceSlot(this);
     // Create the capture <video> eagerly so its METADATA (duration +
     // videoWidth/videoHeight) is available as soon as it loads — even when
     // the WebCodecs fast path never touches it. Without this, a
@@ -201,6 +318,13 @@ export class FrameSource {
    */
   get diag(): FrameDiag {
     return this.diagState;
+  }
+
+  /** True once dispose() has been called (decoder + capture video + LRU
+   *  released). The carousel's polling effect checks this to stop re-
+   *  scheduling itself against a source that can never load. */
+  get isClosed(): boolean {
+    return this.closed;
   }
 
   /**
@@ -242,9 +366,11 @@ export class FrameSource {
    */
   frame(index: number): Promise<ImageBitmap | null> {
     if (index < 0 || this.closed) return Promise.resolve(null);
+    pd.pipeFrameCall();
     const cached = this.cache.get(index);
     if (cached) {
       cached.t = ++this.lruCounter; // promote to most-recently-used
+      pd.pipeFrameHit();
       // The cache owns this bitmap and may close it during LRU eviction.
       // Never hand the same resource to Svelte's canvas action: it can then
       // receive a detached ImageBitmap on the next update and throw.
@@ -252,11 +378,13 @@ export class FrameSource {
     }
     const pending = this.inflight.get(index);
     if (pending) return pending;
+    pd.pipeFrameMiss();
     const raw = this.resolveFrame(index).finally(() => this.inflight.delete(index));
     // The resolved bitmap is cached by FrameSource and can be closed later;
     // expose an independent clone to every Svelte action instead.
     const p = raw.then(cloneImageBitmap);
     this.inflight.set(index, p);
+    pd.pipeInflight(this.inflight.size);
     return p;
   }
 
@@ -280,6 +408,7 @@ export class FrameSource {
       if (webcodecs) {
         this.diagState = { thumb: 'ok' };
         this.cache.set(index, { bitmap: webcodecs, t: ++this.lruCounter });
+        pd.pipeCacheSet();
         this.evictLru();
         return webcodecs;
       }
@@ -299,6 +428,7 @@ export class FrameSource {
     if (captured) {
       this.diagState = { thumb: 'ok' };
       this.cache.set(index, { bitmap: captured, t: ++this.lruCounter });
+      pd.pipeCacheSet();
       this.evictLru();
     } else {
       // captureFrame set the specific reason; surface it.
@@ -461,6 +591,9 @@ export class FrameSource {
   /** Close the decoder, release the thumbnail cache, and stop the capture video. */
   dispose(): void {
     this.closed = true;
+    pd.pipeSourceDisposed(this.sourceId);
+    // Release the global decode slot so a new source can claim it.
+    releaseSourceSlot(this);
     try {
       this.decoder?.close();
     } catch {
@@ -476,6 +609,11 @@ export class FrameSource {
     if (this.captureVideo) {
       this.captureVideo.removeAttribute('src');
       this.captureVideo.load?.();
+      // Force Chromium to reclaim the GPU decode buffer on the NEXT composite
+      // frame (not on GC). Without `.remove()` the element stays in the DOM
+      // tree (even if display:none) and its video texture persists in the
+      // GPU process — the source of the 669MB spike on fast session swings.
+      this.captureVideo.remove();
       this.captureVideo = undefined;
     }
     this.captureReady = false;
@@ -483,6 +621,7 @@ export class FrameSource {
     this.decodeBroken = false;
     this.diagState = { thumb: 'pending' };
     for (const e of this.cache.values()) e.bitmap?.close();
+    pd.pipeCacheClosed(this.cache.size);
     this.cache.clear();
   }
 
@@ -542,6 +681,7 @@ export class FrameSource {
   private onDecoderOutput(frame: VideoFrame): void {
     if (this.outputQueueNotifier) {
       this.outputQueue.push(frame);
+      pd.pipeOutputQueue(this.outputQueue.length);
       const n = this.outputQueueNotifier;
       this.outputQueueNotifier = null;
       n();
@@ -673,6 +813,7 @@ export class FrameSource {
     if (oldestKey !== null) {
       this.cache.get(oldestKey)?.bitmap?.close();
       this.cache.delete(oldestKey);
+      pd.pipeLruEvict();
     }
   }
 }

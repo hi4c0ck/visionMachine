@@ -20,7 +20,9 @@ use crate::commands::settings::{normalize_settings, ProviderSlot};
 use crate::generation::engine::{
     BoxFuture, EngineInput, EngineStage, GenerationEngine, PieceGeneration, StageOutput,
 };
-use crate::generation::media::{append_jsonl, append_request_log, pipe_media_dirs, write_json};
+use crate::generation::media::{
+    append_jsonl, append_request_log, pipe_media_dirs, proxy_path, thumb_path, write_json,
+};
 use crate::generation::shaper::StageContext;
 use crate::generation::shaper::{shape_request, substitute_poll_template};
 use crate::generation::specs::ModelSpecWire;
@@ -47,6 +49,140 @@ async fn cancel_watcher(cancel: &AtomicBool) {
             return;
         }
         sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Generate a 240p proxy for a finalized video original (non-fatal).
+/// Uses the existing ffmpeg locator; skips silently (debug) when no ffmpeg
+/// is available. The probe + encode run on the blocking pool
+/// (`spawn_blocking`) so the async worker is never stalled; a
+/// `spawn_blocking` failure logs and continues — the frontend falls back
+/// to the original. `pub(crate)`: the app-start video backfill (L3, the
+/// `download_failed` marker heal) re-generates a proxy for a re-fetched
+/// artifact.
+pub(crate) async fn generate_video_proxy(original: &std::path::Path) {
+    let original_owned = original.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        let ffmpeg = crate::generation::ffmpeg::resolve_ffmpeg();
+        if ffmpeg.source == "none" {
+            log::debug!(
+                "[Generation] no ffmpeg available, skipping video proxy for {}",
+                original_owned.display()
+            );
+            return;
+        }
+        let proxy = proxy_path(&original_owned);
+        let result = crate::generation::ffmpeg::silent_command(&ffmpeg.path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=-2:240",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "fast",
+                "-crf",
+                "28",
+                "-an",
+                "-y",
+                &proxy.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                log::info!("[Generation] video proxy written -> {}", proxy.display());
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                log::warn!(
+                    "[Generation] video proxy failed for {} ({stderr})",
+                    original_owned.display()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Generation] video proxy spawn failed for {}: {e}",
+                    original_owned.display()
+                );
+            }
+        }
+    })
+    .await;
+    if let Err(e) = result {
+        log::warn!(
+            "[Generation] video proxy worker failed for {}: {e}",
+            original.display()
+        );
+    }
+}
+
+/// Generate a 320px-wide JPEG thumb for a finalized PNG original
+/// (non-fatal). Same skip/warn policy as the video proxy; the probe +
+/// encode run on the blocking pool (`spawn_blocking`).
+async fn generate_image_thumb(original: &std::path::Path) {
+    let original_owned = original.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        let ffmpeg = crate::generation::ffmpeg::resolve_ffmpeg();
+        if ffmpeg.source == "none" {
+            log::debug!(
+                "[Generation] no ffmpeg available, skipping image thumb for {}",
+                original_owned.display()
+            );
+            return;
+        }
+        let thumb = thumb_path(&original_owned);
+        let result = crate::generation::ffmpeg::silent_command(&ffmpeg.path)
+            .args([
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                &original_owned.to_string_lossy(),
+                "-vf",
+                "scale=320:-2",
+                "-q:v",
+                "2",
+                "-y",
+                &thumb.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                log::info!("[Generation] image thumb written -> {}", thumb.display());
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                log::warn!(
+                    "[Generation] image thumb failed for {} ({stderr})",
+                    original_owned.display()
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Generation] image thumb spawn failed for {}: {e}",
+                    original_owned.display()
+                );
+            }
+        }
+    })
+    .await;
+    if let Err(e) = result {
+        log::warn!(
+            "[Generation] image thumb worker failed for {}: {e}",
+            original.display()
+        );
     }
 }
 
@@ -112,11 +248,15 @@ fn transient_503_label(body: &Value) -> &'static str {
 }
 
 /// Fail fast when the shaped payload carries a non-fetchable media source
-/// (a local file path). That happens when the image stage's provider
-/// returned `b64_json` instead of a URL (ignoring `response_format: "url"`)
-/// and `record_upstream` fell back to the local artifact — the video API
-/// cannot fetch a local path, so sending it would burn a multi-minute
-/// render on a guaranteed failure.
+/// (a local file path). After `inline_local_media_fields` has run, any
+/// local file that exists on disk has been rewritten to a base64 `data:`
+/// URI (the image stage requests `response_format: b64_json` — the Agnes
+/// image CDN URL is 403-gated — so `record_upstream` hands the video stage
+/// the materialized local artifact); this check therefore only sees
+/// values it could not inline: a MISSING / unreadable / oversized local
+/// file, or a bare path that was never a file. The video API cannot fetch
+/// such a path, so sending it would burn a multi-minute render on a
+/// guaranteed failure.
 fn assert_media_fetchable(payload: &Value) -> Result<(), String> {
     let mut urls: Vec<(&str, &str)> = Vec::new();
     for key in ["image", "first_frame", "last_frame"] {
@@ -150,6 +290,84 @@ fn assert_media_fetchable(payload: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Inline a local media file as a base64 `data:` URI. Returns `None` for
+/// values that must pass through untouched (remote URLs, already-`data:`
+/// URIs, empty strings) or when the file is absent / unreadable /
+/// oversized — those stay local and the fetchability precheck reports them
+/// concretely.
+fn local_media_data_uri(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("data:")
+    {
+        return None;
+    }
+    const MAX_INLINE_MEDIA_BYTES: u64 = 32 * 1024 * 1024;
+    let path = std::path::Path::new(trimmed);
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_INLINE_MEDIA_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let lower = trimmed.to_ascii_lowercase();
+    let mime = if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else {
+        "image/png"
+    };
+    Some(format!("data:{mime};base64,{b64}"))
+}
+
+/// Inline every local media field of a shaped video payload as a base64
+/// `data:` URI, in place. The image stage now asks `response_format:
+/// "b64_json"` (the Agnes image CDN URL is 403-gated), so
+/// `record_upstream` hands the video stage the materialized LOCAL artifact
+/// as `UpstreamOutput.primary` — the exact case the `UpstreamOutput` doc
+/// already anticipates ("the provider engine can base64-encode this [local
+/// path] if the remote primary is unreachable"). The video API accepts
+/// Data-URIs (catalog), so inlining restores the i2v route without
+/// re-introducing a flaky CDN dependency.
+///
+/// Fields covered: `image`, `first_frame`, `last_frame` (scalar) and
+/// `images`, `extra_body.image` (arrays). Idempotent: remote/`data:`
+/// values pass through untouched; a missing local file stays a local path
+/// so `assert_media_fetchable` still produces the concrete error.
+fn inline_local_media_fields(payload: &mut Value) {
+    for key in ["image", "first_frame", "last_frame"] {
+        if let Some(v) = payload.get(key).and_then(|v| v.as_str()) {
+            if let Some(uri) = local_media_data_uri(v) {
+                payload[key] = Value::String(uri);
+            }
+        }
+    }
+    if let Some(arr) = payload.get_mut("images").and_then(|v| v.as_array_mut()) {
+        inline_local_media_array(arr);
+    }
+    if let Some(ef) = payload
+        .get_mut("extra_body")
+        .and_then(|v| v.get_mut("image"))
+        .and_then(|v| v.as_array_mut())
+    {
+        inline_local_media_array(ef);
+    }
+}
+
+fn inline_local_media_array(arr: &mut Vec<Value>) {
+    for slot in arr.iter_mut() {
+        if let Value::String(s) = slot {
+            if let Some(uri) = local_media_data_uri(s) {
+                *slot = Value::String(uri);
+            }
+        }
+    }
 }
 
 /// A concrete engine error carrying the concrete-cause rule (E4).
@@ -437,7 +655,11 @@ impl ProviderEngine {
                 backoff_idx += 1;
                 on_event(&format!(
                     "retrying after {} — in {} s",
-                    if st == 429 { "rate-limited (429)" } else { "unavailable (503)" },
+                    if st == 429 {
+                        "rate-limited (429)"
+                    } else {
+                        "unavailable (503)"
+                    },
                     delay
                 ));
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
@@ -450,7 +672,8 @@ impl ProviderEngine {
             let body = resp.get("error").cloned().unwrap_or(resp);
             return Err(EngineError::Failure(format!(
                 "piece image generation HTTP {status} ({}): {}",
-                spec.id, body.to_string()
+                spec.id,
+                body.to_string()
             )));
         }
         let data0 = resp
@@ -458,8 +681,19 @@ impl ProviderEngine {
             .and_then(|d| d.get(0))
             .cloned()
             .ok_or_else(|| EngineError::Failure("piece image response missing data[0]".into()))?;
-        let remote_url = data0.get("url").and_then(|u| u.as_str()).map(String::from);
-        let b64 = data0.get("b64_json").and_then(|b| b.as_str()).map(String::from);
+        // The API returns url XOR b64_json; the unselected field is
+        // present-but-empty (live-verified 2026-11-09) - filter empty so
+        // it normalizes to None.
+        let remote_url = data0
+            .get("url")
+            .and_then(|u| u.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let b64 = data0
+            .get("b64_json")
+            .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
 
         // Best-effort redacted request/response line to the piece log.
         if let Some(log_path) = &req.request_log {
@@ -479,25 +713,51 @@ impl ProviderEngine {
         let remote_url_ret = remote_url.clone();
         match remote_url {
             Some(u) => {
-                self.http
-                    .download(&u, &req.dest, slot.api_key.trim())
-                    .await
-                    .map_err(|e| {
-                        log::error!("[Piece] download failed {u}: {e}");
-                        EngineError::Failure(format!("piece image download {u}: {e}"))
+                if self.http.download(&u, &req.dest, slot.api_key.trim()).await.is_err() {
+                    // The CDN client-egress gate (live-verified 2026-11-09)
+                    // 403s our download of the just-minted url. The image API
+                    // itself is reachable, so rescue the local artifact from a
+                    // b64_json re-issue (one extra $0 call, failure-only).
+                    // A piece's CDN url is consumed by NOTHING downstream
+                    // (unlike the task stage, where it drives the video
+                    // first_frame), so a failed rescue is a real failure: the
+                    // user's only usable artifact is the local file.
+                    log::warn!(
+                        "[Piece] CDN download of {u} failed (client-egress gate) — b64_json rescue"
+                    );
+                    let bytes = self
+                        .refetch_image_b64_bytes(&payload, &url, &secrets)
+                        .await
+                        .map_err(|e| {
+                            EngineError::Failure(format!(
+                                "piece image materialization failed: CDN download gated and b64 \
+                                 rescue failed ({}) — the image was generated but no local \
+                                 artifact could be stored",
+                                e.message()
+                            ))
+                        })?;
+                    std::fs::write(&req.dest, bytes).map_err(|e| {
+                        EngineError::Failure(format!("write {}: {e}", req.dest.display()))
                     })?;
+                }
             }
             None => {
-                let b64 = b64.ok_or_else(|| EngineError::Failure(
-                    "piece image response carried neither url nor b64_json".into(),
-                ))?;
+                let b64 = b64.ok_or_else(|| {
+                    EngineError::Failure(
+                        "piece image response carried neither url nor b64_json".into(),
+                    )
+                })?;
                 use base64::Engine as _;
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(b64)
                     .map_err(|e| EngineError::Failure(format!("piece b64 decode: {e}")))?;
-                std::fs::write(&req.dest, bytes)
-                    .map_err(|e| EngineError::Failure(format!("write {}: {e}", req.dest.display())))?;
+                std::fs::write(&req.dest, bytes).map_err(|e| {
+                    EngineError::Failure(format!("write {}: {e}", req.dest.display()))
+                })?;
             }
+        }
+        if req.dest.exists() {
+            generate_image_thumb(&req.dest).await;
         }
         on_progress(1.0);
         on_event("piece image complete");
@@ -748,20 +1008,44 @@ impl ProviderEngine {
                 "image response missing data[0]".into(),
             ));
         };
-        let remote_url = data0.get("url").and_then(|u| u.as_str()).map(String::from);
+        // The API returns `url` XOR `b64_json` (live-verified 2026-11-09); the
+        // non-selected field is present-but-EMPTY, so filter empty strings to
+        // normalize to `None`. In `url` mode: remote_url=Some, b64=None.
+        let remote_url = data0
+            .get("url")
+            .and_then(|u| u.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
         let remote_url_for_log = remote_url.clone();
         let b64 = data0
             .get("b64_json")
             .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
             .map(String::from);
 
-        // Resolve + download the artifact into the media tree. Keep the
-        // provider's remote URL alongside the local path: the registry links
-        // both back to the keyframe/subject (previewRemoteUrl / previewLocalPath)
-        // so the next video run can prefer the fetchable remote source.
-        let local = self
+        // `url` mode (fluent chain): the response carries the provider's CDN
+        // URL, which becomes `UpstreamOutput.primary` -> the video stage's
+        // `first_frame`. We request `url` (not `b64_json`) so that remote
+        // source is ALWAYS populated — that is what the i2v route consumes.
+        //
+        // Materializing the LOCAL file is BEST-EFFORT and never fatal when a
+        // remote URL is present: the Agnes image CDN gates its output objects
+        // behind client egress we can't reach (live-verified 2026-11-09 —
+        // fresh + stale urls, plain/Bearer/Chrome UAs all 403 from our
+        // IP, while the provider's own video backend fetches the url
+        // server-side). So a failed local download degrades the preview
+        // cache (black until the CDN gate lifts and a backfill re-materializes)
+        // but does NOT fail the task — the fluent remote chain (url -> video
+        // API) is what carries the i2v route. Task success is decoupled from
+        // the CDN client-download policy (architectural idempotency).
+        let materialize_url = if b64.is_some() { None } else { remote_url.clone() };
+
+        // Resolve the artifact into the media tree. Keep the provider's remote
+        // URL alongside the local path: the registry links both back to the
+        // keyframe/subject (previewRemoteUrl / previewLocalPath).
+        let local = match self
             .materialize_image(
-                remote_url.clone(),
+                materialize_url,
                 b64,
                 &input.pipe_id,
                 &input.task_id,
@@ -770,14 +1054,59 @@ impl ProviderEngine {
                 &secrets,
             )
             .await
-            .map_err(|e| {
+        {
+            Ok(l) => l,
+            Err(dl_err) if remote_url.is_some() && self.media_root_for(input).is_some() => {
+                // Degrade is only meaningful when a media root exists to
+                // persist into. A missing media root is a hard config error
+                // (the next arm), NOT a CDN gate — it must still fail loudly.
+                // The fluent remote chain is intact (remote_url drives the
+                // video stage), so a failed local download must NOT kill the
+                // task. But keep the local preview cache alive: re-issue the
+                // SAME prompt in `b64_json` mode and write the in-band bytes
+                // to the same dest. Failure-only; if the rescue also fails
+                // we degrade to no-local-file (black preview until the CDN
+                // client-gate lifts and a backfill re-materializes).
+                let rescued = self
+                    .rescue_local_via_b64(
+                        &payload,
+                        &url,
+                        &secrets,
+                        &stage,
+                        input,
+                    )
+                    .await;
+                match rescued {
+                    Ok(local) => {
+                        log::info!(
+                            "[Generation] image task {} local CDN download failed ({}) — rescued local preview via b64_json; fluent remote chain still active via {:?}",
+                            input.task_id,
+                            dl_err.message(),
+                            remote_url_for_log
+                        );
+                        local
+                    }
+                    Err(rescue_err) => {
+                        log::warn!(
+                            "[Generation] image task {} local materialize failed (CDN download: {}; b64 rescue: {}) — fluent remote chain active via {:?}; preview cache degraded until backfill",
+                            input.task_id,
+                            dl_err.message(),
+                            rescue_err.message(),
+                            remote_url_for_log
+                        );
+                        String::new()
+                    }
+                }
+            }
+            Err(e) => {
                 log::error!(
                     "[Generation] image task {} materialize failed: {}",
                     input.task_id,
                     e.message()
                 );
-                e
-            })?;
+                return Err(e);
+            }
+        };
 
         // Append the artifact history line. The log stays in the PIPE-level
         // images dir (append-only, shared by all of this pipe's tasks), but
@@ -876,20 +1205,17 @@ impl ProviderEngine {
         })
     }
 
-    /// Materialize a generated image into the media tree: remote URL or
-    /// in-band base64 -> `<task>/images/<refName>.png`, where the ref name
-    /// is the stage's stable reference id (keyframe id / subject id) so no
-    /// two artifacts ever stack onto one file.
-    async fn materialize_image(
+    /// Resolve the on-disk destination for a generated image artifact:
+    /// `<task>/images/<safeRefName>.png`, where the ref name is the stage's
+    /// stable reference id (keyframe id / subject id) so no two artifacts
+    /// ever stack onto one file. Shared by `materialize_image` and the
+    /// b64-rescue so both write to the identical path.
+    fn image_artifact_dest(
         &self,
-        remote_url: Option<String>,
-        b64: Option<String>,
-        _pipe_id: &str,
         task_id: &str,
         stage: &EngineStage,
         input: &EngineInput,
-        secrets: &[String],
-    ) -> Result<String, EngineError> {
+    ) -> Result<std::path::PathBuf, EngineError> {
         let root = match &input.media_root {
             Some(r) if !r.trim().is_empty() => std::path::PathBuf::from(r.trim()),
             _ => match (self.media_root)() {
@@ -914,7 +1240,24 @@ impl ProviderEngine {
             .filter(|r| !r.trim().is_empty())
             .unwrap_or_else(|| "latest".into());
         let safe_ref = crate::generation::media::safe_dir_name(&ref_id);
-        let dest = task_images_dir.join(format!("{safe_ref}.png"));
+        Ok(task_images_dir.join(format!("{safe_ref}.png")))
+    }
+
+    /// Materialize a generated image into the media tree: remote URL or
+    /// in-band base64 -> `<task>/images/<refName>.png`, where the ref name
+    /// is the stage's stable reference id (keyframe id / subject id) so no
+    /// two artifacts ever stack onto one file.
+    async fn materialize_image(
+        &self,
+        remote_url: Option<String>,
+        b64: Option<String>,
+        _pipe_id: &str,
+        task_id: &str,
+        stage: &EngineStage,
+        input: &EngineInput,
+        secrets: &[String],
+    ) -> Result<String, EngineError> {
+        let dest = self.image_artifact_dest(task_id, stage, input)?;
         match remote_url {
             Some(url) => {
                 let dest_str = dest.to_string_lossy().into_owned();
@@ -970,6 +1313,88 @@ impl ProviderEngine {
                     .map_err(|e| EngineError::Failure(format!("write {}: {e}", dest.display())))?;
             }
         }
+        // 320px JPEG thumb for fast preview (non-fatal; blocking pool).
+        generate_image_thumb(&dest).await;
+        Ok(dest.to_string_lossy().into_owned())
+    }
+
+    /// Failure-only b64 re-issue: POST the original image request switched to
+    /// `b64_json` mode and return the decoded bytes. The image API returns
+    /// url XOR b64_json (live-verified 2026-11-09), so this is exactly one
+    /// extra $0 image call, taken ONLY when a CDN download failed. The fluent
+    /// remote chain is unaffected; only the local cache is at stake.
+    async fn refetch_image_b64_bytes(
+        &self,
+        payload: &Value,
+        post_url: &str,
+        secrets: &[String],
+    ) -> Result<Vec<u8>, EngineError> {
+        let mut rescue_payload = payload.clone();
+        // Switch the response format to in-band base64 (same prompt/size/ratio
+        // maps; PITFALL-locked: response_format lives inside extra_body).
+        rescue_payload
+            .get_mut("extra_body")
+            .ok_or_else(|| {
+                EngineError::Failure("image payload has no extra_body to rescue".into())
+            })?
+            .as_object_mut()
+            .ok_or_else(|| {
+                EngineError::Failure("image payload extra_body is not an object".into())
+            })?
+            .insert("response_format".to_string(), json!("b64_json"));
+        let key = secrets.first().cloned().unwrap_or_default();
+        let (status, resp) = self
+            .http
+            .post(post_url, &rescue_payload, &key, IMAGE_TIMEOUT)
+            .await
+            .map_err(|e| EngineError::Failure(format!("rescue transport: {e}")))?;
+        if status >= 400 {
+            let body = resp.get("error").cloned().unwrap_or(resp);
+            return Err(EngineError::Failure(format!(
+                "rescue HTTP {status}: {}",
+                body.to_string()
+            )));
+        }
+        let b64 = resp
+            .get("data")
+            .and_then(|d| d.get(0))
+            .and_then(|d0| d0.get("b64_json"))
+            .and_then(|b| b.as_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Failure("rescue response carried no in-band b64_json".into())
+            })?
+            .to_string();
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| EngineError::Failure(format!("rescue b64 decode: {e}")))
+    }
+
+    /// Failure-only b64 rescue for the task image stage: re-issue the request
+    /// in `b64_json` mode and write the in-band bytes to the SAME dest the
+    /// primary materialize used (the task's `<refName>.png`), so local
+    /// previews stay alive even when the CDN client-egress gate 403s our
+    /// download.
+    async fn rescue_local_via_b64(
+        &self,
+        payload: &Value,
+        post_url: &str,
+        secrets: &[String],
+        stage: &EngineStage,
+        input: &EngineInput,
+    ) -> Result<String, EngineError> {
+        let bytes = self
+            .refetch_image_b64_bytes(payload, post_url, secrets)
+            .await?;
+        let dest = self.image_artifact_dest(&input.task_id, stage, input)?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| EngineError::Failure(format!("create {}: {e}", parent.display())))?;
+        }
+        std::fs::write(&dest, bytes)
+            .map_err(|e| EngineError::Failure(format!("rescue write {}: {e}", dest.display())))?;
+        generate_image_thumb(&dest).await;
         Ok(dest.to_string_lossy().into_owned())
     }
 
@@ -1006,7 +1431,7 @@ impl ProviderEngine {
             })?;
 
         let ctx = self.stage_context(input, &stage, &spec)?;
-        let payload = shape_request(&spec, &ctx).map_err(|e| {
+        let mut payload = shape_request(&spec, &ctx).map_err(|e| {
             log::error!(
                 "[Generation] video task {} payload shape failed: {}",
                 input.task_id,
@@ -1014,8 +1439,39 @@ impl ProviderEngine {
             );
             EngineError::Failure(e)
         })?;
+        // The image stage now requests `response_format: b64_json` (the
+        // Agnes image CDN URL is 403-gated), so `record_upstream` hands a
+        // LOCAL materialized artifact to the video stage's media fields.
+        // Inline it as a base64 `data:` URI — the documented load-bearing
+        // path ("the provider engine can base64-encode this") — so the i2v
+        // route works without a CDN dependency.
+        let inlined_fields = {
+            let mut fields: Vec<String> = Vec::new();
+            for key in ["image", "first_frame", "last_frame"] {
+                if let Some(v) = payload.get(key).and_then(|v| v.as_str()) {
+                    if !v.starts_with("http://")
+                        && !v.starts_with("https://")
+                        && !v.starts_with("data:")
+                        && !v.trim().is_empty()
+                    {
+                        fields.push(key.to_string());
+                    }
+                }
+            }
+            fields
+        };
+        inline_local_media_fields(&mut payload);
+        if !inlined_fields.is_empty() {
+            log::info!(
+                "[Generation] video task {} media inlined as data: URIs: {}",
+                input.task_id,
+                inlined_fields.join(", ")
+            );
+        }
         // Fail fast on non-fetchable media (local paths) before burning a
-        // multi-minute render on a guaranteed provider 4xx.
+        // multi-minute render on a guaranteed provider 4xx. A local file
+        // that could NOT be inlined (missing / oversized) still reaches
+        // this check and is reported concretely.
         assert_media_fetchable(&payload).map_err(|e| {
             log::error!(
                 "[Generation] video task {} media precheck failed: {e}",
@@ -1196,6 +1652,12 @@ impl ProviderEngine {
         let mut clean_polls = 0usize;
         let mut transport_failures = 0usize;
         const MAX_TRANSPORT_FAILURES: usize = 3;
+/// Bounded in-run attempts for the FINAL video artifact download (the
+/// provider CDN's client-egress gate flaps — fresh objects 403 for our
+/// IP for hours, then lift; catalog Q8). Distinct from the transport
+/// retry inside `fetch_artifact_to` (which skips 403 as non-retryable):
+/// this loop is the gate-flap ride-out, cancel-aware between attempts.
+const VIDEO_DOWNLOAD_ATTEMPTS: usize = 4;
         let final_body = loop {
             if cancel.load(Ordering::Acquire) {
                 return Err(EngineError::Cancelled);
@@ -1439,8 +1901,55 @@ impl ProviderEngine {
                     pipe_media_dirs(root, pipe_dir, &input.task_id)
                         .map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                match self.http.download(&video_url, &dest, slot.api_key.trim()).await {
-                    Ok(()) => {
+                // Bounded in-run download retry (2026-11-11): the Agnes
+                // platform-outputs CDN IP-gates our desktop egress and the
+                // gate FLAPS — the same URL downloaded fine hours earlier,
+                // then 403s for plain and Bearer GETs for the next hours
+                // (catalog Q8; live probes 2026-11-11 confirmed the Nov-10
+                // "working" url now 403s too). Riding out a short flap in
+                // the ~80 s window costs nothing; a still-gated download
+                // must NOT hard-fail a COMPLETED render: the object is
+                // retrievable later, so we write a `download_failed` marker
+                // into output.json (videoPath + videoUrl survive for the
+                // backfill) and degrade to the remote URL, mirroring the
+                // image stage's "task success decoupled from CDN
+                // client-download policy" architecture.
+                let mut dl_err: Option<String> = None;
+                for attempt in 1..=VIDEO_DOWNLOAD_ATTEMPTS {
+                    match self
+                        .http
+                        .download(&video_url, &dest, slot.api_key.trim())
+                        .await
+                    {
+                        Ok(()) => {
+                            dl_err = None;
+                            break;
+                        }
+                        Err(e) => {
+                            dl_err = Some(e.clone());
+                            if attempt < VIDEO_DOWNLOAD_ATTEMPTS {
+                                let delay = self
+                                    .backoff_secs
+                                    .get(2)
+                                    .copied()
+                                    .unwrap_or(15);
+                                log::warn!(
+                                    "[Generation] video task {} final download attempt {attempt}/{} failed: {e} — retrying in {delay} s (CDN egress gate)",
+                                    input.task_id,
+                                    VIDEO_DOWNLOAD_ATTEMPTS
+                                );
+                                on_event(&format!(
+                                    "final video download gated — retrying in {delay} s"
+                                ));
+                                if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                                    return Err(EngineError::Cancelled);
+                                }
+                            }
+                        }
+                    }
+                }
+                match dl_err {
+                    None => {
                         self.log_entry(
                             input,
                             &secrets,
@@ -1453,37 +1962,65 @@ impl ProviderEngine {
                         )
                         .await
                     }
-                    Err(e) => {
+                    Some(e) => {
+                        // `json!` owns its values: clone into the request-log
+                        // entry, keep `e` for the marker (the final use).
                         self.log_entry(
                             input,
                             &secrets,
                             &json!({
-                                "stage": "video-download",
+                                "stage": "video-download-failed",
                                 "url": video_url,
-                                "error": e,
+                                "error": e.clone(),
                             }),
                         )
                         .await;
-                        log::error!(
-                            "[Generation] video task {} download failed: {}",
-                            input.task_id,
-                            e
+                        log::warn!(
+                            "[Generation] video task {} final download failed after {VIDEO_DOWNLOAD_ATTEMPTS} attempts: {e} — marking output.json download_failed; task degrades to the remote URL, backfill re-fetches when the CDN gate lifts",
+                            input.task_id
                         );
-                        return Err(EngineError::Failure(format!(
-                            "video download {video_url}: {e}"
-                        )));
+                        let out = json!({
+                            "videoPath": dest.to_string_lossy(),
+                            "videoUrl": video_url,
+                            "model": spec.id,
+                            "seed": input.seed,
+                            "params": payload,
+                            "status": "download_failed",
+                            "downloadFailed": true,
+                            "providerTaskId": video_id,
+                            "downloadError": e,
+                        });
+                        // The marker is the L3 backfill's trigger: app start /
+                        // session-select walk re-GETs videoUrl and rewrites
+                        // this file to "done". Best-effort — a marker-write
+                        // failure must not turn a completed render into a
+                        // task failure.
+                        if let Err(w) = write_json(&task_dir.join("output.json"), &out) {
+                            log::warn!(
+                                "[Generation] video task {} download-failed marker write failed: {w}",
+                                input.task_id
+                            );
+                        }
                     }
                 }
-                let out = json!({
-                    "videoPath": dest.to_string_lossy(),
-                    "videoUrl": video_url,
-                    "model": spec.id,
-                    "seed": input.seed,
-                    "params": payload,
-                    "status": "done",
-                });
-                write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
-                dest.to_string_lossy().into_owned()
+                if dest.is_file() {
+                    // 240p proxy for the 180px top panel (non-fatal; blocking pool).
+                    generate_video_proxy(&dest).await;
+                    let out = json!({
+                        "videoPath": dest.to_string_lossy(),
+                        "videoUrl": video_url,
+                        "model": spec.id,
+                        "seed": input.seed,
+                        "params": payload,
+                        "status": "done",
+                    });
+                    write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
+                    dest.to_string_lossy().into_owned()
+                } else {
+                    // Degraded: the render completed, only the client-side
+                    // fetch is gated. Keep the task alive on the remote URL.
+                    video_url
+                }
             }
             None => {
                 // No media tree available: the provider artifact stays remote.
@@ -1495,6 +2032,41 @@ impl ProviderEngine {
         on_event("complete");
         log::info!("[Generation] video task {} ok ({})", input.task_id, local);
         Ok(local)
+    }
+
+    /// L3 backfill re-fetch (2026-11-11): engine/task-free re-GET of a video
+    /// artifact whose in-run download was blocked by the provider CDN's
+    /// client-egress gate (the `download_failed` marker). Drives the SAME
+    /// hardened `ReqwestClient` download (plain GET, then a Bearer-authorized
+    /// GET on 401/403) with a bounded outer loop that rides out the gate
+    /// flap; a persistent 403 (gate still closed) returns `Err` — the caller
+    /// retries later, it is never a user-facing failure.
+    pub(crate) async fn retry_fetch_video_download(
+        url: &str,
+        dest: &std::path::Path,
+        api_key: &str,
+        attempts: u32,
+    ) -> Result<(), String> {
+        let http: Arc<dyn HttpClient + Send + Sync> = Arc::new(ReqwestClient::new());
+        let key = api_key.trim().to_string();
+        let bound = attempts.max(1);
+        for attempt in 1..=bound {
+            match http.download(url, dest, &key).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    log::warn!(
+                        "[Backfill] video re-fetch attempt {attempt}/{bound} of {url} failed: {e}",
+                    );
+                    if attempt < bound {
+                        sleep(Duration::from_secs(BACKOFF_SECS.get(2).copied().unwrap_or(15)))
+                            .await;
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "video re-fetch {url} still blocked after {bound} attempts (CDN egress gate)"
+        ))
     }
 
     /// Append a redacted stage entry to the task request.log (best-effort).
@@ -1865,6 +2437,11 @@ mod tests {
         posts: StdMutex<VecDeque<Result<(u16, serde_json::Value), String>>>,
         gets: StdMutex<VecDeque<Result<(u16, serde_json::Value), String>>>,
         download_ok: StdMutex<bool>,
+        /// Per-attempt scripted download results (FIFO). When non-empty a
+        /// `download` pops the front, so tests can simulate "fail, fail,
+        /// succeed" for the video-download retry loop without touching the
+        /// global `download_ok` flag.
+        download_results: StdMutex<VecDeque<Result<(), String>>>,
         /// Records every download destination so tests can assert artifacts.
         downloads: StdMutex<Vec<String>>,
     }
@@ -1875,6 +2452,7 @@ mod tests {
                 posts: StdMutex::new(VecDeque::new()),
                 gets: StdMutex::new(VecDeque::new()),
                 download_ok: StdMutex::new(true),
+                download_results: StdMutex::new(VecDeque::new()),
                 downloads: StdMutex::new(Vec::new()),
             }
         }
@@ -1889,6 +2467,13 @@ mod tests {
         /// Simulate a failing artifact download (non-2xx, status embedded).
         fn fail_download(self) -> Self {
             *self.download_ok.lock().unwrap() = false;
+            self
+        }
+        /// Script a single download attempt (used FIFO). Let the artifact
+        /// bytes land only on `Ok` so the `dest.is_file()` degrade check
+        /// reflects a real 403 (no bytes) vs. a landed download.
+        fn queue_download(self, r: Result<(), String>) -> Self {
+            self.download_results.lock().unwrap().push_back(r);
             self
         }
     }
@@ -1933,6 +2518,20 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(dest.to_string_lossy().into_owned());
+            // Per-attempt scripted result takes precedence (FIFO): lets a test
+            // model "gate closed for the first N attempts, then lifted".
+            if let Some(scripted) = self.download_results.lock().unwrap().pop_front() {
+                return match scripted {
+                    Ok(()) => {
+                        if let Some(parent) = dest.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(dest, "fake-artifact-bytes");
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                };
+            }
             if !*self.download_ok.lock().unwrap() {
                 return Err(format!("GET {url} HTTP 503: simulated provider outage"));
             }
@@ -2011,6 +2610,9 @@ mod tests {
             read_only: None,
             supports_seed: Some(true),
             guidance: None,
+            steps: None,
+            guidance_range: None,
+            img2img_only: None,
             media: None,
         }
     }
@@ -2029,6 +2631,9 @@ mod tests {
             read_only: None,
             supports_seed: Some(true),
             guidance: None,
+            steps: None,
+            guidance_range: None,
+            img2img_only: None,
             media: None,
         }
     }
@@ -2302,6 +2907,110 @@ mod tests {
 
         let req_log = std::fs::read_to_string(task_dir.join("request.log")).unwrap();
         assert!(!req_log.contains("sk-video-key"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    // ── Video-download 403 resilience (L1 retry + L2 degrade marker) ─────────
+
+    #[tokio::test]
+    async fn video_download_retries_then_succeeds_writes_done_marker() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-42" }))))
+                .queue_get(Ok((200, json!({ "status": "running" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                )))
+                // The CDN egress gate flaps closed for the first two in-run
+                // attempts, then lifts: the bounded L1 loop lands the bytes
+                // and the marker is `done` (no `download_failed`).
+                .queue_download(Err(
+                    "GET https://cdn.test/out.mp4 HTTP 403: simulated egress gate".into(),
+                ))
+                .queue_download(Err(
+                    "GET https://cdn.test/out.mp4 HTTP 403: simulated egress gate".into(),
+                ))
+                .queue_download(Ok(())),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("video stage must succeed once the gate lifts mid-retry");
+
+        let task_dir = media.join("pipe1").join("task1");
+        assert_eq!(
+            out.local_path,
+            task_dir.join("video.mp4").to_string_lossy().into_owned(),
+            "the retry-then-success path must yield the local artifact, not the remote URL"
+        );
+        let out_json = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(task_dir.join("output.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out_json["status"], "done");
+        assert!(out_json.get("downloadFailed").is_none());
+        // Exactly three download attempts: 403, 403, then the landed bytes.
+        assert_eq!(http.downloads.lock().unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn video_download_always_gated_writes_download_failed_marker_and_degrades_to_remote_url() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        // Every in-run attempt is 403 (gate closed for the whole render):
+        // the L2 marker must be written and the task must DEGRADE to the
+        // remote URL instead of hard-failing a completed render.
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "videoId": "vid-42" }))))
+                .queue_get(Ok((200, json!({ "status": "running" }))))
+                .queue_get(Ok((
+                    200,
+                    json!({
+                        "status": "completed",
+                        "videoUrl": "https://cdn.test/out.mp4"
+                    }),
+                )))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into()))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into()))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into()))
+                .queue_download(Err("GET https://cdn.test/out.mp4 HTTP 403".into())),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = video_input(&media);
+
+        // The render completed: the task succeeds and reports the remote URL
+        // (the L3 re-heal re-GETs it on the next session load).
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("a completed render must never hard-fail on a gated download");
+        assert_eq!(out.local_path, "https://cdn.test/out.mp4");
+
+        let task_dir = media.join("pipe1").join("task1");
+        assert!(
+            !task_dir.join("video.mp4").exists(),
+            "gated download must not leave a partial local artifact"
+        );
+        let out_json = serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(task_dir.join("output.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out_json["status"], "download_failed");
+        assert_eq!(out_json["downloadFailed"], true);
+        assert_eq!(out_json["videoUrl"], "https://cdn.test/out.mp4");
+        assert_eq!(out_json["providerTaskId"], "vid-42");
+        assert!(out_json.get("downloadError").is_some());
         let _ = std::fs::remove_dir_all(&media);
     }
 
@@ -2593,8 +3302,14 @@ mod tests {
 
     // ── Download diagnostics ───────────────────────────────────────────────────
 
+    // A failed CDN download (403 client-egress gate, live-verified
+    // 2026-11-09) must NOT kill the task: the fluent remote chain
+    // (response url -> video stage first_frame) stays active, the b64
+    // rescue runs (and its own miss degrades, never fails), and the
+    // stage completes with an empty local path. The download error is
+    // still logged for replay/diagnosis.
     #[tokio::test]
-    async fn image_download_failure_is_logged_and_fails_stage() {
+    async fn image_download_failure_degrades_not_fails_with_remote_chain() {
         let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
         let http = Arc::new(
             StubHttp::new()
@@ -2608,12 +3323,15 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let input = image_input(&media);
 
-        let err = engine
+        let out = engine
             .run(&input, &cancel, &|_p| {}, &|_line| {})
             .await
-            .unwrap_err();
-        assert!(err.contains("image download"), "got: {err}");
-        assert!(err.contains("HTTP 503"), "status embedded: {err}");
+            .expect("a CDN download failure must degrade, not fail the task");
+        // The fluent remote chain is preserved in the stage output.
+        assert_eq!(out.remote_url.as_deref(), Some("https://cdn.test/k1.png"));
+        // The local artifact is empty (download failed; rescue carried no
+        // in-band b64 in this stub) - previews degrade, task succeeds.
+        assert_eq!(out.local_path, "");
 
         let req_log =
             std::fs::read_to_string(media.join("pipe1").join("task1").join("request.log")).unwrap();
@@ -2933,5 +3651,101 @@ mod tests {
         assert!(!status_is_retryable(400));
         assert!(!status_is_retryable(403));
         assert!(!status_is_retryable(404));
+    }
+
+    // ── local media inlining (b64_json image stage -> i2v first_frame) ────
+
+    #[test]
+    fn local_media_data_uri_passes_through_remote_and_data_values() {
+        assert_eq!(local_media_data_uri("https://a.com/k.png"), None);
+        assert_eq!(local_media_data_uri("http://a.com/k.png"), None);
+        assert_eq!(local_media_data_uri("data:image/png;base64,AAA"), None);
+        assert_eq!(local_media_data_uri(""), None);
+        assert_eq!(local_media_data_uri("   "), None);
+    }
+
+    #[test]
+    fn local_media_data_uri_encodes_a_local_file_with_mime_from_extension() {
+        let dir = artifact_test_dir("vm-media-inline");
+        let png = dir.join("frame.png");
+        std::fs::write(&png, vec![0u8, 1, 2, 3]).unwrap();
+        let uri = local_media_data_uri(png.to_str().unwrap()).unwrap();
+        assert!(uri.starts_with("data:image/png;base64,"), "got {uri}");
+        use base64::Engine as _;
+        let round = base64::engine::general_purpose::STANDARD
+            .decode(&uri["data:image/png;base64,".len()..])
+            .unwrap();
+        assert_eq!(round, vec![0u8, 1, 2, 3]);
+        assert!(!dir.join("frame.JPG").exists());
+        let jpg = dir.join("frame.JPG");
+        std::fs::write(&jpg, vec![9u8]).unwrap();
+        let uri_j = local_media_data_uri(jpg.to_str().unwrap()).unwrap();
+        assert!(uri_j.starts_with("data:image/jpeg;base64,"), "got {uri_j}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_media_data_uri_rejects_missing_and_directory_paths() {
+        assert_eq!(
+            local_media_data_uri("C:\\vm-inline\\does-not-exist\\x.png"),
+            None
+        );
+        let dir = artifact_test_dir("vm-media-inline-dir");
+        let d = dir.join("sub");
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(local_media_data_uri(d.to_str().unwrap()), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inline_local_media_fields_rewrites_scalars_and_arrays_in_place() {
+        let dir = artifact_test_dir("vm-media-inline-payload");
+        let a = dir.join("k1.png");
+        let b = dir.join("k2.jpg");
+        std::fs::write(&a, vec![1u8]).unwrap();
+        std::fs::write(&b, vec![2u8]).unwrap();
+        let mut payload = json!({
+            "model": "m",
+            "first_frame": a.to_string_lossy(),
+            "last_frame": "https://cdn.test/k2.png",
+            "images": [ b.to_string_lossy(), "data:image/png;base64,QQ==" ],
+            "extra_body": { "image": [ a.to_string_lossy() ] },
+            "prompt": "p",
+        });
+        inline_local_media_fields(&mut payload);
+        assert!(payload["first_frame"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+        // Remote URL is untouched.
+        assert_eq!(payload["last_frame"], "https://cdn.test/k2.png");
+        let arr = payload["images"].as_array().unwrap();
+        assert!(arr[0].as_str().unwrap().starts_with("data:image/jpeg;base64,"));
+        // Already-inlined data URI is untouched.
+        assert_eq!(arr[1], "data:image/png;base64,QQ==");
+        let ef = payload["extra_body"]["image"].as_array().unwrap();
+        assert!(ef[0].as_str().unwrap().starts_with("data:image/png;base64,"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inline_then_precheck_accepts_inlined_payload_and_still_rejects_missing_file() {
+        let dir = artifact_test_dir("vm-media-inline-precheck");
+        let a = dir.join("k1.png");
+        std::fs::write(&a, vec![1u8, 2u8]).unwrap();
+        // Missing file: stays a bare path -> precheck still fails concretely.
+        let mut payload = json!({
+            "first_frame": dir.join("gone.png").to_string_lossy(),
+        });
+        inline_local_media_fields(&mut payload);
+        assert!(assert_media_fetchable(&payload).is_err());
+
+        let mut payload = json!({
+            "first_frame": a.to_string_lossy(),
+            "last_frame": "https://cdn.test/k2.png",
+        });
+        inline_local_media_fields(&mut payload);
+        assert!(assert_media_fetchable(&payload).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

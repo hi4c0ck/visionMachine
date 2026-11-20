@@ -29,5 +29,26 @@ export function subscribeCompositionProgress(
   onEvent: (event: CompositionProgressEvent) => void,
 ): Promise<UnlistenFn> {
   if (!isTauri()) return Promise.resolve(() => {});
-  return listen<CompositionProgressEvent>('composition-progress', ({ payload }) => onEvent(payload));
+  // Async-settle race guard (same class as runProgress.ts / generationEvents.ts):
+  // `listen` resolves later than a synchronous teardown, so a late-resolving
+  // listener leaks — it holds the closure + component tree AND fires on every
+  // `composition-progress` tick.
+  let disposed = false;
+  let unlisten: UnlistenFn | null = null;
+  listen<CompositionProgressEvent>('composition-progress', ({ payload }) => onEvent(payload))
+    .then((u) => {
+      if (disposed) {
+        u();
+        return;
+      }
+      unlisten = u;
+    })
+    .catch(() => {});
+  return Promise.resolve(() => {
+    disposed = true;
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+  });
 }

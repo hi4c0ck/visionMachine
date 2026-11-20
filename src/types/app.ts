@@ -92,6 +92,10 @@ export const RESOLUTION_DIMS: Record<ResolutionPreset, Record<Orientation, { wid
     vertical: { width: 480, height: 854 },
     square: { width: 480, height: 480 },
   },
+  // 720p = 1280x720 (the provider's actual 720P output height, measured
+  // across text/keyframe routes: 1280x720 / 1260x720 — both 720 tall). The
+  // ingest-step normalize (0012 D5) letterboxes any off-grid clip to this
+  // exact canvas so the session grid stays uniform.
   '720p': {
     horizontal: { width: 1280, height: 720 },
     vertical: { width: 720, height: 1280 },
@@ -499,6 +503,14 @@ export interface SessionData {
    *  Absent/legacy = null → the shaper derives ratio from Orientation. */
   videoRatio?: string | null;
   totalGeneratedFrames: number;
+  /** Session-level composed video artifact (the `<session>/session-video/
+   *  session.mp4` path), persisted in the composer row so re-opening the
+   *  session re-attaches it in the tool panel. Absent/legacy = null. */
+  sessionVideoPath?: string | null;
+  /** Item 10: the signed per-boundary overlap map the session video was
+   *  composed with (key = NEW pipe id; +head / −previous-tail frames).
+   *  The playhead→pipe layout subtracts these trims. Null = untrimmed. */
+  sessionVideoOverlap?: Record<string, number> | null;
 }
 
 /**

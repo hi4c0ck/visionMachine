@@ -136,12 +136,17 @@ pub fn normalize_settings(raw: &Value) -> Settings {
     if !out.generation_defaults.fps.is_finite() || out.generation_defaults.fps <= 0.0 {
         out.generation_defaults.fps = 24.0;
     }
+    // Item 3 (RC4): Q/C defaults are range-clamped like every other Q/C
+    // write (Q 5..30, C 0.5..15) — a stored out-of-range default used to
+    // seed pipes the sliders could not represent.
     if !out.generation_defaults.q_value.is_finite() {
         out.generation_defaults.q_value = 18.0;
     }
+    out.generation_defaults.q_value = out.generation_defaults.q_value.clamp(5.0, 30.0);
     if !out.generation_defaults.c_value.is_finite() {
         out.generation_defaults.c_value = 7.0;
     }
+    out.generation_defaults.c_value = out.generation_defaults.c_value.clamp(0.5, 15.0);
     if out.generation_defaults.concurrency != "sequential"
         && out.generation_defaults.concurrency != "parallel"
     {
@@ -356,7 +361,7 @@ pub async fn probe_ffmpeg_path(
 
 /// Shared probe helper (also used by the locator internals in tests).
 fn probe_one(path: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new(path)
+    let out = crate::generation::ffmpeg::silent_command(path)
         .arg("-version")
         .output()
         .ok()?;
@@ -418,8 +423,9 @@ mod tests {
         let out = normalize_settings(&raw);
         assert_eq!(out.generation_defaults.fps, 24.0);
         assert_eq!(out.generation_defaults.concurrency, "sequential");
-        // Valid data survives
-        assert_eq!(out.generation_defaults.q_value, 99.0);
+        // Item 3 (RC4): out-of-range scalars are CLAMPED to the Q/C range
+        // (was: any finite value survived, seeding unrepresentable pipes).
+        assert_eq!(out.generation_defaults.q_value, 30.0);
         assert_eq!(out.providers.video.model, "custom-video");
         // Missing slots reseed
         assert_eq!(out.providers.text.model, "agnes-2.5-flash");

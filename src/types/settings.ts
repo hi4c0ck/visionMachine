@@ -11,13 +11,13 @@ export type PresetId = 'agnes' | 'custom';
 
 /** How a model's API wants its request payload (request-builder shaper id).
  *  `video-job` is the generic OpenAI-shape async job (custom preset). The
- *  two Agnes variants differ by wire shape (P1/P2): frames-based (V2.0)
- *  vs seconds-based (V2.5 family). */
+ *  Agnes video engine is seconds-based (V2.5 family); the legacy
+ *  frames-based V2.0 route (`video-job-frames`) was removed with the
+ *  V2.0 model (P1-7, 2026-11-11). */
 export type RequestFormat =
   | 'chat'
   | 'image-gen'
   | 'video-job'
-  | 'video-job-frames'
   | 'video-job-seconds';
 
 /** Pipe-level media mode (docs/agnes-model-catalog.md, Q7). Default is
@@ -123,6 +123,21 @@ export interface ModelSpec {
    * the live-verification pass).
    */
   guidance?: string;
+  /** Wire param name the engine sends qValue (inference steps) under.
+   *  Same gating as guidance; absent → logged only. (Item 8, live-probed
+   *  2026-11-19: Agnes img2img accepts num_inference_steps.) */
+  steps?: string;
+  /** Product-unit range for the guidance INVERSION at the wire chokepoint:
+   *  wire = (min + max) − cValue. Product semantics: higher C = more
+   *  dreaming; provider CFG semantics: higher guidance = stronger prompt
+   *  adherence = less dreaming. Absent → cValue sent verbatim (a provider
+   *  whose semantics already match the product). */
+  guidanceRange?: [number, number];
+  /** When true, guidance/steps ride ONLY img2img requests (a reference
+   *  image is present); txt2img requests omit them — the Agnes text-image
+   *  queue rejects both knobs there (live 400 probes 2026-11-19), while
+   *  the img2img queue accepts them. */
+  img2imgOnly?: boolean;
   /** Media-mode capabilities driving pipe-UI row visibility. */
   media?: ModelMedia;
 }

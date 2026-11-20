@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuar
 use std::time::{Duration, Instant};
 
 use crate::generation::engine::{EngineInput, EngineStage, GenerationEngine};
+use crate::generation::memory_profile::MemoryProfiler;
 use crate::generation::shaper::UpstreamOutput;
 use crate::generation::types::{
     GenTaskEvent, GenerationStageView, GenerationTaskView, SourceKind, StageKind, StageStatus,
@@ -40,6 +41,12 @@ fn now_unix_ms() -> i64 {
 
 /// Sequential by default (decision D7); raise this to allow parallel tasks.
 pub const MAX_CONCURRENT_TASKS: usize = 1;
+
+/// Terminal-task retention bound: at most this many terminal tasks are kept
+/// in the in-memory map. Older terminal tasks are evicted (their DB rows
+/// remain the queryable fallback — see `get_generation_task`). Non-terminal
+/// tasks are never evicted.
+const MAX_TERMINAL_TASKS: usize = 20;
 
 /// A media-root resolver for the provider engine (E3/O6 resolution order).
 /// Production wiring (docs/provider-engine-tasks.md, Phase D): the owning
@@ -121,6 +128,12 @@ pub struct TaskRegistry {
     media_root: MediaRootResolver,
     /// UI event sink (no-op until wired in `lib.rs`; shared across clones).
     sink: Arc<RwLock<Option<EventSink>>>,
+    /// Per-stage memory profiler: a bounded ring buffer of RSS/system-memory
+    /// samples tagged with the generation stage they were taken at. Lets us
+    /// attribute RAM to a step instead of guessing (docs/memory-profile).
+    /// Shared across clones so every spawned task loop samples the same
+    /// bounded buffer (diagnostics must never themselves be the leak).
+    memory: Arc<MemoryProfiler>,
 }
 
 struct ManagedTask {
@@ -140,13 +153,34 @@ struct ManagedTask {
 
 impl TaskRegistry {
     pub fn new(db: Database) -> Self {
+        let memory = Arc::new(MemoryProfiler::new());
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             engine: Arc::new(Mutex::new(None)),
             db,
             media_root: MediaRootResolver::app_data_default(),
             sink: Arc::new(RwLock::new(None)),
+            memory,
         }
+    }
+
+    /// The per-stage memory profiler (a bounded ring buffer shared by every
+    /// spawned task loop). Read via `memory_profile::MemoryProfiler` methods.
+    pub fn memory_profiler(&self) -> &MemoryProfiler {
+        &self.memory
+    }
+
+    /// Sample the memory profiler right now (the `get_memory_profile`
+    /// command's read point), tagged with the caller's stage label.
+    pub fn memory_sample(&self, stage: &str) {
+        self.memory
+            .sample(stage, self.active_task_count() as u32, None);
+    }
+
+    /// A one-line memory summary for the log file (first → peak RSS across
+    /// the whole ring buffer) — the "did this run grow the process?" line.
+    pub fn memory_summary_line(&self) -> String {
+        self.memory.summary_line()
     }
 
     /// Wire the event sink that forwards `GenTaskEvent`s to the UI (the
@@ -416,11 +450,36 @@ impl TaskRegistry {
                 .filter(|t| matches!(t.view.status, TaskStatus::Queued | TaskStatus::Running))
                 .count();
             if active >= MAX_CONCURRENT_TASKS {
-                log::warn!(
-                    "[Generation] start task {} rejected: generation already in progress",
-                    view.task_id
-                );
-                return Err("Generation already in progress".to_string());
+                // P5: carry WHO holds the single generation slot (its session +
+                // task) in the rejection so the UI can say "another session is
+                // generating", not a bare "already in progress" error. The slot
+                // is global (MAX_CONCURRENT_TASKS == 1), so there is at most one
+                // holder — surface its identity when it belongs to a DIFFERENT
+                // session than the request (the cross-session case that reads
+                // as "an error when I switch sessions").
+                let holder = tasks
+                    .values()
+                    .find(|t| matches!(t.view.status, TaskStatus::Queued | TaskStatus::Running))
+                    .map(|t| (t.view.session_id.clone(), t.view.task_id.clone()));
+                match holder {
+                    Some((h_session, h_task)) if h_session != view.session_id => {
+                        log::warn!(
+                            "[Generation] start task {} rejected: held by session {} (task {})",
+                            view.task_id, h_session, h_task
+                        );
+                        return Err(format!(
+                            "Generation slot is in use by another session (task {h_task}). \
+                             Wait for it to finish, cancel it, or switch to that session."
+                        ));
+                    }
+                    _ => {
+                        log::warn!(
+                            "[Generation] start task {} rejected: generation already in progress",
+                            view.task_id
+                        );
+                        return Err("Generation already in progress".to_string());
+                    }
+                }
             }
             tasks.insert(
                 view.task_id.clone(),
@@ -523,6 +582,16 @@ impl TaskRegistry {
             .values()
             .filter(|t| !t.view.status.is_terminal())
             .count()
+    }
+
+    /// Every managed task view (live + terminal), for the live dashboard.
+    /// Terminal tasks are only pruned on cancel, so this list is bounded by
+    /// the terminal-task cap; cloning the views is cheap (String + Vec).
+    pub fn managed_tasks(&self) -> Vec<GenerationTaskView> {
+        resilient_lock(&self.tasks)
+            .values()
+            .map(|t| t.view.clone())
+            .collect()
     }
 
     // ── Runner ───────────────────────────────────────────────────────────────
@@ -646,6 +715,12 @@ impl TaskRegistry {
                         // line is deliberately terse — the full request/response
                         // detail stays in the redacted log (E1).
                         registry_for_live.patch_stage_event(&task_id_for_live, i, line);
+                        // Per-stage memory sample (docs/memory-profile): tag
+                        // process RSS + system memory to this named stage
+                        // transition ("downloading video", "image request in
+                        // flight", …). The ring buffer is bounded, so this is
+                        // a diagnostic, not a leak source.
+                        registry_for_live.memory_sample(line);
                     },
                 )
                 .await;
@@ -712,8 +787,20 @@ impl TaskRegistry {
                 }
                 entry.view.progress = 1.0;
             }
+            // Evict oldest terminal tasks under the same lock that marks
+            // this task terminal (DB row is the fallback; see helper).
+            evict_old_terminal_tasks(&mut tasks, task_id);
         }
         log::info!("[Generation] task {} done", task_id);
+        // Per-stage memory profile (docs/memory-profile): sample + summarize
+        // the ring buffer at terminal so the log file records how much RSS
+        // this run moved, and `get_memory_profile` shows *which stage*.
+        self.memory_sample("done");
+        log::info!(
+            "[Generation] task {} done · {}",
+            task_id,
+            self.memory_summary_line()
+        );
         self.persist_terminal(task_id).await;
         self.emit_terminal(task_id);
     }
@@ -736,6 +823,9 @@ impl TaskRegistry {
                     entry.view.status = TaskStatus::Cancelled;
                 }
             }
+            // Evict oldest terminal tasks under the same lock that marks
+            // this task terminal (DB row is the fallback; see helper).
+            evict_old_terminal_tasks(&mut tasks, task_id);
         }
         log::info!("[Generation] task {} cancelled", task_id);
         self.refresh_progress(task_id);
@@ -759,6 +849,9 @@ impl TaskRegistry {
                 entry.view.status = TaskStatus::Error;
                 entry.view.error = Some("No generation engine configured".to_string());
             }
+            // Evict oldest terminal tasks under the same lock that marks
+            // this task terminal (DB row is the fallback; see helper).
+            evict_old_terminal_tasks(&mut tasks, task_id);
         }
         log::error!(
             "[Generation] task {} failed: no generation engine configured",
@@ -787,11 +880,21 @@ impl TaskRegistry {
                 entry.view.status = TaskStatus::Error;
                 entry.view.error = Some(message);
             }
+            // Evict oldest terminal tasks under the same lock that marks
+            // this task terminal (DB row is the fallback; see helper).
+            evict_old_terminal_tasks(&mut tasks, task_id);
         }
         log::error!(
             "[Generation] task {} failed at stage {}",
             task_id,
             failed_idx
+        );
+        // Memory profile at a failed stage (the spike may live right here).
+        self.memory_sample("error");
+        log::info!(
+            "[Generation] task {} · {}",
+            task_id,
+            self.memory_summary_line()
         );
         self.refresh_progress(task_id);
         self.persist_terminal(task_id).await;
@@ -1010,6 +1113,55 @@ impl TaskRegistry {
     }
 }
 
+/// Evict the oldest terminal tasks so at most `MAX_TERMINAL_TASKS` remain.
+///
+/// Called while holding the tasks lock, right after a task is marked
+/// terminal, so the mark + eviction are atomic. The just-finished task
+/// (`keep_id`) is never evicted by its own pass — `persist_terminal` and
+/// `emit_terminal` still need to read it afterwards. Non-terminal tasks
+/// are never evicted. Age is ordered by `started_at` (tasks run
+/// sequentially, so start order matches finish order); `task_id` breaks
+/// same-millisecond ties deterministically. Eviction loses nothing
+/// queryable: terminal rows are persisted to the DB, and
+/// `get_generation_task` rebuilds the full view from the DB row when the
+/// in-memory entry is gone.
+fn evict_old_terminal_tasks(tasks: &mut HashMap<String, ManagedTask>, keep_id: &str) {
+    let terminal_count = tasks
+        .values()
+        .filter(|t| t.view.status.is_terminal())
+        .count();
+    if terminal_count <= MAX_TERMINAL_TASKS {
+        return;
+    }
+    // Drain in a loop, re-counting the full terminal set each pass (including
+    // keep_id, matching the fast-path check above). The first snapshot can
+    // become stale the moment the caller releases this tasks lock — a
+    // concurrent cancel/finish may insert new terminal tasks, so a single
+    // snapshot-based pass can leave the cap overshot by one per burst.
+    // keep_id is excluded from eviction (its DB row still backs
+    // `persist_terminal`/`emit_terminal` on the calling path); re-sorting
+    // each pass keeps "oldest first" ordering correct as entries age out.
+    loop {
+        let total = tasks
+            .values()
+            .filter(|t| t.view.status.is_terminal())
+            .count();
+        if total <= MAX_TERMINAL_TASKS {
+            break;
+        }
+        let mut terminal: Vec<(i64, String)> = tasks
+            .iter()
+            .filter(|(id, t)| id.as_str() != keep_id && t.view.status.is_terminal())
+            .map(|(id, t)| (t.view.started_at, id.clone()))
+            .collect();
+        terminal.sort();
+        let excess = total - MAX_TERMINAL_TASKS;
+        for (_, id) in terminal.into_iter().take(excess) {
+            tasks.remove(&id);
+        }
+    }
+}
+
 /// Build the per-stage `EngineStage` plan + the upstream-output slots from
 /// a pipe snapshot (docs/provider-engine-tasks.md, Phase D). `Ready`
 /// (`url`) pieces get a plan entry with `image_src` set so the video stage
@@ -1035,10 +1187,7 @@ fn settled_piece_on_disk(preview_local_path: &Option<String>) -> bool {
 /// forced last-frame catch drive a keyframe video even when the pipe's stored
 /// mode is "reference" — the caught frame (slot-1) is the keyframe, not a
 /// subject reference.
-fn apply_forced_media_mode(
-    plan: &mut [Option<EngineStage>],
-    forced: &str,
-) {
+fn apply_forced_media_mode(plan: &mut [Option<EngineStage>], forced: &str) {
     for entry in plan.iter_mut().flatten() {
         if entry.kind == SourceKind::Video {
             entry.media_mode = Some(forced.to_string());
@@ -1418,7 +1567,10 @@ mod tests {
         // No image stage ever carries a media mode.
         for entry in plan.iter().flatten() {
             if entry.kind != SourceKind::Video {
-                assert!(entry.media_mode.is_none(), "image stages keep media_mode None");
+                assert!(
+                    entry.media_mode.is_none(),
+                    "image stages keep media_mode None"
+                );
             }
         }
         // Sanity: the stored reference mode was what the plan began with (or
@@ -1761,5 +1913,67 @@ mod tests {
             StageStatus::Cancelled,
             "video stage cancelled after image failure"
         );
+    }
+
+    #[tokio::test]
+    async fn terminal_tasks_are_evicted_beyond_twenty() {
+        let (db, sid) = no_engine_db().await;
+        let registry = TaskRegistry::new(db);
+        registry.set_engine(Arc::new(TestEngine {
+            delay_ms: 20,
+            fail: false,
+        }) as Arc<dyn GenerationEngine>);
+        let pipe = fixture_pipe();
+
+        // Start 25 terminal tasks (MAX_TERMINAL_TASKS + 5).
+        for i in 0..25 {
+            let id = format!("evict-{i}");
+            registry
+                .start(make_view(&id, &pipe, &sid), engine_input())
+                .await
+                .unwrap();
+            wait_terminal(&registry, &id).await;
+        }
+
+        // Start one more task, then plant a running task directly in the
+        // map so eviction runs with a non-terminal task present.
+        registry
+            .start(make_view("evict-25", &pipe, &sid), engine_input())
+            .await
+            .unwrap();
+        {
+            let mut tasks = resilient_lock(&registry.tasks);
+            let mut running_view = make_view("running-1", &pipe, &sid);
+            running_view.status = TaskStatus::Running;
+            tasks.insert(
+                "running-1".to_string(),
+                ManagedTask {
+                    view: running_view,
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    input: engine_input(),
+                    stage_plan: Vec::new(),
+                    upstream_outputs: Vec::new(),
+                    last_emit_at: None,
+                },
+            );
+        }
+        wait_terminal(&registry, "evict-25").await;
+
+        let tasks = resilient_lock(&registry.tasks);
+        let terminal = tasks
+            .values()
+            .filter(|t| t.view.status.is_terminal())
+            .count();
+        let running = tasks
+            .values()
+            .filter(|t| !t.view.status.is_terminal())
+            .count();
+        assert!(
+            terminal <= 20,
+            "terminal tasks evicted to bound, got {terminal}"
+        );
+        assert_eq!(running, 1, "running tasks are never evicted");
+        assert!(tasks.contains_key("running-1"));
+        assert!(tasks.contains_key("evict-25"), "just-finished task kept");
     }
 }

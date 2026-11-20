@@ -50,7 +50,7 @@
 		input.value = String(pipe.lengthFrames);
 	}
 
-	const durationSec = fps ? pipe.lengthFrames / fps : null;
+	const durationSec = $derived(fps ? pipe.lengthFrames / fps : null);
 </script>
 
 <div class="pipe-header">

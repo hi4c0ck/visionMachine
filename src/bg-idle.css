@@ -1,0 +1,15 @@
+/* Global background/idle gate (GPU-load reduction).
+   When the Tauri webview window loses focus or the page becomes hidden
+   (alt-tab, minimize), App.svelte toggles `vm-bg-idle` on <html>. This single
+   rule pauses EVERY CSS animation in the app (the ~20 infinite keyframes:
+   header stripe, carousel breathe, generation pulse dots, status spins,
+   …) so the compositor stops continuously re-compositing an unseen window.
+   It is cheap: it only flips a play-state flag, no repaints are triggered.
+
+   Foreground behavior is untouched — the "alive" ambient animations keep
+   running while the user is actually looking at the app. The matching
+   display-<video> pause/resume lives in App.svelte (data-vm-display). */
+
+html.vm-bg-idle * {
+	animation-play-state: paused !important;
+}

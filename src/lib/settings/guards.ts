@@ -7,6 +7,7 @@
 // - Security (P6): maskKey for UI/logs, validateHttpUrl (http/https only),
 //   redactLog guarantees keys + raw local paths never sit in a log entry.
 
+import { validateQValue, validateCValue } from '$lib/composerStore/validators';
 import type {
   AutoScrollMode,
   CarouselBlock,
@@ -136,8 +137,11 @@ export function normalizeSettings(raw: unknown): Settings {
       fps: Number.isFinite(g.fps) && (g.fps as number) > 0 ? (g.fps as number) : base.generationDefaults.fps,
       resolution: typeof g.resolution === 'string' && g.resolution ? g.resolution : base.generationDefaults.resolution,
       orientation: typeof g.orientation === 'string' && g.orientation ? g.orientation : base.generationDefaults.orientation,
-      qValue: Number.isFinite(g.qValue) ? (g.qValue as number) : base.generationDefaults.qValue,
-      cValue: Number.isFinite(g.cValue) ? (g.cValue as number) : base.generationDefaults.cValue,
+      // Item 3 (RC4): defaults are range-validated like every other Q/C
+      // write — a stored default outside the slider range used to seed
+      // pipes the panel could not represent.
+      qValue: Number.isFinite(g.qValue) ? validateQValue(g.qValue as number) : base.generationDefaults.qValue,
+      cValue: Number.isFinite(g.cValue) ? validateCValue(g.cValue as number) : base.generationDefaults.cValue,
       concurrency: g.concurrency === 'parallel' ? 'parallel' : 'sequential',
       alwaysNewSeed: g.alwaysNewSeed !== false,
       segmentLengthUnit: g.segmentLengthUnit === 'seconds' ? 'seconds' : 'frames',
