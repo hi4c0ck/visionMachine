@@ -27,7 +27,7 @@ numbered blocks:
 | **④ NOVEL** | The written story — scene cards with sluglines and numbered beats |
 | **⑤ STEP CHAIN** | The run itself: steps, status lamps, take line, run log |
 
-<!-- SCREENSHOT PENDING: director-overview.png — Director tab, post-run state -->
+![Director tab — post-run overview: ① DIRECTION, ② PARAMETERS, ③ FILM STRUCTURE, ④ NOVEL](img/director-overview.png)
 
 ## 2. Setting up a run
 
@@ -61,7 +61,7 @@ seed file.
 
 ## 3. Running — ⑤ STEP CHAIN
 
-Press **run**. The ⑤ STEP CHAIN heading becomes a slate take line:
+Press **Run S0→S5**. The ⑤ STEP CHAIN heading becomes a slate take line:
 
 - **TAKE K** — the flow version of this run (every run is kept; takes never
   overwrite each other).
