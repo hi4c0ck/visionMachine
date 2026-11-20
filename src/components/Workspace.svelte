@@ -3537,9 +3537,9 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 		font: inherit;
 		font-size: 12px;
 		font-weight: 400;
-		color: var(--text-secondary);
-		background: var(--bg-tertiary);
-		border: 1px solid var(--border-light, #3a3a4a);
+		color: var(--text-muted);
+		background: var(--bg-secondary);
+		border: 1px solid var(--border, #2a2a3a);
 		border-radius: 6px 6px 0 0;
 		padding: 0 14px;
 		height: 22px;
@@ -3558,13 +3558,18 @@ import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	}
 
 	.harness-tab:hover {
-		color: var(--text-primary);
+		color: var(--text-secondary);
+		background: var(--bg-tertiary);
 	}
 
+	/* Active = raised: the lighter fill, bright label, accent underline.
+	   Inactive = recessed: darker fill, muted label (the hierarchy was
+	   inverted in the first pass — active read as disabled). */
 	.harness-tab.is-active {
 		color: var(--text-primary);
 		font-weight: 600;
-		background: var(--bg-primary);
+		background: var(--bg-tertiary);
+		border-color: var(--border-light, #3a3a4a);
 		border-bottom: 1px solid var(--accent-color);
 		height: 23px;
 	}
