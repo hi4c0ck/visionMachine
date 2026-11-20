@@ -59,15 +59,15 @@ describe('per-executable SHA-256 pins', () => {
   // exactly how a stale local Gyan binary slipped past CI (win64 pins were
   // derived from local files, not the pinned archive).
   const assets = [
-    'ffmpeg-N-128094-g31855b2a70-win64-gpl.zip',
-    'ffmpeg-N-128094-g31855b2a70-winarm64-gpl.zip',
-    'ffmpeg-N-128094-g31855b2a70-linux64-gpl.tar.xz',
-    'ffmpeg-N-128094-g31855b2a70-linuxarm64-gpl.tar.xz',
+    'ffmpeg-N-129130-gcd39c36377-win64-gpl.zip',
+    'ffmpeg-N-129130-gcd39c36377-winarm64-gpl.zip',
+    'ffmpeg-N-129130-gcd39c36377-linux64-gpl.tar.xz',
+    'ffmpeg-N-129130-gcd39c36377-linuxarm64-gpl.tar.xz',
   ];
 
   it.each(assets)('pins BOTH executables of %s', (asset) => {
     const key = (tool: string) =>
-      `autobuild-2026-10-25-13-00/${asset}/${tool}`;
+      `autobuild-2026-11-19-12-39/${asset}/${tool}`;
     const ffmpeg = internal.PinnedExecutableSha256[key('ffmpeg')];
     const ffprobe = internal.PinnedExecutableSha256[key('ffprobe')];
     expect(ffmpeg).toMatch(/^[0-9a-f]{64}$/);
@@ -80,18 +80,18 @@ describe('per-executable SHA-256 pins', () => {
     // (the 09948d4c…/a6618e99… values were derived from stale local Gyan
     // binaries — that is how the CI win-x64 installer job started failing).
     const key = (tool: string) =>
-      `autobuild-2026-10-25-13-00/ffmpeg-N-128094-g31855b2a70-win64-gpl.zip/${tool}`;
+      `autobuild-2026-11-19-12-39/ffmpeg-N-129130-gcd39c36377-win64-gpl.zip/${tool}`;
     expect(internal.PinnedExecutableSha256[key('ffmpeg')]).toBe(
-      '0d8e1240f20fbbca5897f40d67e1ca3389dd6837830e71031b3e9dafde6c4e05',
+      'a4701fcf609703cd0115892e79d73fba3248320758d39d03ffe95ff5c6738c97',
     );
     expect(internal.PinnedExecutableSha256[key('ffprobe')]).toBe(
-      '04734fdb925245df128957d42ecf822e3edd7d44891c1f4fa79202db1f7d2d44',
+      '4ed98446121882d3fd935e7c1a19a5839915a4803c7ae8b86c0a04936a940cdd',
     );
   });
 
   it('archive-level pins still cover the asset download', () => {
     expect(
-      internal.PinnedAssetSha256['ffmpeg-N-128094-g31855b2a70-win64-gpl.zip'],
+      internal.PinnedAssetSha256['ffmpeg-N-129130-gcd39c36377-win64-gpl.zip'],
     ).toMatch(/^[0-9a-f]{64}$/);
   });
 
