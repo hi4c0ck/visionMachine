@@ -527,6 +527,12 @@ pub async fn director_run_flow(
     .ok();
 
     let version = next_flow_version(&dir).saturating_add(1);
+    // Stamp the take identity INTO the doc before saving: the file index is
+    // the take number, and the UI (TAKE line, REV stamps, replay label) reads
+    // the internal fields. Without this every file carried flowVersion=1
+    // internally while the filename index climbed — "TAKE 1" on take 25.
+    doc.flow_version = version;
+    doc.regen.version.flow_version = version;
     let path = dir.join(FlowDocument::default_filename(version));
     doc.save(&path).map_err(|e| e.to_string())?;
 
@@ -674,13 +680,19 @@ pub async fn director_load_flow(
     };
     let path = dir.join(FlowDocument::default_filename(flow_version));
     debug!("[DIRECTOR] load_flow reading: {}", path.display());
-    let doc = FlowDocument::load(&path).map_err(|e| {
+    let mut doc = FlowDocument::load(&path).map_err(|e| {
         // 2026-11-11: log the underlying IO/serde failure — a failed load is
         // the exact point where a session's persisted novel/extract data
         // "disappears" on restart (the UI then shows only the draft).
         warn!("[DIRECTOR] load_flow FAILED: {} ({})", path.display(), e);
         e.to_string()
     })?;
+    // The FILE index is the take identity. Older files were saved before the
+    // write side stamped the internal version (every doc carried
+    // flowVersion=1) — re-stamp on load so existing takes display their real
+    // number without rewriting the user's files.
+    doc.flow_version = flow_version;
+    doc.regen.version.flow_version = flow_version;
     debug!("[DIRECTOR] load_flow loaded, serializing");
     let val = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
     info!("[DIRECTOR] load_flow done: {} v{}", session_id, flow_version);
