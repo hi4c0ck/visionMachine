@@ -15,7 +15,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -463,7 +463,7 @@ fn run_ffmpeg(
     if cancel.load(Ordering::Acquire) {
         return (-1, "cancelled before start".into(), false, true);
     }
-    let mut child = match Command::new(&ffmpeg.path)
+    let mut child = match crate::generation::ffmpeg::silent_command(&ffmpeg.path)
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -522,7 +522,7 @@ async fn generate_session_proxy(ffmpeg: &FfmpegAvailability, out_path: &Path) {
     let out_owned = out_path.to_path_buf();
     let result = tokio::task::spawn_blocking(move || {
         let proxy = crate::generation::media::proxy_path(&out_owned);
-        let result = Command::new(&ffmpeg_path)
+        let result = crate::generation::ffmpeg::silent_command(&ffmpeg_path)
             .args([
                 "-nostdin",
                 "-hide_banner",
@@ -896,7 +896,7 @@ fn run_capture(
     if cancel.load(Ordering::Acquire) {
         return Err("metadata probe cancelled".into());
     }
-    let mut child = Command::new(program)
+    let mut child = crate::generation::ffmpeg::silent_command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -6,7 +6,7 @@
 
 mod compose;
 mod engine;
-mod ffmpeg;
+pub(crate) mod ffmpeg;
 pub mod group;
 mod media;
 pub mod media_protocol;

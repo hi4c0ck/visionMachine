@@ -72,7 +72,7 @@ pub(crate) async fn generate_video_proxy(original: &std::path::Path) {
             return;
         }
         let proxy = proxy_path(&original_owned);
-        let result = std::process::Command::new(&ffmpeg.path)
+        let result = crate::generation::ffmpeg::silent_command(&ffmpeg.path)
             .args([
                 "-nostdin",
                 "-hide_banner",
@@ -139,7 +139,7 @@ async fn generate_image_thumb(original: &std::path::Path) {
             return;
         }
         let thumb = thumb_path(&original_owned);
-        let result = std::process::Command::new(&ffmpeg.path)
+        let result = crate::generation::ffmpeg::silent_command(&ffmpeg.path)
             .args([
                 "-nostdin",
                 "-hide_banner",

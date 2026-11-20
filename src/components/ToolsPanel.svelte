@@ -1026,7 +1026,10 @@
 		font-size: 10px;
 		font-weight: 600;
 		background: rgba(0, 0, 0, 0.75);
-		color: var(--text-primary);
+		/* Fixed light text: the pill rides a dark scrim over black video in
+		   BOTH themes — var(--text-primary) flips dark in the light theme and
+		   sinks into the scrim, making it unreadable. */
+		color: #fff;
 		border: 1px solid var(--panel-right-border);
 		border-radius: 10px;
 		cursor: pointer;
@@ -1226,7 +1229,9 @@
 		font-size: 10px;
 		font-weight: 600;
 		background: rgba(0, 0, 0, 0.75);
-		color: var(--text-primary);
+		/* Fixed light text — dark scrim over black video in both themes (see
+		   .pipe-open); var(--text-primary) would go dark-on-dark in light. */
+		color: #fff;
 		border: 1px solid var(--panel-right-border);
 		border-radius: 10px;
 		cursor: pointer;

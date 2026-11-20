@@ -45,7 +45,15 @@
 	}>();
 
 	// Store mutations replace pipe arrays, so the counts must stay derived.
-	const refs = $derived(pipe.subjectReferences ?? []);
+	// The store keeps subjectReferences as a STABLE shared array and mutates it
+	// IN PLACE (push / field assignment); touchPipeShells detaches only the pipe
+	// shell. A stable array reference never bumps a Svelte 5 derived (strict ===
+	// equality), so the keyed each below never reconciled after Confirm — the
+	// chip froze on the old data ("confirmed but no preview"). Copy the array +
+	// ref shells so every mutation yields a fresh value the each reconciles
+	// (covers add AND in-place edit). Bounded (≤5 refs/pipe); the store's
+	// shared-array invariant (and its tests) stay untouched.
+	const refs = $derived((pipe.subjectReferences ?? []).map((r: SubjectReference) => ({ ...r })));
 	// The `visible` eye-mechanic is obsolete: every ref in the pipe renders and
 	// counts. Numbering + the add-button gate key off the total count.
 	const refNumber = $derived(refs.length);

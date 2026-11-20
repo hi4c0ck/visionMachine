@@ -361,7 +361,7 @@ pub async fn probe_ffmpeg_path(
 
 /// Shared probe helper (also used by the locator internals in tests).
 fn probe_one(path: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new(path)
+    let out = crate::generation::ffmpeg::silent_command(path)
         .arg("-version")
         .output()
         .ok()?;

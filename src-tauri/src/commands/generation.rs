@@ -1423,7 +1423,7 @@ fn downscale_image_to(
     tw: u32,
     th: u32,
 ) -> Result<(), String> {
-    let status = std::process::Command::new(&ffmpeg.path)
+    let status = crate::generation::ffmpeg::silent_command(&ffmpeg.path)
         .args([
             "-y",
             "-i",
@@ -2336,7 +2336,7 @@ async fn backfill_video_proxy(ffmpeg_path: &str, original: &std::path::Path) -> 
     let original_owned = original.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let proxy = backfill_proxy_path(&original_owned);
-        let out = std::process::Command::new(&ffmpeg_path)
+        let out = crate::generation::ffmpeg::silent_command(&ffmpeg_path)
             .args([
                 "-nostdin",
                 "-hide_banner",
@@ -2377,7 +2377,7 @@ async fn backfill_image_thumb(ffmpeg_path: &str, original: &std::path::Path) -> 
     let original_owned = original.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let thumb = backfill_thumb_path(&original_owned);
-        let out = std::process::Command::new(&ffmpeg_path)
+        let out = crate::generation::ffmpeg::silent_command(&ffmpeg_path)
             .args([
                 "-nostdin",
                 "-hide_banner",
