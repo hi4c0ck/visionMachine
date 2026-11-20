@@ -78,7 +78,13 @@ impl MemoryProfiler {
     /// storm.
     fn read_memory() -> (u64, u64, u64) {
         let pid = Pid::from_u32(std::process::id());
-        let mut sys = sysinfo::System::new();
+        // sysinfo 0.40 made `System::new()` fallible. Diagnostics degrade to
+        // zeros on failure rather than panicking — the sampler must never be
+        // the thing that breaks a generation.
+        let mut sys = match sysinfo::System::new() {
+            Ok(s) => s,
+            Err(_) => return (0, 0, 0),
+        };
         sys.refresh_memory();
         let total = sys.total_memory();
         let free = sys.available_memory();
