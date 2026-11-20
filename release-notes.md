@@ -17,6 +17,9 @@
 - Switching a pipe between keyframes and references mode now sticks.
 - The Quality and Creativity knobs are gone — the provider ignores them almost everywhere, so they only added noise; generation uses sensible fixed values behind the scenes.
 - Finished videos keep downloading even when the provider's link acts up.
+- Reference images you pick show their thumbnail in the pipe's reference strip the moment you confirm them.
+- The pipes panel follows the session carousel again — scrub to any frame and the matching pipe scrolls into view.
+- "Open in preview" now lives only in the tool panel beside the preview it belongs to; the stray copy in the player's top corner is gone.
 
 # VisionMachine v0.7.10
 
