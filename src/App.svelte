@@ -379,15 +379,19 @@
 					onlayoutChange={handleLayoutChange}
 				/>
 			</div>
-			<!-- The in-app RAM/leak/stall chip. Mounted in the live-app branch
-				 so its 8 s tick runs: it drives reportToDashboard() (feeds the
-				 live dashboard's renderer card) and flushPipelineDiag() (the
-				 backend log ring). It was previously never rendered, so neither
-				 ran — the dashboard's "renderer not reporting" + near-empty
-				 pipeline log were both caused by this missing mount. -->
-			<div class="ram-chip-host">
-				<RamMonitor />
-			</div>
+			<!-- The in-app RAM/leak/stall chip — DEV ONLY. Mounted in the
+				 live-app branch so its 8 s tick runs: it drives
+				 reportToDashboard() (feeds the live dashboard's renderer
+				 card) and flushPipelineDiag() (the backend log ring). It was
+				 previously never rendered, so neither ran — the dashboard's
+				 "renderer not reporting" + near-empty pipeline log were both
+				 caused by this missing mount. Release builds ship without
+				 the chip AND without its polling/reporting side effects. -->
+			{#if import.meta.env.DEV}
+				<div class="ram-chip-host">
+					<RamMonitor />
+				</div>
+			{/if}
 		{/if}
 </ErrorHandler>
 {/if}

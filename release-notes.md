@@ -1,13 +1,13 @@
 # VisionMachine v0.7.11
 
 ### Director mode feels like a film set
-- The Director now wears a slate: take numbers, tally lamps for every step, script-page scene cards, cue-sheet chips, and a contact-sheet scoreboard.
+- The Director now wears a slate: take numbers, tally lamps for every step, script-page scene cards, and cue-sheet chips.
 - Your Director work survives a restart — idea, look settings, mood, and every take come back exactly as you left them.
 - Timelines are split into per-beat windows instead of one long block, so each moment carries its own camera, light, and motion cues.
 - Pacing reads your story: a dense action idea moves fast with shifting layers, a quiet one breathes — a high mood no longer slows everything down.
 
 ### Generation you can follow
-- The Pipes / Director / Extract tabs now sit attached to the composer's top edge — Pipes on the left, the others on the right, and the active tab merges into the panel.
+- The Pipes / Director / Extract tabs stay on their strip but now align with the composer — Pipes at its left edge, the others at its right — as folder-style tabs: the active one raised, the rest recessed.
 - The session progress view was rebuilt: the working pipe is always pinned in view, one pipe opens at a time, and overall progress stays visible through composing.
 - Compose now lets you pick which pipes to join and set how much to trim at each junction — preview the first three of ten without generating the rest.
 - Check-all switches flip "Force last frame" and the boundary trim for every pipe at once.

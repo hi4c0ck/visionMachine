@@ -19,6 +19,10 @@ gives you a **composer** — the same way a video editor gives you a timeline:
   scene, camera, rotation, lighting, effect, zoom, transition — and per-zone
   prompts. What you see is what gets generated: each zone of the final
   video is built from its own instructions, seed, and model.
+- **Or let the Director plan it.** Describe the idea in one line; Director
+  mode writes the story, breaks it into shots with camera, light, and motion
+  cues, and regenerates your pipes from the plan — every take kept, every
+  step re-runnable. See the [Director mode guide](docs/manuals/director-mode.md).
 - **Inspect every frame of the result.** The top preview panel shows the
   generated video next to the frame ruler — scrub to any frame and see
   exactly which prompt and settings produced it. No black box.
@@ -44,9 +48,8 @@ gives you a **composer** — the same way a video editor gives you a timeline:
    generate text→image, or transform image→image.
 3. **Segments and tags** on the timeline describe *how* the shot moves —
    camera pans, zooms, lighting shifts — each zone with its own prompt.
-4. **Generate** compiles everything into per-zone prompts (quality,
-   creativity, seed, model of your choice) and runs the jobs with live
-   progress.
+4. **Generate** compiles everything into per-zone prompts (seed and model
+   of your choice) and runs the jobs with live progress.
 5. **Preview & compose.** Watch each pipe in the top panel, then join pipes
    into the finished video.
 </details>
@@ -89,6 +92,13 @@ in the side panel, ready to open again:
 
 <p align="center">
   <img src="img/provider-settings.gif" alt="Navigating to Settings → Providers" width="300">
+</p>
+
+**The Director** — idea in, shot plan out: the story, the film structure,
+and the step chain that lowers it into pipe-ready cues:
+
+<p align="center">
+  <img src="docs/manuals/img/director-overview.png" alt="Director mode — direction, parameters, film structure, and novel blocks" width="720">
 </p>
 
 **Cite a subject in any prompt** — prompt modals (tag, global, sound)
@@ -148,14 +158,15 @@ npm run dev            # frontend only (browser dev mode, localStorage)
 
 ```
 src/
+├── App.svelte              # Main app with welcome screen
 ├── components/
-│   ├── App.svelte          # Main app with welcome screen
 │   ├── Workspace.svelte    # 5-container layout orchestrator
 │   ├── Frame.svelte        # Top header with preview
 │   ├── ProjectsPanel.svelte # Left sidebar - projects/sessions
 │   ├── ProfilePanel.svelte  # Bottom-left user info
 │   ├── ComposerPanel.svelte # Center - pipe timeline editor
-│   └── ToolsPanel.svelte   # Right sidebar - settings/generate
+│   ├── ToolsPanel.svelte   # Right sidebar - settings/generate
+│   └── Director/           # Director mode - idea → novel → plan → step chain
 ├── types/
 │   ├── app.ts              # Core data models
 │   └── composer.ts         # Type re-exports
@@ -178,7 +189,7 @@ src/
 - **Add keyframes**: Click "+" in the keyframe row (max 3)
 - **Set global prompt**: Click the global prompt bar
 - **Add segments**: Click "+ Add Segment" to add type-specific sliders
-- **Adjust settings**: Use the right panel for FPS, resolution, quality, creativity
+- **Adjust settings**: Use the right panel for FPS, resolution, orientation
 
 ### Data storage
 
@@ -188,6 +199,10 @@ src/
 
 ## <img src="img/icons/documentation.png" width="36" align="absmiddle" alt=""> Documentation
 
+- [Director mode guide](docs/manuals/director-mode.md) — idea → novel →
+  film structure → step chain, takes, re-runs, and the Extract cue sheet
+- [Session generation & progress](docs/manuals/session-generation.md) —
+  the generation box, the live progress view, compose and trim
 - [Composer timeline rules (SLA)](docs/composer-timeline-sla.md) — the 8-frame
   engine floor, the ≈1s zone guideline, and the tag composition model
 - [Agnes model catalog](docs/agnes-model-catalog.md) — supported models,

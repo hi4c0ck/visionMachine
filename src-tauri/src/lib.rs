@@ -471,7 +471,10 @@ pub fn run() {
             }
             // Start the live dashboard server (auto-opens in the OS browser
             // so a wedged webview can be diagnosed from a separate process).
-            {
+            // DEV ONLY by default: a release build must not bind a localhost
+            // diagnostic port or auto-open a browser tab. Support can still
+            // opt in on any build with VM_DASHBOARD=1.
+            if cfg!(debug_assertions) || std::env::var("VM_DASHBOARD") == Ok("1".into()) {
                 let st = app.state::<AppState>();
                 let shared = st.dashboard.clone();
                 let gen = st.generation.clone();
