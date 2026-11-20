@@ -1,18 +1,17 @@
 # VisionMachine Roadmap
 
 Living roadmap. Items marked **[x]** are shipped and verified in code (status
-re-checked 2026-09-27 against `production` @ v0.7.4). Open items are small and
-shippable — each links to the doc/component that owns the detail. Anything
-"parked" is a known improvement we deferred on purpose, not forgotten.
+re-checked 2026-11-20 against `feat/bug-batch-nov19` @ v0.7.11 release prep,
+pushed to origin). Open items are small and shippable — each links to the
+doc/component that owns the detail. Anything "parked" is a known improvement
+we deferred on purpose, not forgotten.
 
 ---
 
 ## ✅ Shipped (verified in code)
 
 - **Session-level "generate all"** — `SessionGenerateModal` + `CompactPipesProgress`
-      group runner + auto-compose. Shipped v0.7.3. `docs/session-generation-plan.md`
-      (P0–P1 backend done; P2–P4 frontend wiring + validation is the remaining
-      polish, tracked under "Session generation modal quality" below).
+      group runner + auto-compose. Shipped v0.7.3. `docs/session-generation-plan.md`.
 - **Session video compose** — "Compose session video" button + auto-compose +
       frame-carousel spliced-frame mapping. Shipped v0.7.3.
       `docs/plan-session-video-and-carousel.md`.
@@ -33,46 +32,121 @@ shippable — each links to the doc/component that owns the detail. Anything
 - **Two-variant ship** — `tiny` (no ffmpeg) / `full` (bundled ffmpeg sidecar)
       MSI + AppImage. `release-notes.md` v0.7.2–v0.7.4.
 
+### v0.7.11 batch (in release prep — awaiting owner sign-off)
+
+- **Director mode — film-set identity** — idea → novel → film structure →
+      step chain; slate take line, tally lamps, script-page scene cards,
+      Extract cue sheet; re-run from any step (RETAKE, upstream locked);
+      regenerate pipes from the plan (replace / append, per-step replay).
+      `docs/manuals/director-mode.md`.
+- **Director persistence, end to end** — every take persists as
+      `flow.v{N}.json` under the session; restart restores the newest readable
+      take (the seed effect's self-cancelling latch is fixed — the restore
+      loop now actually loads); take identity stamped on save and re-stamped
+      on load so the TAKE line shows the file's real number.
+- **Context-driven pacing** — shot density reads the idea: narrative ideas
+      breathe, action ideas cut fast; mood steers look, not tempo.
+- **Session progress redesign** — pinned "now" strip (active pipe + stage +
+      elapsed), single-expand accordion with lazy stage fetch, overall band
+      with phase chip, compose outcome band. `docs/manuals/session-generation.md`.
+- **Compose selection + junction trim** — pick which pipes to join; per-
+      junction signed overlap map (trim/extend) keyed by pipe id, persisted
+      with the session; preview a subset without generating the rest.
+- **Q/C abolition** — Quality/Creativity controls removed from every UI
+      surface (the provider ignores them on almost every route); the data
+      model stays — stored defaults still flow silently on img2img.
+- **Composer-aligned folder tabs** — Pipes / Director / Extract stay on the
+      meta strip, aligned to the composer's left/right edges; active tab
+      raised, inactive recessed.
+- **Dev-only diagnostics** — Scoreboard tab, RAM/stall pill, and the
+      localhost monitor dashboard are DEV-gated; release builds bind no
+      diagnostic port (support opt-in: `VM_DASHBOARD=1`).
+- **Manuals** — Director mode + session generation/progress guides, English,
+      illustrated with live app screenshots; README carries the Director
+      value proposition + manual links.
+
 ---
 
-## Next release (v0.7.11)
+## v0.7.11 — release prep status
 
-Open items carried forward from the v0.7.8/v0.7.9 targets (none of these
-blocked v0.7.10, which shipped the persistence/provider/design fixes). Each
-is small and shippable; the linked doc/component owns the detail.
+Prep complete on `feat/bug-batch-nov19` (pushed): version bump, release
+notes, manuals, debug audit, diagnostics gating. Remaining gate: **owner
+test sign-off**, then merge → `develop` → `production`, tag `v0.7.11`,
+push, verify CI + release assets.
 
-- [x] **Remove legacy Agnes Video V2.0** — DONE 2026-11-11 (P1-7, on
-      `feature/text-video-flow`): the retired `agnes-video-v2.0` catalog entry,
-      the dead `video-job-frames` fps-native engine branch + its prechecks
-      block, and the TS `video-job-frames` request format are gone; the
-      2.5-series is now the only video engine. Saved settings that still name
-      the retired id self-heal on load (the settings normalizer migrates a
-      missing model id to the preset's default generable model =
-      `agnes-video-2.5-flash`).
-- [x] **Per-model video size selection** — already SHIPPED: the session
-      resolution dropdown offers only the tiers the active model declares
-      (`availableResolutionsForModel` filters by `limits.resolutions`),
-      ratios are orientation-filtered (`videoRatiosForOrientation`), and
-      `effectiveVideoAspect` mirrors the Rust shaper so the UI shows the exact
-      `aspect_ratio` that will be sent. The classic 480p/720p/1080p presets
-      remain as the session tiers, now model-filtered.
-- [ ] **Tools panel view pass** — redesign the right-panel inspector so the
-      session → pipe → segment → tag context reads clearly: a header showing
-      which entity the settings/inspector currently edits, no silent
-      cross-level writes (add an explicit "apply to pipe" / "apply to session"
-      affordance), and a visual flag on pipe-level values that diverge from the
-      session default.
-- [ ] **Remove frames from keyframe / subject modals** — drop the frame
-      input/preview from `KeyframeModal` / `SubjectRefModal`; the frame position
-      stays owned by the composer, the modals just attach the piece to that slot.
+Carried items verified against the current code:
+
+- [x] **Remove legacy Agnes Video V2.0** — DONE 2026-11-11 (P1-7): the retired
+      `agnes-video-v2.0` catalog entry, the dead `video-job-frames` fps-native
+      engine branch + its prechecks block, and the TS `video-job-frames`
+      request format are gone; the 2.5-series is the only video engine. Saved
+      settings naming the retired id self-heal on load.
+- [x] **Per-model video size selection** — SHIPPED: the session resolution
+      dropdown offers only the tiers the active model declares
+      (`availableResolutionsForModel`), ratios are orientation-filtered, and
+      `effectiveVideoAspect` mirrors the Rust shaper.
+- [x] **Remove frames from keyframe / subject modals** — verified 2026-11-20:
+      no frame-position input remains in `KeyframeModal` / `SubjectRefModal`;
+      frame position stays owned by the composer (the remaining frame math
+      is the slot-1 "use last frame" action, which is composer-owned).
+- [x] **Session generation modal quality pass** — superseded by the v0.7.11
+      progress redesign: pinned now-strip tracks the active pipe on terminal
+      advance, the accordion expands one pipe's stage list at a time (lazy
+      fetch), cancel-all stops the group, and the compact-pipes/group logic
+      is pinned by vitest (`compactPipes.test.ts` et al. in the 712-test suite).
 
 ### Module-size debt (P3, track-don't-block)
 Large single-file modules a future refactor should split (no correctness
-issue today; all gates stay green): `provider.rs` ~3.7k LOC,
-`commands/generation.rs` ~3.1k, `generation/group.rs` ~2.5k,
-`generation/compose.rs` ~2k, `commands/director.rs` ~1.8k. Split by
-concern (e.g. provider image/video stages; generation commands vs. recovery
-commands) when one of these files next gets a behavior change.
+issue today; all gates stay green): `provider.rs`, `commands/generation.rs`,
+`generation/group.rs`, `generation/compose.rs`, `commands/director.rs`
+(sizes as of v0.7.4 — re-measure when splitting). Split by concern when one
+of these files next gets a behavior change.
+
+---
+
+## Next target (v0.7.12) — owner decision 2026-11-20
+
+**Lead: paid models + local models.** Two workstreams, one theme — widen
+what can generate beyond the free Agnes tier.
+
+### Paid models support (lead)
+
+Today paid models are **read-only** (visible in Settings, parameters shown, but
+can't be confirmed for generation — the `readOnly` gate in `Workspace` /
+`ProviderCard` / `GenerateModal`). The billing story is open:
+
+- [ ] **Pick a paid-model billing model** (credit / subscription / pay-per-
+      generation) and define the entitlement surface.
+- [ ] Wire an **entitlement / quota check** into the generation start path so a
+      paid model becomes generable once the user has access.
+- [ ] Surface **quota / credit state** in the provider chip + Settings.
+- [ ] Backend: persist entitlement + meter usage per generation run.
+
+### Local models support (new)
+
+Run generation against the user's own hardware — no API key, no per-frame
+fees, private by construction. Scope to shape:
+
+- [ ] **Local provider abstraction** — OpenAI-compatible local endpoints
+      (llama.cpp server / LM Studio / Ollama class) for text; decide the
+      local image/video path (ComfyUI-class workflow server vs. deferred).
+- [ ] **Catalog + capabilities** — local model entries with honest limits
+      (context, resolutions, speed class); hardware-aware expectations in
+      the UI (a local 7B is not a cloud video engine).
+- [ ] **Settings UX** — endpoint URL + health probe, keyless flow, clear
+      offline/error states distinct from provider outages.
+- [ ] **Generation semantics** — local jobs may be synchronous or
+      queue-polled; the task registry + progress view must handle both
+      without faking cloud-style job ids.
+
+### Backlog (carried, not leading)
+
+- [ ] **Tools panel view pass** — redesign the right-panel inspector so the
+      session → pipe → segment → tag context reads clearly: a header showing
+      which entity the settings/inspector currently edits, no silent
+      cross-level writes (explicit "apply to pipe" / "apply to session"),
+      and a visual flag on pipe-level values that diverge from the session
+      default. (Carried from v0.7.8/v0.7.9 targets.)
 
 ---
 
@@ -84,9 +158,9 @@ release. Follow-ups:
 
 - [ ] **Rename release assets to `VisionMachine_tiny` / `VisionMachine_full` /
       `VisionMachine_full.AppImage`** (drop the platform extension, keep the
-      variant). Parked — no rebuild now; lands with the next tag. Touches the
-      capture + publish steps in `.github/workflows/release.yml` and the
-      release-notes body.
+      variant). Parked — lands with a future tag. Touches the capture +
+      publish steps in `.github/workflows/release.yml` and the release-notes
+      body. (Verified 2026-11-20: not yet in the workflow.)
 - [ ] **Code-sign the Windows MSIs.** No cert configured; SmartScreen shows an
       "unknown publisher" warning today (noted in the release body). Add a
       signing step + secret once a cert is available.
@@ -164,31 +238,6 @@ Tier 1 (the media tree) is done. The rest is a dedicated workstream:
 
 ## Product
 
-### Session generation modal — quality pass
-
-The group runner works; what's left is UX polish + the P2–P4 wiring from
-`docs/session-generation-plan.md`:
-
-- [ ] `startWatchingGroup` auto-advance on `pipe-terminal` (per-pipe
-      `reconcileTerminal` unchanged), terminal footer, cancel-all → group
-      cancel, `focus-generate` disabled during a group (S12).
-- [ ] Compact-pipes group progress rows expand into the per-pipe stage list
-      (current `GenerationProgressModal` body, verbatim, per pipe).
-- [ ] Vitest: group auto-advance, cancel-all, stale-row UI, policy control.
-
-### Paid models support
-
-Today paid models are **read-only** (visible in Settings, parameters shown, but
-can't be confirmed for generation — the `readOnly` gate in `Workspace` /
-`ProviderCard` / `GenerateModal`). The actual billing story is open:
-
-- [ ] **Pick a paid-model billing model** (credit / subscription / pay-per-
-      generation) and define the entitlement surface.
-- [ ] Wire an **entitlement / quota check** into the generation start path so a
-      paid model becomes generable once the user has access.
-- [ ] Surface **quota / credit state** in the provider chip + Settings.
-- [ ] Backend: persist entitlement + meter usage per generation run.
-
 ### UI — top panel (design, resizing, more functions)
 
 `Frame.svelte` is a static preview surface with no resize logic:
@@ -212,8 +261,9 @@ segment → tag) but the session-vs-pipe divergence UX isn't designed yet:
 - [ ] Avoid the inspector silently writing session-level values when a pipe is
       focused (and vice-versa) — add a clear "apply to pipe" / "apply to
       session" affordance.
-- [ ] Pipe-level settings (length / fps / Q / C / resolution) that diverge from
-      the session default should be visually flagged.
+- [ ] Pipe-level settings (length / fps / resolution) that diverge from the
+      session default should be visually flagged. (Q/C no longer exists as
+      UI — abolished in v0.7.11.)
 
 ### Resolution / size selection
 
@@ -244,7 +294,8 @@ Thumbnails + readiness dots + regenerate are shipped. Open polish:
 A **`pipe.mediaMode`** already exists and persists (Rust `media_mode` with a
 `'keyframes'` default, carried in the composer JSON blob; the UI toggles
 keyframes⇄reference for models whose `media.modes` is exclusive, Q7 in
-`docs/agnes-model-catalog.md`). What's open:
+`docs/agnes-model-catalog.md`; the mode-switch stickiness fix shipped in
+v0.7.11). What's open:
 
 - [ ] **Add a `text` mode** to the media-mode enum (models that take neither
       keyframes nor reference subjects — prompt-only). Extend `media.modes` /
@@ -279,9 +330,13 @@ keyframes⇄reference for models whose `media.modes` is exclusive, Q7 in
 - [ ] **Larger runners.** `--light` keeps release builds inside GitHub's
       default-runner RAM; once we move to larger self-hosted runners, drop
       `--light` to restore full LTO / codegen units.
-- [ ] **`fresh-reef` branch** — unmerged; contains the prompt-engine XML rewrite
-      + fps-inherited seconds math. Decide whether it's the next product line or
-      to be rebased/discarded.
+- [x] **`fresh-reef` branch — RESOLVED 2026-11-20, deleted.** Verified
+      obsolete: its prompt-engine XML rewrite + fps-inherited seconds math
+      already landed on `develop` as `10d372d` (rebased equivalent of
+      `39c476f`); `tests/unit/promptEngine.test.ts` is byte-identical, and
+      develop's `promptEngine.ts` is one cast-fix ahead. Its settings
+      additions are superseded (Q/C abolished). Local branch deleted with
+      owner approval; it never existed on origin.
 - [ ] **cargo + ffmpeg cache warm on CI** — both already cached; confirm the
       cache-hit path holds across the double-build consolidation above.
 
