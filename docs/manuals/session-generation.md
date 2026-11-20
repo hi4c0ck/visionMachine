@@ -21,7 +21,7 @@ lists every pipe in the session with its own row:
 Above the pipe list, two master controls flip **every** pipe at once:
 
 - **Force last frame — all** (tri-state: shows a dash when pipes disagree)
-- **Boundary trim — all**
+- **Boundary trim — all** (appears when the experimental trim gate is on)
 
 Individual rows still override the master afterwards.
 
@@ -30,7 +30,7 @@ Press **Generate** — the run starts with the session's current settings.
 them on almost every route, so they only added noise. Keyframe generation
 uses fixed sensible values behind the scenes.)
 
-<!-- SCREENSHOT PENDING: session-generate-modal.png — generation box with masters -->
+![Generate session box — pipe list with the Force-last-frame master, per-pipe toggles and Ready status, models + seed, run stats, session target, run options](img/session-generate-modal.png)
 
 ## 2. Following the run — the redesigned progress view
 
