@@ -84,7 +84,7 @@ the novel is written. The chip on **④ NOVEL** tells you which path wrote it:
 the LLM (when a text provider is configured) or the deterministic template
 fallback, which always works.
 
-<!-- SCREENSHOT PENDING: director-running.png — ⑤ STEP CHAIN mid-run -->
+![⑤ STEP CHAIN after a run — TAKE line, tally lamps (green ok / amber untrained stub), shot chips, accept / reject / export / import / regenerate](img/director-stepchain.png)
 
 ## 4. Reading the result
 
