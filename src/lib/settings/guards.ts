@@ -85,6 +85,10 @@ export const DEFAULT_SETTINGS: Settings = {
 function migrateStoredModel(preset: string, kind: ProviderKind, model: string): string {
   const p = getPreset(preset);
   if (!p) return model;
+  // Free-form presets (custom / local / aggregator): the model id is USER
+  // DATA typed against a real server, not a catalog reference — never
+  // "heal" it to a catalog entry (expanded provider system).
+  if (p.freeFormModel) return model;
   if (getModel(p, model)) return model; // known model — keep as stored
   const fallback = modelsFor(p, kind).find((m) => !m.pending && !m.readOnly);
   return fallback?.id ?? model;
@@ -106,14 +110,17 @@ function normalizeSlot(kind: ProviderKind, raw: unknown): ProviderSlot {
 }
 
 /**
- * Per-preset baseUrl normalization. The agnes base is the HOST ROOT — its
- * create endpoints carry the /v1 prefix themselves, so a pasted
- * ".../v1" would double the prefix and 404. Other presets keep their base
- * as-is (custom is /v1-native).
+ * Per-preset baseUrl normalization, driven by the preset's urlStyle
+ * (expanded provider system — generalizes the old agnes-only hack).
+ * 'host-root' bases carry the version prefix in their endpoint paths
+ * (Agnes, Runway, Kling, Ollama…), so a pasted ".../v1" would double the
+ * prefix and 404 — strip it. 'v1-native' bases (OpenAI-compatible) keep
+ * their base as-is. Unknown preset = legacy agnes-compatible behavior.
  */
 export function normalizeBaseUrl(preset: string, raw: string): string {
   const u = raw.trim();
-  if (preset === 'agnes') return u.replace(/\/v1\/?$/, '');
+  const style = getPreset(preset)?.urlStyle ?? (preset === 'agnes' ? 'host-root' : 'v1-native');
+  if (style === 'host-root') return u.replace(/\/v1\/?$/, '');
   return u;
 }
 
@@ -192,10 +199,12 @@ export function maskKey(key: string): string {
   return `${k.slice(0, 4)}${'•'.repeat(Math.min(k.length - 4, 24))}`;
 }
 
-/** A slot is "configured" when it can plausibly make a request. */
+/** A slot is "configured" when it can plausibly make a request. Keyless
+ *  presets (auth 'none' — local servers) need only url + model. */
 export function isConfigured(slot: ProviderSlot | null | undefined): boolean {
   if (!slot) return false;
-  return Boolean(validateHttpUrl(slot.baseUrl) && slot.apiKey && slot.model);
+  const keyless = getPreset(slot.preset)?.auth === 'none';
+  return Boolean(validateHttpUrl(slot.baseUrl) && (keyless || slot.apiKey) && slot.model);
 }
 
 /**
@@ -227,11 +236,13 @@ export interface ProviderStatusSnapshot {
 /** Derive a key-presence status for one slot. Pure; never returns the key. */
 export function providerStatusFor(kind: ProviderKind, s: Settings): ProviderStatusSnapshot {
   const slot = s.providers[kind];
+  const keyless = getPreset(slot?.preset ?? '')?.auth === 'none';
   const gaps: ('url' | 'key' | 'model')[] = [];
   if (!slot) gaps.push('url', 'key', 'model');
   else {
     if (!validateHttpUrl(slot.baseUrl)) gaps.push('url');
-    if (!slot.apiKey) gaps.push('key');
+    // Keyless presets never report a 'key' gap — the local server needs none.
+    if (!keyless && !slot.apiKey) gaps.push('key');
     if (!slot.model) gaps.push('model');
   }
   return {

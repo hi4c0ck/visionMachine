@@ -276,7 +276,7 @@ fn parse_ratio_aspect(ratio: &str) -> Option<f64> {
 /// A ratio that can't be parsed is treated as compatible (the guard layer
 /// still clamps it to the model's declared lists), so a malformed value is
 /// not silently forced onto the wrong shape.
-fn ratio_compatible_with_orientation(ratio: &str, orientation: &str) -> bool {
+pub(crate) fn ratio_compatible_with_orientation(ratio: &str, orientation: &str) -> bool {
     let Some(a) = parse_ratio_aspect(ratio) else {
         return true;
     };
@@ -720,6 +720,12 @@ mod tests {
             guidance_range: None,
             img2img_only: None,
             media: None,
+            auth: None,
+            adapter: None,
+            media_input: None,
+            structured_output: None,
+            thinking_toggle: None,
+            pricing: None,
         };
         extra(&mut s);
         s

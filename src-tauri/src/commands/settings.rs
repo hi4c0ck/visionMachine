@@ -5,7 +5,7 @@
 // API keys never leave this process; ping messages never carry them (P6/P7).
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::AppState;
@@ -247,28 +247,39 @@ pub fn url_host(url: &str) -> String {
     url.trim().split('/').take(3).collect::<Vec<_>>().join("/")
 }
 
-/// Real reachability probe: GET the base URL with the bearer key.
-/// Any HTTP response counts as reachable; a transport failure does not.
+/// Real reachability probe: GET the base URL (or the preset's kind-aware
+/// ping path) with the preset's auth scheme. Any HTTP response counts as
+/// reachable; a transport failure does not. `ping_path` / `auth` are
+/// optional — legacy callers (base + Bearer) keep today's behavior.
 #[tauri::command]
 pub async fn test_provider(
     base_url: String,
     api_key: String,
+    ping_path: Option<String>,
+    auth: Option<String>,
 ) -> Result<TestProviderResult, String> {
     let host = url_host(&base_url);
     let trimmed = base_url.trim();
     if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
         return Err("URL must start with http:// or https://".into());
     }
+    let url = match ping_path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => format!("{}{}", trimmed.trim_end_matches('/'), p),
+        None => trimmed.to_string(),
+    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut req = client.get(trimmed);
-    if !api_key.trim().is_empty() {
-        req = req.header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", api_key.trim()),
-        );
+    let mut req = client.get(&url);
+    let key = api_key.trim();
+    if !key.is_empty() {
+        req = match auth.as_deref().unwrap_or("bearer") {
+            "key-header" => req.header(reqwest::header::AUTHORIZATION, format!("Key {key}")),
+            "x-api-key" => req.header("x-api-key", key),
+            "none" => req,
+            _ => req.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}")),
+        };
     }
     match req.send().await {
         Ok(resp) => Ok(describe_provider_status(
@@ -276,6 +287,189 @@ pub async fn test_provider(
             &host,
         )),
         Err(_) => Ok(describe_provider_status(None, &host)),
+    }
+}
+
+// ── Expanded provider system: model listing + pricing retrieval ────────────
+
+/// One listed model: id + optional live pricing (OpenRouter's /models
+/// listing carries per-token pricing; OpenAI-shape listings without pricing
+/// return None). The key never appears in the result or errors (P6).
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListing {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Value>,
+}
+
+/// Dynamic model listing for free-form presets (Ollama /api/tags, LM Studio
+/// / llama.cpp / OpenAI / OpenRouter /v1/models). `shape` = "openai"
+/// ({data:[{id, pricing?}]}) | "ollama" ({models:[{name}]}). Read-only GET;
+/// the UI merges the list into the model picker (settings pass).
+#[tauri::command]
+pub async fn list_provider_models(
+    base_url: String,
+    api_key: String,
+    auth: Option<String>,
+    endpoint: String,
+    shape: String,
+) -> Result<Vec<ModelListing>, String> {
+    let trimmed = base_url.trim();
+    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+        return Err("URL must start with http:// or https://".into());
+    }
+    let url = format!("{}{}", trimmed.trim_end_matches('/'), endpoint.trim());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(&url);
+    let key = api_key.trim();
+    if !key.is_empty() {
+        req = match auth.as_deref().unwrap_or("bearer") {
+            "key-header" => req.header(reqwest::header::AUTHORIZATION, format!("Key {key}")),
+            "x-api-key" => req.header("x-api-key", key),
+            "none" => req,
+            _ => req.header(reqwest::header::AUTHORIZATION, format!("Bearer {key}")),
+        };
+    }
+    let resp = req.send().await.map_err(|e| format!("model list transport: {e}"))?;
+    let status = resp.status().as_u16();
+    let body: Value = resp.json().await.unwrap_or(Value::Null);
+    if status >= 400 {
+        // Redacted: the body may echo request metadata, never our key header.
+        return Err(format!("model list HTTP {status}: {}", body));
+    }
+    Ok(parse_model_listing(&body, &shape))
+}
+
+/// Pure listing parser (unit-testable, no network).
+pub fn parse_model_listing(body: &Value, shape: &str) -> Vec<ModelListing> {
+    let mut out = Vec::new();
+    match shape {
+        "ollama" => {
+            if let Some(arr) = body.get("models").and_then(|m| m.as_array()) {
+                for m in arr {
+                    if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                        out.push(ModelListing { id: name.to_string(), pricing: None });
+                    }
+                }
+            }
+        }
+        _ => {
+            // openai shape: {data:[{id, pricing?}]} — OpenRouter includes
+            // per-token pricing objects; plain OpenAI listings carry none.
+            if let Some(arr) = body.get("data").and_then(|d| d.as_array()) {
+                for m in arr {
+                    if let Some(id) = m.get("id").and_then(|i| i.as_str()) {
+                        out.push(ModelListing {
+                            id: id.to_string(),
+                            pricing: m.get("pricing").filter(|p| !p.is_null()).cloned(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Pre-run cost estimate from the model's static PriceSpec data (catalog).
+/// HONEST unknown: absent/unverified pricing reports known=false with the
+/// reason — never a fabricated number. Provider-reported actual cost rides
+/// output.json `cost` post-run (adapter reportedCost); live OpenRouter
+/// pricing rides list_provider_models. Pure — no network.
+#[tauri::command]
+pub async fn estimate_generation_cost(
+    spec: Value,
+    seconds: f64,
+    resolution: String,
+) -> Result<Value, String> {
+    Ok(estimate_cost_pure(&spec, seconds, &resolution))
+}
+
+/// Pure estimate core (unit-testable).
+pub fn estimate_cost_pure(spec: &Value, seconds: f64, resolution: &str) -> Value {
+    let Some(pricing) = spec.get("pricing").filter(|p| !p.is_null()) else {
+        return json!({ "known": false, "basis": "no pricing data for this model" });
+    };
+    let unit = pricing.get("unit").and_then(|u| u.as_str()).unwrap_or("");
+    let currency = pricing.get("currency").and_then(|c| c.as_str()).unwrap_or("USD");
+    let source = pricing.get("source").and_then(|s| s.as_str()).unwrap_or("");
+    let verified = pricing.get("verifiedAt").and_then(|v| v.as_str()).is_some();
+    let rates = pricing.get("rates").filter(|r| !r.is_null());
+    // Base fields every answer carries (unit/currency/source provenance).
+    let base = || {
+        let mut m = serde_json::Map::<String, Value>::new();
+        m.insert("unit".into(), json!(unit));
+        m.insert("currency".into(), json!(currency));
+        m.insert("source".into(), json!(source));
+        m
+    };
+    let answer = |mut m: serde_json::Map<String, Value>, known: bool, basis: String| {
+        m.insert("known".into(), json!(known));
+        m.insert("basis".into(), json!(basis));
+        Value::Object(m)
+    };
+    if unit == "free-local" {
+        let mut m = base();
+        m.insert("estimatedUsd".into(), json!(0.0));
+        return answer(m, true, "local hardware — $0 marginal cost".into());
+    }
+    let Some(rates) = rates else {
+        return answer(base(), false, "pricing rates pending research (unverified)".into());
+    };
+    if !verified {
+        return answer(base(), false, "pricing rates unverified — research pending".into());
+    }
+    let rate = rates
+        .get(resolution)
+        .and_then(|r| r.as_f64())
+        .or_else(|| rates.get("base").and_then(|r| r.as_f64()));
+    match unit {
+        "per-video-second" => match rate {
+            Some(r) => {
+                let mut m = base();
+                // Round to 4 decimals: cost display precision, no float dust.
+                let usd = (r * seconds.max(0.0) * 10000.0).round() / 10000.0;
+                m.insert("estimatedUsd".into(), json!(usd));
+                answer(m, true, format!("{r} {currency}/s × {seconds:.1}s"))
+            }
+            None => answer(base(), false, "no rate for this resolution".into()),
+        },
+        "per-image" => match rate {
+            Some(r) => {
+                let mut m = base();
+                m.insert("estimatedUsd".into(), json!(r));
+                answer(m, true, format!("{r} {currency}/image"))
+            }
+            None => answer(base(), false, "no per-image rate".into()),
+        },
+        "per-token" => answer(
+            base(),
+            false,
+            "token pricing needs usage counts — computed post-run from the response usage block".into(),
+        ),
+        "per-credit" | "per-unit" => {
+            let conv = rates
+                .get("usdPerCredit")
+                .or_else(|| rates.get("usdPerUnit"))
+                .and_then(|c| c.as_f64());
+            match conv {
+                Some(c) => {
+                    let mut m = base();
+                    m.insert("usdPerUnit".into(), json!(c));
+                    answer(m, false, format!("provider reports {unit} post-run; USD conversion {c} available"))
+                }
+                None => answer(
+                    base(),
+                    false,
+                    "provider reports credits/units post-run; USD pack rate pending research".into(),
+                ),
+            }
+        }
+        _ => answer(base(), false, format!("unknown pricing unit '{unit}'")),
     }
 }
 
@@ -471,5 +665,55 @@ mod tests {
         );
         assert_eq!(url_host("http://localhost:8000"), "http://localhost:8000");
         assert_eq!(url_host("  https://x.example/a/b  "), "https://x.example");
+    }
+
+    // ── Expanded provider system: listing + estimate ──
+
+    #[test]
+    fn model_listing_parses_openai_and_ollama_shapes() {
+        let openai = json!({ "data": [
+            { "id": "gpt-4.1" },
+            { "id": "anthropic/claude-sonnet-4.5", "pricing": { "prompt": "0.000003", "completion": "0.000015" } }
+        ]});
+        let list = parse_model_listing(&openai, "openai");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "gpt-4.1");
+        assert!(list[0].pricing.is_none());
+        assert_eq!(list[1].pricing.as_ref().unwrap()["prompt"], "0.000003");
+        let ollama = json!({ "models": [{ "name": "llama3.1:8b" }, { "name": "qwen2.5:14b" }] });
+        let list = parse_model_listing(&ollama, "ollama");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "llama3.1:8b");
+        assert!(parse_model_listing(&json!({}), "openai").is_empty());
+    }
+
+    #[test]
+    fn cost_estimate_is_honest_about_unknowns() {
+        // No pricing data → unknown, never a fabricated number.
+        let est = estimate_cost_pure(&json!({ "id": "m" }), 5.0, "720p");
+        assert_eq!(est["known"], false);
+        // Unverified rates → unknown even when rates exist.
+        let unverified = json!({ "pricing": { "unit": "per-video-second", "currency": "USD",
+                                              "rates": { "base": 0.05 }, "verifiedAt": null } });
+        assert_eq!(estimate_cost_pure(&unverified, 5.0, "720p")["known"], false);
+        // Verified per-second rate → known estimate (resolution-tiered).
+        let verified = json!({ "pricing": { "unit": "per-video-second", "currency": "USD",
+                                            "rates": { "base": 0.05, "1080p": 0.10 },
+                                            "verifiedAt": "2026-11-21", "source": "https://x" } });
+        let est = estimate_cost_pure(&verified, 6.0, "720p");
+        assert_eq!(est["known"], true);
+        assert_eq!(est["estimatedUsd"], json!(0.30));
+        let est = estimate_cost_pure(&verified, 6.0, "1080p");
+        assert_eq!(est["estimatedUsd"], json!(0.60));
+        // Local = $0 marginal, known.
+        let local = json!({ "pricing": { "unit": "free-local", "currency": "USD",
+                                         "rates": { "base": 0 }, "verifiedAt": "2026-11-21" } });
+        let est = estimate_cost_pure(&local, 6.0, "720p");
+        assert_eq!(est["known"], true);
+        assert_eq!(est["estimatedUsd"], json!(0.0));
+        // Token pricing is post-run (usage counts), credits post-run (units).
+        let tokens = json!({ "pricing": { "unit": "per-token", "currency": "USD",
+                                          "rates": { "base": 0.000003 }, "verifiedAt": "2026-11-21" } });
+        assert_eq!(estimate_cost_pure(&tokens, 0.0, "720p")["known"], false);
     }
 }

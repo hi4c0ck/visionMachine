@@ -7,18 +7,33 @@
 
 export type ProviderKind = 'text' | 'image' | 'video';
 
-export type PresetId = 'agnes' | 'custom';
+/** Widened for the expanded provider system (docs ROADMAP v0.7.12 lead):
+ *  preset ids are catalog data, not a closed union. Known ids stay constants
+ *  in catalog.ts; stored slots keep self-healing via normalizeSettings. */
+export type PresetId = string;
+
+/** How a provider authenticates requests. 'none' = keyless local servers
+ *  (Ollama / LM Studio / llama.cpp class) — the key gates relax for them. */
+export type AuthScheme = 'bearer' | 'key-header' | 'x-api-key' | 'query-key' | 'none';
+
+/** Base-URL convention: 'host-root' bases carry the version prefix in their
+ *  endpoint paths (Agnes, Runway, Kling…); 'v1-native' bases already include
+ *  /v1 (OpenAI-compatible). Drives normalizeBaseUrl — replaces the old
+ *  agnes-only special case. */
+export type UrlStyle = 'host-root' | 'v1-native';
 
 /** How a model's API wants its request payload (request-builder shaper id).
  *  `video-job` is the generic OpenAI-shape async job (custom preset). The
  *  Agnes video engine is seconds-based (V2.5 family); the legacy
  *  frames-based V2.0 route (`video-job-frames`) was removed with the
- *  V2.0 model (P1-7, 2026-11-11). */
+ *  V2.0 model (P1-7, 2026-11-11). `video-adapter` = the configurable
+ *  Tier-A adapter (spec.adapter data interpreted by the Rust engine). */
 export type RequestFormat =
   | 'chat'
   | 'image-gen'
   | 'video-job'
-  | 'video-job-seconds';
+  | 'video-job-seconds'
+  | 'video-adapter';
 
 /** Pipe-level media mode (docs/agnes-model-catalog.md, Q7). Default is
  *  'keyframes'. Drives keyframes/subject-refs row visibility per model.
@@ -72,6 +87,127 @@ export interface ModelMedia {
   imageField?: 'images' | 'image';
 }
 
+// ── Configurable video adapter (Tier A, expanded provider system) ──────────
+// Declarative create→poll→artifact job mapping. Vendor transport + response
+// interpretation live on the PRESET (PresetSpec.adapter); the per-model
+// payload template + deltas live on the MODEL (adapterPayload /
+// adapterOverrides). resolveSpecs merges them onto the wire spec; the Rust
+// engine interprets (generation/video_adapter.rs). Logic-heavy uniques
+// (Agnes mode-fallback, ComfyUI workflow graphs) stay Tier-B code shapers —
+// never force-folded into this config (owner scope decision 2026-11-21).
+
+/** Canonical job states the adapter statusMap translates vendor vocab into. */
+export type AdapterJobState =
+  | 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'throttled';
+
+export interface AdapterArtifactSpec {
+  /** 'url' = dot-path to a URL (string or array[0]) in the final body;
+   *  'retrieve' = secondary GET (fileId) that yields the URL (MiniMax);
+   *  'content' = the endpoint itself streams the artifact bytes (reserved). */
+  mode: 'url' | 'content' | 'retrieve';
+  /** url mode: dot path into the poll/result body ("output", "assets.video",
+   *  "data.task_result.videos"). Numeric segments index arrays. */
+  path?: string;
+  /** content/retrieve: GET template with {jobId} / {fileId} / {model}. */
+  endpoint?: string;
+  /** retrieve: dot path to the file id in the poll body ("file_id"). */
+  fileIdPath?: string;
+  /** retrieve: dot path to the URL in the retrieve response ("file.download_url"). */
+  artifactPath?: string;
+}
+
+export interface AdapterEnvelopeSpec {
+  /** Business-error check on HTTP-200 bodies (Kling {code}, MiniMax
+   *  {base_resp:{status_code}}): codePath != okValue → concrete failure. */
+  codePath: string;
+  okValue: number | string;
+  messagePath: string;
+}
+
+export interface AdapterResponseSpec {
+  /** Dot path to the job id in the CREATE response. */
+  jobIdPath: string;
+  /** Dot path to the raw status in the POLL response. */
+  statusPath: string;
+  /** Raw vendor status → canonical state. List EVERY spelling (Kling
+   *  'succeed' AND 'succeeded'; case-sensitive keys). */
+  statusMap: Record<string, AdapterJobState>;
+  progressPath?: string;
+  /** Scale of the provider progress number: Runway 0-1, most 0-100. */
+  progressScale?: 1 | 100;
+  /** fal queue_position → "queue position N" live event line. */
+  queuePositionPath?: string;
+  artifact: AdapterArtifactSpec;
+  /** Failure message dot path (poll or result body). */
+  errorPath?: string;
+  envelope?: AdapterEnvelopeSpec;
+  /** Provider-reported actual cost (Runway cost.credits, Kling
+   *  data.final_unit_deduction) → captured into output.json `cost`. */
+  reportedCost?: { path: string; unit: string };
+  /** Compute-time usage signal (Replicate metrics.predict_time, fal
+   *  metrics.inference_time) → output.json `cost.usage`. */
+  predictTimePath?: string;
+}
+
+export interface VideoAdapterSpec {
+  /** Static headers sent on every request (e.g. X-Runway-Version). */
+  headers?: Record<string, string>;
+  /** POST JSON create; endpoint may contain {model} (fal/Replicate/Kling-new). */
+  create: { endpoint: string };
+  poll: {
+    /** GET template with {jobId} (+ {model} where the vendor needs it). */
+    endpoint: string;
+    /** fal two-stage: COMPLETED includes failed jobs — GET the result to
+     *  decide success and extract the artifact. */
+    resultEndpoint?: string;
+    /** Poll cadence floor (Runway recommends ≥5s); default = engine 10s. */
+    intervalSecs?: number;
+  };
+  /** Best-effort remote cancel on user cancel (stops abandoned-render billing). */
+  cancel?: { endpoint: string; method: 'DELETE' | 'POST' | 'PUT' };
+  /** Per-model JSON payload template. Tokens: {{model}} {{prompt}}
+   *  {{seconds}} (1-dec string) {{seconds:int}} {{seconds:str}}
+   *  {{seconds:enum}} (snapped to limits.secondsEnum, number)
+   *  {{seconds:enumstr}} (snapped, string) {{ratio}} {{size}}
+   *  {{seed}} {{media:first}} {{media:last}} {{media:refs}}.
+   *  A WHOLE-STRING token substitutes as its typed JSON value; an embedded
+   *  token interpolates into the string ("{{seconds:int}}s" → "5s").
+   *  Unresolved optional tokens PRUNE the field (objects whose leaves all
+   *  pruned vanish — Luma keyframes on a text-only run). */
+  payload: Record<string, unknown>;
+  response: AdapterResponseSpec;
+  media?: {
+    /** 'url-or-data' = local media inlined as data: URIs (existing ≤32MB
+     *  path); 'url-only' = local-only media is a concrete precheck failure.
+     *  'upload' reserved for the ComfyUI slice. */
+    input: 'url-or-data' | 'url-only';
+  };
+}
+
+/** Static per-model pricing data (researched, date-stamped — same convention
+ *  as limits). rates absent / verifiedAt null = NOT yet researched: the
+ *  estimate endpoint reports 'unknown' honestly, never a fabricated number.
+ *  Live retrieval (OpenRouter /models pricing) and provider-reported cost
+ *  (adapter reportedCost) supersede static rates when present. */
+export interface PriceSpec {
+  unit: 'per-video-second' | 'per-image' | 'per-token' | 'per-credit' | 'per-unit' | 'free-local';
+  currency: 'USD' | 'credits' | 'units';
+  /** Unit rate, optionally keyed by tier (resolution/duration variant). */
+  rates?: Record<string, number>;
+  source?: string;
+  verifiedAt?: string | null;
+  note?: string;
+}
+
+/** Portable per-run cost snapshot (P5-safe: costs are not secrets). Captured
+ *  into output.json by the adapter engine; rides the generation log piece. */
+export interface RunCostSnapshot {
+  reported?: { value: number; unit: string };
+  usage?: { predictTimeSecs?: number; inferenceTimeSecs?: number };
+  estimatedUsd?: number;
+  basis?: string;
+}
+
 /**
  * A model owns its request format (the "guaranteed on the flight" rule):
  * endpoint + payload shaper + limits travel WITH the model, so switching
@@ -92,6 +228,10 @@ export interface ModelSpec {
     maxFrames?: number;
     /** Seconds range for seconds-based video models (V2.5: [4, 12]). */
     seconds?: [number, number];
+    /** Discrete allowed durations (MiniMax 6|10, Kling 5|10, Luma 5|9):
+     *  the {{seconds:enum}} / {{seconds:enumstr}} adapter tokens snap the
+     *  clamped seconds to the nearest entry. Absent = continuous range. */
+    secondsEnum?: number[];
     /** Supported aspect ratios (model-driven, P2). */
     ratios?: string[];
     /**
@@ -140,6 +280,30 @@ export interface ModelSpec {
   img2imgOnly?: boolean;
   /** Media-mode capabilities driving pipe-UI row visibility. */
   media?: ModelMedia;
+  // ── Expanded provider system (2026-11-21) ──
+  /** Resolved auth scheme (attached by resolveSpecs from the preset; the
+   *  wire mirror carries it so Rust can build headers + relax key gates). */
+  auth?: AuthScheme;
+  /** Tier-A video adapter: per-model payload template (requestFormat
+   *  'video-adapter'). Merged with the preset adapter by resolveSpecs. */
+  adapterPayload?: Record<string, unknown>;
+  /** Per-model deltas over the preset adapter (Runway t2v vs i2v endpoint,
+   *  Kling legacy vs new response paths, Replicate output object shape). */
+  adapterOverrides?: Partial<VideoAdapterSpec>;
+  /** Merged adapter attached by resolveSpecs (preset ⊕ overrides ⊕ payload). */
+  adapter?: VideoAdapterSpec;
+  /** Text models: structured-output capability for the Director Node A call.
+   *  json_schema (OpenAI/Agnes), json_object (most local servers),
+   *  prompt-only (fallback instruction; the retry net still applies). */
+  structuredOutput?: 'json_schema' | 'json_object' | 'prompt-only';
+  /** Send chat_template_kwargs.enable_thinking (Agnes/vLLM only — OpenAI
+   *  400s on unknown params). Absent/false = omitted. */
+  thinkingToggle?: boolean;
+  /** Video media input contract: 'url-only' routes reject local-only media
+   *  with a concrete precheck error instead of a burned render. */
+  mediaInput?: 'url-or-data' | 'url-only';
+  /** Static pricing data (researched, date-stamped; absent = unknown). */
+  pricing?: PriceSpec;
 }
 
 /** One vendor template: auth scheme + default URL + its model catalog. */
@@ -147,9 +311,25 @@ export interface PresetSpec {
   id: PresetId;
   label: string;
   kinds: ProviderKind[];
-  auth: 'bearer';
+  auth: AuthScheme;
+  /** Base-URL convention (absent = 'v1-native'). 'host-root' strips a pasted
+   *  /v1 suffix in normalizeBaseUrl (the Agnes convention, generalized). */
+  urlStyle?: UrlStyle;
   defaultBaseUrl: string;
   models: ModelSpec[];
+  /** User-typed model ids (custom / local / aggregator presets): the picker
+   *  becomes a free-text input + datalist (UI lands with the settings pass);
+   *  migrateStoredModel keeps typed ids as-is. */
+  freeFormModel?: boolean;
+  /** Kind-aware real ping path (P7); absent = GET the base URL (today). */
+  pingPath?: Partial<Record<ProviderKind, string>>;
+  /** Dynamic model listing (Ollama /api/tags, OpenAI-shape /v1/models —
+   *  OpenRouter's listing carries per-token pricing). */
+  modelList?: { endpoint: string; shape: 'openai' | 'ollama' };
+  /** Vendor-level Tier-A video adapter defaults (transport + response). */
+  adapter?: VideoAdapterSpec;
+  /** UI grouping + honest-expectations hint (a local 7B ≠ a cloud engine). */
+  tag?: 'cloud' | 'local';
 }
 
 /** A configured provider slot (one per kind, per user profile). */
@@ -269,6 +449,10 @@ export interface GenerationLogPiece {
   /** Snapshot of the params that produced this piece. `seed` present when
    *  a concrete value was sent (reproducible re-gen; P4). */
   params: { fps: number; resolution: string; q: number; c: number; seed?: number };
+  /** Per-run cost snapshot (expanded provider system): provider-reported
+   *  units/credits, compute-time usage, static estimate. Portable (P5) —
+   *  costs are not secrets. Absent on legacy entries / unknown pricing. */
+  cost?: RunCostSnapshot;
   /** Sanitized — guaranteed key-free (redactLog). */
   error?: string;
 }

@@ -3,7 +3,10 @@
 // hand it to Rust as a wire-safe mirror; Rust shapes the payload and owns
 // secrets + HTTP. Pre-checks and seconds preview live in ./prechecks.
 
-import type { ModelSpec, ProviderKind } from '$types';
+// Expanded provider system: the resolved copy carries the preset's auth
+// scheme and the MERGED Tier-A video adapter (preset ⊕ model overrides ⊕
+// per-model payload) so the Rust engine interprets one self-contained spec.
+import type { ModelSpec, ProviderKind, VideoAdapterSpec } from '$types';
 import { getPreset, getModel } from './catalog';
 import { getSettings } from './store';
 
@@ -16,6 +19,36 @@ export interface ResolvedModelSpec {
 export interface ResolvedPair {
   image: ResolvedModelSpec | null;
   video: ResolvedModelSpec | null;
+}
+
+/** Deep-merge plain objects (adapter overrides); arrays + scalars replace.
+ *  One-level nesting is typical (create/poll/response/artifact), but the
+ *  recursion keeps response.artifact / response.envelope deltas working. */
+function mergeDeep<T>(base: T, over: unknown): T {
+  if (over === undefined || over === null) return base;
+  if (Array.isArray(base) || Array.isArray(over)) return over as T;
+  if (typeof base === 'object' && base !== null && typeof over === 'object') {
+    const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
+    for (const [k, v] of Object.entries(over as Record<string, unknown>)) {
+      out[k] = k in out ? mergeDeep(out[k], v) : v;
+    }
+    return out as T;
+  }
+  return over as T;
+}
+
+/** Merge the vendor adapter (preset) with the model's deltas + payload.
+ *  Null when the model is not a Tier-A adapter model or the preset carries
+ *  no adapter base (a concrete config error the caller surfaces). */
+export function mergeAdapter(
+  presetAdapter: VideoAdapterSpec | undefined,
+  spec: ModelSpec,
+): VideoAdapterSpec | null {
+  if (spec.requestFormat !== 'video-adapter') return null;
+  if (!presetAdapter) return null;
+  const merged = mergeDeep(presetAdapter, spec.adapterOverrides ?? {});
+  merged.payload = spec.adapterPayload ?? merged.payload ?? {};
+  return merged;
 }
 
 /**
@@ -33,7 +66,12 @@ export function resolveModelSpec(kind: ProviderKind, overrideId?: string): Resol
   if (!id) return null;
   const spec = getModel(preset, id);
   if (!spec) return null;
-  return { preset: preset.id, spec };
+  // Wire-safe resolved copy: auth scheme rides along (Rust builds headers +
+  // relaxes the key gate for 'none'); the merged adapter rides for Tier A.
+  const resolved: ModelSpec = { ...spec, auth: preset.auth };
+  const adapter = mergeAdapter(preset.adapter, spec);
+  if (adapter) resolved.adapter = adapter;
+  return { preset: preset.id, spec: resolved };
 }
 
 /** Resolve image + video specs for a run (the generate modal's picks). */

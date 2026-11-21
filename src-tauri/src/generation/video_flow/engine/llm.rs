@@ -20,13 +20,25 @@ use crate::generation::video_flow::engine::tree::{brief_block, StructuralTree};
 use crate::generation::video_flow::engine::types::VisualNovel;
 
 /// The app's text provider slot (Settings → Providers → Text):
-/// `base_url + /v1/chat/completions`, bearer key, model id.
+/// `base_url + endpoint`, auth key, model id. Expanded provider system:
+/// `endpoint` comes from the catalog text spec (Agnes host-root carries
+/// /v1/chat/completions; OpenAI-compatible v1-native bases carry
+/// /chat/completions). Empty endpoint = legacy Agnes composition.
+/// `structured_output` / `thinking_toggle` gate the Node A wire shape per
+/// provider capability (OpenAI 400s on chat_template_kwargs; most local
+/// servers lack json_schema — the attempt-1 fallback still applies).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextProvider {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub structured_output: String,
+    #[serde(default)]
+    pub thinking_toggle: bool,
 }
 
 /// Hard cap for one Node A expansion call (kept off the flow's DB lock;
@@ -34,10 +46,23 @@ pub struct TextProvider {
 pub const NODE_A_TIMEOUT_SECS: u64 = 60;
 
 /// POST target: the provider base URL trimmed of a trailing slash + the
-/// catalog text endpoint (URL option "a" from provider.rs).
+/// catalog text endpoint (URL option "a" from provider.rs). Legacy
+/// composition — kept byte-stable for the Agnes host-root convention.
 pub fn chat_url(base_url: &str) -> String {
+    chat_url_with_endpoint(base_url, "")
+}
+
+/// Endpoint-aware composition (expanded provider system): an empty endpoint
+/// falls back to the legacy Agnes path; a catalog endpoint rides verbatim
+/// (v1-native bases no longer double the /v1 prefix).
+pub fn chat_url_with_endpoint(base_url: &str, endpoint: &str) -> String {
     let base = base_url.trim().trim_end_matches('/');
-    format!("{base}/v1/chat/completions")
+    let ep = endpoint.trim();
+    if ep.is_empty() {
+        format!("{base}/v1/chat/completions")
+    } else {
+        format!("{base}{ep}")
+    }
 }
 
 /// Node A's strict response schema (mirrored from
@@ -125,6 +150,26 @@ pub fn node_a_request_body(
     model: &str,
     tree: Option<&StructuralTree>,
 ) -> Value {
+    // Legacy Agnes capabilities — the wire-shape pin stays byte-stable.
+    node_a_request_body_with_caps(entry, model, tree, "json_schema", true)
+}
+
+/// Capability-aware Node A body (expanded provider system). The prompt
+/// construction is identical across providers; only the structured-output
+/// envelope and the thinking toggle vary:
+/// - json_schema (OpenAI/Agnes): the strict VisualNovel schema.
+/// - json_object (most local servers): type-only envelope.
+/// - prompt-only: no response_format (the prompt already demands raw JSON;
+///   the attempt-1 capability fallback remains the safety net).
+/// - thinking_toggle: chat_template_kwargs rides ONLY for Agnes/vLLM-class
+///   servers (OpenAI 400s on unknown request arguments).
+pub fn node_a_request_body_with_caps(
+    entry: &EngineEntry,
+    model: &str,
+    tree: Option<&StructuralTree>,
+    structured_output: &str,
+    thinking_toggle: bool,
+) -> Value {
     use crate::generation::video_flow::engine::seed::MoodProfile;
 
     let mood_line = MoodProfile::for_mood(entry.mood).directive();
@@ -170,24 +215,35 @@ pub fn node_a_request_body(
         brief = brief,
         duration_note = duration_note,
     );
-    json!({
+    let mut body = json!({
         "model": model,
         "temperature": 0.5,
         "max_tokens": 4500,
-        "chat_template_kwargs": { "enable_thinking": false },
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "VisualNovel",
-                "strict": true,
-                "schema": visual_novel_schema()
-            }
-        },
         "messages": [
             { "role": "system", "content": NODE_A_SYSTEM },
             { "role": "user", "content": user }
         ]
-    })
+    });
+    if thinking_toggle {
+        body["chat_template_kwargs"] = json!({ "enable_thinking": false });
+    }
+    match structured_output {
+        "json_object" => {
+            body["response_format"] = json!({ "type": "json_object" });
+        }
+        "prompt-only" => {}
+        _ => {
+            body["response_format"] = json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "VisualNovel",
+                    "strict": true,
+                    "schema": visual_novel_schema()
+                }
+            });
+        }
+    }
+    body
 }
 
 /// Total parse: the Agnes envelope nests `data.choices[0].message.content`,
@@ -467,11 +523,21 @@ pub async fn expand_node_a(
         .timeout(std::time::Duration::from_secs(NODE_A_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
-    let url = chat_url(&provider.base_url);
+    let url = chat_url_with_endpoint(&provider.base_url, &provider.endpoint);
 
     let mut last_err = String::new();
     for attempt in 0..2u32 {
-        let mut body = node_a_request_body(entry, &provider.model, tree);
+        let mut body = node_a_request_body_with_caps(
+            entry,
+            &provider.model,
+            tree,
+            if provider.structured_output.is_empty() {
+                "json_schema"
+            } else {
+                &provider.structured_output
+            },
+            provider.thinking_toggle,
+        );
         if attempt == 1 {
             // Capability fallback (llm.json: response_format unsupported).
             body.as_object_mut().unwrap().remove("response_format");
@@ -563,6 +629,46 @@ mod tests {
     fn chat_url_composes_catalog_shape() {
         assert_eq!(chat_url("https://apihub.agnes-ai.com"), "https://apihub.agnes-ai.com/v1/chat/completions");
         assert_eq!(chat_url("https://x.example/"), "https://x.example/v1/chat/completions");
+    }
+
+    #[test]
+    fn chat_url_with_endpoint_avoids_double_v1() {
+        // v1-native base + catalog endpoint (OpenAI / LM Studio / llama.cpp).
+        assert_eq!(
+            chat_url_with_endpoint("https://api.openai.com/v1", "/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        // Agnes host-root keeps the legacy composition.
+        assert_eq!(
+            chat_url_with_endpoint("https://apihub.agnes-ai.com", "/v1/chat/completions"),
+            "https://apihub.agnes-ai.com/v1/chat/completions"
+        );
+        // Empty endpoint = legacy fallback (old callers byte-stable).
+        assert_eq!(
+            chat_url_with_endpoint("https://apihub.agnes-ai.com", ""),
+            "https://apihub.agnes-ai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn node_a_caps_gate_thinking_and_schema() {
+        let e = entry();
+        // OpenAI-route: json_schema, NO chat_template_kwargs.
+        let openai = node_a_request_body_with_caps(&e, "gpt-4.1", None, "json_schema", false);
+        assert!(openai.get("chat_template_kwargs").is_none());
+        assert_eq!(openai["response_format"]["type"], "json_schema");
+        // Local: json_object envelope, no thinking toggle.
+        let local = node_a_request_body_with_caps(&e, "llama3.1:8b", None, "json_object", false);
+        assert_eq!(local["response_format"], serde_json::json!({ "type": "json_object" }));
+        assert!(local.get("chat_template_kwargs").is_none());
+        // prompt-only: no response_format at all.
+        let bare = node_a_request_body_with_caps(&e, "m", None, "prompt-only", false);
+        assert!(bare.get("response_format").is_none());
+        // Legacy Agnes delegate = full caps (pin compatibility).
+        assert_eq!(
+            node_a_request_body(&e, "agnes-2.5-flash", None),
+            node_a_request_body_with_caps(&e, "agnes-2.5-flash", None, "json_schema", true)
+        );
     }
 
     fn visual_novel_json() -> Value {

@@ -8,6 +8,7 @@
 //! keep working.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +21,10 @@ pub struct ModelSpecLimits {
     pub max_frames: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seconds: Option<[f64; 2]>,
+    /// Discrete allowed durations (MiniMax 6|10, Kling 5|10, Luma 5|9): the
+    /// adapter {{seconds:enum}} tokens snap to the nearest entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_enum: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ratios: Option<Vec<String>>,
     /// E8: session resolution → size tier (absent → param omitted).
@@ -37,6 +42,7 @@ impl Default for ModelSpecLimits {
             resolutions: None,
             max_frames: None,
             seconds: None,
+            seconds_enum: None,
             ratios: None,
             size_map: None,
             ratio_map: None,
@@ -44,7 +50,7 @@ impl Default for ModelSpecLimits {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSpecMedia {
     #[serde(default)]
@@ -91,6 +97,128 @@ pub struct ModelSpecMedia {
     pub image_field: Option<String>,
 }
 
+// ── Tier-A video adapter wire mirror (expanded provider system) ────────────
+// Declarative create→poll→artifact mapping, merged on the frontend
+// (resolveSpecs.mergeAdapter: preset ⊕ model overrides ⊕ payload). The
+// engine interprets via generation/video_adapter.rs (pure). Tolerant
+// deserialization: a malformed config surfaces as a concrete engine error,
+// never a serde panic on the whole spec.
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterArtifactWire {
+    /// "url" | "content" | "retrieve".
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterEnvelopeWire {
+    pub code_path: String,
+    pub ok_value: Value,
+    pub message_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterReportedCostWire {
+    pub path: String,
+    pub unit: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterResponseWire {
+    #[serde(default)]
+    pub job_id_path: String,
+    #[serde(default)]
+    pub status_path: String,
+    #[serde(default)]
+    pub status_map: std::collections::HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_path: Option<String>,
+    /// 1 (Runway 0-1 float) or 100 (default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_scale: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_position_path: Option<String>,
+    #[serde(default)]
+    pub artifact: AdapterArtifactWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<AdapterEnvelopeWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_cost: Option<AdapterReportedCostWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predict_time_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterCreateWire {
+    #[serde(default)]
+    pub endpoint: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterPollWire {
+    #[serde(default)]
+    pub endpoint: String,
+    /// fal two-stage: COMPLETED includes failed jobs — GET the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterCancelWire {
+    pub endpoint: String,
+    /// DELETE | POST | PUT (best-effort remote cancel).
+    #[serde(default)]
+    pub method: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterMediaWire {
+    /// "url-or-data" | "url-only" ("upload" reserved for the ComfyUI slice).
+    #[serde(default)]
+    pub input: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoAdapterSpecWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub create: AdapterCreateWire,
+    #[serde(default)]
+    pub poll: AdapterPollWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<AdapterCancelWire>,
+    /// Per-model JSON payload template with {{tokens}} (video_adapter.rs).
+    #[serde(default)]
+    pub payload: Value,
+    #[serde(default)]
+    pub response: AdapterResponseWire,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<AdapterMediaWire>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSpecWire {
@@ -132,6 +260,27 @@ pub struct ModelSpecWire {
     pub img2img_only: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<ModelSpecMedia>,
+    // ── Expanded provider system (2026-11-21) ──
+    /// Resolved auth scheme from the preset ("bearer" default; "none" =
+    /// keyless local — the engine's key gate relaxes for it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+    /// Merged Tier-A adapter (requestFormat "video-adapter").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<VideoAdapterSpecWire>,
+    /// "url-or-data" | "url-only" media input contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_input: Option<String>,
+    /// Text structured-output capability (Director Node A).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<String>,
+    /// Send chat_template_kwargs.enable_thinking (Agnes/vLLM only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_toggle: Option<bool>,
+    /// Static pricing data (PriceSpec mirror; kept as JSON — the estimate
+    /// command reads it generically, no struct churn).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<Value>,
 }
 
 impl ModelSpecWire {

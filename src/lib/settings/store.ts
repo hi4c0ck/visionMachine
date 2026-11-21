@@ -272,6 +272,7 @@ export interface TestProviderOutcome {
 export async function testProvider(
   baseUrl: string,
   apiKey: string,
+  opts?: { pingPath?: string; auth?: string },
 ): Promise<TestProviderOutcome> {
   if (!isTauri()) {
     return {
@@ -281,7 +282,12 @@ export async function testProvider(
     };
   }
   try {
-    const raw = (await invoke('test_provider', { baseUrl, apiKey })) as {
+    const raw = (await invoke('test_provider', {
+      baseUrl,
+      apiKey,
+      pingPath: opts?.pingPath ?? null,
+      auth: opts?.auth ?? null,
+    })) as {
       reachable: boolean;
       status: number | null;
       message: string;
@@ -291,5 +297,65 @@ export async function testProvider(
     // Backend rejects non-http(s) URLs and client build failures with a
     // readable error string — surface it, never the key.
     return { reachable: false, status: null, message: String(e) };
+  }
+}
+
+// ── Expanded provider system: model listing + cost estimate wrappers ───────
+
+/** One listed model (dynamic listing for free-form presets). OpenRouter's
+ *  listing carries live per-token pricing; other shapes return none. */
+export interface ProviderModelListing {
+  id: string;
+  pricing?: Record<string, unknown> | null;
+}
+
+/** Dynamic model list (Ollama /api/tags, OpenAI-shape /v1/models). The UI
+ *  merges it into the free-text model picker (settings pass); browser dev
+ *  has no backend → empty list. Never throws; errors surface as []. */
+export async function listProviderModels(
+  baseUrl: string,
+  apiKey: string,
+  endpoint: string,
+  shape: 'openai' | 'ollama',
+  auth?: string,
+): Promise<ProviderModelListing[]> {
+  if (!isTauri()) return [];
+  try {
+    return (await invoke('list_provider_models', {
+      baseUrl,
+      apiKey,
+      auth: auth ?? null,
+      endpoint,
+      shape,
+    })) as ProviderModelListing[];
+  } catch (e) {
+    console.error('[settings] model list failed:', e);
+    return [];
+  }
+}
+
+/** Pre-run cost estimate from the model's static pricing data. Honest
+ *  unknown: known=false with a reason when pricing is absent/unverified. */
+export interface CostEstimate {
+  known: boolean;
+  estimatedUsd?: number;
+  basis: string;
+  unit?: string;
+  currency?: string;
+  source?: string;
+}
+
+export async function estimateGenerationCost(
+  spec: unknown,
+  seconds: number,
+  resolution: string,
+): Promise<CostEstimate> {
+  if (!isTauri()) {
+    return { known: false, basis: 'Cost estimation is only available in the desktop app' };
+  }
+  try {
+    return (await invoke('estimate_generation_cost', { spec, seconds, resolution })) as CostEstimate;
+  } catch (e) {
+    return { known: false, basis: String(e) };
   }
 }

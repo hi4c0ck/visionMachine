@@ -26,6 +26,7 @@ use crate::generation::media::{
 use crate::generation::shaper::StageContext;
 use crate::generation::shaper::{shape_request, substitute_poll_template};
 use crate::generation::specs::ModelSpecWire;
+use crate::generation::video_adapter;
 use crate::generation::types::SourceKind;
 use crate::storage::db::Database;
 
@@ -370,6 +371,74 @@ fn inline_local_media_array(arr: &mut Vec<Value>) {
     }
 }
 
+/// Whether a payload key names a media slot. Adapter templates use arbitrary
+/// vendor field names (promptImage, image_url, keyframes.frame0.url,
+/// first_frame_image, input.image…) — the hint filter keeps PROMPT text out
+/// of the media inlining/precheck path (a prompt that happens to look like
+/// a path must never be base64-inlined or rejected).
+fn is_media_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["image", "img", "frame", "photo", "picture", "video", "reference", "media", "url"]
+        .iter()
+        .any(|h| k.contains(h))
+}
+
+/// Inline local media files as data: URIs across an adapter payload — only
+/// under media-hint keys (is_media_key), recursively. Idempotent; remote /
+/// data: values pass through untouched (same semantics as the Agnes inliner).
+fn inline_local_media_generic(payload: &mut Value) {
+    fn walk(v: &mut Value, media: bool) {
+        match v {
+            Value::String(s) if media => {
+                if let Some(uri) = local_media_data_uri(s) {
+                    *s = uri;
+                }
+            }
+            Value::Object(m) => {
+                for (k, val) in m.iter_mut() {
+                    walk(val, media || is_media_key(k));
+                }
+            }
+            Value::Array(a) => {
+                for val in a.iter_mut() {
+                    walk(val, media);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(payload, false)
+}
+
+/// First non-fetchable media leaf: a local path that survived inlining
+/// (missing / unreadable / oversized file, or a bare path). Media-hint keys
+/// only — prompt text is never inspected. Concrete E4-style error source.
+fn local_media_leaf(payload: &Value) -> Option<String> {
+    fn looks_local(s: &str) -> bool {
+        let t = s.trim();
+        !t.is_empty()
+            && !t.starts_with("http://")
+            && !t.starts_with("https://")
+            && !t.starts_with("data:")
+            && (t.contains(":\\")
+                || t.contains(":/")
+                || t.starts_with('/')
+                || t.starts_with("./")
+                || t.starts_with("../"))
+    }
+    fn walk(v: &Value, key: &str, media: bool) -> Option<String> {
+        match v {
+            Value::String(s) if media && looks_local(s) => Some(key.to_string()),
+            Value::Object(m) => m
+                .iter()
+                .find_map(|(k, val)| walk(val, k, media || is_media_key(k))),
+            Value::Array(a) => a.iter().find_map(|val| walk(val, key, media)),
+            _ => None,
+        }
+    }
+    walk(payload, "payload", false)
+}
+
 /// A concrete engine error carrying the concrete-cause rule (E4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineError {
@@ -439,6 +508,113 @@ pub trait HttpClient: Send + Sync {
         dest: &std::path::Path,
         api_key: &str,
     ) -> Result<(), String>;
+    /// Scheme-aware request for the Tier-A adapter path (expanded provider
+    /// system): any method, optional JSON body, auth bundle (bearer /
+    /// key-header / x-api-key / query-key / none + static adapter headers).
+    /// The legacy Agnes path keeps the Bearer-only post/get above.
+    async fn request_auth(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&serde_json::Value>,
+        auth: &RequestAuth,
+        timeout: Duration,
+    ) -> Result<(u16, serde_json::Value), String>;
+    /// Scheme-aware artifact download: plain GET first, then the scheme's
+    /// authorized retry on 401/403 (Replicate output URLs are auth-gated).
+    async fn download_auth(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        auth: &RequestAuth,
+    ) -> Result<(), String>;
+}
+
+/// Auth scheme + key + static headers for adapter-path requests (expanded
+/// provider system). Built from the wire spec's resolved `auth` (preset
+/// scheme) + the slot key at request time only (E1 — never persisted).
+#[derive(Debug, Clone, Default)]
+pub struct RequestAuth {
+    /// "bearer" | "key-header" | "x-api-key" | "query-key" | "none".
+    pub scheme: String,
+    pub key: String,
+    /// Static adapter headers (e.g. X-Runway-Version), sorted for determinism.
+    pub headers: Vec<(String, String)>,
+}
+
+impl RequestAuth {
+    pub fn from_spec(spec: &ModelSpecWire, slot_key: &str) -> Self {
+        let mut headers: Vec<(String, String)> = spec
+            .adapter
+            .as_ref()
+            .and_then(|a| a.headers.as_ref())
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        headers.sort();
+        Self {
+            scheme: spec.auth.clone().unwrap_or_else(|| "bearer".into()),
+            key: slot_key.trim().to_string(),
+            headers,
+        }
+    }
+
+    /// Apply the scheme + static headers to a request builder. 'none' sends
+    /// no credential header (keyless local servers); static headers always.
+    pub fn apply_headers(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if !self.key.is_empty() {
+            req = match self.scheme.as_str() {
+                "key-header" => {
+                    req.header(reqwest::header::AUTHORIZATION, format!("Key {}", self.key))
+                }
+                "x-api-key" => req.header("x-api-key", &self.key),
+                // query-key rides the URL (url_with_query_key); none = no header.
+                "none" | "query-key" => req,
+                _ => req.bearer_auth(&self.key),
+            };
+        }
+        for (k, v) in &self.headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        req
+    }
+
+    /// query-key scheme: append the key as a URL query param (reserved).
+    pub fn url_with_query_key(&self, url: &str) -> String {
+        if self.scheme == "query-key" && !self.key.is_empty() {
+            let sep = if url.contains('?') { '&' } else { '?' };
+            format!("{url}{sep}key={}", self.key)
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// Masked header rendering for request.log (P6): the ACTUAL auth header
+    /// form with [API_KEY], plus the non-secret static headers verbatim.
+    pub fn log_headers(&self) -> Value {
+        let mut h = serde_json::Map::new();
+        if !self.key.is_empty() {
+            match self.scheme.as_str() {
+                "key-header" => {
+                    h.insert("Authorization".into(), json!("Key [API_KEY]"));
+                }
+                "x-api-key" => {
+                    h.insert("x-api-key".into(), json!("[API_KEY]"));
+                }
+                "query-key" => {
+                    h.insert("query".into(), json!("key=[API_KEY]"));
+                }
+                "none" => {}
+                _ => {
+                    h.insert("Authorization".into(), json!("Bearer [API_KEY]"));
+                }
+            }
+        }
+        for (k, v) in &self.headers {
+            h.insert(k.clone(), json!(v));
+        }
+        h.insert("Content-Type".into(), json!("application/json"));
+        Value::Object(h)
+    }
 }
 
 impl ProviderEngine {
@@ -492,6 +668,7 @@ impl ProviderEngine {
         &self,
         input: &EngineInput,
         kind: String,
+        auth_scheme: &str,
     ) -> Result<ProviderSlot, EngineError> {
         let profile_id = match &input.profile_id {
             Some(p) if !p.is_empty() => p.clone(),
@@ -527,7 +704,9 @@ impl ProviderEngine {
             );
             return Err(EngineError::Failure(msg));
         }
-        if slot.api_key.trim().is_empty() {
+        // Keyless presets (auth 'none' — local servers) need no API key;
+        // every keyed scheme keeps the concrete config error (E4).
+        if slot.api_key.trim().is_empty() && auth_scheme != "none" {
             let msg = format!("API key is not set for profile {profile_id} ({kind} slot)");
             log::error!(
                 "[Generation] task {} provider slot failed: {}",
@@ -622,7 +801,9 @@ impl ProviderEngine {
             target_h: 0,
             video_ratio: None,
         };
-        let slot = self.provider_slot(&input, spec.kind.clone()).await?;
+        let slot = self
+            .provider_slot(&input, spec.kind.clone(), spec.auth.as_deref().unwrap_or("bearer"))
+            .await?;
         let payload = shape_request(spec, &req.ctx).map_err(|e| {
             log::error!("[Piece] payload shape failed: {e}");
             EngineError::Failure(e)
@@ -862,7 +1043,7 @@ impl ProviderEngine {
             EngineError::Failure(msg)
         })?;
         let slot = self
-            .provider_slot(input, spec.kind.clone())
+            .provider_slot(input, spec.kind.clone(), spec.auth.as_deref().unwrap_or("bearer"))
             .await
             .map_err(|e| {
                 log::error!(
@@ -1419,7 +1600,7 @@ impl ProviderEngine {
             EngineError::Failure(msg)
         })?;
         let slot = self
-            .provider_slot(input, spec.kind.clone())
+            .provider_slot(input, spec.kind.clone(), spec.auth.as_deref().unwrap_or("bearer"))
             .await
             .map_err(|e| {
                 log::error!(
@@ -1430,6 +1611,14 @@ impl ProviderEngine {
                 e
             })?;
 
+        // Tier-A configurable adapter (expanded provider system): the
+        // generic create→poll→artifact interpreter. The Agnes path below
+        // stays byte-stable (owner scope S3).
+        if spec.request_format == "video-adapter" {
+            return self
+                .run_video_adapter(input, &spec, &slot, cancel, on_progress, on_event)
+                .await;
+        }
         let ctx = self.stage_context(input, &stage, &spec)?;
         let mut payload = shape_request(&spec, &ctx).map_err(|e| {
             log::error!(
@@ -2087,6 +2276,622 @@ const VIDEO_DOWNLOAD_ATTEMPTS: usize = 4;
     }
 }
 
+// ── Tier-A configurable video adapter (expanded provider system) ───────────
+//
+// Generic create→poll→artifact interpreter driven by the merged
+// VideoAdapterSpecWire DATA (catalog). Reuses the Agnes runtime machinery:
+// cancel-aware sleeps, 429/503 steady ladder, transport-failure tolerance,
+// monotonic progress bands, redacted request.log, media tree + output.json
+// (+ download_failed marker / L3 backfill). The Agnes path above is
+// untouched (owner scope S3). Uniques that need logic beyond flat config
+// (ComfyUI workflow graphs, Kling legacy JWT) stay Tier-B code shapers.
+
+impl ProviderEngine {
+    async fn run_video_adapter(
+        &self,
+        input: &EngineInput,
+        spec: &ModelSpecWire,
+        slot: &ProviderSlot,
+        cancel: &AtomicBool,
+        on_progress: &(dyn Fn(f32) + Sync),
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<String, EngineError> {
+        let adapter = spec.adapter.as_ref().ok_or_else(|| {
+            EngineError::Failure(format!(
+                "model {} declares video-adapter but carries no adapter config — re-resolve the spec from the catalog",
+                spec.id
+            ))
+        })?;
+        if adapter.create.endpoint.is_empty()
+            || adapter.poll.endpoint.is_empty()
+            || adapter.response.job_id_path.is_empty()
+            || adapter.response.status_path.is_empty()
+        {
+            return Err(EngineError::Failure(format!(
+                "adapter config for {} is incomplete (create/poll endpoints + response jobId/status paths required)",
+                spec.id
+            )));
+        }
+        let stage = input.stage.clone().unwrap_or_default();
+        let ctx = self.stage_context(input, &stage, spec)?;
+        let params = video_adapter::resolve_params(spec, &ctx);
+        let mut payload =
+            video_adapter::resolve_payload(&adapter.payload, &params).map_err(EngineError::Failure)?;
+
+        // Media contract: 'url-only' routes reject local media BEFORE the
+        // create (never burn a render); 'url-or-data' inlines local files as
+        // data: URIs (the existing ≤32MB path), then fails fast on anything
+        // still non-fetchable. Media-hint keys only — prompts are untouched.
+        let url_only = adapter
+            .media
+            .as_ref()
+            .map(|m| m.input == "url-only")
+            .unwrap_or(false);
+        if url_only {
+            if let Some(field) = local_media_leaf(&payload) {
+                return Err(EngineError::Failure(format!(
+                    "model {} accepts remote media URLs only — '{field}' is a local file; use a URL reference",
+                    spec.id
+                )));
+            }
+        } else {
+            inline_local_media_generic(&mut payload);
+            if let Some(field) = local_media_leaf(&payload) {
+                return Err(EngineError::Failure(format!(
+                    "video media '{field}' is not fetchable by the provider (missing/oversized local file) — re-run the image stage or use a URL reference"
+                )));
+            }
+        }
+
+        let auth = RequestAuth::from_spec(spec, slot.api_key.trim());
+        let base = slot.base_url.trim().trim_end_matches('/');
+        let secrets: Vec<String> = if slot.api_key.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![slot.api_key.trim().to_string()]
+        };
+        let secrets_refs: Vec<&str> = secrets.iter().map(|s| s.as_str()).collect();
+        let model = spec.id.clone();
+        let join = |path: String| -> String {
+            if path.starts_with("http") {
+                path
+            } else {
+                format!("{base}{path}")
+            }
+        };
+
+        // 1) Create the job (429/503 → steady ladder, cancel-aware).
+        let create_url = join(video_adapter::substitute(&adapter.create.endpoint, "", &model, ""));
+        let mut last_pub = 0.45f32;
+        on_progress(last_pub);
+        on_event("creating video job");
+        let mut backoff_idx = 0usize;
+        let (create_status, create_body) = loop {
+            if cancel.load(Ordering::Acquire) {
+                return Err(EngineError::Cancelled);
+            }
+            let (st, body) = self
+                .http
+                .request_auth("POST", &create_url, Some(&payload), &auth, IMAGE_TIMEOUT)
+                .await
+                .map_err(|e| EngineError::Failure(format!("video create transport: {e}")))?;
+            if st != 429 && st != 503 {
+                break (st, body);
+            }
+            let delay = self
+                .backoff_secs
+                .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                .copied()
+                .unwrap_or(15);
+            backoff_idx += 1;
+            last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
+            on_progress(last_pub);
+            on_event(&format!(
+                "{} — retry in {delay} s",
+                if st == 429 { "rate-limited (429)" } else { "unavailable (503)" }
+            ));
+            self.log_entry(input, &secrets_refs, &json!({
+                "stage": "video-create-transient", "http": st, "backoff": delay,
+                "request": { "method": "POST", "url": create_url, "headers": auth.log_headers(), "body": payload.clone() },
+                "resp": body.clone(),
+            })).await;
+            if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                return Err(EngineError::Cancelled);
+            }
+        };
+        self.log_entry(input, &secrets_refs, &json!({
+            "stage": "video-create",
+            "request": { "method": "POST", "url": create_url, "headers": auth.log_headers(), "body": payload.clone() },
+            "status": create_status, "resp": create_body.clone(),
+        })).await;
+        if create_status >= 400 {
+            return Err(EngineError::Failure(format!(
+                "video create HTTP {create_status} ({}): {}",
+                spec.id,
+                create_body.get("error").cloned().unwrap_or(create_body.clone())
+            )));
+        }
+        if let Some(env) = &adapter.response.envelope {
+            if let Some(e) = video_adapter::envelope_error(&create_body, env) {
+                return Err(EngineError::Failure(format!("video create ({}): {e}", spec.id)));
+            }
+        }
+        let job_id = video_adapter::path_string(&create_body, &adapter.response.job_id_path)
+            .ok_or_else(|| {
+                EngineError::Failure(format!(
+                    "video create response missing job id at '{}' (body: {})",
+                    adapter.response.job_id_path, create_body
+                ))
+            })?;
+        last_pub = last_pub.max(0.50);
+        on_progress(last_pub);
+        on_event("job created — rendering");
+        log::info!(
+            "[Generation] adapter video task {} job created ({})",
+            input.task_id, job_id
+        );
+
+        // 2) Poll until terminal. Canonical states come from the statusMap;
+        // THROTTLED rides the backoff band (Runway: queued behind rate limit,
+        // NOT an error). Unknown statuses = running + logged (defensive).
+        let interval = adapter
+            .poll
+            .interval_secs
+            .map(Duration::from_secs)
+            .unwrap_or(self.poll_interval);
+        let mut backoff_idx = 0usize;
+        let mut clean_polls = 0usize;
+        let mut transport_failures = 0usize;
+        const MAX_TRANSPORT_FAILURES: usize = 3;
+        let final_body = loop {
+            if cancel.load(Ordering::Acquire) {
+                self.fire_remote_cancel(adapter, &join, &job_id, &model, &auth).await;
+                return Err(EngineError::Cancelled);
+            }
+            if cancel_aware_sleep(cancel, interval).await {
+                self.fire_remote_cancel(adapter, &join, &job_id, &model, &auth).await;
+                return Err(EngineError::Cancelled);
+            }
+            let poll_url = join(video_adapter::substitute(&adapter.poll.endpoint, &job_id, &model, ""));
+            match self.http.request_auth("GET", &poll_url, None, &auth, POLL_TIMEOUT).await {
+                Ok((st, body)) if st == 429 || st == 503 => {
+                    transport_failures = 0;
+                    let delay = self
+                        .backoff_secs
+                        .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                        .copied()
+                        .unwrap_or(15);
+                    backoff_idx += 1;
+                    clean_polls = 0;
+                    last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
+                    on_progress(last_pub);
+                    on_event(&format!(
+                        "{} — retry in {delay} s",
+                        if st == 429 { "rate-limited" } else { "poll unavailable" }
+                    ));
+                    self.log_entry(input, &secrets_refs, &json!({
+                        "stage": "video-poll-transient", "http": st, "backoff": delay,
+                        "request": { "method": "GET", "url": poll_url, "headers": auth.log_headers() },
+                        "resp": body.clone(),
+                    })).await;
+                    if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                        self.fire_remote_cancel(adapter, &join, &job_id, &model, &auth).await;
+                        return Err(EngineError::Cancelled);
+                    }
+                    continue;
+                }
+                Ok((st, body)) if st >= 400 => {
+                    return Err(EngineError::Failure(format!(
+                        "video poll HTTP {st} ({}): {}",
+                        spec.id, body
+                    )));
+                }
+                Ok((_st, body)) => {
+                    if let Some(env) = &adapter.response.envelope {
+                        if let Some(e) = video_adapter::envelope_error(&body, env) {
+                            return Err(EngineError::Failure(format!(
+                                "video job {job_id} ({}): {e}",
+                                spec.id
+                            )));
+                        }
+                    }
+                    let raw = video_adapter::path_string(&body, &adapter.response.status_path)
+                        .unwrap_or_else(|| "unknown".into());
+                    match video_adapter::job_state(&raw, &adapter.response.status_map) {
+                        video_adapter::JobState::Failed => {
+                            let msg = adapter
+                                .response
+                                .error_path
+                                .as_deref()
+                                .and_then(|p| video_adapter::path_string(&body, p))
+                                .unwrap_or_else(|| body.to_string());
+                            return Err(EngineError::Failure(format!(
+                                "video job {job_id} failed ({}): {msg}",
+                                spec.id
+                            )));
+                        }
+                        video_adapter::JobState::Cancelled => {
+                            return Err(EngineError::Cancelled);
+                        }
+                        video_adapter::JobState::Succeeded => break body,
+                        video_adapter::JobState::Throttled => {
+                            let delay = self
+                                .backoff_secs
+                                .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                                .copied()
+                                .unwrap_or(15);
+                            backoff_idx += 1;
+                            clean_polls = 0;
+                            last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
+                            on_progress(last_pub);
+                            on_event(&format!("throttled — retry in {delay} s"));
+                            self.log_entry(input, &secrets_refs, &json!({
+                                "stage": "video-poll-throttled", "backoff": delay,
+                                "request": { "method": "GET", "url": poll_url, "headers": auth.log_headers() },
+                                "resp": body.clone(),
+                            })).await;
+                            if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                                self.fire_remote_cancel(adapter, &join, &job_id, &model, &auth).await;
+                                return Err(EngineError::Cancelled);
+                            }
+                            continue;
+                        }
+                        _ => {
+                            // Pending / Running / Unknown — clean poll.
+                            transport_failures = 0;
+                            clean_polls += 1;
+                            if clean_polls >= 3 {
+                                backoff_idx = 0;
+                                clean_polls = 0;
+                            }
+                            let mut showed = false;
+                            if let Some(pp) = &adapter.response.progress_path {
+                                if let Some(pv) = video_adapter::path_f64(&body, pp) {
+                                    let scale = adapter.response.progress_scale.unwrap_or(100.0);
+                                    let frac = (pv / scale).clamp(0.0, 1.0) as f32;
+                                    last_pub = last_pub.max((0.54 + 0.36 * frac).min(0.9));
+                                    on_progress(last_pub);
+                                    on_event(&format!("rendering {}%", (frac * 100.0) as u32));
+                                    showed = true;
+                                }
+                            }
+                            if !showed {
+                                if let Some(qp) = &adapter.response.queue_position_path {
+                                    if let Some(q) = video_adapter::path_f64(&body, qp) {
+                                        on_event(&format!("queue position {}", q as u32));
+                                        showed = true;
+                                    }
+                                }
+                            }
+                            if !showed {
+                                on_event("rendering — in progress");
+                            }
+                            self.log_entry(input, &secrets_refs, &json!({
+                                "stage": "video-poll", "status": raw,
+                                "request": { "method": "GET", "url": poll_url, "headers": auth.log_headers() },
+                                "resp": body.clone(),
+                            })).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    transport_failures += 1;
+                    let delay = self
+                        .backoff_secs
+                        .get(transport_failures - 1)
+                        .copied()
+                        .unwrap_or(15);
+                    self.log_entry(input, &secrets_refs, &json!({
+                        "stage": "video-poll-transport-error", "error": e.clone(),
+                        "attempt": transport_failures, "backoff": delay,
+                        "request": { "method": "GET", "url": poll_url, "headers": auth.log_headers() },
+                    })).await;
+                    if transport_failures >= MAX_TRANSPORT_FAILURES {
+                        return Err(EngineError::Failure(format!(
+                            "video poll transport failed {MAX_TRANSPORT_FAILURES}x in a row: {e}"
+                        )));
+                    }
+                    on_event(&format!("poll connection error — retry in {delay} s"));
+                    if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                        self.fire_remote_cancel(adapter, &join, &job_id, &model, &auth).await;
+                        return Err(EngineError::Cancelled);
+                    }
+                    continue;
+                }
+            }
+        };
+
+        // 3) Two-stage result (fal): COMPLETED INCLUDES failed/cancelled jobs
+        // — the result fetch decides success and carries the artifact.
+        let mut artifact_body = final_body.clone();
+        if let Some(tpl) = &adapter.poll.result_endpoint {
+            let result_url = join(video_adapter::substitute(tpl, &job_id, &model, ""));
+            let (st, body) = self
+                .http
+                .request_auth("GET", &result_url, None, &auth, POLL_TIMEOUT)
+                .await
+                .map_err(|e| EngineError::Failure(format!("video result transport: {e}")))?;
+            self.log_entry(input, &secrets_refs, &json!({
+                "stage": "video-result",
+                "request": { "method": "GET", "url": result_url, "headers": auth.log_headers() },
+                "status": st, "resp": body.clone(),
+            })).await;
+            if st >= 400 {
+                return Err(EngineError::Failure(format!(
+                    "video result HTTP {st} ({}): {}",
+                    spec.id, body
+                )));
+            }
+            if let Some(env) = &adapter.response.envelope {
+                if let Some(e) = video_adapter::envelope_error(&body, env) {
+                    return Err(EngineError::Failure(format!(
+                        "video job {job_id} ({}): {e}",
+                        spec.id
+                    )));
+                }
+            }
+            if let Some(ep) = &adapter.response.error_path {
+                if let Some(e) = video_adapter::path_string(&body, ep) {
+                    return Err(EngineError::Failure(format!(
+                        "video job {job_id} failed ({}): {e}",
+                        spec.id
+                    )));
+                }
+            }
+            artifact_body = body;
+        }
+
+        // 4) Artifact resolution (url / retrieve / content modes).
+        last_pub = last_pub.max(0.9);
+        on_progress(last_pub);
+        on_event("downloading video");
+        let cost = video_adapter::cost_snapshot(&final_body, adapter)
+            .or_else(|| video_adapter::cost_snapshot(&artifact_body, adapter));
+        let art = &adapter.response.artifact;
+        let video_url: Option<String> = match art.mode.as_str() {
+            "url" => {
+                let p = art.path.as_deref().ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "adapter artifact mode 'url' needs a path (model {})",
+                        spec.id
+                    ))
+                })?;
+                Some(video_adapter::artifact_url(&artifact_body, p).ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "video job {job_id} completed but no artifact URL at '{p}' (body: {})",
+                        artifact_body
+                    ))
+                })?)
+            }
+            "retrieve" => {
+                let fid_path = art.file_id_path.as_deref().ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "adapter artifact mode 'retrieve' needs fileIdPath (model {})",
+                        spec.id
+                    ))
+                })?;
+                let file_id = video_adapter::path_string(&final_body, fid_path).ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "video job {job_id} succeeded but no file id at '{fid_path}' (body: {})",
+                        final_body
+                    ))
+                })?;
+                let tpl = art.endpoint.as_deref().ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "adapter artifact mode 'retrieve' needs an endpoint (model {})",
+                        spec.id
+                    ))
+                })?;
+                let retrieve_url = join(video_adapter::substitute(tpl, &job_id, &model, &file_id));
+                let (st, body) = self
+                    .http
+                    .request_auth("GET", &retrieve_url, None, &auth, POLL_TIMEOUT)
+                    .await
+                    .map_err(|e| EngineError::Failure(format!("video retrieve transport: {e}")))?;
+                self.log_entry(input, &secrets_refs, &json!({
+                    "stage": "video-retrieve",
+                    "request": { "method": "GET", "url": retrieve_url, "headers": auth.log_headers() },
+                    "status": st, "resp": body.clone(),
+                })).await;
+                if st >= 400 {
+                    return Err(EngineError::Failure(format!(
+                        "video retrieve HTTP {st} ({}): {}",
+                        spec.id, body
+                    )));
+                }
+                if let Some(env) = &adapter.response.envelope {
+                    if let Some(e) = video_adapter::envelope_error(&body, env) {
+                        return Err(EngineError::Failure(format!(
+                            "video retrieve ({}): {e}",
+                            spec.id
+                        )));
+                    }
+                }
+                let ap = art.artifact_path.as_deref().ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "adapter artifact mode 'retrieve' needs artifactPath (model {})",
+                        spec.id
+                    ))
+                })?;
+                Some(video_adapter::artifact_url(&body, ap).ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "retrieve response carries no download URL at '{ap}' (body: {})",
+                        body
+                    ))
+                })?)
+            }
+            // content: the endpoint itself streams the bytes (reserved for
+            // Sora-shaped / local-view artifacts; no URL in the body).
+            "content" => None,
+            other => {
+                return Err(EngineError::Failure(format!(
+                    "unknown adapter artifact mode '{other}' (model {})",
+                    spec.id
+                )));
+            }
+        };
+
+        // 5) Media tree + download + output.json (with the cost block) —
+        // mirrors the Agnes tail: bounded gate-flap retry, download_failed
+        // marker + remote degrade, 240p proxy.
+        let media = self.media_root_for(input);
+        let local = match &media {
+            Some(root) => {
+                let pipe_dir = input
+                    .pipe_name
+                    .as_deref()
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or(&input.pipe_id);
+                let (_images_dir, task_dir, _task_images_dir) =
+                    pipe_media_dirs(root, pipe_dir, &input.task_id).map_err(EngineError::Failure)?;
+                let dest = task_dir.join("video.mp4");
+                const ADAPTER_DOWNLOAD_ATTEMPTS: usize = 4;
+                let mut dl_err: Option<String> = None;
+                for attempt in 1..=ADAPTER_DOWNLOAD_ATTEMPTS {
+                    let res = match (&video_url, art.mode.as_str()) {
+                        (Some(u), _) => self.http.download_auth(u, &dest, &auth).await,
+                        (None, "content") => {
+                            let tpl = art.endpoint.as_deref().ok_or_else(|| {
+                                EngineError::Failure(
+                                    "content artifact mode needs an endpoint".into(),
+                                )
+                            })?;
+                            let content_url =
+                                join(video_adapter::substitute(tpl, &job_id, &model, ""));
+                            self.http.download_auth(&content_url, &dest, &auth).await
+                        }
+                        _ => Err("no artifact source".into()),
+                    };
+                    match res {
+                        Ok(()) => {
+                            dl_err = None;
+                            break;
+                        }
+                        Err(e) => {
+                            dl_err = Some(e.clone());
+                            if attempt < ADAPTER_DOWNLOAD_ATTEMPTS {
+                                let delay = self.backoff_secs.get(2).copied().unwrap_or(15);
+                                on_event(&format!(
+                                    "final video download gated — retrying in {delay} s"
+                                ));
+                                if cancel_aware_sleep(cancel, Duration::from_secs(delay)).await {
+                                    self.fire_remote_cancel(adapter, &join, &job_id, &model, &auth)
+                                        .await;
+                                    return Err(EngineError::Cancelled);
+                                }
+                            }
+                        }
+                    }
+                }
+                match dl_err {
+                    None => {
+                        self.log_entry(input, &secrets_refs, &json!({
+                            "stage": "video-download",
+                            "url": video_url.clone().unwrap_or_else(|| "<content endpoint>".into()),
+                            "dest": dest.to_string_lossy(), "bytes": true,
+                        })).await;
+                        if dest.is_file() {
+                            generate_video_proxy(&dest).await;
+                        }
+                        let mut out = json!({
+                            "videoPath": dest.to_string_lossy(),
+                            "videoUrl": video_url,
+                            "model": spec.id,
+                            "seed": input.seed,
+                            "params": payload,
+                            "status": "done",
+                            "providerTaskId": job_id,
+                        });
+                        if let Some(c) = &cost {
+                            out["cost"] = c.clone();
+                        }
+                        write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
+                        dest.to_string_lossy().into_owned()
+                    }
+                    Some(e) => {
+                        self.log_entry(input, &secrets_refs, &json!({
+                            "stage": "video-download-failed", "error": e.clone(),
+                        })).await;
+                        // content mode has no remote fallback — a failed byte
+                        // fetch is a real failure, not a degrade.
+                        let Some(u) = video_url.clone() else {
+                            return Err(EngineError::Failure(format!(
+                                "video artifact download failed: {e}"
+                            )));
+                        };
+                        log::warn!(
+                            "[Generation] adapter video task {} download failed after {ADAPTER_DOWNLOAD_ATTEMPTS} attempts: {e} — download_failed marker, degrade to remote URL",
+                            input.task_id
+                        );
+                        let out = json!({
+                            "videoPath": dest.to_string_lossy(),
+                            "videoUrl": u,
+                            "model": spec.id,
+                            "seed": input.seed,
+                            "params": payload,
+                            "status": "download_failed",
+                            "downloadFailed": true,
+                            "providerTaskId": job_id,
+                            "downloadError": e,
+                            "cost": cost,
+                        });
+                        if let Err(w) = write_json(&task_dir.join("output.json"), &out) {
+                            log::warn!(
+                                "[Generation] adapter video task {} marker write failed: {w}",
+                                input.task_id
+                            );
+                        }
+                        u
+                    }
+                }
+            }
+            None => video_url.clone().ok_or_else(|| {
+                EngineError::Failure(
+                    "no media root configured and no remote artifact URL".into(),
+                )
+            })?,
+        };
+        on_progress(1.0);
+        on_event("complete");
+        log::info!(
+            "[Generation] adapter video task {} ok ({})",
+            input.task_id, local
+        );
+        Ok(local)
+    }
+
+    /// Best-effort remote cancel (Runway DELETE /v1/tasks/{id}, fal PUT
+    /// …/cancel, Replicate POST …/cancel): stops provider-side billing on an
+    /// abandoned render. Fires once on user cancel; the outcome is logged,
+    /// never blocks the cancel itself.
+    async fn fire_remote_cancel(
+        &self,
+        adapter: &crate::generation::specs::VideoAdapterSpecWire,
+        join: &impl Fn(String) -> String,
+        job_id: &str,
+        model: &str,
+        auth: &RequestAuth,
+    ) {
+        let Some(c) = &adapter.cancel else {
+            return;
+        };
+        let url = join(video_adapter::substitute(&c.endpoint, job_id, model, ""));
+        let method = if c.method.is_empty() { "DELETE" } else { c.method.as_str() };
+        match self
+            .http
+            .request_auth(method, &url, None, auth, Duration::from_secs(10))
+            .await
+        {
+            Ok((st, _)) => {
+                log::info!("[Generation] remote cancel {method} {url} -> {st}");
+            }
+            Err(e) => {
+                log::warn!("[Generation] remote cancel {method} {url} failed: {e} (best-effort)");
+            }
+        }
+    }
+}
+
 // ── Production HTTP transport (reqwest) ─────────────────────────────────────
 
 struct ReqwestClient {
@@ -2170,6 +2975,66 @@ impl HttpClient for ReqwestClient {
                     let authed_status = resp.status().as_u16();
                     log::info!(
                         "[Artifact] plain GET {url} -> {status}, Bearer retry -> {authed_status}"
+                    );
+                    return Ok((authed_status, response_body_stream(resp)));
+                }
+                Ok((status, response_body_stream(resp)))
+            }
+        })
+        .await
+    }
+
+    async fn request_auth(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&serde_json::Value>,
+        auth: &RequestAuth,
+        timeout: Duration,
+    ) -> Result<(u16, serde_json::Value), String> {
+        let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
+        let url = auth.url_with_query_key(url);
+        let mut req = self.client.request(m, &url).timeout(timeout);
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        req = auth.apply_headers(req);
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        Ok((status, body))
+    }
+
+    async fn download_auth(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        auth: &RequestAuth,
+    ) -> Result<(), String> {
+        // Plain GET first (pre-signed artifact), then the scheme's authorized
+        // GET on 401/403 — Replicate output URLs are auth-gated; fal/Runway/
+        // Luma/Kling/MiniMax URLs are pre-signed (plain-first is correct).
+        let client = self.client.clone();
+        let url_owned = url.to_string();
+        let auth = auth.clone();
+        fetch_artifact_to(dest, url, move || {
+            let client = client.clone();
+            let url = url_owned.clone();
+            let auth = auth.clone();
+            async move {
+                let resp = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("transport: {e}"))?;
+                let status = resp.status().as_u16();
+                if matches!(status, 401 | 403) && !auth.key.is_empty() {
+                    let req = auth.apply_headers(client.get(&url));
+                    let resp = req.send().await.map_err(|e| format!("transport: {e}"))?;
+                    let authed_status = resp.status().as_u16();
+                    log::info!(
+                        "[Artifact] plain GET {url} -> {status}, {} retry -> {authed_status}",
+                        auth.scheme
                     );
                     return Ok((authed_status, response_body_stream(resp)));
                 }
@@ -2444,6 +3309,9 @@ mod tests {
         download_results: StdMutex<VecDeque<Result<(), String>>>,
         /// Records every download destination so tests can assert artifacts.
         downloads: StdMutex<Vec<String>>,
+        /// Records every scheme-aware request (method, url, auth) so adapter
+        /// tests can assert remote-cancel fires + auth schemes.
+        auth_requests: StdMutex<Vec<(String, String, RequestAuth)>>,
     }
 
     impl StubHttp {
@@ -2454,6 +3322,7 @@ mod tests {
                 download_ok: StdMutex::new(true),
                 download_results: StdMutex::new(VecDeque::new()),
                 downloads: StdMutex::new(Vec::new()),
+                auth_requests: StdMutex::new(Vec::new()),
             }
         }
         fn queue_post(self, r: Result<(u16, serde_json::Value), String>) -> Self {
@@ -2542,6 +3411,35 @@ mod tests {
             let _ = std::fs::write(dest, "fake-artifact-bytes");
             Ok(())
         }
+
+        async fn request_auth(
+            &self,
+            method: &str,
+            url: &str,
+            body: Option<&serde_json::Value>,
+            auth: &RequestAuth,
+            timeout: Duration,
+        ) -> Result<(u16, serde_json::Value), String> {
+            self.auth_requests
+                .lock()
+                .unwrap()
+                .push((method.to_string(), url.to_string(), auth.clone()));
+            match method {
+                "POST" => self.post(url, body.unwrap_or(&serde_json::Value::Null), &auth.key, timeout).await,
+                "GET" => self.get(url, &auth.key, timeout).await,
+                // Remote cancel (DELETE/PUT/POST-no-body): scripted success.
+                _ => Ok((200, json!({ "ok": true }))),
+            }
+        }
+
+        async fn download_auth(
+            &self,
+            url: &str,
+            dest: &std::path::Path,
+            auth: &RequestAuth,
+        ) -> Result<(), String> {
+            self.download(url, dest, &auth.key).await
+        }
     }
 
     // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -2614,6 +3512,12 @@ mod tests {
             guidance_range: None,
             img2img_only: None,
             media: None,
+            auth: None,
+            adapter: None,
+            media_input: None,
+            structured_output: None,
+            thinking_toggle: None,
+            pricing: None,
         }
     }
 
@@ -2635,6 +3539,12 @@ mod tests {
             guidance_range: None,
             img2img_only: None,
             media: None,
+            auth: None,
+            adapter: None,
+            media_input: None,
+            structured_output: None,
+            thinking_toggle: None,
+            pricing: None,
         }
     }
 
@@ -3747,5 +4657,443 @@ mod tests {
         inline_local_media_fields(&mut payload);
         assert!(assert_media_fetchable(&payload).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Tier-A configurable video adapter (expanded provider system) ──────
+
+    /// Runway-shaped adapter spec (researched contract 2026-11-21): version
+    /// header, 0-1 progress, THROTTLED, output[] artifact, cost.credits.
+    fn runway_adapter_spec(auth: &str) -> serde_json::Value {
+        json!({
+            "id": "gen4.5", "kind": "video", "endpoint": "/v1/image_to_video",
+            "sync": false, "requestFormat": "video-adapter", "auth": auth,
+            "limits": { "seconds": [2, 10], "ratios": ["1280:720", "720:1280"],
+                        "ratioMap": { "horizontal": "1280:720", "vertical": "720:1280" } },
+            "supportsSeed": true,
+            "adapter": {
+                "headers": { "X-Runway-Version": "2024-11-06" },
+                "create": { "endpoint": "/v1/image_to_video" },
+                "poll": { "endpoint": "/v1/tasks/{jobId}", "intervalSecs": 0 },
+                "cancel": { "endpoint": "/v1/tasks/{jobId}", "method": "DELETE" },
+                "payload": { "model": "{{model}}", "promptText": "{{prompt}}",
+                             "promptImage": "{{media:first}}", "ratio": "{{ratio}}",
+                             "duration": "{{seconds:int}}", "seed": "{{seed}}" },
+                "response": {
+                    "jobIdPath": "id", "statusPath": "status",
+                    "statusMap": { "PENDING": "pending", "THROTTLED": "throttled",
+                                   "RUNNING": "running", "SUCCEEDED": "succeeded",
+                                   "FAILED": "failed", "CANCELLED": "cancelled" },
+                    "progressPath": "progress", "progressScale": 1,
+                    "artifact": { "mode": "url", "path": "output" },
+                    "errorPath": "failure",
+                    "reportedCost": { "path": "cost.credits", "unit": "credits" }
+                },
+                "media": { "input": "url-or-data" }
+            }
+        })
+    }
+
+    fn adapter_input(media: &std::path::Path, spec: serde_json::Value) -> EngineInput {
+        let mut input = video_input(media);
+        input.video_spec = Some(serde_json::from_value(spec).unwrap());
+        input
+    }
+
+    #[tokio::test]
+    async fn adapter_runway_success_writes_cost_and_provider_task_id() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "id": "task-1" }))))
+                .queue_get(Ok((200, json!({ "status": "RUNNING", "progress": 0.4 }))))
+                .queue_get(Ok((200, json!({
+                    "status": "SUCCEEDED",
+                    "output": ["https://cdn.test/out.mp4"],
+                    "cost": { "credits": 120 }
+                })))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, runway_adapter_spec("bearer"));
+        let events: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|l| events.lock().unwrap().push(l.into()))
+            .await
+            .expect("adapter video stage should succeed");
+        let task_dir = media.join("pipe1").join("task1");
+        assert_eq!(out.local_path, task_dir.join("video.mp4").to_string_lossy().into_owned());
+        let out_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(task_dir.join("output.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(out_json["status"], "done");
+        assert_eq!(out_json["providerTaskId"], "task-1");
+        assert_eq!(out_json["cost"]["reported"]["value"], json!(120.0));
+        assert_eq!(out_json["cost"]["reported"]["unit"], "credits");
+        // 0-1 progress scaled into the render band + live event line.
+        assert!(events.lock().unwrap().iter().any(|e| e == "rendering 40%"));
+        // The version header rode the create; the payload shaped via tokens.
+        let reqs = http.auth_requests.lock().unwrap();
+        assert_eq!(reqs[0].0, "POST");
+        assert!(reqs[0].2.headers.iter().any(|(k, v)| k == "X-Runway-Version" && v == "2024-11-06"));
+        // Key never persisted.
+        let req_log = std::fs::read_to_string(task_dir.join("request.log")).unwrap();
+        assert!(!req_log.contains("sk-video-key"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// fal trap: COMPLETED includes FAILED jobs — the result fetch decides.
+    #[tokio::test]
+    async fn adapter_fal_completed_with_error_result_is_a_failure() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let spec = json!({
+            "id": "fal-ai/kling-video/v2.5-turbo/pro/image-to-video", "kind": "video",
+            "endpoint": "/fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+            "sync": false, "requestFormat": "video-adapter", "auth": "key-header",
+            "adapter": {
+                "create": { "endpoint": "/{model}" },
+                "poll": { "endpoint": "/{model}/requests/{jobId}/status",
+                          "resultEndpoint": "/{model}/requests/{jobId}", "intervalSecs": 0 },
+                "payload": { "prompt": "{{prompt}}", "image_url": "{{media:first}}" },
+                "response": {
+                    "jobIdPath": "request_id", "statusPath": "status",
+                    "statusMap": { "IN_QUEUE": "pending", "IN_PROGRESS": "running", "COMPLETED": "succeeded" },
+                    "queuePositionPath": "queue_position",
+                    "artifact": { "mode": "url", "path": "video.url" },
+                    "errorPath": "detail"
+                },
+                "media": { "input": "url-or-data" }
+            }
+        });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "status": "IN_QUEUE", "request_id": "r1" }))))
+                .queue_get(Ok((202, json!({ "status": "IN_QUEUE", "queue_position": 2 }))))
+                .queue_get(Ok((200, json!({ "status": "COMPLETED" }))))
+                .queue_get(Ok((200, json!({ "detail": "content moderation violation" })))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, spec);
+        let events: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|l| events.lock().unwrap().push(l.into()))
+            .await
+            .expect_err("COMPLETED-with-error must fail");
+        assert!(err.contains("content moderation"), "{err}");
+        assert!(events.lock().unwrap().iter().any(|e| e == "queue position 2"));
+        // fal auth scheme is Key, not Bearer.
+        let reqs = http.auth_requests.lock().unwrap();
+        assert_eq!(reqs[0].2.scheme, "key-header");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn adapter_fal_two_stage_success_extracts_result_artifact() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let spec = json!({
+            "id": "fal-ai/wan/v2.2-5b/image-to-video", "kind": "video",
+            "endpoint": "/fal-ai/wan/v2.2-5b/image-to-video",
+            "sync": false, "requestFormat": "video-adapter", "auth": "key-header",
+            "adapter": {
+                "create": { "endpoint": "/{model}" },
+                "poll": { "endpoint": "/{model}/requests/{jobId}/status",
+                          "resultEndpoint": "/{model}/requests/{jobId}", "intervalSecs": 0 },
+                "payload": { "prompt": "{{prompt}}", "image_url": "{{media:first}}" },
+                "response": {
+                    "jobIdPath": "request_id", "statusPath": "status",
+                    "statusMap": { "IN_QUEUE": "pending", "IN_PROGRESS": "running", "COMPLETED": "succeeded" },
+                    "artifact": { "mode": "url", "path": "video.url" },
+                    "errorPath": "detail",
+                    "predictTimePath": "metrics.inference_time"
+                },
+                "media": { "input": "url-or-data" }
+            }
+        });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "request_id": "r2" }))))
+                .queue_get(Ok((200, json!({ "status": "COMPLETED" }))))
+                .queue_get(Ok((200, json!({
+                    "video": { "url": "https://cdn.test/f.mp4" },
+                    "metrics": { "inference_time": 12.5 }
+                })))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, spec);
+        let out = engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect("fal success");
+        let out_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(media.join("pipe1").join("task1").join("output.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(out_json["videoUrl"], "https://cdn.test/f.mp4");
+        assert_eq!(out_json["cost"]["usage"]["predictTimeSecs"], json!(12.5));
+        assert!(out.local_path.ends_with("video.mp4"));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// Kling: envelope business-error on HTTP 200 + 'succeed' casing +
+    /// final_unit_deduction string → cost units.
+    #[tokio::test]
+    async fn adapter_kling_envelope_error_is_concrete() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let spec = json!({
+            "id": "kling-v2-6", "kind": "video", "endpoint": "/v1/videos/image2video",
+            "sync": false, "requestFormat": "video-adapter", "auth": "bearer",
+            "adapter": {
+                "create": { "endpoint": "/v1/videos/image2video" },
+                "poll": { "endpoint": "/v1/videos/image2video/{jobId}", "intervalSecs": 0 },
+                "payload": { "model_name": "{{model}}", "prompt": "{{prompt}}", "image": "{{media:first}}" },
+                "response": {
+                    "jobIdPath": "data.task_id", "statusPath": "data.task_status",
+                    "statusMap": { "submitted": "pending", "processing": "running",
+                                   "succeed": "succeeded", "succeeded": "succeeded", "failed": "failed" },
+                    "artifact": { "mode": "url", "path": "data.task_result.videos" },
+                    "errorPath": "data.task_status_msg",
+                    "envelope": { "codePath": "code", "okValue": 0, "messagePath": "message" }
+                },
+                "media": { "input": "url-or-data" }
+            }
+        });
+        let http = Arc::new(StubHttp::new().queue_post(Ok((
+            200,
+            json!({ "code": 1002, "message": "Authentication error", "request_id": "x" }),
+        ))));
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, spec);
+        let err = engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect_err("envelope error");
+        assert!(err.contains("1002") && err.contains("Authentication error"), "{err}");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn adapter_kling_succeed_casing_and_units_cost() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let spec = json!({
+            "id": "kling-v2-6", "kind": "video", "endpoint": "/v1/videos/image2video",
+            "sync": false, "requestFormat": "video-adapter", "auth": "bearer",
+            "adapter": {
+                "create": { "endpoint": "/v1/videos/image2video" },
+                "poll": { "endpoint": "/v1/videos/image2video/{jobId}", "intervalSecs": 0 },
+                "payload": { "model_name": "{{model}}", "prompt": "{{prompt}}", "image": "{{media:first}}" },
+                "response": {
+                    "jobIdPath": "data.task_id", "statusPath": "data.task_status",
+                    "statusMap": { "submitted": "pending", "processing": "running",
+                                   "succeed": "succeeded", "succeeded": "succeeded", "failed": "failed" },
+                    "artifact": { "mode": "url", "path": "data.task_result.videos" },
+                    "errorPath": "data.task_status_msg",
+                    "envelope": { "codePath": "code", "okValue": 0, "messagePath": "message" },
+                    "reportedCost": { "path": "data.final_unit_deduction", "unit": "units" }
+                },
+                "media": { "input": "url-or-data" }
+            }
+        });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "code": 0, "data": { "task_id": "t1" } }))))
+                .queue_get(Ok((200, json!({
+                    "code": 0,
+                    "data": { "task_status": "succeed",
+                              "task_result": { "videos": [{ "url": "https://cdn.test/k.mp4" }] },
+                              "final_unit_deduction": "4.0" }
+                })))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, spec);
+        engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect("kling succeed");
+        let out_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(media.join("pipe1").join("task1").join("output.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(out_json["videoUrl"], "https://cdn.test/k.mp4");
+        assert_eq!(out_json["cost"]["reported"]["value"], json!(4.0));
+        assert_eq!(out_json["cost"]["reported"]["unit"], "units");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// MiniMax retrieve mode: file_id (string) → secondary GET → download_url.
+    #[tokio::test]
+    async fn adapter_minimax_retrieve_mode_fetches_download_url() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let spec = json!({
+            "id": "MiniMax-Hailuo-2.3", "kind": "video", "endpoint": "/v1/video_generation",
+            "sync": false, "requestFormat": "video-adapter", "auth": "bearer",
+            "limits": { "seconds": [6, 10], "secondsEnum": [6, 10],
+                        "resolutions": ["768P", "1080P"],
+                        "sizeMap": { "720p": "768P", "1080p": "1080P" } },
+            "adapter": {
+                "create": { "endpoint": "/v1/video_generation" },
+                "poll": { "endpoint": "/v1/query/video_generation?task_id={jobId}", "intervalSecs": 0 },
+                "payload": { "model": "{{model}}", "prompt": "{{prompt}}",
+                             "duration": "{{seconds:enum}}", "resolution": "{{size}}",
+                             "prompt_optimizer": true },
+                "response": {
+                    "jobIdPath": "task_id", "statusPath": "status",
+                    "statusMap": { "Preparing": "pending", "Queueing": "pending",
+                                   "Processing": "running", "Success": "succeeded", "Fail": "failed" },
+                    "artifact": { "mode": "retrieve",
+                                  "endpoint": "/v1/files/retrieve?file_id={fileId}",
+                                  "fileIdPath": "file_id", "artifactPath": "file.download_url" },
+                    "errorPath": "base_resp.status_msg",
+                    "envelope": { "codePath": "base_resp.status_code", "okValue": 0,
+                                  "messagePath": "base_resp.status_msg" }
+                }
+            }
+        });
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "task_id": "t9", "base_resp": { "status_code": 0 } }))))
+                .queue_get(Ok((200, json!({ "status": "Success", "file_id": "777",
+                                            "base_resp": { "status_code": 0 } }))))
+                .queue_get(Ok((200, json!({ "file": { "download_url": "https://cdn.test/m.mp4" },
+                                            "base_resp": { "status_code": 0 } })))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, spec);
+        engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect("minimax retrieve");
+        let reqs = http.auth_requests.lock().unwrap();
+        assert!(reqs.iter().any(|(m, u, _)| m == "GET" && u.contains("file_id=777")));
+        let out_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(media.join("pipe1").join("task1").join("output.json")).unwrap(),
+        ).unwrap();
+        assert_eq!(out_json["videoUrl"], "https://cdn.test/m.mp4");
+        // 121 frames / 24fps = 5.04 → clamp [6,10] → 6 → enum snap 6.
+        assert_eq!(out_json["params"]["duration"], json!(6));
+        assert_eq!(out_json["params"]["resolution"], "768P");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn adapter_throttled_rides_backoff_band_then_succeeds() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "id": "task-2" }))))
+                .queue_get(Ok((200, json!({ "status": "THROTTLED" }))))
+                .queue_get(Ok((200, json!({ "status": "SUCCEEDED", "output": ["https://cdn.test/t.mp4"] })))),
+        );
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, runway_adapter_spec("bearer"));
+        let events: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
+        engine
+            .run(&input, &cancel, &|_p| {}, &|l| events.lock().unwrap().push(l.into()))
+            .await
+            .expect("throttled then succeeded");
+        assert!(events.lock().unwrap().iter().any(|e| e.starts_with("throttled")));
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// Keyless local-shaped job (auth 'none', empty slot key) must run —
+    /// the engine key gate relaxes only for 'none'.
+    #[tokio::test]
+    async fn adapter_keyless_local_job_succeeds() {
+        let (db, media) = db_with_slots("", "").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "id": "local-1" }))))
+                .queue_get(Ok((200, json!({ "status": "SUCCEEDED", "output": ["https://cdn.test/l.mp4"] })))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, runway_adapter_spec("none"));
+        engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect("keyless job");
+        let reqs = http.auth_requests.lock().unwrap();
+        assert_eq!(reqs[0].2.scheme, "none");
+        assert!(reqs[0].2.key.is_empty());
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn adapter_remote_cancel_fires_on_user_cancel() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "id": "task-9" }))))
+                .queue_get(Ok((200, json!({ "status": "RUNNING" })))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, runway_adapter_spec("bearer"));
+        let cancel2 = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            cancel2.store(true, Ordering::Release);
+        });
+        let err = engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect_err("cancelled");
+        assert_eq!(err, "cancelled");
+        let reqs = http.auth_requests.lock().unwrap();
+        assert!(
+            reqs.iter().any(|(m, u, _)| m == "DELETE" && u.contains("task-9")),
+            "remote cancel must fire: {reqs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// url-only media contract: a local reference blocks BEFORE the create
+    /// (never burns a render on a guaranteed provider rejection).
+    #[tokio::test]
+    async fn adapter_url_only_media_precheck_blocks_create() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let mut spec = runway_adapter_spec("bearer");
+        spec["adapter"]["media"]["input"] = json!("url-only");
+        let http = Arc::new(StubHttp::new());
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = adapter_input(&media, spec);
+        input.upstream[0].primary = "C:/vm-missing/k1.png".into();
+        let err = engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect_err("url-only precheck");
+        assert!(err.contains("remote media URLs only"), "{err}");
+        assert!(http.auth_requests.lock().unwrap().is_empty(), "no create may fire");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn adapter_missing_config_is_a_concrete_error() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let spec = json!({
+            "id": "broken", "kind": "video", "endpoint": "/x", "sync": false,
+            "requestFormat": "video-adapter", "auth": "bearer"
+        });
+        let http = Arc::new(StubHttp::new());
+        let engine = engine_with(db, media.clone(), http, [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let input = adapter_input(&media, spec);
+        let err = engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect_err("missing adapter");
+        assert!(err.contains("no adapter config"), "{err}");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[test]
+    fn generic_inlining_touches_media_keys_only() {
+        let dir = artifact_test_dir("vm-adapter-inline");
+        let png = dir.join("k1.png");
+        std::fs::write(&png, vec![1u8, 2u8]).unwrap();
+        let p = png.to_string_lossy().to_string();
+        let mut payload = json!({
+            "promptImage": p,
+            "prompt": p,                       // prompt text must NEVER inline
+            "keyframes": { "frame0": { "type": "image", "url": p } },
+            "mode": "pro"
+        });
+        inline_local_media_generic(&mut payload);
+        assert!(payload["promptImage"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(payload["prompt"], json!(p));
+        assert!(payload["keyframes"]["frame0"]["url"].as_str().unwrap().starts_with("data:"));
+        assert_eq!(payload["keyframes"]["frame0"]["type"], "image");
+        assert!(local_media_leaf(&payload).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_media_leaf_flags_missing_media_not_prompt() {
+        let payload = json!({
+            "prompt": "C:/looks/like/a/path.png",
+            "image_url": "C:/vm-missing/ref.png"
+        });
+        assert_eq!(local_media_leaf(&payload).as_deref(), Some("image_url"));
+        let remote = json!({ "image_url": "https://cdn.test/ref.png", "prompt": "C:/x/y.png" });
+        assert!(local_media_leaf(&remote).is_none());
     }
 }

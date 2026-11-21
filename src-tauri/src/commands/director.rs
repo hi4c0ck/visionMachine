@@ -178,10 +178,25 @@ async fn node_a_provider_for_session(
     if base_url.is_empty() || model.is_empty() {
         return None;
     }
+    // Expanded provider system: the text endpoint + Node A capabilities come
+    // from the preset (catalog mirror). Agnes keeps the host-root /v1 path +
+    // json_schema + thinking toggle (byte-stable wire shape); OpenAI-route
+    // presets are v1-native with json_schema and NO chat_template_kwargs
+    // (OpenAI 400s on unknown params); local servers ride json_object (the
+    // attempt-1 prompt-only fallback covers the rest).
+    let (endpoint, structured_output, thinking_toggle) = match slot.preset.as_str() {
+        "agnes" => ("/v1/chat/completions", "json_schema", true),
+        "openai" | "openrouter" | "custom" => ("/chat/completions", "json_schema", false),
+        "ollama" | "lmstudio" | "llamacpp" => ("/chat/completions", "json_object", false),
+        _ => ("/chat/completions", "json_object", false),
+    };
     Some(crate::generation::video_flow::engine::llm::TextProvider {
         base_url,
         api_key: slot.api_key,
         model,
+        endpoint: endpoint.to_string(),
+        structured_output: structured_output.to_string(),
+        thinking_toggle,
     })
 }
 

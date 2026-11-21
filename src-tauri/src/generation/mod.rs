@@ -16,6 +16,7 @@ mod registry;
 mod shaper;
 mod specs;
 mod types;
+mod video_adapter;
 pub mod video_flow;
 
 pub use compose::{

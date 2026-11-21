@@ -119,6 +119,12 @@ fn fallback_image_spec(model_id: &str) -> ModelSpecWire {
         guidance_range: None,
         img2img_only: None,
         media: None,
+        auth: None,
+        adapter: None,
+        media_input: None,
+        structured_output: None,
+        thinking_toggle: None,
+        pricing: None,
     }
 }
 
