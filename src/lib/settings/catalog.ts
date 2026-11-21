@@ -225,6 +225,28 @@ const LOCAL_TEXT_MODEL = (endpoint: string): ModelSpec => ({
              verifiedAt: '2026-11-21', note: '$0 marginal — own hardware; compute time metered separately' },
 });
 
+// Generic local endpoint — matches ANY local OpenAI-compatible server: the
+// user types the base URL (include /v1 if the server routes it there, e.g.
+// http://localhost:8080/v1; Ollama's host-root base keeps /v1 in the URL) and
+// the model id. Keyless, free-form ids, optional /v1/models refresh. This is
+// the "random local model" surface — a new server is a base URL + an id, no
+// catalog entry. customTransport: 'mcp' | 'special' = reserved Tier-B marker
+// for non-OpenAI local protocols (MCP servers, vendor-specific APIs); the
+// config slot lands now, the code shaper with the ComfyUI-class slice.
+export const LOCAL_CUSTOM_PRESET: PresetSpec = {
+  id: 'local-custom',
+  label: 'Local endpoint (any OpenAI-compatible)',
+  kinds: ['text'],
+  auth: 'none',
+  urlStyle: 'v1-native',
+  defaultBaseUrl: '',
+  freeFormModel: true,
+  modelList: { endpoint: '/v1/models', shape: 'openai' },
+  tag: 'local',
+  customTransport: 'openai-compat',
+  models: [LOCAL_TEXT_MODEL('/chat/completions')],
+};
+
 export const OLLAMA_PRESET: PresetSpec = {
   id: 'ollama',
   label: 'Ollama (local)',
@@ -354,6 +376,34 @@ export const RUNWAY_PRESET: PresetSpec = {
       pricing: { unit: 'per-credit', currency: 'credits', source: 'https://docs.dev.runwayml.com/guides/pricing',
                  rates: { usdPerCredit: 0.01 }, verifiedAt: '2026-11-21',
                  note: 'provider reports cost.credits per task; 1 credit = $0.01' } },
+    { id: 'hailuo3', kind: 'video', label: 'Hailuo 3 (H3, Runway-hosted)',
+      endpoint: '/v1/image_to_video', sync: false, requestFormat: 'video-adapter',
+      limits: { seconds: [2, 10],
+                ratios: ['1280:720', '720:1280', '960:960'],
+                ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
+      pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: {
+        model: 'hailuo3', promptText: '{{prompt}}',
+        promptImage: '{{media:first}}', ratio: '{{ratio}}',
+        duration: '{{seconds:int}}',
+      },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://docs.dev.runwayml.com/guides/pricing',
+                 rates: { '720p': 0.10, '1080p': 0.15, base: 0.10 }, verifiedAt: '2026-11-21',
+                 note: '10/15 cr-s at 768P/2K × $0.01/credit; ref image/keyframe +2 credits; in-band cost.credits is authoritative' } },
+    { id: 'h3_max', kind: 'video', label: 'H3 Max (Runway-hosted)',
+      endpoint: '/v1/image_to_video', sync: false, requestFormat: 'video-adapter',
+      limits: { seconds: [2, 10],
+                ratios: ['1280:720', '720:1280', '960:960'],
+                ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
+      pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: {
+        model: 'h3_max', promptText: '{{prompt}}',
+        promptImage: '{{media:first}}', ratio: '{{ratio}}',
+        duration: '{{seconds:int}}',
+      },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://docs.dev.runwayml.com/guides/pricing',
+                 rates: { '480p': 0.05, '720p': 0.08, base: 0.08 }, verifiedAt: '2026-11-21',
+                 note: '5/8 cr-s at 480p/768p × $0.01/credit; in-band cost.credits is authoritative' } },
   ],
 };
 
@@ -424,6 +474,34 @@ export const FAL_PRESET: PresetSpec = {
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/models',
                  verifiedAt: null, note: 'id + schema + rates live-verify' } },
+    // fal hosts MiniMax H3 Max (fal.ai/pricing 2026-11-21: $0.05/s; turbo $0.025/s).
+    // Live per-model schema + price: fal.ai/models/<id>/llms.txt (no auth) or the
+    // authenticated /v1/models/pricing API. Draft payloads — input schemas
+    // live-verify per model.
+    { id: 'minimax/h3-max/text-to-video', kind: 'video', label: 'H3 Max (t2v, via fal)',
+      endpoint: '/minimax/h3-max/text-to-video', sync: false,
+      requestFormat: 'video-adapter',
+      limits: {}, pending: true,
+      adapterPayload: { prompt: '{{prompt}}', duration: '{{seconds:int}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/pricing',
+                 rates: { base: 0.05 }, verifiedAt: '2026-11-21',
+                 note: 'live check: GET /v1/models/pricing?endpoint_id=minimax/h3-max/text-to-video' } },
+    { id: 'minimax/h3-max/image-to-video', kind: 'video', label: 'H3 Max (i2v, via fal)',
+      endpoint: '/minimax/h3-max/image-to-video', sync: false,
+      requestFormat: 'video-adapter',
+      limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}', duration: '{{seconds:int}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/pricing',
+                 rates: { base: 0.05 }, verifiedAt: '2026-11-21',
+                 note: 'live check: GET /v1/models/pricing?endpoint_id=minimax/h3-max/image-to-video' } },
+    { id: 'minimax/h3-max-turbo/image-to-video', kind: 'video', label: 'H3 Max Turbo (i2v, via fal)',
+      endpoint: '/minimax/h3-max-turbo/image-to-video', sync: false,
+      requestFormat: 'video-adapter',
+      limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}', duration: '{{seconds:int}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/pricing',
+                 rates: { base: 0.025 }, verifiedAt: '2026-11-21',
+                 note: 'live check: GET /v1/models/pricing?endpoint_id=minimax/h3-max-turbo/image-to-video' } },
   ],
 };
 
@@ -681,13 +759,69 @@ export const MINIMAX_PRESET: PresetSpec = {
       pricing: { unit: 'per-video', currency: 'USD', source: 'https://platform.minimax.io/docs/pricing/overview',
                  rates: { '768P-6': 0.28, '768P-10': 0.56, '1080P-6': 0.49 }, verifiedAt: '2026-11-21',
                  note: 'per-clip; 512P tier is Hailuo-02 i2v-only, not in this model\'s limits; first_frame_image param name live-verify' } },
+    // H3 series (current flagship generation, platform docs 2026-11-21): billed
+    // PER-SECOND (unlike legacy Hailuo per-clip); task types t2v/i2v/fl2v/ref;
+    // input media billed separately. Request params (duration options, res
+    // vocab, i2v field name) live-verify — drafts below. H4: no public model
+    // as of 2026-11-21; when it ships it is a catalog row, not a schema change.
+    { id: 'MiniMax-H3', kind: 'video', label: 'H3 (t2v)',
+      endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      limits: { resolutions: ['768P', '2K'],
+                sizeMap: { '480p': '768P', '720p': '768P', '1080p': '2K' } },
+      pending: true,
+      adapterPayload: { model: '{{model}}', prompt: '{{prompt}}',
+                        duration: '{{seconds:int}}', resolution: '{{size}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://platform.minimax.io/docs/pricing/overview',
+                 rates: { '720p': 0.08, '1080p': 0.13, base: 0.08 }, verifiedAt: '2026-11-21',
+                 note: '768P $0.08/s, 2K $0.13/s; ref image/keyframe +$0.04 (first 5 free); input video billed by duration' } },
+    { id: 'MiniMax-H3-i2v', kind: 'video', label: 'H3 (i2v)',
+      endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      limits: { resolutions: ['768P', '2K'],
+                sizeMap: { '480p': '768P', '720p': '768P', '1080p': '2K' } },
+      pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: { model: '{{model}}', prompt: '{{prompt}}',
+                        duration: '{{seconds:int}}', resolution: '{{size}}',
+                        first_frame_image: '{{media:first}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://platform.minimax.io/docs/pricing/overview',
+                 rates: { '720p': 0.08, '1080p': 0.13, base: 0.08 }, verifiedAt: '2026-11-21',
+                 note: 'as H3 t2v + input-image surcharge; i2v param name live-verify' } },
+    { id: 'MiniMax-H3-Highspeed', kind: 'video', label: 'H3 Highspeed (t2v)',
+      endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      limits: { resolutions: ['480P', '768P'],
+                sizeMap: { '480p': '480P', '720p': '768P' } },
+      pending: true,
+      adapterPayload: { model: '{{model}}', prompt: '{{prompt}}',
+                        duration: '{{seconds:int}}', resolution: '{{size}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://platform.minimax.io/docs/pricing/overview',
+                 rates: { '480p': 0.04, '720p': 0.06, base: 0.04 }, verifiedAt: '2026-11-21',
+                 note: '480P $0.04/s, 768P $0.06/s — everyday-creation tier' } },
+    { id: 'MiniMax-H3-Lite', kind: 'video', label: 'H3 Lite (t2v)',
+      endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      limits: { resolutions: ['480P', '768P'],
+                sizeMap: { '480p': '480P', '720p': '768P' } },
+      pending: true,
+      adapterPayload: { model: '{{model}}', prompt: '{{prompt}}',
+                        duration: '{{seconds:int}}', resolution: '{{size}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://platform.minimax.io/docs/pricing/overview',
+                 rates: { '480p': 0.025, '720p': 0.04, base: 0.025 }, verifiedAt: '2026-11-21',
+                 note: '480P $0.025/s, 768P $0.04/s — low-cost batch tier' } },
+    { id: 'MiniMax-H3-Max', kind: 'video', label: 'H3 Max (t2v, multi-asset)',
+      endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      limits: { resolutions: ['480P', '768P'],
+                sizeMap: { '480p': '480P', '720p': '768P' } },
+      pending: true,
+      adapterPayload: { model: '{{model}}', prompt: '{{prompt}}',
+                        duration: '{{seconds:int}}', resolution: '{{size}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://platform.minimax.io/docs/pricing/overview',
+                 rates: { '480p': 0.05, '720p': 0.08, base: 0.05 }, verifiedAt: '2026-11-21',
+                 note: '768P $0.08/s, 480P $0.05/s; video input +$0.143/s, image +$0.074 (first 2 free)' } },
   ],
 };
 
 export const PRESETS: PresetSpec[] = [
   AGNES_PRESET, CUSTOM_PRESET,
   // text — OpenAI route
-  OPENAI_PRESET, OPENROUTER_PRESET, OLLAMA_PRESET, LMSTUDIO_PRESET, LLAMACPP_PRESET,
+  OPENAI_PRESET, OPENROUTER_PRESET, OLLAMA_PRESET, LMSTUDIO_PRESET, LLAMACPP_PRESET, LOCAL_CUSTOM_PRESET,
   // video — Tier-A adapter
   RUNWAY_PRESET, FAL_PRESET, REPLICATE_PRESET, LUMA_PRESET, KLING_PRESET, MINIMAX_PRESET,
 ];

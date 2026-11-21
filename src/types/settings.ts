@@ -330,6 +330,10 @@ export interface PresetSpec {
   /** Dynamic model listing (Ollama /api/tags, OpenAI-shape /v1/models —
    *  OpenRouter's listing carries per-token pricing). */
   modelList?: { endpoint: string; shape: 'openai' | 'ollama' };
+  /** Reserved Tier-B transport marker: 'mcp' / 'special' = non-OpenAI-compatible
+   *  local APIs (MCP servers, vendor-specific local protocols). The config slot
+   *  lands now; the code shaper lands with the ComfyUI-class slice. */
+  customTransport?: 'openai-compat' | 'mcp' | 'special';
   /** Vendor-level Tier-A video adapter defaults (transport + response). */
   adapter?: VideoAdapterSpec;
   /** UI grouping + honest-expectations hint (a local 7B ≠ a cloud engine). */
