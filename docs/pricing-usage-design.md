@@ -1,5 +1,8 @@
 # Pricing & Usage — Design (expanded provider system)
 
+> Human surface: read `docs/provider-system.md` first — plain-English guide
+> for every subsystem. This file is the deep-dive design record.
+
 Status: DESIGN + collection endpoints landed on `feat/expanded-provider-system`
 (2026-11-21). Companion to
 `.hermes/plans/2026-11-21_110654-video-adapter-multi-provider.md`.
