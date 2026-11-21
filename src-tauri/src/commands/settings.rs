@@ -438,6 +438,33 @@ pub fn estimate_cost_pure(spec: &Value, seconds: f64, resolution: &str) -> Value
             }
             None => answer(base(), false, "no rate for this resolution".into()),
         },
+        "per-video" => {
+            // Per-clip pricing (MiniMax Hailuo legacy): rates keyed
+            // '<resolution>-<seconds>' — the per-second model mis-estimates
+            // these (10s clips carry a different effective rate than 6s).
+            let mut m = base();
+            let mut found = false;
+            let mut usd = 0.0;
+            let mut key = String::new();
+            if let Some(rates) = rates.as_object() {
+                let secs = seconds.max(0.0).round() as i64;
+                key = format!("{resolution}-{secs}");
+                if let Some(r) = rates.get(&key).and_then(|r| r.as_f64()) {
+                    usd = r;
+                    found = true;
+                } else if let Some(r) = rates.get("base").and_then(|r| r.as_f64()) {
+                    usd = r;
+                    found = true;
+                    key = "base".into();
+                }
+            }
+            if found {
+                m.insert("estimatedUsd".into(), json!(usd));
+                answer(m, true, format!("{usd} {currency}/video ({key})"))
+            } else {
+                answer(m, false, "no rate for this resolution/duration combo".into())
+            }
+        }
         "per-image" => match rate {
             Some(r) => {
                 let mut m = base();
@@ -715,5 +742,37 @@ mod tests {
         let tokens = json!({ "pricing": { "unit": "per-token", "currency": "USD",
                                           "rates": { "base": 0.000003 }, "verifiedAt": "2026-11-21" } });
         assert_eq!(estimate_cost_pure(&tokens, 0.0, "720p")["known"], false);
+    }
+
+    #[test]
+    fn cost_estimate_per_video_combo_rates() {
+        // Per-clip: rates keyed '<resolution>-<seconds>' with a 'base' fallback.
+        let pv = json!({ "pricing": { "unit": "per-video", "currency": "USD",
+                                      "rates": { "720p-6": 0.15, "720p-10": 0.25, "base": 0.20 },
+                                      "verifiedAt": "2026-11-21", "source": "https://x" } });
+        let est = estimate_cost_pure(&pv, 6.0, "720p");
+        assert_eq!(est["known"], true);
+        assert_eq!(est["estimatedUsd"], json!(0.15));
+        assert_eq!(est["basis"], "0.15 USD/video (720p-6)");
+        let est = estimate_cost_pure(&pv, 10.0, "720p");
+        assert_eq!(est["estimatedUsd"], json!(0.25));
+        // Unlisted combo → 'base' fallback, still known.
+        let est = estimate_cost_pure(&pv, 6.0, "1080p");
+        assert_eq!(est["known"], true);
+        assert_eq!(est["estimatedUsd"], json!(0.20));
+        assert_eq!(est["basis"], "0.2 USD/video (base)");
+        // Fractional seconds round to the nearest whole-clip length.
+        assert_eq!(estimate_cost_pure(&pv, 6.4, "720p")["estimatedUsd"], json!(0.15));
+        // Combo rate missing AND no base → unknown, never a fabricated number.
+        let no_base = json!({ "pricing": { "unit": "per-video", "currency": "USD",
+                                           "rates": { "720p-6": 0.15 },
+                                           "verifiedAt": "2026-11-21" } });
+        let est = estimate_cost_pure(&no_base, 10.0, "720p");
+        assert_eq!(est["known"], false);
+        assert!(est["basis"].as_str().unwrap().contains("combo"));
+        // Unverified rates → unknown even when a combo rate exists.
+        let unverified = json!({ "pricing": { "unit": "per-video", "currency": "USD",
+                                              "rates": { "base": 0.2 }, "verifiedAt": null } });
+        assert_eq!(estimate_cost_pure(&unverified, 6.0, "720p")["known"], false);
     }
 }

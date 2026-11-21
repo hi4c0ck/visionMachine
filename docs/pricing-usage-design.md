@@ -28,9 +28,10 @@ pack rate (`rates.usdPerCredit` / `usdPerUnit`).
 ```ts
 // src/types/settings.ts
 PriceSpec {
-  unit: 'per-video-second'|'per-image'|'per-token'|'per-credit'|'per-unit'|'free-local',
+  unit: 'per-video-second'|'per-video'|'per-image'|'per-token'|'per-credit'|'per-unit'|'free-local',
   currency: 'USD'|'credits'|'units',
-  rates?: Record<string, number>,   // tier-keyed ('720p','1080p') or 'base';
+  rates?: Record<string, number>,   // per-video-second: tier-keyed ('720p','1080p') or 'base';
+                                    // per-video (per-clip): '<resolution>-<seconds>' ('768P-6') or 'base';
                                     // usdPerCredit/usdPerUnit for conversions
   source?: string,                  // provenance URL
   verifiedAt?: string | null,       // null = research pending → estimate unknown

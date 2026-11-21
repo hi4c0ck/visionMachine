@@ -190,9 +190,13 @@ export interface VideoAdapterSpec {
  *  Live retrieval (OpenRouter /models pricing) and provider-reported cost
  *  (adapter reportedCost) supersede static rates when present. */
 export interface PriceSpec {
-  unit: 'per-video-second' | 'per-image' | 'per-token' | 'per-credit' | 'per-unit' | 'free-local';
+  unit: 'per-video-second' | 'per-video' | 'per-image' | 'per-token' | 'per-credit' | 'per-unit' | 'free-local';
   currency: 'USD' | 'credits' | 'units';
-  /** Unit rate, optionally keyed by tier (resolution/duration variant). */
+  /** Unit rate. Key conventions: per-video-second → session resolution
+   *  ('720p','1080p') or 'base'; per-video → '<resolution>-<seconds>'
+   *  ('768P-6') or 'base'; per-token → promptPer1M/completionPer1M/
+   *  cachedInputPer1M (USD per 1M tokens, post-run); per-credit/per-unit →
+   *  usdPerCredit/usdPerUnit conversion anchor (post-run reported units). */
   rates?: Record<string, number>;
   source?: string;
   verifiedAt?: string | null;
