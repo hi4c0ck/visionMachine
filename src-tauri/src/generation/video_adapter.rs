@@ -73,7 +73,7 @@ pub struct ResolvedParams {
 }
 
 pub fn resolve_params(spec: &ModelSpecWire, ctx: &StageContext) -> ResolvedParams {
-    let (size, mut ratio) =
+    let (size, ratio) =
         shaper::resolve_target_size(spec, &ctx.resolution, &ctx.orientation, ctx.target_w, ctx.target_h);
     let (size, mut ratio) = shaper::guard_supported(spec, size, ratio);
     // 0012: an explicit session video-ratio override wins ONLY when

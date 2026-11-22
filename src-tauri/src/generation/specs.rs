@@ -191,12 +191,42 @@ pub struct AdapterCancelWire {
     pub method: String,
 }
 
+/// Engine upload route for the 'upload' media input mode (ComfyUI-class
+/// local engines): multipart-POST each local media file, then reference the
+/// engine-side name in the payload. Contract unverified-live until a local
+/// engine is probed (Tier-B slice 2026-11-22).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterUploadWire {
+    /// Multipart POST target (ComfyUI: /upload/image).
+    pub endpoint: String,
+    /// Multipart form field name (ComfyUI default "image").
+    #[serde(default = "default_upload_field")]
+    pub field: String,
+    /// Dot-path to the engine-side reference in the upload response JSON
+    /// (ComfyUI: "name" — graph nodes take the uploaded filename).
+    #[serde(default = "default_upload_name_path")]
+    pub name_path: String,
+}
+
+fn default_upload_field() -> String {
+    "image".into()
+}
+
+fn default_upload_name_path() -> String {
+    "name".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterMediaWire {
-    /// "url-or-data" | "url-only" ("upload" reserved for the ComfyUI slice).
+    /// "url-or-data" | "url-only" | "upload" (ComfyUI-class local engines).
     #[serde(default)]
     pub input: String,
+    /// 'upload' only: the engine upload route (endpoint + form field +
+    /// response name path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<AdapterUploadWire>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

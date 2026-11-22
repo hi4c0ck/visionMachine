@@ -179,8 +179,19 @@ export interface VideoAdapterSpec {
   media?: {
     /** 'url-or-data' = local media inlined as data: URIs (existing ≤32MB
      *  path); 'url-only' = local-only media is a concrete precheck failure.
-     *  'upload' reserved for the ComfyUI slice. */
-    input: 'url-or-data' | 'url-only';
+     *  'upload' = local media is multipart-POSTed to the engine's upload
+     *  route before create; the payload reference becomes the engine-side
+     *  name (ComfyUI: /upload/image → response.name — graph nodes take
+     *  the uploaded filename, not a URL). */
+    input: 'url-or-data' | 'url-only' | 'upload';
+    /** 'upload' only: the engine upload route. ComfyUI-class defaults:
+     *  endpoint '/upload/image', multipart field 'image', response
+     *  reference at 'name'. Unverified-live until an engine is probed. */
+    upload?: {
+      endpoint: string;
+      field?: string;
+      namePath?: string;
+    };
   };
 }
 
@@ -304,8 +315,9 @@ export interface ModelSpec {
    *  400s on unknown params). Absent/false = omitted. */
   thinkingToggle?: boolean;
   /** Video media input contract: 'url-only' routes reject local-only media
-   *  with a concrete precheck error instead of a burned render. */
-  mediaInput?: 'url-or-data' | 'url-only';
+   *  with a concrete precheck error instead of a burned render; 'upload'
+   *  routes (local engines) multipart-POST local media to the engine. */
+  mediaInput?: 'url-or-data' | 'url-only' | 'upload';
   /** Static pricing data (researched, date-stamped; absent = unknown). */
   pricing?: PriceSpec;
 }

@@ -302,6 +302,24 @@ fn assert_media_fetchable(payload: &Value) -> Result<(), String> {
 /// URIs, empty strings) or when the file is absent / unreadable /
 /// oversized — those stay local and the fetchability precheck reports them
 /// concretely.
+/// Media-hint key test shared by the inliner / precheck / upload paths.
+fn is_local_media_ref(s: &str) -> bool {
+    let t = s.trim();
+    !t.is_empty()
+        && !t.starts_with("http://")
+        && !t.starts_with("https://")
+        && !t.starts_with("data:")
+        && (t.contains(":\\")
+            || t.contains(":/")
+            || t.starts_with('/')
+            || t.starts_with("./")
+            || t.starts_with("../"))
+}
+
+/// Shared cap for local media sent to providers — inlining (data: URI) and
+/// engine upload ('upload' media mode) alike.
+const MEDIA_FILE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
 fn local_media_data_uri(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty()
@@ -311,10 +329,9 @@ fn local_media_data_uri(value: &str) -> Option<String> {
     {
         return None;
     }
-    const MAX_INLINE_MEDIA_BYTES: u64 = 32 * 1024 * 1024;
     let path = std::path::Path::new(trimmed);
     let meta = std::fs::metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_INLINE_MEDIA_BYTES {
+    if !meta.is_file() || meta.len() > MEDIA_FILE_MAX_BYTES {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
@@ -418,21 +435,9 @@ fn inline_local_media_generic(payload: &mut Value) {
 /// (missing / unreadable / oversized file, or a bare path). Media-hint keys
 /// only — prompt text is never inspected. Concrete E4-style error source.
 fn local_media_leaf(payload: &Value) -> Option<String> {
-    fn looks_local(s: &str) -> bool {
-        let t = s.trim();
-        !t.is_empty()
-            && !t.starts_with("http://")
-            && !t.starts_with("https://")
-            && !t.starts_with("data:")
-            && (t.contains(":\\")
-                || t.contains(":/")
-                || t.starts_with('/')
-                || t.starts_with("./")
-                || t.starts_with("../"))
-    }
     fn walk(v: &Value, key: &str, media: bool) -> Option<String> {
         match v {
-            Value::String(s) if media && looks_local(s) => Some(key.to_string()),
+            Value::String(s) if media && is_local_media_ref(s) => Some(key.to_string()),
             Value::Object(m) => m
                 .iter()
                 .find_map(|(k, val)| walk(val, k, media || is_media_key(k))),
@@ -441,6 +446,60 @@ fn local_media_leaf(payload: &Value) -> Option<String> {
         }
     }
     walk(payload, "payload", false)
+}
+
+/// All local media references in a payload (deduped, in first-seen order) —
+/// the 'upload' media mode uploads each unique file once, then swaps every
+/// reference for the engine-side name.
+fn collect_local_media_refs(payload: &Value) -> Vec<String> {
+    fn walk(v: &Value, media: bool, out: &mut Vec<String>) {
+        match v {
+            Value::String(s) if media && is_local_media_ref(s) => {
+                let t = s.trim();
+                if !out.iter().any(|o| o.as_str() == t) {
+                    out.push(t.to_string());
+                }
+            }
+            Value::Object(m) => {
+                for (k, val) in m {
+                    walk(val, media || is_media_key(k), out);
+                }
+            }
+            Value::Array(a) => {
+                for val in a {
+                    walk(val, media, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(payload, false, &mut out);
+    out
+}
+
+/// Swap every local-path string for `engine_ref` in place ('upload' mode:
+/// the ComfyUI graph node takes the uploaded filename, not the path).
+fn replace_local_media_refs(payload: &mut Value, from: &str, engine_ref: &str) {
+    fn walk(v: &mut Value, media: bool, from: &str, engine_ref: &str) {
+        match v {
+            Value::String(s) if media && s.trim() == from => {
+                *s = engine_ref.to_string();
+            }
+            Value::Object(m) => {
+                for (k, val) in m.iter_mut() {
+                    walk(val, media || is_media_key(k), from, engine_ref);
+                }
+            }
+            Value::Array(a) => {
+                for val in a.iter_mut() {
+                    walk(val, media, from, engine_ref);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(payload, false, from, engine_ref);
 }
 
 /// A concrete engine error carrying the concrete-cause rule (E4).
@@ -532,6 +591,19 @@ pub trait HttpClient: Send + Sync {
         dest: &std::path::Path,
         auth: &RequestAuth,
     ) -> Result<(), String>;
+    /// Multipart upload of one local media file to an engine upload route
+    /// (the 'upload' media input mode — ComfyUI-class local engines, e.g.
+    /// POST /upload/image). reqwest infers the part's MIME from the
+    /// filename. Returns `(status, body-json)`.
+    async fn upload_auth(
+        &self,
+        url: &str,
+        form_field: &str,
+        filename: &str,
+        bytes: &[u8],
+        auth: &RequestAuth,
+        timeout: Duration,
+    ) -> Result<(u16, serde_json::Value), String>;
 }
 
 /// Auth scheme + key + static headers for adapter-path requests (expanded
@@ -2332,21 +2404,87 @@ impl ProviderEngine {
         let mut payload =
             video_adapter::resolve_payload(&adapter.payload, &params).map_err(EngineError::Failure)?;
 
+        let auth = RequestAuth::from_spec(spec, slot.api_key.trim());
+        let base = slot.base_url.trim().trim_end_matches('/');
+
         // Media contract: 'url-only' routes reject local media BEFORE the
-        // create (never burn a render); 'url-or-data' inlines local files as
-        // data: URIs (the existing ≤32MB path), then fails fast on anything
-        // still non-fetchable. Media-hint keys only — prompts are untouched.
-        let url_only = adapter
+        // create (never burn a render); 'url-or-data' (default) inlines local
+        // files as data: URIs (the existing ≤32MB path), then fails fast on
+        // anything still non-fetchable; 'upload' (ComfyUI-class local
+        // engines) multipart-POSTs each local file to the engine's upload
+        // route first, then swaps every payload reference for the
+        // engine-side name. Media-hint keys only — prompts are untouched.
+        // Upload contract unverified-live until a local engine is probed.
+        let media_input = adapter
             .media
             .as_ref()
-            .map(|m| m.input == "url-only")
-            .unwrap_or(false);
-        if url_only {
+            .map(|m| m.input.as_str())
+            .unwrap_or("url-or-data");
+        if media_input == "url-only" {
             if let Some(field) = local_media_leaf(&payload) {
                 return Err(EngineError::Failure(format!(
                     "model {} accepts remote media URLs only — '{field}' is a local file; use a URL reference",
                     spec.id
                 )));
+            }
+        } else if media_input == "upload" {
+            let upload = adapter
+                .media
+                .as_ref()
+                .and_then(|m| m.upload.clone())
+                .ok_or_else(|| {
+                    EngineError::Failure(format!(
+                        "model {} uses upload media mode but has no media.upload descriptor (endpoint + field + namePath)",
+                        spec.id
+                    ))
+                })?;
+            for path in collect_local_media_refs(&payload) {
+                let filename = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .filter(|f| !f.is_empty())
+                    .unwrap_or_else(|| "media".to_string());
+                let bytes = std::fs::read(&path).map_err(|e| {
+                    EngineError::Failure(format!(
+                        "cannot read media file for upload ({path}): {e}"
+                    ))
+                })?;
+                if bytes.is_empty() || bytes.len() as u64 > MEDIA_FILE_MAX_BYTES {
+                    return Err(EngineError::Failure(format!(
+                        "media file '{path}' is missing, empty, or exceeds the 32 MB upload cap"
+                    )));
+                }
+                let ep = upload.endpoint.trim();
+                let upload_url = if ep.starts_with("http") {
+                    ep.to_string()
+                } else {
+                    format!("{base}{}", if ep.starts_with('/') { ep.to_string() } else { format!("/{ep}") })
+                };
+                let (status, body) = self
+                    .http
+                    .upload_auth(&upload_url, &upload.field, &filename, &bytes, &auth, POLL_TIMEOUT)
+                    .await
+                    .map_err(|e| {
+                        EngineError::Failure(format!(
+                            "media upload for '{path}' failed (engine {upload_url}): {e}"
+                        ))
+                    })?;
+                let engine_ref = body
+                    .get(upload.name_path.as_str())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if status != 200 || engine_ref.is_empty() {
+                    let snippet = if body.is_null() {
+                        "{}".to_string()
+                    } else {
+                        serde_json::to_string(&body).unwrap_or_default().chars().take(300).collect()
+                    };
+                    return Err(EngineError::Failure(format!(
+                        "media upload returned {status} for '{path}' (engine {upload_url}); response {snippet}"
+                    )));
+                }
+                replace_local_media_refs(&mut payload, &path, &engine_ref);
             }
         } else {
             inline_local_media_generic(&mut payload);
@@ -2357,8 +2495,6 @@ impl ProviderEngine {
             }
         }
 
-        let auth = RequestAuth::from_spec(spec, slot.api_key.trim());
-        let base = slot.base_url.trim().trim_end_matches('/');
         let secrets: Vec<String> = if slot.api_key.trim().is_empty() {
             Vec::new()
         } else {
@@ -3070,6 +3206,29 @@ impl HttpClient for ReqwestClient {
         })
         .await
     }
+
+    async fn upload_auth(
+        &self,
+        url: &str,
+        form_field: &str,
+        filename: &str,
+        bytes: &[u8],
+        auth: &RequestAuth,
+        timeout: Duration,
+    ) -> Result<(u16, serde_json::Value), String> {
+        // Multipart part with the engine's form field + original filename
+        // (ComfyUI /upload/image stores under the filename graph nodes take;
+        // reqwest infers the part's MIME from the extension).
+        let part = reqwest::multipart::Part::bytes(bytes.to_vec()).file_name(filename.to_string());
+        let form = reqwest::multipart::Form::new().part(form_field.to_string(), part);
+        let url = auth.url_with_query_key(url);
+        let mut req = self.client.post(&url).multipart(form).timeout(timeout);
+        req = auth.apply_headers(req);
+        let resp = req.send().await.map_err(|e| format!("transport: {e}"))?;
+        let status = resp.status().as_u16();
+        let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        Ok((status, body))
+    }
 }
 
 // ── Hardened artifact download ──────────────────────────────────────────────
@@ -3342,6 +3501,12 @@ mod tests {
         /// Records every create-request body so media tests can assert
         /// inlining happened (data: URI) or not (url-only kept the path).
         posted_bodies: StdMutex<Vec<serde_json::Value>>,
+        /// Per-attempt scripted upload results (FIFO) — the 'upload' media
+        /// mode: ComfyUI /upload/image-style responses ({name} on 200).
+        upload_results: StdMutex<VecDeque<Result<(u16, serde_json::Value), String>>>,
+        /// Records every multipart upload (url, form field, filename) so
+        /// tests can assert the engine route was hit with the right file.
+        upload_calls: StdMutex<Vec<(String, String, String)>>,
     }
 
     impl StubHttp {
@@ -3354,7 +3519,20 @@ mod tests {
                 downloads: StdMutex::new(Vec::new()),
                 auth_requests: StdMutex::new(Vec::new()),
                 posted_bodies: StdMutex::new(Vec::new()),
+                upload_results: StdMutex::new(VecDeque::new()),
+                upload_calls: StdMutex::new(Vec::new()),
             }
+        }
+        /// Script one 'upload'-mode multipart POST result (ComfyUI-style:
+        /// 200 + {"name": "uploaded.png"}).
+        fn queue_upload(self, status: u16, body: serde_json::Value) -> Self {
+            self.upload_results.lock().unwrap().push_back(Ok((status, body)));
+            self
+        }
+        /// Script a transport-level upload failure (engine down, etc.).
+        fn queue_upload_transport_error(self, msg: &str) -> Self {
+            self.upload_results.lock().unwrap().push_back(Err(msg.to_string()));
+            self
         }
         fn queue_post(self, r: Result<(u16, serde_json::Value), String>) -> Self {
             self.posts.lock().unwrap().push_back(r);
@@ -3471,6 +3649,28 @@ mod tests {
             auth: &RequestAuth,
         ) -> Result<(), String> {
             self.download(url, dest, &auth.key).await
+        }
+
+        async fn upload_auth(
+            &self,
+            url: &str,
+            form_field: &str,
+            filename: &str,
+            _bytes: &[u8],
+            _auth: &RequestAuth,
+            _timeout: Duration,
+        ) -> Result<(u16, serde_json::Value), String> {
+            self.upload_calls.lock().unwrap().push((
+                url.to_string(),
+                form_field.to_string(),
+                filename.to_string(),
+            ));
+            match self.upload_results.lock().unwrap().pop_front() {
+                Some(r) => r,
+                // Default: ComfyUI-style success ({name} keyed by the
+                // uploaded filename).
+                None => Ok((200, serde_json::json!({ "name": filename }))),
+            }
         }
     }
 
@@ -5134,6 +5334,127 @@ mod tests {
             }),
             "create body must carry the inlined data: URI, got: {bodies:?}"
         );
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// 'upload' media mode (ComfyUI-class local engines): each local media
+    /// file is multipart-POSTed to the engine's upload route, and every
+    /// payload reference is swapped for the engine-side name from the
+    /// response's namePath. Contract unverified-live (Tier-B).
+    #[tokio::test]
+    async fn adapter_upload_media_uploads_and_swaps_refs() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let kf = media.join("k1.png");
+        std::fs::write(&kf, vec![1u8, 2u8, 3u8]).unwrap();
+        let spec = json!({
+            "id": "local/wan-2.2-5b/image-to-video", "kind": "video",
+            "endpoint": "/local/wan-2.2-5b/image-to-video",
+            "sync": false, "requestFormat": "video-adapter", "auth": "none",
+            "adapter": {
+                "create": { "endpoint": "/prompt" },
+                "poll": { "endpoint": "/history/{jobId}",
+                          "resultEndpoint": "/history/{jobId}", "intervalSecs": 0 },
+                "payload": { "prompt": "1", "image_url": "{{media:first}}" },
+                "response": {
+                    "jobIdPath": "prompt_id", "statusPath": "status",
+                    "statusMap": { "RUNNING": "running", "SUCCESS": "succeeded" },
+                    "artifact": { "mode": "url", "path": "video.url" },
+                    "errorPath": "error"
+                },
+                "media": { "input": "upload",
+                           "upload": { "endpoint": "/upload/image" } }
+            }
+        });
+        let mut input = adapter_input(&media, spec);
+        input.upstream[0].primary = kf.to_string_lossy().into();
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_upload(200, json!({ "name": "uploaded-abc.png" }))
+                .queue_post(Ok((200, json!({ "status": "SUCCESS", "prompt_id": "p1" }))))
+                .queue_get(Ok((200, json!({ "status": "SUCCESS" }))))
+                .queue_get(Ok((200, json!({ "video": { "url": "http://localhost:8188/view?filename=out.mp4" } }))))
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        engine
+            .run(&input, &cancel, &|_p| {}, &|_l| {})
+            .await
+            .expect("upload-mode local media must upload and the run must succeed");
+        let calls = http.upload_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one local file, one upload call");
+        assert!(
+            calls[0].0.ends_with("/upload/image"),
+            "upload must hit the engine's multipart route, got {}",
+            calls[0].0
+        );
+        assert_eq!(&calls[0].1, "image", "default form field");
+        assert_eq!(&calls[0].2, "k1.png", "original filename travels with the part");
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert!(
+            bodies.iter().any(|b| {
+                b.get("image_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s == "uploaded-abc.png")
+                    .unwrap_or(false)
+            }),
+            "create body must carry the engine-side name, got: {bodies:?}"
+        );
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// 'upload' media mode: a non-200 engine response fails the run BEFORE
+    /// the create (no render burned) with the engine's status + snippet.
+    #[tokio::test]
+    async fn adapter_upload_media_engine_reject_fails_before_create() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let kf = media.join("k1.png");
+        std::fs::write(&kf, vec![1u8, 2u8]).unwrap();
+        let mut spec = runway_adapter_spec("none");
+        spec["adapter"]["media"] = json!({
+            "input": "upload", "upload": { "endpoint": "/upload/image" }
+        });
+        let http = Arc::new(
+            StubHttp::new().queue_upload(500, json!({ "error": "unsupported type" })),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = adapter_input(&media, spec);
+        input.upstream[0].primary = kf.to_string_lossy().into();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_l| {})
+            .await
+            .expect_err("engine upload reject must fail the run");
+        assert!(err.contains("media upload returned 500"), "{err}");
+        assert!(err.contains("unsupported type"), "{err}");
+        assert!(
+            http.posted_bodies.lock().unwrap().is_empty(),
+            "no create request may fire when the upload is rejected"
+        );
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// 'upload' media mode without a media.upload descriptor is a concrete
+    /// config error (never a silent fall-through to inlining).
+    #[tokio::test]
+    async fn adapter_upload_media_missing_descriptor_is_a_concrete_error() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let kf = media.join("k1.png");
+        std::fs::write(&kf, vec![1u8, 2u8]).unwrap();
+        let mut spec = runway_adapter_spec("none");
+        spec["adapter"]["media"] = json!({ "input": "upload" });
+        let http = Arc::new(StubHttp::new());
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = adapter_input(&media, spec);
+        input.upstream[0].primary = kf.to_string_lossy().into();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_l| {})
+            .await
+            .expect_err("upload mode without a descriptor must fail");
+        assert!(err.contains("media.upload descriptor"), "{err}");
         let _ = std::fs::remove_dir_all(&media);
     }
 
