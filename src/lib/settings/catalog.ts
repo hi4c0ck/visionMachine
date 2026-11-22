@@ -17,10 +17,13 @@
 //   ships pending:true until the live-verification pass (Phase F protocol:
 //   one real clip, record into docs/provider-catalogs/<vendor>.md, flip).
 //   Sora EXCLUDED — OpenAI shut the Videos API down 2026-09-24.
-// - LOCAL image/video (ComfyUI class) is a deferred slice; the adapter
-//   schema reserves its shapes (keyless auth, upload media, content mode).
+// - LOCAL image/video (ComfyUI class): config surface landed 2026-11-22 —
+//   LOCAL_VIDEO_PRESET (keyless, reserved /prompt+/history adapter shape,
+//   the owner's 16 GB model matrix: Wan 2.1/2.2, LTX, HunyuanVideo 1.5,
+//   runtimes ComfyUI / Wan2GP); the EXECUTOR (workflow graphs, 'upload'
+//   media input mode) remains the deferred Tier-B slice.
 
-import type { ModelSpec, PresetId, PresetSpec, ProviderKind, VideoAdapterSpec } from '$types';
+import type { ModelSpec, PresetId, PresetSpec, PriceSpec, ProviderKind, VideoAdapterSpec } from '$types';
 
 // Host-root base URL: creates carry the /v1 prefix in their endpoint path,
 // polling lives at the host root (/agnesapi) — one base for everything
@@ -213,7 +216,9 @@ export const OPENROUTER_PRESET: PresetSpec = {
 
 // Local OpenAI-compatible servers — KEYLESS (auth 'none'). Text only:
 // Ollama/LM Studio/llama.cpp do not run diffusion image/video engines; the
-// local image+video path is the deferred ComfyUI slice. The placeholder
+// local VIDEO config surface is LOCAL_VIDEO_PRESET (below — ComfyUI-class);
+// its executor (workflow graphs + upload media) remains the Tier-B slice.
+// The placeholder
 // model entry is pending (the closed picker can't send a garbage id); the
 // free-text + refresh-list UI lands with the settings pass. Director Node A
 // rides the json_object capability + the existing prompt-only fallback retry.
@@ -289,6 +294,108 @@ export const LLAMACPP_PRESET: PresetSpec = {
   modelList: { endpoint: '/models', shape: 'openai' },
   tag: 'local',
   models: [LOCAL_TEXT_MODEL('/chat/completions')],
+};
+
+// ── LOCAL video preset — ComfyUI-class engines (owner GPU: Wan / LTX /
+//    HunyuanVideo, 16 GB matrix — owner-provided local model table
+//    2026-11-22) ───────────────────────────────────────────────────────────
+// Config surface lands NOW (preset + model data, all pending — the picker
+// can show the options, generation is blocked until live-verified); the
+// EXECUTOR is the deferred Tier-B slice: ComfyUI workflow graphs + the
+// 'upload' media input mode (VideoAdapterSpec.media.input, types). The
+// adapter spec below is the RESERVED ComfyUI shape (public HTTP API, no
+// auth): POST /prompt {prompt: graph} → {prompt_id}; GET /history/{id}
+// returns {} while queued, the finished record when done; artifact bytes
+// stream from GET /view?filename=… (content mode). Every shape here is
+// unverified-live — reserved, not exercised (no local engine probed).
+const LOCAL_VIDEO_ADAPTER: VideoAdapterSpec = {
+  create: { endpoint: '/prompt' },
+  poll: { endpoint: '/history/{jobId}', intervalSecs: 5 },
+  payload: {}, // per-model template required (adapterPayload) — graph data is Tier-B
+  response: {
+    jobIdPath: 'prompt_id',
+    // {} while queued vs finished record — the Tier-B slice owns the
+    // mapping; reserved shape, not exercised.
+    statusPath: 'status.status_str',
+    statusMap: { success: 'succeeded', error: 'failed' },
+    artifact: { mode: 'content', endpoint: '/view' }, // filename query from outputs
+  },
+  media: { input: 'url-or-data' }, // 'upload' (local file paths) reserved
+};
+
+const LOCAL_VIDEO_MODEL = (
+  id: string, label: string,
+  extra: Partial<ModelSpec> & { pricing: PriceSpec },
+): ModelSpec => ({
+  id, kind: 'video', label,
+  endpoint: '/prompt', sync: false, requestFormat: 'video-adapter',
+  limits: {}, pending: true,
+  // Minimal payloads on purpose (G1 rule): no speculative graph params —
+  // the workflow template is Tier-B slice data.
+  adapterPayload: { prompt: '{{prompt}}' },
+  ...extra,
+});
+
+export const LOCAL_VIDEO_PRESET: PresetSpec = {
+  id: 'local-video',
+  label: 'Local video engine (ComfyUI-class)',
+  kinds: ['video'],
+  auth: 'none',
+  urlStyle: 'host-root',
+  // ComfyUI's default dev server; Wan2GP serves its own port — user edits.
+  defaultBaseUrl: 'http://localhost:8188',
+  freeFormModel: true,
+  // GET /system_stats = ComfyUI's device/queue JSON (public, no auth);
+  // unverified-live — no local engine probed.
+  pingPath: { video: '/system_stats' },
+  tag: 'local',
+  customTransport: 'special', // ComfyUI-class reserved marker (config slot now)
+  adapter: LOCAL_VIDEO_ADAPTER,
+  models: [
+    // Owner matrix (2026-11-22): "Wan 2.2 (5B / 14B FP8) — 8–16 GB VRAM —
+    // best overall quality, 480p–720p clips, strong motion physics; 4-step
+    // LoRAs keep 14B FP8 fast on 16 GB."
+    LOCAL_VIDEO_MODEL('wan-2.2-14b-fp8', 'Wan 2.2 14B FP8/GGUF (local)', {
+      limits: { resolutions: ['480p', '720p'],
+                sizeMap: { '480p': '480p', '720p': '720p', '1080p': '720p' } },
+      media: { modes: ['keyframes'], maxKeyframes: 1 },
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: '2026-11-22',
+                 note: 'VRAM 8–16 GB (FP8/GGUF); 480p–720p best quality; runtimes ComfyUI / Wan2GP (4–16 GB, auto swap). Owner matrix 2026-11-22, unverified-live' } },
+    ),
+    LOCAL_VIDEO_MODEL('wan-2.2-5b-fp16', 'Wan 2.2 5B FP16 (local)', {
+      limits: { resolutions: ['480p', '720p'],
+                sizeMap: { '480p': '480p', '720p': '720p', '1080p': '720p' } },
+      media: { modes: ['keyframes'], maxKeyframes: 1 },
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: '2026-11-22',
+                 note: 'VRAM 8–16 GB (FP16); 480p–720p best quality; runtimes ComfyUI / Wan2GP. Owner matrix 2026-11-22, unverified-live' } },
+    ),
+    // "LTX-Video / LTX-2.3 (2B Distilled) — 6–12 GB VRAM — fastest; quick
+    // iterations; ideal on 16 GB Apple Silicon."
+    LOCAL_VIDEO_MODEL('ltx-video-2b', 'LTX-Video 2B distilled FP8/GGUF (local)', {
+      media: { modes: ['keyframes'], maxKeyframes: 1 },
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: '2026-11-22',
+                 note: 'VRAM 6–12 GB; fastest class (quick iterations; 16 GB Apple Silicon ok); runtimes ComfyUI / Wan2GP. Owner matrix 2026-11-22, unverified-live' } },
+    ),
+    // "HunyuanVideo 1.5 — FP8 ~8.3 GB weights, 14–16 GB VRAM — cinematic
+    // lighting & human motion; fits 16 GB with FP8 + sequential offloading."
+    LOCAL_VIDEO_MODEL('hunyuanvideo-1.5', 'HunyuanVideo 1.5 FP8 (local)', {
+      media: { modes: ['keyframes'], maxKeyframes: 1 },
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: '2026-11-22',
+                 note: 'VRAM 14–16 GB (FP8 ~8.3 GB weights + sequential offload); cinematic lighting & human motion; runtimes ComfyUI / Wan2GP. Owner matrix 2026-11-22, unverified-live' } },
+    ),
+    // "Wan 2.1 (1.3B) — ~8.2–9.8 GB VRAM — easiest entry point, runs natively
+    // without aggressive offloading."
+    LOCAL_VIDEO_MODEL('wan-2.1-1.3b', 'Wan 2.1 1.3B FP16 (local)', {
+      media: { modes: ['text'] }, // t2v-only variant — no keyframe media
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: '2026-11-22',
+                 note: 'VRAM ~8.2–9.8 GB; easiest entry point (native, no offloading); runtimes ComfyUI / Wan2GP. Owner matrix 2026-11-22, unverified-live' } },
+    ),
+  ],
 };
 
 // ── VIDEO presets — Tier-A configurable adapter (owner scope S2) ───────────
@@ -874,8 +981,8 @@ export const PRESETS: PresetSpec[] = [
   AGNES_PRESET, CUSTOM_PRESET,
   // text — OpenAI route
   OPENAI_PRESET, OPENROUTER_PRESET, OLLAMA_PRESET, LMSTUDIO_PRESET, LLAMACPP_PRESET, LOCAL_CUSTOM_PRESET,
-  // video — Tier-A adapter
-  RUNWAY_PRESET, FAL_PRESET, REPLICATE_PRESET, LUMA_PRESET, KLING_PRESET, MINIMAX_PRESET,
+  // video — Tier-A adapter + local ComfyUI-class (config now, executor Tier-B)
+  RUNWAY_PRESET, FAL_PRESET, REPLICATE_PRESET, LUMA_PRESET, KLING_PRESET, MINIMAX_PRESET, LOCAL_VIDEO_PRESET,
 ];
 
 export function getPreset(id: string): PresetSpec | undefined {

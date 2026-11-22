@@ -197,3 +197,55 @@ describe('mergeAdapter (preset ⊕ model overrides ⊕ payload)', () => {
 		expect(merged.media?.input).toBe('url-or-data');
 	});
 });
+
+describe('local-video preset (ComfyUI-class config, owner matrix 2026-11-22)', () => {
+	it('pins the keyless reserved adapter shape', () => {
+		const p = getPreset('local-video');
+		expect(p, 'local-video preset').toBeDefined();
+		expect(p!.kinds).toEqual(['video']);
+		expect(p!.auth).toBe('none');
+		expect(p!.tag).toBe('local');
+		expect(p!.customTransport).toBe('special');
+		expect(p!.freeFormModel).toBe(true);
+		expect(p!.adapter, 'adapter').toBeDefined();
+		expect(p!.adapter!.create.endpoint).toBe('/prompt');
+		expect(p!.adapter!.poll.endpoint).toBe('/history/{jobId}');
+		expect(p!.adapter!.response.artifact.mode).toBe('content');
+	});
+
+	it('ships the 5-matrix models, all pending + free-local + doc-sourced notes', () => {
+		const p = getPreset('local-video')!;
+		expect(p.models.map((m) => m.id)).toEqual([
+			'wan-2.2-14b-fp8', 'wan-2.2-5b-fp16', 'ltx-video-2b',
+			'hunyuanvideo-1.5', 'wan-2.1-1.3b',
+		]);
+		for (const m of p.models) {
+			expect(m.pending, m.id).toBe(true);
+			expect(m.requestFormat).toBe('video-adapter');
+			expect(m.adapterPayload, m.id).toBeDefined();
+			expect(m.pricing!.unit, m.id).toBe('free-local');
+			expect(m.pricing!.note, m.id).toMatch(/Owner matrix 2026-11-22/);
+		}
+	});
+
+	it('encodes only doc-sourced caps (480p–720p on Wan 2.2; nothing speculative)', () => {
+		const p = getPreset('local-video')!;
+		for (const id of ['wan-2.2-14b-fp8', 'wan-2.2-5b-fp16']) {
+			const m = getModel(p, id)!;
+			expect(m.limits.resolutions, id).toEqual(['480p', '720p']);
+			expect(m.limits.sizeMap!['1080p'], id).toBe('720p');
+		}
+		// No caps were documented for these — limits stay {} (G1 rule).
+		for (const id of ['ltx-video-2b', 'hunyuanvideo-1.5', 'wan-2.1-1.3b']) {
+			expect(getModel(p, id)!.limits, id).toEqual({});
+		}
+		// Wan 2.1 1.3B is the t2v-only entry point — no keyframe media.
+		expect(getModel(p, 'wan-2.1-1.3b')!.media!.modes).toEqual(['text']);
+	});
+
+	it('registers in PRESETS without disturbing the default seeding order', () => {
+		expect(PRESETS.map((x) => x.id)).toContain('local-video');
+		expect(PRESETS[0]).toBe(AGNES_PRESET);
+		expect(PRESETS[1]).toBe(CUSTOM_PRESET);
+	});
+});

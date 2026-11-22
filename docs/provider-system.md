@@ -202,13 +202,23 @@ Group header = the shared fields; row = the exact catalog model id
 | `MiniMax-Hailuo-2.3`, `MiniMax-Hailuo-02`, `MiniMax-Hailuo-2.3-i2v` | local ✓ / remote ✓ (i2v) | per-clip tiers; 1080P = 6s-only (docs 2026-11-21) → **unverified-live + combo constraint not expressible (§7.4)**; i2v `first_frame_image` param name **unverified** | per-clip static → **unverified-live** | retrieve `file.download_url` (1h expiry) → **unverified-live** |
 | `MiniMax-H3` series ×5 (t2v/i2v/Highspeed/Lite/Max, all `pending`) | local ✓ / remote ✓ (i2v) | per-second generation; 480P–2K per tier → **unverified-live** (docs platform.minimax.io 2026-11-21) | per-second static + input-media surcharges → **unverified-live** | retrieve mode → **unverified-live** |
 
+**local** (5 rows, `local-video` preset — ComfyUI-class config, 2026-11-22) — auth keyless by design (local, code-verified by construction) · executor **unsupported** until the Tier-B slice (workflow graphs + `upload` media mode) · VRAM/runtime data doc-sourced from the owner's 16 GB matrix (unverified-live — no local engine probed):
+
+| Model | Input media | Duration / resolution (source → status) | Pricing (estimate source → status) | Artifact (path → status) |
+|---|---|---|---|---|
+| `wan-2.2-14b-fp8` / `wan-2.2-5b-fp16` | keyframes (first-frame) — **reserved** (`upload` mode Tier-B) | resolutions **doc-sourced** (owner matrix 2026-11-22: 480p–720p; 1080p clamps to 720p); seconds **unverified** | `free-local` — VRAM 8–16 GB; runtimes ComfyUI / Wan2GP (4–16 GB, auto swap) → **doc-sourced**, unverified-live | **unsupported** (content mode reserved, Tier-B slice) |
+| `ltx-video-2b` | keyframes — **reserved** | caps **unverified** (G1; no doc caps) | `free-local` — VRAM 6–12 GB, fastest class | **unsupported** |
+| `hunyuanvideo-1.5` | keyframes — **reserved** | caps **unverified** (G1) | `free-local` — VRAM 14–16 GB (FP8 ~8.3 GB + sequential offload) | **unsupported** |
+| `wan-2.1-1.3b` | none (t2v-only entry point) | caps **unverified** (G1) | `free-local` — VRAM ~8.2–9.8 GB | **unsupported** |
+
 ### 7.3 Closed / no open items
 
 - `agnes-video-2.5-flash` — **verified** (live runs, previous releases; free).
 - `agnes-video-2.5` — read-only by design, no open items.
 - Text presets (openai, openrouter, custom, local ×4) — **code-verified**
   engine paths; local: auth `none` + $0 marginal **code-verified by design**;
-  media N/A.
+  media N/A. local-video (5 rows): CONFIG only — no executor to verify yet
+  (Tier-B slice); the $0 + keyless shape is code-verified by design.
 - Redaction — **code-verified** for Bearer and `Key <k>` forms (value-based;
   secrets never land in `request.log`).
 
@@ -220,8 +230,9 @@ Group header = the shared fields; row = the exact catalog model id
 2. **Vendor-reported cost exists for exactly two adapters** (runway, kling —
    code-verified). Every other vendor prices via source ②/④ by design, not
    by bug.
-3. **MCP / special-API local transport** — reserved `customTransport` marker,
-   no implementation; ComfyUI slice carries its own pre-check (upload).
+3. **MCP / special-API local transport** — reserved `customTransport` marker
+   (in use since 2026-11-22: `local-video` preset, config-only), no
+   implementation; ComfyUI slice carries its own pre-check (upload).
 
 ---
 
