@@ -11,6 +11,7 @@
 	//  - A history strip lists the piece's prior on-disk generations; clicking
 	//    one switches the "generated" preview to that artifact.
 	import { getSettings } from '$lib/settings/store';
+	import { unlockVerified } from '$lib/settings/guards';
 	import { modelsFor, getPreset } from '$lib/settings/catalog';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { flashToast } from '$lib/flashToast';
@@ -121,7 +122,9 @@
 		if (imageModelSeedKey === key) return;
 		imageModelSeedKey = key;
 		const ip = getPreset(s.providers.image.preset);
-		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m) => !m.readOnly && !m.obsolete);
+		imageModels = (ip ? modelsFor(ip, 'image') : [])
+			.filter((m) => !m.readOnly && !m.obsolete)
+			.map((m) => unlockVerified(m, s.providers.image.verified));
 		imageModel = s.providers.image.model;
 		if (!imageModels.some((m) => m.id === imageModel))
 			imageModel = imageModels.find((m) => !m.pending)?.id ?? imageModel;

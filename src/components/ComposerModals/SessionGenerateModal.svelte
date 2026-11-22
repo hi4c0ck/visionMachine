@@ -3,6 +3,7 @@
 	import { APP_CONSTANTS } from '$constants';
 	import { flashToast } from '$lib/flashToast';
 	import { getSettings } from '$lib/settings/store';
+	import { unlockVerified } from '$lib/settings/guards';
 	import { modelsFor, getPreset, resolveSpecs } from '$lib/settings';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
@@ -227,8 +228,12 @@
 		videoModel = s.providers.video.model;
 		const ip = getPreset(s.providers.image.preset);
 		const vp = getPreset(s.providers.video.preset);
-		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly && !m.obsolete);
-		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly && !m.obsolete);
+		imageModels = (ip ? modelsFor(ip, 'image') : [])
+			.filter((m: ModelSpec) => !m.readOnly && !m.obsolete)
+			.map((m) => unlockVerified(m, s.providers.image.verified));
+		videoModels = (vp ? modelsFor(vp, 'video') : [])
+			.filter((m: ModelSpec) => !m.readOnly && !m.obsolete)
+			.map((m) => unlockVerified(m, s.providers.video.verified));
 		// Self-heal: a saved default that is no longer selectable (read-only /
 		// unknown) must not leave the select empty — fall back to the first
 		// generable model of the kind.

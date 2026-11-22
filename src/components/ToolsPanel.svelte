@@ -5,6 +5,7 @@
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { effectiveTargetDims } from '$types';
 	import { getPreset, modelsFor } from '$lib/settings/catalog';
+	import { unlockVerified } from '$lib/settings/guards';
 	import { availableResolutionsForModel, videoRatiosForOrientation, effectiveVideoAspect } from '$lib/settings/mediaMode';
 	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import { onMount } from 'svelte';
@@ -128,7 +129,9 @@
 		void settingsRev;
 		const s = getSettings();
 		const vp = getPreset(s.providers.video.preset);
-		const models = (vp ? modelsFor(vp, 'video') : []).filter((m) => !m.readOnly && !m.obsolete);
+		const models = (vp ? modelsFor(vp, 'video') : [])
+			.filter((m) => !m.readOnly && !m.obsolete)
+			.map((m) => unlockVerified(m, s.providers.video.verified));
 		const id = s.providers.video.model;
 		const m = models.find((mm) => mm.id === id) ?? models.find((mm) => !mm.pending) ?? null;
 		return m;

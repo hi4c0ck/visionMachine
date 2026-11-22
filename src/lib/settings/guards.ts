@@ -14,6 +14,7 @@ import type {
   CropMode,
   ExperimentalBlock,
   GenerationLogEntry,
+  ModelSpec,
   Orientation,
   ProviderKind,
   ProviderSlot,
@@ -36,6 +37,15 @@ function defaultSlot(kind: ProviderKind): ProviderSlot {
     apiKey: '',
     model: model?.id ?? '',
   };
+}
+
+/** Lift the catalog `pending` gate for a model the owner live-verified on
+ *  this machine (settings.providers[kind].verified). Pure: the catalog spec
+ *  stays the reserved source of truth; the unlock rides the list builder,
+ *  so every downstream gate (option disabled, prechecks, self-heal) reads
+ *  the unlocked list. Non-pending specs pass through untouched. */
+export function unlockVerified(m: ModelSpec, verified: readonly string[] | undefined | null): ModelSpec {
+  return m.pending && verified?.includes(m.id) ? { ...m, pending: false } : m;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

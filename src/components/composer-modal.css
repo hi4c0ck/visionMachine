@@ -327,6 +327,19 @@
 	white-space: nowrap;
 }
 
+/* Pre-run cost hint chip (same shape as the preset chips): green border
+   when the estimate is known, muted when honest-unknown (E4 — never a
+   fabricated $0). */
+.gen-cost-pill {
+	border-color: var(--success-color, #4ade80);
+	color: var(--success-color, #4ade80);
+}
+
+.gen-cost-pill.cost-unknown {
+	border-color: var(--border-color, #3f3f46);
+	color: var(--text-muted, #71717a);
+}
+
 /* Status chips (per-pipe readiness / terminal states). */
 .gen-status-chip {
 	display: inline-block;

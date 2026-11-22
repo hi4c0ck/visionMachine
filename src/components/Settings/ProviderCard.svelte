@@ -5,7 +5,7 @@
 	// and gets it back via onchange.
 	import type { ProviderKind, ProviderSlot } from '$types';
 	import { PRESETS, getPreset, modelsFor } from '$lib/settings/catalog';
-	import { validateHttpUrl, isConfigured } from '$lib/settings/guards';
+	import { validateHttpUrl, isConfigured, unlockVerified } from '$lib/settings/guards';
 	import { testProvider, type TestProviderOutcome } from '$lib/settings/store';
 
 	let {
@@ -34,7 +34,13 @@
 
 	const preset = $derived(getPreset(slot.preset) ?? PRESETS[0]);
 	const presetOptions = $derived(PRESETS.filter((p) => p.kinds.includes(kind)));
-	const modelOptions = $derived(modelsFor(preset, kind).filter((m) => !m.obsolete));
+	// Owner live-verification (slot.verified) lifts the catalog `pending`
+	// gate for selected models — they become the settings default too.
+	const modelOptions = $derived(
+		modelsFor(preset, kind).filter((m) => !m.obsolete).map((m) => unlockVerified(m, slot.verified)),
+	);
+	// Reserved models not yet verified on this machine — the owner gate.
+	const pendingModels = $derived(modelOptions.filter((m) => m.pending));
 	// Self-heal the value: a stored slot may still name an obsolete (<2.5)
 	// model that's no longer offered. Show the first usable option instead so
 	// the select never renders a dangling value; the stored id is untouched
@@ -73,9 +79,18 @@
 			preset: next.id,
 			baseUrl: next.defaultBaseUrl,
 			apiKey: '',
+			// Verified ids belong to the previous preset's models — a
+			// vendor-scoped list, dropped with the key.
+			verified: undefined,
 			model: model?.id ?? slot.model,
 		});
 		testResult = null;
+	}
+
+	function toggleVerified(id: string) {
+		const cur: string[] = slot.verified ?? [];
+		const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+		onslotchange({ ...slot, verified: next.length ? next : undefined });
 	}
 
 	async function runTest() {
@@ -160,6 +175,26 @@
 			<span class="hint">Limits: {modelLimitsText}</span>
 		{/if}
 	</div>
+
+	{#if pendingModels.length}
+		<div class="field verified">
+			<span class="verified-title">Live-verified models</span>
+			{#each pendingModels as m (m.id)}
+				<label class="verified-row">
+					<input
+						type="checkbox"
+						checked={(slot.verified ?? []).includes(m.id)}
+						onchange={() => toggleVerified(m.id)}
+					/>
+					<span>{m.label ?? m.id}</span>
+				</label>
+			{/each}
+			<span class="hint">
+				Reserved until live-verified. Tick a model once you've confirmed it against
+				your engine — it unlocks generation on this machine only.
+			</span>
+		</div>
+	{/if}
 
 	<div class="test-row">
 		<button
@@ -281,6 +316,31 @@
 
 	.hint-error {
 		color: var(--error-color, #f87171);
+	}
+
+	/* Owner live-verification gate: one checkbox row per reserved model. */
+	.verified-title {
+		font-size: 0.72rem;
+		font-weight: 500;
+		color: var(--text-secondary, #a1a1aa);
+	}
+
+	.verified-row {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		font-size: 0.8rem;
+		color: var(--text-primary, #fff);
+		cursor: pointer;
+	}
+
+	.verified-row input {
+		width: auto;
+		padding: 0;
+		margin: 0;
+		background: transparent;
+		border: none;
+		accent-color: var(--accent-color, #ff3e00);
 	}
 
 	.test-row {

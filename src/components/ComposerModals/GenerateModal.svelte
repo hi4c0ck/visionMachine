@@ -7,7 +7,8 @@
 	import { summarizePipe } from '$lib/promptEngine';
 	import { flashToast } from '$lib/flashToast';
 	import { APP_CONSTANTS } from '$constants';
-	import { getSettings } from '$lib/settings/store';
+	import { getSettings, estimateGenerationCost, type CostEstimate } from '$lib/settings/store';
+	import { unlockVerified } from '$lib/settings/guards';
 	import { modelsFor, getPreset } from '$lib/settings/catalog';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import '../composer-modal.css';
@@ -60,6 +61,38 @@
 		if (!spec || spec.requestFormat !== 'video-job-seconds') return null;
 		return secondsPreview(pipe, session, spec);
 	});
+
+	// Pre-run cost hint (docs/pricing-usage-design.md §11, the deferred
+	// generate-modal slice): an honest estimate from the selected VIDEO
+	// model's static pricing — local hardware reads "free on your
+	// hardware", a known rate reads "≈ $X", and unknown stays unknown
+	// (never a fabricated $0). Stale responses are dropped (seq guard).
+	let costEst = $state<CostEstimate | null>(null);
+	let costSeq = 0;
+	$effect(() => {
+		const spec = selectedVideoModel;
+		if (!open || !spec) {
+			costSeq += 1;
+			costEst = null;
+			return;
+		}
+		// video-job-seconds models ride the clamped seconds preview;
+		// adapter models (ComfyUI-class) carry no seconds hint — the
+		// pipe's own length in seconds.
+		const seconds = secHint
+			? Number(secHint.shown)
+			: Math.round((pipe.lengthFrames / Math.max(session?.fps ?? 24, 1)) * 10) / 10;
+		const seq = ++costSeq;
+		void estimateGenerationCost(spec, seconds, session?.resolution ?? '720p').then((r) => {
+			if (seq === costSeq) costEst = r;
+		});
+	});
+	const costPillText = $derived.by(() => {
+		if (!costEst) return '';
+		if (!costEst.known) return 'cost: unknown';
+		if ((costEst.estimatedUsd ?? 0) === 0 && /local/i.test(costEst.basis)) return 'free on your hardware';
+		return `≈ $${(costEst.estimatedUsd ?? 0).toFixed(2)}`;
+	});
 	// Reseed at most once per distinct model/preset config. The self-heal
 	// check below READS the model arrays + models, and a plain run reassigns
 	// those $state arrays on every pass — Svelte re-invalidates this very
@@ -80,8 +113,12 @@
 		const vp = getPreset(s.providers.video.preset);
 		// Read-only (paid) models are Settings-browse only (Q3) — they are
 		// not confirmable for generation.
-		imageModels = (ip ? modelsFor(ip, 'image') : []).filter((m: ModelSpec) => !m.readOnly && !m.obsolete);
-		videoModels = (vp ? modelsFor(vp, 'video') : []).filter((m: ModelSpec) => !m.readOnly && !m.obsolete);
+		imageModels = (ip ? modelsFor(ip, 'image') : [])
+			.filter((m: ModelSpec) => !m.readOnly && !m.obsolete)
+			.map((m) => unlockVerified(m, s.providers.image.verified));
+		videoModels = (vp ? modelsFor(vp, 'video') : [])
+			.filter((m: ModelSpec) => !m.readOnly && !m.obsolete)
+			.map((m) => unlockVerified(m, s.providers.video.verified));
 		// Self-heal: a saved default that is no longer selectable (read-only /
 		// unknown) must not leave the select empty — fall back to the first
 		// generable model of the kind.
@@ -212,6 +249,9 @@
 						<span>{session.resolution}</span>
 						<span>{session.orientation}</span>
 						<span>{pipe.lengthFrames} frames</span>
+						{#if costEst}
+							<span class="gen-cost-pill" class:cost-unknown={!costEst.known} title={costEst.basis}>{costPillText}</span>
+						{/if}
 					</div>
 				</div>
 			</div>

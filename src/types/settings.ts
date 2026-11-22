@@ -361,6 +361,10 @@ export interface ProviderSlot {
   apiKey: string;
   /** ModelSpec.id */
   model: string;
+  /** ModelSpec.id the owner live-verified on this machine: lifts the
+   *  catalog `pending` gate for that model (selectable + prechecks pass).
+   *  Absent = every reserved model stays blocked (E1). */
+  verified?: string[];
 }
 
 export interface GenerationDefaults {
