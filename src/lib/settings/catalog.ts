@@ -466,6 +466,35 @@ export const FAL_PRESET: PresetSpec = {
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/models',
                  verifiedAt: null, note: 'id + schema + rates live-verify' } },
+    // Wan 2.2 A14B (Alibaba open-weights MoE, 2×14B experts). fal public
+    // pages (fetched 2026-11-22, no auth): 480p/580p/720p tiers billed per
+    // video second at 16 fps — 720p $0.08, 580p $0.06, 480p $0.04. Input
+    // schemas (num_frames / resolution param names) live-verify per model —
+    // payloads stay minimal on purpose; caps unverified (§7). Replicate has
+    // NO t2v A14B row (404 on wan-video/wan-2.2-t2v-a14b, checked
+    // 2026-11-22) — t2v coverage is fal-only.
+    { id: 'fal-ai/wan/v2.2-a14b/text-to-video', kind: 'video',
+      label: 'Wan 2.2 A14B (t2v, via fal)',
+      endpoint: '/fal-ai/wan/v2.2-a14b/text-to-video', sync: false,
+      requestFormat: 'video-adapter',
+      limits: {}, pending: true,
+      adapterPayload: { prompt: '{{prompt}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD',
+                 source: 'https://fal.ai/models/fal-ai/wan/v2.2-a14b/text-to-video',
+                 rates: { '480p': 0.04, '580p': 0.06, '720p': 0.08, base: 0.08 },
+                 verifiedAt: '2026-11-22',
+                 note: 'public fal page text 2026-11-22; live pricing check needs a key (probed public paths 404, 2026-11-22)' } },
+    { id: 'fal-ai/wan/v2.2-a14b/image-to-video', kind: 'video',
+      label: 'Wan 2.2 A14B (i2v, via fal)',
+      endpoint: '/fal-ai/wan/v2.2-a14b/image-to-video', sync: false,
+      requestFormat: 'video-adapter',
+      limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
+      pricing: { unit: 'per-video-second', currency: 'USD',
+                 source: 'https://fal.ai/models/fal-ai/wan/v2.2-a14b/image-to-video',
+                 rates: { '480p': 0.04, '580p': 0.06, '720p': 0.08, base: 0.08 },
+                 verifiedAt: '2026-11-22',
+                 note: 'public fal page text 2026-11-22; live pricing check needs a key (probed public paths 404, 2026-11-22)' } },
     { id: 'fal-ai/veo3.1/fast/image-to-video', kind: 'video',
       label: 'Veo 3.1 Fast (i2v, via fal)',
       endpoint: '/fal-ai/veo3.1/fast/image-to-video', sync: false,
@@ -474,30 +503,43 @@ export const FAL_PRESET: PresetSpec = {
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/models',
                  verifiedAt: null, note: 'id + schema + rates live-verify' } },
-    // fal hosts MiniMax H3 Max (fal.ai/pricing 2026-11-21: $0.05/s; turbo $0.025/s).
-    // Live per-model schema + price: fal.ai/models/<id>/llms.txt (no auth) or the
-    // authenticated /v1/models/pricing API. Draft payloads — input schemas
-    // live-verify per model. Duration/resolution caps are deliberately
-    // UNVERIFIED: limits stay {} — no speculative caps. The guard cannot
-    // snap these rows until the live check encodes the real limits; a session
-    // length beyond the vendor cap is a vendor-side reject, documented in
-    // docs/provider-system.md §7 (G1).
+    // fal hosts MiniMax H3 Max (fal.ai/pricing 2026-11-21: $0.05/s; turbo
+    // $0.025/s). h3-max caps are DOC-SOURCED (fal public API-reference page,
+    // fetched 2026-11-22, no auth): duration 5-15 s (default 5); resolution
+    // enum 480P/768P/1080P where 1080P is a latent refinement from a native
+    // 768P source; 24 fps; t2v aspect ratios 21:9/16:9/4:3/1:1/3:4/9:16;
+    // i2v canvas follows the input image. Status: unverified-live (doc
+    // values, no recorded run) — §7 (G1). h3-max-turbo caps: no doc capture
+    // yet — limits stay {} (no speculative caps). Pricing check: fal's
+    // public model pages (no auth); no public pricing API endpoint found
+    // (probed queue.fal.run/rest.fal.ai pricing paths 2026-11-22, all 404) —
+    // the authenticated API, once a key exists.
     { id: 'minimax/h3-max/text-to-video', kind: 'video', label: 'H3 Max (t2v, via fal)',
       endpoint: '/minimax/h3-max/text-to-video', sync: false,
       requestFormat: 'video-adapter',
-      limits: {}, pending: true,
-      adapterPayload: { prompt: '{{prompt}}', duration: '{{seconds:int}}' },
+      limits: { seconds: [5, 15],
+                ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+                ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' },
+                resolutions: ['480P', '768P', '1080P'],
+                sizeMap: { '480p': '480P', '720p': '768P', '1080p': '1080P' } },
+      pending: true,
+      adapterPayload: { prompt: '{{prompt}}', duration: '{{seconds:int}}',
+                        aspect_ratio: '{{ratio}}', resolution: '{{size}}' },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/pricing',
                  rates: { base: 0.05 }, verifiedAt: '2026-11-21',
-                 note: 'live check: GET /v1/models/pricing?endpoint_id=minimax/h3-max/text-to-video' } },
+                 note: 'public pages only; per-model live pricing needs a key (probed public paths 404, 2026-11-22)' } },
     { id: 'minimax/h3-max/image-to-video', kind: 'video', label: 'H3 Max (i2v, via fal)',
       endpoint: '/minimax/h3-max/image-to-video', sync: false,
       requestFormat: 'video-adapter',
-      limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
-      adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}', duration: '{{seconds:int}}' },
+      limits: { seconds: [5, 15],
+                resolutions: ['480P', '768P', '1080P'],
+                sizeMap: { '480p': '480P', '720p': '768P', '1080p': '1080P' } },
+      pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}',
+                        duration: '{{seconds:int}}', resolution: '{{size}}' },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/pricing',
                  rates: { base: 0.05 }, verifiedAt: '2026-11-21',
-                 note: 'live check: GET /v1/models/pricing?endpoint_id=minimax/h3-max/image-to-video' } },
+                 note: 'public pages only; per-model live pricing needs a key (probed public paths 404, 2026-11-22)' } },
     { id: 'minimax/h3-max-turbo/image-to-video', kind: 'video', label: 'H3 Max Turbo (i2v, via fal)',
       endpoint: '/minimax/h3-max-turbo/image-to-video', sync: false,
       requestFormat: 'video-adapter',
@@ -505,7 +547,7 @@ export const FAL_PRESET: PresetSpec = {
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}', duration: '{{seconds:int}}' },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://fal.ai/pricing',
                  rates: { base: 0.025 }, verifiedAt: '2026-11-21',
-                 note: 'live check: GET /v1/models/pricing?endpoint_id=minimax/h3-max-turbo/image-to-video' } },
+                 note: 'public pages only; per-model live pricing needs a key (probed public paths 404, 2026-11-22)' } },
   ],
 };
 
@@ -555,7 +597,13 @@ export const REPLICATE_PRESET: PresetSpec = {
     { id: 'wan-video/wan-2.2-i2v-a14b', kind: 'video', label: 'Wan 2.2 I2V A14B (via Replicate)',
       endpoint: '/v1/models/wan-video/wan-2.2-i2v-a14b/predictions', sync: false,
       requestFormat: 'video-adapter',
-      limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
+      // resolutions DOC-SOURCED (Wan-AI/Wan2.2 HF model card, fetched
+      // 2026-11-22): I2V-A14B supports 480P & 720P; clip length is
+      // frame-count driven (81 frames ≈ 5 s @16 fps, vendor's "best
+      // results" value — not an explicit cap, so seconds stay unverified).
+      limits: { resolutions: ['480p', '720p'],
+                sizeMap: { '480p': '480p', '720p': '720p', '1080p': '720p' } },
+      pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
       adapterPayload: { input: { prompt: '{{prompt}}', image: '{{media:first}}' } },
       pricing: { unit: 'per-video-second', currency: 'USD', source: 'https://replicate.com/wan-video',
                  verifiedAt: null, note: 'id + schema + rates live-verify' } },

@@ -80,7 +80,7 @@ the UI chip — so the app, the guards, and the user always agree.
 
 | Layer | Example | When it wins |
 |---|---|---|
-| Live retrieval | OpenRouter `/models`, fal `/v1/models/pricing`, Replicate model object | fetched this session, still valid |
+| Live retrieval | OpenRouter `/models`, fal public model pages, Replicate model object | fetched 2026-11-22, still valid |
 | Static researched | Luma $0.09/s, Kling $0.14/unit, MiniMax Hailuo $0.28/clip | dated, vendor-published |
 | Last actual | Runway `cost.credits`, Kling `final_unit_deduction` | last run of *this* model |
 | Unknown | everything else | shown as "unknown + reason" |
@@ -118,11 +118,24 @@ vendor-reported cost in `request.log` → flip the cell and (for pending models)
 `pending → generable` per the video-adapter plan's acceptance criterion
 (`.hermes/plans/2026-11-21_110654-video-adapter-multi-provider.md`).
 G-ids refer to the gap list from the 2026-11-21 h3-max flow emulation:
-G1 = `limits: {}` rows whose caps are unverified (no speculative limits) ·
+G1 = `limits: {}` rows whose caps are unverified (no speculative limits) —
+partially closed 2026-11-22 by the keyless emulation: h3-max (fal) 5–15s +
+480P/768P/1080P caps and the replicate wan-2.2-i2v-a14b 480P/720P caps are
+now DOC-SOURCED from public pages and encoded (unverified-live); open G1
+rows: fal wan-2.2-a14b, h3-max-turbo, veo3.1, wan/v2.2-5b, kling v2.5,
+minimax/video-01 ·
 G2 = Tier-A media inlining / url-only pre-check (**closed this batch** —
 regression tests) · G3 = artifact response paths unverified ·
 G4 = vendor-reported-cost support per adapter (only runway + kling) ·
 G5 = `Key <k>` header-form redaction (**closed this batch** — tests).
+
+Keyless emulation state (2026-11-22): doc-sourced caps/prices captured from
+public pages (fal API reference, fal model pages, HF model cards, replicate
+model pages) — no vendor key needed, recorded above. Pricing API probes
+without a key: GET queue.fal.run/v1/models/pricing → 405; POST → 404;
+rest.fal.ai equivalents → 404 — the pricing API is not public, only the
+public web pages are. Still key-gated: recorded live runs, artifact paths,
+in-band cost fields, and the pending → generable flips.
 
 ### 7.1 Adapter layer (shared by all models of the preset)
 
@@ -145,14 +158,16 @@ a render). Local files → `data:` URI ≤32MB; remote URLs pass through.
 Group header = the shared fields; row = the exact catalog model id
 (`src/lib/settings/catalog.ts` → `<preset>.models['<id>']` + the adapter above).
 
-**fal** (5 rows) — auth key-header code-verified · inliner code-verified · `COMPLETED` trap code-verified:
+**fal** (8 rows) — auth key-header code-verified · inliner code-verified · `COMPLETED` trap code-verified:
 
 | Model | Input media | Duration / resolution (source → status) | Pricing (estimate source → status) | Submission / polling | Artifact (path → status) |
 |---|---|---|---|---|---|
 | `fal-ai/kling-video/v2.5-turbo/pro/image-to-video` | local ✓ (inliner) / remote ✓ | docs 2026-11-21 draft: 5–10s, 3 ratios → **unverified** | `verifiedAt: null` → **unverified** | FAL_ADAPTER | `video.url` → **unverified** |
 | `fal-ai/wan/v2.2-5b/image-to-video` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1, no speculative caps) | rates → **unverified** | FAL_ADAPTER | `video.url` → **unverified** |
+| `fal-ai/wan/v2.2-a14b/{text-to-video, image-to-video}` (new 2026-11-22) | t2v: none / local ✓ + remote ✓ (i2v) | `limits: {}` — caps **unverified** (G1; fal pages list 480p/580p/720p tiers — param names live-verify) | per-s tiers $0.04/$0.06/$0.08 @16fps, fal public pages 2026-11-22 → **unverified-live** | FAL_ADAPTER | `video.url` default → **unverified** (G3) |
 | `fal-ai/veo3.1/fast/image-to-video` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1) | rates → **unverified** | FAL_ADAPTER | `video.url` → **unverified** |
-| `minimax/h3-max/{text-to-video, image-to-video}` + `minimax/h3-max-turbo/image-to-video` | local ✓ / remote ✓ (i2v rows) | `limits: {}` — caps **unverified** (G1) | static $0.05 / $0.025 per s, fal.ai/pricing docs 2026-11-21 → **unverified-live** | FAL_ADAPTER | `video.url` default → **unverified** (G3) |
+| `minimax/h3-max/{text-to-video, image-to-video}` | local ✓ / remote ✓ (i2v rows) | caps **doc-sourced** (fal API reference 2026-11-22: 5–15 s, 480P/768P/1080P with 1080P = latent refinement, 24 fps) → **unverified-live** | static $0.05/s, fal.ai/pricing 2026-11-21 → **unverified-live** | FAL_ADAPTER | `video.url` default → **unverified** (G3) |
+| `minimax/h3-max-turbo/image-to-video` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1, no doc capture yet) | static $0.025/s → **unverified-live** | FAL_ADAPTER | `video.url` default → **unverified** (G3) |
 
 **runway** (5 rows, all `pending`) — auth bearer · inliner code-verified (`promptImage` key) · THROTTLED + failure code-verified · cost `cost.credits` code-verified:
 
@@ -166,7 +181,7 @@ Group header = the shared fields; row = the exact catalog model id
 | Model | Input media | Duration / resolution | Pricing | Artifact |
 |---|---|---|---|---|
 | `minimax/video-01` (minimal input) | t2v: none | `limits: {}` — caps **unverified** (G1) | **unverified** | `output` (string\|array\|object) → **unverified** |
-| `wan-video/wan-2.2-i2v-a14b` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1) | **unverified** | `output` → **unverified** |
+| `wan-video/wan-2.2-i2v-a14b` | local ✓ / remote ✓ | resolutions **doc-sourced** (HF Wan2.2 model card 2026-11-22: 480P/720P; seconds frame-driven ≈5s @16fps, **unverified**) | **unverified** | `output` → **unverified** |
 
 **luma** (1 row) — auth bearer · inliner code-verified (`keyframes.*.url` pruning rule):
 
