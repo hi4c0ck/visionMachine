@@ -300,13 +300,15 @@ export const LLAMACPP_PRESET: PresetSpec = {
 //    HunyuanVideo, 16 GB matrix — owner-provided local model table
 //    2026-11-22) ───────────────────────────────────────────────────────────
 // Config surface lands NOW (preset + model data, all pending — the picker
-// can show the options, generation is blocked until live-verified); the
-// EXECUTOR is the deferred Tier-B slice: ComfyUI workflow graphs + the
-// 'upload' media input mode (VideoAdapterSpec.media.input, types). The
-// adapter spec below is the RESERVED ComfyUI shape (public HTTP API, no
-// auth): POST /prompt {prompt: graph} → {prompt_id}; GET /history/{id}
-// returns {} while queued, the finished record when done; artifact bytes
-// stream from GET /view?filename=… (content mode). Every shape here is
+// can show the options, generation is blocked until live-verified).
+// Landed: the 'upload' media input mode executor (engine multipart-POSTs
+// local media to the upload route pre-create — see media descriptor
+// below). Still Tier-B: the per-model ComfyUI graph template (payload /
+// adapterPayload) + live verification. The adapter spec below is the
+// RESERVED ComfyUI shape (public HTTP API, no auth): POST /prompt
+// {prompt: graph} → {prompt_id}; GET /history/{id} returns {} while
+// queued, the finished record when done; artifact bytes stream from
+// GET /view?filename=… (content mode). Every shape here is
 // unverified-live — reserved, not exercised (no local engine probed).
 const LOCAL_VIDEO_ADAPTER: VideoAdapterSpec = {
   create: { endpoint: '/prompt' },
@@ -320,7 +322,14 @@ const LOCAL_VIDEO_ADAPTER: VideoAdapterSpec = {
     statusMap: { success: 'succeeded', error: 'failed' },
     artifact: { mode: 'content', endpoint: '/view' }, // filename query from outputs
   },
-  media: { input: 'url-or-data' }, // 'upload' (local file paths) reserved
+  media: {
+    input: 'upload',
+    // ComfyUI-class upload route (public HTTP API): local media is
+    // multipart-POSTed to /upload/image pre-create; the payload ref
+    // becomes response.name — graph nodes take the uploaded filename,
+    // not a URL (data: URIs don't work inside a workflow graph).
+    upload: { endpoint: '/upload/image', field: 'image', namePath: 'name' },
+  },
 };
 
 const LOCAL_VIDEO_MODEL = (
