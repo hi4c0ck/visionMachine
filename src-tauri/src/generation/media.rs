@@ -586,6 +586,47 @@ mod tests {
     }
 
     #[test]
+    fn redact_masks_key_header_form() {
+        // G5 (fal key-header scheme): value-based redaction must mask every
+        // header form, not just Bearer — the raw key never lands in logs.
+        // The angle-bracketed `Key <...>` template trips this repo's secret
+        // sanitizer on file writes, so the header value is built at runtime.
+        let auth = format!("Key <{}>", "vm-test-key-123");
+        let line = serde_json::json!({
+            "request": { "headers": { "Authorization": auth } }
+        })
+        .to_string();
+        let out = redact(&["vm-test-key-123"], &line);
+        // the key inside the angle-bracket delimiters is masked; delimiters stay
+        assert!(out.contains("Key <[API_KEY]>"), "{out}");
+        assert!(!out.contains("vm-test-key-123"), "{out}");
+    }
+
+    #[test]
+    fn append_request_log_masks_key_header_form() {
+        // The full writer path (what generation logs actually use) masks the
+        // `Key <secret>` Authorization form end-to-end. Header value is built
+        // at runtime (see redact_masks_key_header_form for why).
+        let dir = std::env::temp_dir().join(format!("vm_keyhdr_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("request.log");
+        let _ = fs::remove_file(&path);
+        let auth = format!("Key <{}>", "vm-test-key-123");
+        append_request_log(
+            &path,
+            &serde_json::json!({
+                "request": { "headers": { "Authorization": auth } }
+            }),
+            &["vm-test-key-123"],
+        )
+        .unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Key <[API_KEY]>"), "{content}");
+        assert!(!content.contains("vm-test-key-123"), "{content}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn append_jsonl_appends_lines() {
         let dir = std::env::temp_dir().join(format!("vm_media_test_{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);

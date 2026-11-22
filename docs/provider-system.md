@@ -23,7 +23,7 @@ used.
 |---|---|---|
 | **What it accepts** | resolutions, clip lengths, aspect ratios, seed, media (keyframes / refs) — the model's physical limits | H3 Lite: 480P/768P only; MiniMax Hailuo: 6s or 10s, 1080P is 6s-only |
 | **What it costs** | a pricing fact: a rate (per-second / per-clip / per-credit / per-unit / per-token) or "free (your own hardware)" | Kling: provider reports the exact charge; Luma: $0.09/s 720p researched |
-| **How to talk to it** | the API family + auth: a config-driven adapter (most video vendors) or a code shaper (Agnes, text), Bearer key / `Key *** / no key | fal needs `Key <k>`; Ollama needs no key at all |
+| **How to talk to it** | the API family + auth: a config-driven adapter (most video vendors) or a code shaper (Agnes, text), Bearer key / `Key <k>` / no key | fal needs `Key <k>`; Ollama needs no key at all |
 
 **Model status is the fourth fact:** `generable` (works, verified),
 `pending` (shipped as data, must prove itself with one real run before the
@@ -92,9 +92,11 @@ always labelled as such.
 ## 6. What is deliberately parked
 
 - **Pending models** — every `pending` entry ships as data and flips
-  generable only after one recorded real run (`docs/provider-catalogs/`
-  convention). Your vendor keys decide the verification order; aggregators
-  first (one key, many models).
+  generable only after one recorded real run (the `pending → generable`
+  convention from the video-adapter plan acceptance,
+  `.hermes/plans/2026-11-21_110654-video-adapter-multi-provider.md`;
+  §7 closing protocol). Your vendor keys decide the verification order;
+  aggregators first (one key, many models).
 - **Live price refresh in the UI** — backend retrieval exists; the
   settings-UI consumption pass wires the refresh button + cost hints.
 - **ComfyUI local image/video** — the only local diffusion path; upload →
@@ -102,6 +104,109 @@ always labelled as such.
 - **MCP / special-API local transport** — reserved marker, no implementation.
 - **H4 (or whatever ships next)** — a catalog row when it exists; the
   architecture already assumes this.
+
+## 7. Verification matrix (live-verify + release-readiness checklist)
+
+**Rules.** Catalog + adapter code remain authoritative — this section records
+verification *state* only, never model data. Never promote an assumption to a
+verified value. Statuses: **verified** = a live run was recorded ·
+**code-verified** = engine code/tests prove the path, vendor-side unconfirmed ·
+**unverified** = researched data, no live confirmation · **unsupported** = the
+capability is absent from the vendor contract (sourced).
+Closing an item: one live run with your vendor key → record `verifiedAt` + the
+vendor-reported cost in `request.log` → flip the cell and (for pending models)
+`pending → generable` per the video-adapter plan's acceptance criterion
+(`.hermes/plans/2026-11-21_110654-video-adapter-multi-provider.md`).
+G-ids refer to the gap list from the 2026-11-21 h3-max flow emulation:
+G1 = `limits: {}` rows whose caps are unverified (no speculative limits) ·
+G2 = Tier-A media inlining / url-only pre-check (**closed this batch** —
+regression tests) · G3 = artifact response paths unverified ·
+G4 = vendor-reported-cost support per adapter (only runway + kling) ·
+G5 = `Key <k>` header-form redaction (**closed this batch** — tests).
+
+### 7.1 Adapter layer (shared by all models of the preset)
+
+| Adapter | Auth (header form; redaction) | Submission / polling | Vendor cost support |
+|---|---|---|---|
+| `RUNWAY_ADAPTER` | bearer · value-based redaction **code-verified** (both header forms, media.rs tests) | full status map incl. THROTTLED; `failure` errorPath · **code-verified** | `cost.credits` · **code-verified** (test writes the cost block) · values unverified-live |
+| `FAL_ADAPTER` | key-header `Key <k>` · redaction **code-verified** (G5 test) | `COMPLETED` includes FAILED jobs — result-fetch `detail` decides · **code-verified** | **none configured — unverified** (response schema unconfirmed; do NOT claim "vendor doesn't report") |
+| `REPLICATE_ADAPTER` | bearer | 5-state map; `error` · **code-verified** | **none configured — unverified** |
+| `LUMA_ADAPTER` | bearer | 4-state map; `failure_reason` · **code-verified** | **unsupported — vendor does not report** (openapi 1.1.0: no cost field in responses; ladder source ③ never exists for luma by design) |
+| `KLING_ADAPTER` | bearer (new console keys; legacy AK/SK JWT hard-rejected code 1002 — docs 2026-11-21) | legacy `succeed` + new `succeeded` both mapped; envelope `code=0` · **code-verified** | `data.final_unit_deduction` · **code-verified** |
+| `MINIMAX_ADAPTER` | bearer | 5-state map; `base_resp` envelope; retrieve-step artifact (file_id string↔int cast) · **code-verified** | **none configured — unverified** |
+
+Media inlining (all adapter presets `url-or-data`): **code-verified** — the
+Tier-A inliner covers media-hint keys recursively; G2 regression tests pin
+both the inlining and the url-only counter-contract (never inline, never burn
+a render). Local files → `data:` URI ≤32MB; remote URLs pass through.
+
+### 7.2 Model open items (rows with ≥1 unverified/unsupported field)
+
+Group header = the shared fields; row = the exact catalog model id
+(`src/lib/settings/catalog.ts` → `<preset>.models['<id>']` + the adapter above).
+
+**fal** (5 rows) — auth key-header code-verified · inliner code-verified · `COMPLETED` trap code-verified:
+
+| Model | Input media | Duration / resolution (source → status) | Pricing (estimate source → status) | Submission / polling | Artifact (path → status) |
+|---|---|---|---|---|---|
+| `fal-ai/kling-video/v2.5-turbo/pro/image-to-video` | local ✓ (inliner) / remote ✓ | docs 2026-11-21 draft: 5–10s, 3 ratios → **unverified** | `verifiedAt: null` → **unverified** | FAL_ADAPTER | `video.url` → **unverified** |
+| `fal-ai/wan/v2.2-5b/image-to-video` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1, no speculative caps) | rates → **unverified** | FAL_ADAPTER | `video.url` → **unverified** |
+| `fal-ai/veo3.1/fast/image-to-video` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1) | rates → **unverified** | FAL_ADAPTER | `video.url` → **unverified** |
+| `minimax/h3-max/{text-to-video, image-to-video}` + `minimax/h3-max-turbo/image-to-video` | local ✓ / remote ✓ (i2v rows) | `limits: {}` — caps **unverified** (G1) | static $0.05 / $0.025 per s, fal.ai/pricing docs 2026-11-21 → **unverified-live** | FAL_ADAPTER | `video.url` default → **unverified** (G3) |
+
+**runway** (5 rows, all `pending`) — auth bearer · inliner code-verified (`promptImage` key) · THROTTLED + failure code-verified · cost `cost.credits` code-verified:
+
+| Model | Input media | Duration / resolution (source → status) | Pricing (estimate source → status) | Artifact (path → status) |
+|---|---|---|---|---|
+| `gen4.5`, `gen4.5-t2v` (create-override), `seedance2_5` | local ✓ / remote ✓ (i2v) | docs 2026-11-21 draft: 2–10s + ratio lists → **unverified** | per-credit $0.01/credit, docs → **unverified-live** | `output[]` → **unverified** |
+| `hailuo3`, `h3_max` | local ✓ / remote ✓ | 2–10s **unverified** + resolution-dependent clip constraint (1080P = 6s-only per docs) **not expressible in flat limits — structural, §7.4** | per-second derived from the credit table (10/15 · 5/8 cr-s × $0.01) — **derived, unverified-live**; in-band `cost.credits` authoritative | `output[]` → **unverified** |
+
+**replicate** (2 rows) — auth bearer · inliner code-verified · envelope code-verified:
+
+| Model | Input media | Duration / resolution | Pricing | Artifact |
+|---|---|---|---|---|
+| `minimax/video-01` (minimal input) | t2v: none | `limits: {}` — caps **unverified** (G1) | **unverified** | `output` (string\|array\|object) → **unverified** |
+| `wan-video/wan-2.2-i2v-a14b` | local ✓ / remote ✓ | `limits: {}` — caps **unverified** (G1) | **unverified** | `output` → **unverified** |
+
+**luma** (1 row) — auth bearer · inliner code-verified (`keyframes.*.url` pruning rule):
+
+| Model | Input media | Duration / resolution | Pricing | Artifact | Vendor cost |
+|---|---|---|---|---|---|
+| `ray-2` | local ✓ / remote ✓ (2 keyframes) | docs openapi: 5/9s, 720p/1080p, 7 ratios → **unverified-live** | `verifiedAt: null` → **unverified** | `assets.video` → **unverified-live** | **unsupported** (openapi 1.1.0 — no cost field; source ③ never exists) |
+
+**kling** (2 rows) — auth bearer · inliner code-verified (docs: base64 or public URL) · envelope + both status casings code-verified:
+
+| Model | Input media | Duration / resolution | Pricing | Vendor cost |
+|---|---|---|---|---|
+| `kling-v2-6` (i2v), `kling-v2-6-t2v` (poll-override) | local ✓ / remote ✓ (2 keyframes i2v) | docs draft: 5/10s, 3 ratios → **unverified-live** | $0.14/unit LIST (pack discounts account-specific) → **unverified** | `final_unit_deduction` · **code-verified** |
+
+**minimax platform** (8 rows) — auth bearer · inliner code-verified · `base_resp` envelope + retrieve-step code-verified:
+
+| Model | Input media | Duration / resolution | Pricing | Artifact |
+|---|---|---|---|---|
+| `MiniMax-Hailuo-2.3`, `MiniMax-Hailuo-02`, `MiniMax-Hailuo-2.3-i2v` | local ✓ / remote ✓ (i2v) | per-clip tiers; 1080P = 6s-only (docs 2026-11-21) → **unverified-live + combo constraint not expressible (§7.4)**; i2v `first_frame_image` param name **unverified** | per-clip static → **unverified-live** | retrieve `file.download_url` (1h expiry) → **unverified-live** |
+| `MiniMax-H3` series ×5 (t2v/i2v/Highspeed/Lite/Max, all `pending`) | local ✓ / remote ✓ (i2v) | per-second generation; 480P–2K per tier → **unverified-live** (docs platform.minimax.io 2026-11-21) | per-second static + input-media surcharges → **unverified-live** | retrieve mode → **unverified-live** |
+
+### 7.3 Closed / no open items
+
+- `agnes-video-2.5-flash` — **verified** (live runs, previous releases; free).
+- `agnes-video-2.5` — read-only by design, no open items.
+- Text presets (openai, openrouter, custom, local ×4) — **code-verified**
+  engine paths; local: auth `none` + $0 marginal **code-verified by design**;
+  media N/A.
+- Redaction — **code-verified** for Bearer and `Key <k>` forms (value-based;
+  secrets never land in `request.log`).
+
+### 7.4 Structural gaps (a live run cannot close these)
+
+1. **Resolution-dependent duration caps** (1080P = 6s-only class) — the flat
+   `limits` schema cannot express the combo; needs a `secondsBySize` extension
+   or a pre-check. Parked until a vendor actually rejects on it.
+2. **Vendor-reported cost exists for exactly two adapters** (runway, kling —
+   code-verified). Every other vendor prices via source ②/④ by design, not
+   by bug.
+3. **MCP / special-API local transport** — reserved `customTransport` marker,
+   no implementation; ComfyUI slice carries its own pre-check (upload).
 
 ---
 

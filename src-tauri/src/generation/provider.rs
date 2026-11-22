@@ -3312,6 +3312,9 @@ mod tests {
         /// Records every scheme-aware request (method, url, auth) so adapter
         /// tests can assert remote-cancel fires + auth schemes.
         auth_requests: StdMutex<Vec<(String, String, RequestAuth)>>,
+        /// Records every create-request body so media tests can assert
+        /// inlining happened (data: URI) or not (url-only kept the path).
+        posted_bodies: StdMutex<Vec<serde_json::Value>>,
     }
 
     impl StubHttp {
@@ -3323,6 +3326,7 @@ mod tests {
                 download_results: StdMutex::new(VecDeque::new()),
                 downloads: StdMutex::new(Vec::new()),
                 auth_requests: StdMutex::new(Vec::new()),
+                posted_bodies: StdMutex::new(Vec::new()),
             }
         }
         fn queue_post(self, r: Result<(u16, serde_json::Value), String>) -> Self {
@@ -3356,6 +3360,7 @@ mod tests {
             _api_key: &str,
             _timeout: Duration,
         ) -> Result<(u16, serde_json::Value), String> {
+            self.posted_bodies.lock().unwrap().push(_body.clone());
             let mut q = self.posts.lock().unwrap();
             match q.pop_front() {
                 Some(r) => r,
@@ -5046,6 +5051,91 @@ mod tests {
         let err = engine.run(&input, &cancel, &|_p| {}, &|_l| {}).await.expect_err("url-only precheck");
         assert!(err.contains("remote media URLs only"), "{err}");
         assert!(http.auth_requests.lock().unwrap().is_empty(), "no create may fire");
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// G2 regression (h3-max emulation): url-or-data + an EXISTING local
+    /// keyframe file must be inlined into the create body as a data: URI —
+    /// the adapter run itself (not just the inliner unit) is what this
+    /// proves: the run succeeds and the wire payload carries the inliner's
+    /// output, never the raw local path.
+    #[tokio::test]
+    async fn adapter_url_or_data_inlines_local_keyframe_in_create_body() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let kf = media.join("k1.png");
+        std::fs::write(&kf, vec![1u8, 2u8, 3u8]).unwrap();
+        let spec = json!({
+            "id": "minimax/h3-max/image-to-video", "kind": "video",
+            "endpoint": "/minimax/h3-max/image-to-video",
+            "sync": false, "requestFormat": "video-adapter", "auth": "key-header",
+            "adapter": {
+                "create": { "endpoint": "/{model}" },
+                "poll": { "endpoint": "/{model}/requests/{jobId}/status",
+                          "resultEndpoint": "/{model}/requests/{jobId}", "intervalSecs": 0 },
+                "payload": { "prompt": "{{prompt}}", "image_url": "{{media:first}}" },
+                "response": {
+                    "jobIdPath": "request_id", "statusPath": "status",
+                    "statusMap": { "IN_QUEUE": "pending", "IN_PROGRESS": "running", "COMPLETED": "succeeded" },
+                    "artifact": { "mode": "url", "path": "video.url" },
+                    "errorPath": "detail"
+                },
+                "media": { "input": "url-or-data" }
+            }
+        });
+        let mut input = adapter_input(&media, spec);
+        input.upstream[0].primary = kf.to_string_lossy().into();
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, json!({ "status": "IN_QUEUE", "request_id": "r1" }))))
+                .queue_get(Ok((200, json!({ "status": "COMPLETED" }))))
+                .queue_get(Ok((200, json!({ "video": { "url": "https://cdn.test/out.mp4" } }))))
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        engine
+            .run(&input, &cancel, &|_p| {}, &|_l| {})
+            .await
+            .expect("existing local keyframe must inline and the run must succeed");
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert!(
+            bodies.iter().any(|b| {
+                b.get("image_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.starts_with("data:image/png;base64,"))
+                    .unwrap_or(false)
+            }),
+            "create body must carry the inlined data: URI, got: {bodies:?}"
+        );
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// G2 counter-contract: url-only must NEVER inline, even for an EXISTING
+    /// local file — if the inliner call ever moves ahead of the branch, this
+    /// test fails and the url-only promise ("never burn a render on local
+    /// media the vendor can't fetch") is broken.
+    #[tokio::test]
+    async fn adapter_url_only_never_inlines_even_existing_local_media() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let kf = media.join("k1.png");
+        std::fs::write(&kf, vec![1u8, 2u8]).unwrap();
+        let mut spec = runway_adapter_spec("bearer");
+        spec["adapter"]["media"]["input"] = json!("url-only");
+        let http = Arc::new(StubHttp::new());
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut input = adapter_input(&media, spec);
+        input.upstream[0].primary = kf.to_string_lossy().into();
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_l| {})
+            .await
+            .expect_err("url-only + local media must fail fast");
+        assert!(err.contains("remote media URLs only"), "{err}");
+        assert!(
+            http.posted_bodies.lock().unwrap().is_empty(),
+            "no create request may fire on url-only local media"
+        );
         let _ = std::fs::remove_dir_all(&media);
     }
 

@@ -477,7 +477,11 @@ export const FAL_PRESET: PresetSpec = {
     // fal hosts MiniMax H3 Max (fal.ai/pricing 2026-11-21: $0.05/s; turbo $0.025/s).
     // Live per-model schema + price: fal.ai/models/<id>/llms.txt (no auth) or the
     // authenticated /v1/models/pricing API. Draft payloads — input schemas
-    // live-verify per model.
+    // live-verify per model. Duration/resolution caps are deliberately
+    // UNVERIFIED: limits stay {} — no speculative caps. The guard cannot
+    // snap these rows until the live check encodes the real limits; a session
+    // length beyond the vendor cap is a vendor-side reject, documented in
+    // docs/provider-system.md §7 (G1).
     { id: 'minimax/h3-max/text-to-video', kind: 'video', label: 'H3 Max (t2v, via fal)',
       endpoint: '/minimax/h3-max/text-to-video', sync: false,
       requestFormat: 'video-adapter',
