@@ -201,6 +201,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// are transient in exactly the same way — the request is fine, the
 /// provider just can't serve it right now.
 const BACKOFF_SECS: [u64; 3] = [15, 15, 15];
+/// 429 backoff (owner rule 2026-11-22): the 10 rpm model wants a 30 s
+/// rate-limit clearance on 429 — five request slots — instead of the 15 s
+/// 503-ladder step. 429 is always 30 s; 503 stays on the steady ladder.
+const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
 /// Image generation timeout (catalog: 60-360 s; typical ~15-18 s).
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Poll transport timeout (transient network, not the job itself).
@@ -816,7 +820,8 @@ impl ProviderEngine {
         on_progress(0.1);
         on_event("piece image request in flight");
 
-        // 429 / 503 back off on the steady ladder, same as the task image stage.
+        // 429 → fixed 30 s (owner rule 2026-11-22: 10 rpm model — five
+        // request slots of clearance); 503 walks the steady ladder.
         let (status, resp) = {
             let mut backoff_idx = 0usize;
             loop {
@@ -828,11 +833,15 @@ impl ProviderEngine {
                 if st != 429 && st != 503 {
                     break (st, rs);
                 }
-                let delay = self
-                    .backoff_secs
-                    .get(backoff_idx.min(self.backoff_secs.len() - 1))
-                    .copied()
-                    .unwrap_or(15);
+                let delay = if st == 429 {
+                    RATE_LIMIT_BACKOFF_SECS
+                } else {
+                    self
+                        .backoff_secs
+                        .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                        .copied()
+                        .unwrap_or(15)
+                };
                 backoff_idx += 1;
                 on_event(&format!(
                     "retrying after {} — in {} s",
@@ -1078,7 +1087,8 @@ impl ProviderEngine {
         on_progress(0.0);
         on_event("image request in flight");
 
-        // 429 rate-limited → steady 15 s backoff retry, not a
+        // 429 rate-limited → fixed 30 s retry (owner rule 2026-11-22: the
+        // 10 rpm model — five request slots of clearance), not a
         // hard failure. 503 (any provider cause — queue-full, maintenance,
         // upstream gateway unavailable) is likewise TRANSIENT by definition:
         // it means the provider cannot serve the request right now, not that
@@ -1105,11 +1115,17 @@ impl ProviderEngine {
                 if st != 429 && st != 503 {
                     break (st, rs);
                 }
-                let delay = self
-                    .backoff_secs
-                    .get(backoff_idx.min(self.backoff_secs.len() - 1))
-                    .copied()
-                    .unwrap_or(15);
+                // 429 → fixed 30 s (owner rule 2026-11-22: 10 rpm model);
+                // 503 walks the steady ladder.
+                let delay = if st == 429 {
+                    RATE_LIMIT_BACKOFF_SECS
+                } else {
+                    self
+                        .backoff_secs
+                        .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                        .copied()
+                        .unwrap_or(15)
+                };
                 backoff_idx += 1;
                 let label = if st == 429 {
                     "rate-limited (429)"
@@ -1823,8 +1839,10 @@ impl ProviderEngine {
             video_id
         );
 
-        // 3) Poll until terminal. 503 queue-full and 429 rate-limited both
-        // back off on the 30/60/120 s ladder; cancel aborts. A TRANSIENT
+        // 3) Poll until terminal. 429 rate-limited retries on a fixed 30 s
+        // (owner rule 2026-11-22: the 10 rpm model — five request slots of
+        // clearance); 503 queue-full backs off on the steady 15 s ladder;
+        // cancel aborts. A TRANSIENT
         // transport failure (network blip, DNS, connection reset) is NOT
         // fatal: it is logged and retried on the same ladder — only three
         // CONSECUTIVE transport failures abort the task.
@@ -1899,17 +1917,13 @@ const VIDEO_DOWNLOAD_ATTEMPTS: usize = 4;
                     continue;
                 }
                 Ok((429, body)) => {
-                    // Rate-limited: retry on the steady 15 s schedule. `clean_polls`
-                    // tracks consecutive clean 200s since the last 429/503 —
-                    // the ladder resets only after 3 clean polls in a row, so
-                    // a 429/200/429 pattern escalates instead of stalling at
-                    // the first rung, but sustained recovery re-arms it.
+                    // Rate-limited: fixed 30 s retry (owner rule 2026-11-22:
+                    // the 10 rpm model — five request slots of clearance).
+                    // `clean_polls` still tracks consecutive clean 200s so
+                    // a 429/200/429 pattern keeps escalating on the ladder
+                    // index; the 429 delay itself is the flat 30 s.
                     transport_failures = 0;
-                    let delay = self
-                        .backoff_secs
-                        .get(backoff_idx.min(self.backoff_secs.len() - 1))
-                        .copied()
-                        .unwrap_or(15);
+                    let delay = RATE_LIMIT_BACKOFF_SECS;
                     backoff_idx += 1;
                     clean_polls = 0;
                     self.log_entry(input, &secrets, &json!({
@@ -2360,7 +2374,8 @@ impl ProviderEngine {
             }
         };
 
-        // 1) Create the job (429/503 → steady ladder, cancel-aware).
+        // 1) Create the job (429 → fixed 30 s / 503 → steady ladder,
+        //    cancel-aware).
         let create_url = join(video_adapter::substitute(&adapter.create.endpoint, "", &model, ""));
         let mut last_pub = 0.45f32;
         on_progress(last_pub);
@@ -2378,11 +2393,17 @@ impl ProviderEngine {
             if st != 429 && st != 503 {
                 break (st, body);
             }
-            let delay = self
-                .backoff_secs
-                .get(backoff_idx.min(self.backoff_secs.len() - 1))
-                .copied()
-                .unwrap_or(15);
+            // 429 → fixed 30 s (owner rule 2026-11-22: 10 rpm model); 503
+            // walks the steady ladder.
+            let delay = if st == 429 {
+                RATE_LIMIT_BACKOFF_SECS
+            } else {
+                self
+                    .backoff_secs
+                    .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                    .copied()
+                    .unwrap_or(15)
+            };
             backoff_idx += 1;
             last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
             on_progress(last_pub);
@@ -2456,11 +2477,17 @@ impl ProviderEngine {
             match self.http.request_auth("GET", &poll_url, None, &auth, POLL_TIMEOUT).await {
                 Ok((st, body)) if st == 429 || st == 503 => {
                     transport_failures = 0;
-                    let delay = self
-                        .backoff_secs
-                        .get(backoff_idx.min(self.backoff_secs.len() - 1))
-                        .copied()
-                        .unwrap_or(15);
+                    // 429 → fixed 30 s (owner rule 2026-11-22: 10 rpm model);
+                    // 503 walks the steady ladder.
+                    let delay = if st == 429 {
+                        RATE_LIMIT_BACKOFF_SECS
+                    } else {
+                        self
+                            .backoff_secs
+                            .get(backoff_idx.min(self.backoff_secs.len() - 1))
+                            .copied()
+                            .unwrap_or(15)
+                    };
                     backoff_idx += 1;
                     clean_polls = 0;
                     last_pub = last_pub.max((0.50 + 0.01 * (backoff_idx as f32)).min(0.53));
