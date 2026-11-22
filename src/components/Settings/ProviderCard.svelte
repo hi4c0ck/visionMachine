@@ -163,11 +163,32 @@
 
 	<div class="field">
 		<label for="prov-model-{kind}">Model</label>
-		<select id="prov-model-{kind}" value={effectiveModel} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
-			{#each modelOptions as m (m.id)}
-				<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
-			{/each}
-		</select>
+		{#if preset.freeFormModel}
+			<!-- Free-form preset (local engine, custom server): type the engine's own
+			     model/checkpoint id. Reserved catalog ids are datalist hints; the typed
+			     id rides the base spec in resolveSpecs — owner-typed = live-verified,
+			     the reserved pending gate lifts by construction. -->
+			<input
+				id="prov-model-{kind}"
+				class="prov-model-input"
+				type="text"
+				list="prov-model-dl-{kind}"
+				value={slot.model}
+				oninput={(e) => onslotchange({ ...slot, model: (e.target as HTMLInputElement).value })}
+				placeholder={`Type the ${kind} model id for ${preset.label}`}
+			/>
+			<datalist id="prov-model-dl-{kind}">
+				{#each modelOptions as m (m.id)}
+					<option value={m.id}>{m.label ?? m.id}{m.pending ? ' (reserved)' : ''}</option>
+				{/each}
+			</datalist>
+		{:else}
+			<select id="prov-model-{kind}" value={effectiveModel} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
+				{#each modelOptions as m (m.id)}
+					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+				{/each}
+			</select>
+		{/if}
 		{#if selectedModel?.readOnly}
 			<span class="hint hint-readonly">Read-only — paid model. Parameters are visible here, but it can't be confirmed for generation.</span>
 		{/if}

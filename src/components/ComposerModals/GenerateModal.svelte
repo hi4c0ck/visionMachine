@@ -173,6 +173,10 @@
 							{#each imageModels as m (m.id)}
 								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
 							{/each}
+							{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
+								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
+								<option value={imageModel}>{imageModel} (custom)</option>
+							{/if}
 						</select>
 					</div>
 					<div class="gen-fieldrow">
@@ -181,6 +185,10 @@
 							{#each videoModels as m (m.id)}
 								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
 							{/each}
+							{#if videoModel && !videoModels.some((m) => m.id === videoModel)}
+								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
+								<option value={videoModel}>{videoModel} (custom)</option>
+							{/if}
 						</select>
 					</div>
 					{#if selectedVideoModel?.supportsSeed}

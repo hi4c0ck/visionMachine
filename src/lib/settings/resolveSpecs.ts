@@ -64,7 +64,17 @@ export function resolveModelSpec(kind: ProviderKind, overrideId?: string): Resol
   if (!preset) return null;
   const id = overrideId ? overrideId : slot.model;
   if (!id) return null;
-  const spec = getModel(preset, id);
+  let spec = getModel(preset, id);
+  // Free-form preset (freeFormModel): a TYPED model id is not in the catalog
+  // — ride the preset's base model spec (first model of the kind) so the run
+  // proceeds with the catalog limits/media/pricing/adapter data, and the
+  // typed id travels on the wire + generation log. Typing a model id against
+  // your own engine IS the live-verification act — the reserved `pending`
+  // gate is lifted for the base spec (owner verified by construction).
+  if (!spec && preset.freeFormModel) {
+    const base = preset.models.find((m) => m.kind === kind);
+    if (base) spec = { ...base, id, pending: false };
+  }
   if (!spec) return null;
   // Wire-safe resolved copy: auth scheme rides along (Rust builds headers +
   // relaxes the key gate for 'none'); the merged adapter rides for Tier A.
