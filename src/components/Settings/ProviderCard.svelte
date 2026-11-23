@@ -103,7 +103,14 @@
 		testing = true;
 		testResult = null;
 		try {
-			testResult = await testProvider(slot.baseUrl, slot.apiKey);
+			// Transport-aware: the Wan2GP MCP preset answers POST /mcp with an
+			// initialize JSON-RPC handshake, not a plain GET. Other presets keep
+			// their kind-aware ping path + auth scheme (previously not forwarded).
+			testResult = await testProvider(slot.baseUrl, slot.apiKey, {
+				pingPath: preset.pingPath?.[kind as ProviderKind],
+				auth: preset.auth,
+				transport: preset.customTransport ?? undefined,
+			});
 		} finally {
 			testing = false;
 		}

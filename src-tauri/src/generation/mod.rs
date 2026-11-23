@@ -10,6 +10,7 @@ pub(crate) mod ffmpeg;
 pub mod group;
 mod media;
 pub mod media_protocol;
+pub(crate) mod mcp;
 pub mod memory_profile;
 mod provider;
 mod registry;

@@ -1699,6 +1699,14 @@ impl ProviderEngine {
                 e
             })?;
 
+        // Stateless JSON-RPC MCP transport (local Wan2GP preset): ONE additive
+        // branch ahead of the Agnes path — the byte-stable Agnes flow below is
+        // untouched (owner scope S3). requestFormat 'mcp' owns its config.
+        if spec.request_format == "mcp" {
+            return self
+                .run_video_mcp(input, &spec, &slot, cancel, on_progress, on_event)
+                .await;
+        }
         // Tier-A configurable adapter (expanded provider system): the
         // generic create→poll→artifact interpreter. The Agnes path below
         // stays byte-stable (owner scope S3).
@@ -2359,6 +2367,240 @@ const VIDEO_DOWNLOAD_ATTEMPTS: usize = 4;
         {
             let _ = append_request_log(&task_dir.join("request.log"), entry, secrets);
         }
+    }
+}
+
+// ── Stateless MCP video transport (Tier-B, generation/mcp.rs) ───────────────
+//
+// One additive engine branch for requestFormat 'mcp'. The Agnes path and the
+// Tier-A adapter interpreter are byte-stable — this block shares only the
+// existing HTTP abstraction, media tree and progress/event plumbing.
+
+impl ProviderEngine {
+    async fn run_video_mcp(
+        &self,
+        input: &EngineInput,
+        spec: &ModelSpecWire,
+        slot: &ProviderSlot,
+        cancel: &AtomicBool,
+        on_progress: &(dyn Fn(f32) + Sync),
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<String, EngineError> {
+        let mcp = spec.mcp.as_ref().ok_or_else(|| {
+            EngineError::Failure(format!(
+                "model {} declares requestFormat 'mcp' but carries no mcp config — re-resolve the spec from the catalog",
+                spec.id
+            ))
+        })?;
+        if mcp.tools.generate.trim().is_empty() || mcp.tools.session.trim().is_empty() {
+            return Err(EngineError::Failure(format!(
+                "MCP config for {} is incomplete (tools.generate + tools.session required)",
+                spec.id
+            )));
+        }
+        if cancel.load(Ordering::Acquire) {
+            return Err(EngineError::Cancelled);
+        }
+        let stage = input.stage.clone().unwrap_or_default();
+        let ctx = self.stage_context(input, &stage, spec)?;
+
+        // Build the flat WanGP settings object from PORTABLE catalog defaults
+        // plus this run's values. No config path / checkpoint / output
+        // filename ever enters the wire (P5, owner-local config policy).
+        let mut settings = mcp.settings_defaults.clone();
+        settings.insert("model_type".into(), Value::String(spec.id.clone()));
+        settings.insert("prompt".into(), Value::String(ctx.prompt.clone()));
+        if spec.supports_seed() {
+            if let Some(seed) = ctx.seed {
+                settings.insert("seed".into(), json!(seed));
+            }
+        }
+        if ctx.length_frames > 0 {
+            settings.insert("video_length".into(), json!(ctx.length_frames));
+        }
+        if let Some(size) = spec
+            .limits
+            .size_map
+            .as_ref()
+            .and_then(|m| m.get(&ctx.resolution))
+        {
+            settings.insert("resolution".into(), Value::String(size.clone()));
+        }
+        // Guidance/steps ride only when the spec declares wire names (the
+        // Wan2GP preset does not — its generic probe defaults stay untouched).
+        if let Some(name) = spec.guidance.as_deref() {
+            settings.insert(name.into(), json!(ctx.c_value));
+        }
+        if let Some(name) = spec.steps.as_deref() {
+            settings.insert(name.into(), json!(ctx.q_value));
+        }
+
+        let base = slot.base_url.trim().trim_end_matches('/');
+        let endpoint = mcp.endpoint.trim();
+        let url = if endpoint.starts_with("http") {
+            endpoint.to_string()
+        } else {
+            format!("{base}{}", if endpoint.starts_with('/') { endpoint.to_string() } else { format!("/{endpoint}") })
+        };
+
+        // Stateless JSON-RPC handshake: no session id is issued, but the
+        // server still expects `initialize` before any `tools/call`.
+        crate::generation::mcp::initialize(
+            &*self.http,
+            &url,
+            &mcp.protocol_version,
+            POLL_TIMEOUT,
+        )
+        .await
+        .map_err(|e| EngineError::Failure(format!("MCP initialize failed: {e}")))?;
+        on_event("MCP session initialized");
+
+        // I2V: local keyframes must become AUTHORIZED references through a
+        // wangp_session upload action. Never send an arbitrary filesystem
+        // path or data: URI — if the upload cannot be completed, FAIL with
+        // an actionable message (never silently drop the image input).
+        // T2V (no upstream media) just omits `image_start`.
+        let media_refs: Vec<String> = ctx
+            .upstream
+            .iter()
+            .map(|u| {
+                if u.primary.trim().is_empty() {
+                    u.local_path.trim().to_string()
+                } else {
+                    u.primary.trim().to_string()
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !media_refs.is_empty() {
+            let mut authorized = Vec::new();
+            for reference in &media_refs {
+                if reference.starts_with("http://")
+                    || reference.starts_with("https://")
+                    || reference.starts_with("data:")
+                {
+                    return Err(EngineError::Failure(format!(
+                        "Wan2GP MCP i2v needs an authorized local image; media '{reference}' is remote/in-band — supply a local keyframe so wangp_session can upload it"
+                    )));
+                }
+                let authorized_ref = crate::generation::mcp::upload_media(
+                    &*self.http, &url, mcp, reference, POLL_TIMEOUT,
+                )
+                .await
+                .map_err(EngineError::Failure)?;
+                authorized.push(authorized_ref);
+            }
+            settings.insert(
+                "image_start".into(),
+                if authorized.len() == 1 {
+                    Value::String(authorized.remove(0))
+                } else {
+                    json!(authorized)
+                },
+            );
+        }
+
+        let mut args = serde_json::Map::new();
+        args.insert("settings".into(), Value::Object(settings.clone()));
+        args.insert("wait".into(), Value::Bool(mcp.generate.wait));
+        if let Some(t) = mcp.generate.timeout_s {
+            args.insert("timeout_s".into(), json!(t));
+        }
+        let secrets: Vec<String> = if slot.api_key.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![slot.api_key.trim().to_string()]
+        };
+        let secrets_refs: Vec<&str> = secrets.iter().map(|s| s.as_str()).collect();
+
+        on_progress(0.45);
+        on_event("calling MCP generate tool");
+        let payload = crate::generation::mcp::call_tool(
+            &*self.http,
+            &url,
+            &mcp.tools.generate,
+            Value::Object(args),
+            IMAGE_TIMEOUT,
+        )
+        .await
+        .map_err(EngineError::Failure)?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(EngineError::Cancelled);
+        }
+        self.log_entry(
+            input,
+            &secrets_refs,
+            &json!({
+                "stage": "mcp-generate",
+                "request": { "method": "POST", "url": url, "tool": mcp.tools.generate,
+                             "headers": crate::generation::mcp::mcp_auth().log_headers(),
+                             "settings": settings },
+                "result": payload,
+            }),
+        )
+        .await;
+
+        on_progress(0.9);
+        let files = crate::generation::mcp::generated_files(&payload);
+        let reference = files
+            .iter()
+            .find(|f| {
+                let lower = f.to_ascii_lowercase();
+                lower.ends_with(".mp4") || lower.ends_with(".webm") || lower.ends_with(".mov")
+            })
+            .or_else(|| files.first())
+            .cloned()
+            .ok_or_else(|| {
+                EngineError::Failure(format!(
+                    "MCP generate returned no generated_files for model {} — no artifact to retrieve",
+                    spec.id
+                ))
+            })?;
+        on_event("retrieving MCP artifact");
+
+        let local = match self.media_root_for(input) {
+            Some(root) => {
+                let pipe_dir = input
+                    .pipe_name
+                    .as_deref()
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or(&input.pipe_id);
+                let (_images, task_dir, _task_images) =
+                    pipe_media_dirs(&root, pipe_dir, &input.task_id).map_err(EngineError::Failure)?;
+                let dest = task_dir.join("video.mp4");
+                crate::generation::mcp::retrieve_artifact(
+                    &*self.http, &url, mcp, &reference, &dest, POLL_TIMEOUT,
+                )
+                .await
+                .map_err(EngineError::Failure)?;
+                if dest.is_file() {
+                    generate_video_proxy(&dest).await;
+                }
+                let mut out = json!({
+                    "videoPath": dest.to_string_lossy(),
+                    "videoUrl": null,
+                    "model": spec.id,
+                    "seed": input.seed,
+                    "params": settings,
+                    "status": "done",
+                });
+                if let Some(id) = crate::generation::mcp::job_id(&payload) {
+                    out["providerTaskId"] = json!(id);
+                }
+                write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
+                dest.to_string_lossy().into_owned()
+            }
+            None => {
+                return Err(EngineError::Failure(
+                    "no media root configured; MCP video artifact cannot be stored".into(),
+                ));
+            }
+        };
+
+        on_progress(1.0);
+        on_event("complete");
+        log::info!("[Generation] MCP video task {} ok ({})", input.task_id, local);
+        Ok(local)
     }
 }
 
@@ -3747,6 +3989,7 @@ mod tests {
             media: None,
             auth: None,
             adapter: None,
+            mcp: None,
             media_input: None,
             structured_output: None,
             thinking_toggle: None,
@@ -3775,6 +4018,7 @@ mod tests {
             media: None,
             auth: None,
             adapter: None,
+            mcp: None,
             media_input: None,
             structured_output: None,
             thinking_toggle: None,
@@ -5535,5 +5779,159 @@ mod tests {
         assert_eq!(local_media_leaf(&payload).as_deref(), Some("image_url"));
         let remote = json!({ "image_url": "https://cdn.test/ref.png", "prompt": "C:/x/y.png" });
         assert!(local_media_leaf(&remote).is_none());
+    }
+
+    // ── Wan2GP MCP transport (stub HTTP — no server, no GPU work) ────────────
+
+    fn mcp_spec() -> ModelSpecWire {
+        serde_json::from_value(json!({
+            "id": "ti2v_2_2", "kind": "video", "endpoint": "/mcp", "sync": false,
+            "requestFormat": "mcp", "auth": "none", "supportsSeed": true,
+            "limits": {},
+            "mcp": {
+                "endpoint": "/mcp", "protocolVersion": "2025-06-18",
+                "tools": { "generate": "wangp_generate", "session": "wangp_session" },
+                "generate": { "wait": true, "timeout_s": null },
+                "settingsDefaults": {
+                    "model_type": "ti2v_2_2", "seed": -1, "resolution": "1280x720",
+                    "video_length": 121, "num_inference_steps": 50, "guidance_scale": 5,
+                    "flow_shift": 5, "image_mode": 0, "image_prompt_type": "T"
+                },
+                "actions": {
+                    "upload": { "action": "create_file_upload", "pathArg": "path",
+                                "refPaths": ["media_id", "path"] },
+                    "download": { "action": "create_file_download", "pathArg": "path",
+                                  "refPaths": ["path"] }
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mcp_initialize_handshake_parses_server_info_from_stub() {
+        let http = StubHttp::new().queue_post(Ok((
+            200,
+            json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "protocolVersion": "2025-06-18",
+                            "serverInfo": { "name": "WanGP", "version": "1.30.0" } }
+            }),
+        )));
+        let result = crate::generation::mcp::initialize(
+            &http,
+            "http://127.0.0.1:8765/mcp",
+            crate::generation::mcp::DEFAULT_PROTOCOL_VERSION,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["serverInfo"]["name"], "WanGP");
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0]["method"], "initialize");
+        assert_eq!(bodies[0]["params"]["protocolVersion"], "2025-06-18");
+    }
+
+    #[tokio::test]
+    async fn mcp_t2v_generate_writes_output_json_from_stub_http() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap(); // db_with_slots returns an uncreated root
+        let source = media.join("mcp-source.mp4");
+        std::fs::write(&source, b"fake-mcp-artifact").unwrap();
+        let artifact = source.to_string_lossy().to_string();
+        let http = Arc::new(StubHttp::new()
+            .queue_post(Ok((
+                200,
+                json!({
+                    "jsonrpc": "2.0", "id": 1,
+                    "result": { "protocolVersion": "2025-06-18",
+                                "serverInfo": { "name": "WanGP", "version": "1.30.0" } }
+                }),
+            )))
+            .queue_post(Ok((
+                200,
+                json!({
+                    "jsonrpc": "2.0", "id": 2,
+                    "result": {
+                        "structuredContent": {
+                            "status": "done", "job_id": "job-mcp-1",
+                            "generated_files": [artifact]
+                        },
+                        "content": [{ "type": "text", "text": "{}" }],
+                        "isError": false
+                    }
+                }),
+            ))));
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let input = {
+            let mut i = video_input(&media);
+            i.prompt = "video prompt".into();
+            i.upstream.clear(); // t2v — no image input
+            i.video_spec = Some(mcp_spec());
+            i
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("mcp t2v should succeed");
+        assert!(out.local_path.ends_with("video.mp4"));
+        assert!(std::path::Path::new(&out.local_path).is_file());
+        let out_json: Value =
+            serde_json::from_str(&std::fs::read_to_string(media.join("pipe1/task1/output.json")).unwrap())
+                .unwrap();
+        assert_eq!(out_json["status"], "done");
+        assert_eq!(out_json["model"], "ti2v_2_2");
+        assert_eq!(out_json["providerTaskId"], "job-mcp-1");
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2, "initialize handshake + one JSON-RPC tools/call for t2v");
+        assert_eq!(bodies[0]["method"], "initialize");
+        assert_eq!(bodies[1]["method"], "tools/call");
+        assert_eq!(bodies[1]["params"]["name"], "wangp_generate");
+        assert_eq!(bodies[1]["params"]["arguments"]["wait"], true);
+        let st = &bodies[1]["params"]["arguments"]["settings"];
+        assert_eq!(st["prompt"], "video prompt");
+        assert_eq!(st["model_type"], "ti2v_2_2");
+        assert_eq!(st["seed"], 42);
+        assert_eq!(st["video_length"], 121);
+        assert!(st.get("image_start").is_none(), "t2v must not send image_start");
+        drop(bodies);
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn mcp_i2v_remote_media_fails_actionably_without_a_call() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(StubHttp::new().queue_post(Ok((
+            200,
+            json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": { "protocolVersion": "2025-06-18",
+                            "serverInfo": { "name": "WanGP", "version": "1.30.0" } }
+            }),
+        ))));
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let input = {
+            let mut i = video_input(&media); // upstream primary = https://cdn.test/k1.png
+            i.video_spec = Some(mcp_spec());
+            i
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect_err("remote image media must fail for MCP i2v");
+        assert!(err.contains("authorized local image"), "{err}");
+        assert!(
+            !http
+                .posted_bodies
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|b| b["method"] == "tools/call"),
+            "no generate call may fire on un-uploadable media (initialize is expected)"
+        );
+        let _ = std::fs::remove_dir_all(&media);
     }
 }

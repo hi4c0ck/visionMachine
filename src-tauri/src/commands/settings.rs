@@ -302,16 +302,19 @@ pub fn url_host(url: &str) -> String {
     url.trim().split('/').take(3).collect::<Vec<_>>().join("/")
 }
 
-/// Real reachability probe: GET the base URL (or the preset's kind-aware
+/// Real reachability probe. GET the base URL (or the preset's kind-aware
 /// ping path) with the preset's auth scheme. Any HTTP response counts as
 /// reachable; a transport failure does not. `ping_path` / `auth` are
 /// optional — legacy callers (base + Bearer) keep today's behavior.
+/// `transport: 'mcp'` switches to the stateless MCP `initialize` handshake
+/// (POST /mcp) — local MCP servers do not answer a plain GET there.
 #[tauri::command]
 pub async fn test_provider(
     base_url: String,
     api_key: String,
     ping_path: Option<String>,
     auth: Option<String>,
+    transport: Option<String>,
 ) -> Result<TestProviderResult, String> {
     let host = url_host(&base_url);
     let trimmed = base_url.trim();
@@ -326,6 +329,49 @@ pub async fn test_provider(
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
+    if transport.as_deref() == Some("mcp") {
+        // POST the SAME initialize body the engine's MCP client uses; a bare
+        // 200 is NOT enough — the result must identify an MCP server. No key
+        // is sent (keyless local transport) and no error echoes one.
+        let body = crate::generation::mcp::initialize_request(
+            crate::generation::mcp::DEFAULT_PROTOCOL_VERSION,
+        );
+        let resp = client
+            .post(&url)
+            .header("Accept", crate::generation::mcp::MCP_ACCEPT)
+            .json(&body)
+            .send()
+            .await;
+        return match resp {
+            Ok(r) => {
+                let status = r.status().as_u16();
+                let raw: Value = r.json().await.unwrap_or(Value::Null);
+                match crate::generation::mcp::parse_response(&raw) {
+                    Ok(result) if crate::generation::mcp::initialize_ok(&result) => {
+                        Ok(TestProviderResult {
+                            reachable: true,
+                            status: Some(status),
+                            message: format!(
+                                "MCP initialize ok — {}",
+                                result
+                                    .get("serverInfo")
+                                    .and_then(|s| s.get("name"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("MCP server")
+                            ),
+                        })
+                    }
+                    Ok(_) => Ok(describe_provider_status(Some(status), &host)),
+                    Err(e) => Ok(TestProviderResult {
+                        reachable: false,
+                        status: Some(status),
+                        message: format!("MCP initialize failed: {e}"),
+                    }),
+                }
+            }
+            Err(_) => Ok(describe_provider_status(None, &host)),
+        };
+    }
     let mut req = client.get(&url);
     let key = api_key.trim();
     if !key.is_empty() {

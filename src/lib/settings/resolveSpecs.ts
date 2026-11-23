@@ -6,7 +6,7 @@
 // Expanded provider system: the resolved copy carries the preset's auth
 // scheme and the MERGED Tier-A video adapter (preset ⊕ model overrides ⊕
 // per-model payload) so the Rust engine interprets one self-contained spec.
-import type { ModelSpec, ProviderKind, VideoAdapterSpec } from '$types';
+import type { McpSpec, ModelSpec, ProviderKind, VideoAdapterSpec } from '$types';
 import { getPreset, getModel } from './catalog';
 import { unlockVerified } from './guards';
 import { getSettings } from './store';
@@ -50,6 +50,18 @@ export function mergeAdapter(
   const merged = mergeDeep(presetAdapter, spec.adapterOverrides ?? {});
   merged.payload = spec.adapterPayload ?? merged.payload ?? {};
   return merged;
+}
+
+/** Attach the preset's MCP transport config to an 'mcp' wire spec. Mirrors
+ *  mergeAdapter: transport lives on the preset, the model owns the request
+ *  format. Null for every other request format or a preset with no config —
+ *  the Rust engine reports that as a concrete config error. */
+export function mergeMcp(
+  presetMcp: McpSpec | undefined,
+  spec: ModelSpec,
+): McpSpec | null {
+  if (spec.requestFormat !== 'mcp' || !presetMcp) return null;
+  return mergeDeep(presetMcp, spec.mcp ?? {});
 }
 
 /**
@@ -109,6 +121,8 @@ export function resolveModelSpec(
   if (ownerVerified) resolved.ownerVerified = true;
   const adapter = mergeAdapter(preset.adapter, spec);
   if (adapter) resolved.adapter = adapter;
+  const mcp = mergeMcp(preset.mcp, spec);
+  if (mcp) resolved.mcp = mcp;
   return { preset: preset.id, spec: resolved };
 }
 

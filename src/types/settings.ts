@@ -27,13 +27,16 @@ export type UrlStyle = 'host-root' | 'v1-native';
  *  Agnes video engine is seconds-based (V2.5 family); the legacy
  *  frames-based V2.0 route (`video-job-frames`) was removed with the
  *  V2.0 model (P1-7, 2026-11-11). `video-adapter` = the configurable
- *  Tier-A adapter (spec.adapter data interpreted by the Rust engine). */
+ *  Tier-A adapter (spec.adapter data interpreted by the Rust engine).
+ *  `mcp` = stateless JSON-RPC MCP tool call (spec.mcp config interpreted by
+ *  generation/mcp.rs); used by keyless local MCP engines (Wan2GP). */
 export type RequestFormat =
   | 'chat'
   | 'image-gen'
   | 'video-job'
   | 'video-job-seconds'
-  | 'video-adapter';
+  | 'video-adapter'
+  | 'mcp';
 
 /** Pipe-level media mode (docs/agnes-model-catalog.md, Q7). Default is
  *  'keyframes'. Drives keyframes/subject-refs row visibility per model.
@@ -202,6 +205,35 @@ export interface VideoAdapterSpec {
   };
 }
 
+/** Stateless JSON-RPC MCP transport (Tier-B code shaper, generation/mcp.rs).
+ *  Declarative like the Tier-A adapter: transport + tool names + defaults on
+ *  the PRESET (PresetSpec.mcp), resolved onto the wire spec as `spec.mcp`.
+ *  No SDK crate, no session header — initialize then tools/call per request.
+ *  All strings are protocol data; NEVER put owner-machine paths/checkpoints
+ *  or Wan2GP config values here (P5: portable catalog). */
+export interface McpSpec {
+  /** JSON-RPC endpoint under the provider base URL (e.g. '/mcp'). */
+  endpoint: string;
+  /** JSON-RPC protocol version advertised at initialize. */
+  protocolVersion: string;
+  /** Exposed tool names (WanGP: wangp_generate / wangp_session). */
+  tools: { generate: string; session: string };
+  /** Generation tool call options. wait=true -> the server blocks until the
+   *  job finishes; no client-side polling is needed for this transport. */
+  generate?: { wait?: boolean; timeout_s?: number | null };
+  /** Generic generation settings merged UNDER the per-run prompt/seed/
+   *  resolution. Only portable wire values — no `config`, `overrides`,
+   *  output filename, LoRA or filesystem paths (owner local config). */
+  settingsDefaults?: Record<string, unknown>;
+  /** wangp_session actions used to transfer authorized media. The exact
+   *  action names/argument keys are server data; the engine fails with an
+   *  actionable error if an upload/download cannot be completed safely. */
+  actions?: {
+    upload?: { action: string; pathArg: string; refPaths: string[] };
+    download?: { action: string; pathArg: string; refPaths: string[] };
+  };
+}
+
 /** Static per-model pricing data (researched, date-stamped — same convention
  *  as limits). rates absent / verifiedAt null = NOT yet researched: the
  *  estimate endpoint reports 'unknown' honestly, never a fabricated number.
@@ -339,6 +371,9 @@ export interface ModelSpec {
   adapterOverrides?: Partial<VideoAdapterSpec>;
   /** Merged adapter attached by resolveSpecs (preset ⊕ overrides ⊕ payload). */
   adapter?: VideoAdapterSpec;
+  /** Merged MCP transport config attached by resolveSpecs (requestFormat
+   *  'mcp'). Transport + tool names + defaults, no owner-machine values. */
+  mcp?: McpSpec;
   /** Text models: structured-output capability for the Director Node A call.
    *  json_schema (OpenAI/Agnes), json_object (most local servers),
    *  prompt-only (fallback instruction; the retry net still applies). */
@@ -374,12 +409,17 @@ export interface PresetSpec {
   /** Dynamic model listing (Ollama /api/tags, OpenAI-shape /v1/models —
    *  OpenRouter's listing carries per-token pricing). */
   modelList?: { endpoint: string; shape: 'openai' | 'ollama' };
-  /** Reserved Tier-B transport marker: 'mcp' / 'special' = non-OpenAI-compatible
-   *  local APIs (MCP servers, vendor-specific local protocols). The config slot
-   *  lands now; the code shaper lands with the ComfyUI-class slice. */
+  /** Non-OpenAI local transport marker: 'mcp' = stateless JSON-RPC tool
+   *  transport (implemented for Wan2GP in generation/mcp.rs, requestFormat
+   *  'mcp'); 'special' = vendor-specific local APIs (ComfyUI-class, reserved
+   *  Tier-B). 'openai-compat' = normal OpenAI-shaped local server. */
   customTransport?: 'openai-compat' | 'mcp' | 'special';
   /** Vendor-level Tier-A video adapter defaults (transport + response). */
   adapter?: VideoAdapterSpec;
+  /** Vendor-level MCP transport defaults (requestFormat 'mcp'). Mirrors the
+   *  adapter pattern: transport config on the preset, resolved onto the wire
+   *  spec by resolveSpecs; no per-model payload template needed. */
+  mcp?: McpSpec;
   /** UI grouping + honest-expectations hint (a local 7B ≠ a cloud engine). */
   tag?: 'cloud' | 'local';
 }

@@ -249,7 +249,86 @@ pub struct VideoAdapterSpecWire {
     pub media: Option<AdapterMediaWire>,
 }
 
+// ── MCP JSON-RPC transport wire mirror (Tier-B code shaper, mcp.rs) ──────────
+// Declarative config resolved from the preset (resolveSpecs.mergeMcp) onto
+// the wire spec. No SDK crate, no session header — the engine drives a
+// minimal stateless JSON-RPC client over the existing HttpClient trait.
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolsWire {
+    #[serde(default)]
+    pub generate: String,
+    #[serde(default)]
+    pub session: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpActionWire {
+    /// wangp_session action name (e.g. "create_file_upload").
+    #[serde(default)]
+    pub action: String,
+    /// Argument key that carries the (authorized) path to the server.
+    #[serde(default)]
+    pub path_arg: String,
+    /// Dot-path keys accepted when reading the returned media reference.
+    #[serde(default)]
+    pub ref_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpActionsWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<McpActionWire>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download: Option<McpActionWire>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpGenerateWire {
+    /// wait=true: the server blocks until the job finishes.
+    #[serde(default = "default_mcp_wait")]
+    pub wait: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<f64>,
+}
+
+impl Default for McpGenerateWire {
+    fn default() -> Self {
+        Self {
+            wait: true,
+            timeout_s: None,
+        }
+    }
+}
+
+fn default_mcp_wait() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSpecWire {
+    /// JSON-RPC endpoint under the provider base URL ("/mcp").
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub protocol_version: String,
+    #[serde(default)]
+    pub tools: McpToolsWire,
+    #[serde(default)]
+    pub generate: McpGenerateWire,
+    /// Generic generation defaults (portable wire values only — no paths).
+    #[serde(default)]
+    pub settings_defaults: serde_json::Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<McpActionsWire>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSpecWire {
     pub id: String,
@@ -304,6 +383,10 @@ pub struct ModelSpecWire {
     /// Merged Tier-A adapter (requestFormat "video-adapter").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<VideoAdapterSpecWire>,
+    /// Merged MCP transport config (requestFormat "mcp") — resolved from the
+    /// preset by resolveSpecs.mergeMcp; no owner-machine values on the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpSpecWire>,
     /// "url-or-data" | "url-only" media input contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_input: Option<String>,
@@ -418,5 +501,55 @@ mod tests {
             v2spec.media.as_ref().unwrap().image_field.as_deref(),
             Some("image")
         );
+    }
+
+    #[test]
+    fn mcp_config_round_trips_from_catalog_wire_shape() {
+        // The exact shape resolveSpecs.mergeMcp attaches to an 'mcp' spec.
+        let json = serde_json::json!({
+            "id": "ti2v_2_2",
+            "kind": "video",
+            "endpoint": "/mcp",
+            "sync": false,
+            "requestFormat": "mcp",
+            "pending": true,
+            "auth": "none",
+            "mcp": {
+                "endpoint": "/mcp",
+                "protocolVersion": "2025-06-18",
+                "tools": { "generate": "wangp_generate", "session": "wangp_session" },
+                "generate": { "wait": true, "timeout_s": null },
+                "settingsDefaults": {
+                    "model_type": "ti2v_2_2", "seed": -1, "resolution": "1280x720",
+                    "video_length": 121, "num_inference_steps": 50,
+                    "guidance_scale": 5, "flow_shift": 5, "image_mode": 0,
+                    "image_prompt_type": "T"
+                },
+                "actions": {
+                    "upload": { "action": "create_file_upload", "pathArg": "path",
+                                "refPaths": ["media_id", "path"] },
+                    "download": { "action": "create_file_download", "pathArg": "path",
+                                  "refPaths": ["path"] }
+                }
+            }
+        });
+        let spec: ModelSpecWire = serde_json::from_value(json).unwrap();
+        assert_eq!(spec.request_format, "mcp");
+        let mcp = spec.mcp.as_ref().expect("mcp config must survive the wire");
+        assert_eq!(mcp.endpoint, "/mcp");
+        assert_eq!(mcp.protocol_version, "2025-06-18");
+        assert_eq!(mcp.tools.generate, "wangp_generate");
+        assert_eq!(mcp.tools.session, "wangp_session");
+        assert!(mcp.generate.wait);
+        assert!(mcp.generate.timeout_s.is_none());
+        assert_eq!(mcp.settings_defaults.get("model_type").unwrap(), "ti2v_2_2");
+        assert_eq!(mcp.settings_defaults.get("video_length").unwrap(), 121);
+        let up = mcp.actions.as_ref().unwrap().upload.as_ref().unwrap();
+        assert_eq!(up.action, "create_file_upload");
+        assert_eq!(up.path_arg, "path");
+        // Camel-case round trip: Rust struct fields are wire-safe.
+        let out = serde_json::to_value(&spec).unwrap();
+        assert_eq!(out["mcp"]["protocolVersion"], "2025-06-18");
+        assert_eq!(out["mcp"]["settingsDefaults"]["image_mode"], 0);
     }
 }

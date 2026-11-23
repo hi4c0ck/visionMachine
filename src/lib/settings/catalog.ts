@@ -23,7 +23,7 @@
 //   runtimes ComfyUI / Wan2GP); the EXECUTOR (workflow graphs, 'upload'
 //   media input mode) remains the deferred Tier-B slice.
 
-import type { ModelSpec, PresetId, PresetSpec, PriceSpec, ProviderKind, VideoAdapterSpec } from '$types';
+import type { McpSpec, ModelSpec, PresetId, PresetSpec, PriceSpec, ProviderKind, VideoAdapterSpec } from '$types';
 
 // Host-root base URL: creates carry the /v1 prefix in their endpoint path,
 // polling lives at the host root (/agnesapi) — one base for everything
@@ -428,6 +428,73 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
                  verifiedAt: '2026-11-22',
                  note: 'VRAM ~8.2–9.8 GB; easiest entry point (native, no offloading); runtimes ComfyUI / Wan2GP. Owner matrix 2026-11-22, unverified-live' } },
     ),
+  ],
+};
+
+// ── LOCAL MCP video preset — Wan2GP (stateless JSON-RPC, owner install
+//    2026-11-23) ─────────────────────────────────────────────────────────────
+// Contract probed against the owner's local server (2026-11-23, endpoint-only
+// probe, NO live generation): POST base + '/mcp', JSON-RPC 2.0, no session
+// header, `initialize` then `tools/call`. `wangp_generate` takes one flat
+// settings object (prompt + model_type required in practice) with wait=true;
+// the result carries structuredContent (plus the same JSON in content[0].text)
+// and `isError`. Generated files arrive as virtual @outputs paths; a
+// `wangp_session` upload/download action transfers authorized media.
+// PORTABLE DATA ONLY: no checkpoint path, no owner Models directory, no
+// Wan2GP config value. Settings defaults below are the generic generation
+// wire values from the MCP contract probe (no `config`/`overrides`/LoRA/path).
+const WAN2GP_MCP: McpSpec = {
+  endpoint: '/mcp',
+  protocolVersion: '2025-06-18',
+  tools: { generate: 'wangp_generate', session: 'wangp_session' },
+  generate: { wait: true, timeout_s: null },
+  settingsDefaults: {
+    model_type: 'ti2v_2_2',
+    seed: -1,
+    resolution: '1280x720',
+    video_length: 121,
+    num_inference_steps: 50,
+    guidance_scale: 5,
+    flow_shift: 5,
+    image_mode: 0,
+    image_prompt_type: 'T',
+  },
+  // Action names/argument keys are server data; `refPaths` lists the keys
+  // the engine accepts when reading an authorized media reference back.
+  actions: {
+    upload: { action: 'create_file_upload', pathArg: 'path',
+              refPaths: ['media_id', 'gallery_id', 'id', 'path', 'name', 'uri'] },
+    download: { action: 'create_file_download', pathArg: 'path',
+                refPaths: ['path', 'file_path', 'url', 'uri', 'content_base64', 'base64'] },
+  },
+};
+
+export const WAN2GP_PRESET: PresetSpec = {
+  id: 'wan2gp',
+  label: 'Wan2GP (local MCP)',
+  kinds: ['video'],
+  auth: 'none',
+  urlStyle: 'host-root',
+  defaultBaseUrl: 'http://127.0.0.1:8765',
+  // The whole JSON-RPC conversation rides one POST to /mcp; the initialize
+  // probe (transport-aware Test connection) uses the same endpoint.
+  pingPath: { video: '/mcp' },
+  customTransport: 'mcp',
+  tag: 'local',
+  mcp: WAN2GP_MCP,
+  models: [
+    {
+      id: 'ti2v_2_2', kind: 'video', label: 'Wan 2.2 TI2V (local MCP)',
+      endpoint: '/mcp', sync: false, requestFormat: 'mcp',
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: MCP contract probe image_start + ti2v model type
+      media: { modes: ['keyframes'], maxKeyframes: 1 },
+      supportsSeed: true,
+      limits: {},
+      pending: true,
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: null,
+                 note: 'owner local install 2026-11-23, unverified-live' },
+    },
   ],
 };
 
@@ -1042,6 +1109,8 @@ export const PRESETS: PresetSpec[] = [
   OPENAI_PRESET, OPENROUTER_PRESET, OLLAMA_PRESET, LMSTUDIO_PRESET, LLAMACPP_PRESET, LOCAL_CUSTOM_PRESET,
   // video — Tier-A adapter + local ComfyUI-class (config now, executor Tier-B)
   RUNWAY_PRESET, FAL_PRESET, REPLICATE_PRESET, LUMA_PRESET, KLING_PRESET, MINIMAX_PRESET, LOCAL_VIDEO_PRESET,
+  // video — local MCP (stateless JSON-RPC; keyless, pending owner verification)
+  WAN2GP_PRESET,
 ];
 
 export function getPreset(id: string): PresetSpec | undefined {

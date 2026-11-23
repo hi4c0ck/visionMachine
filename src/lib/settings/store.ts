@@ -269,10 +269,14 @@ export interface TestProviderOutcome {
   message: string;
 }
 
+/** Transport-aware connection test. `transport: 'mcp'` makes the Rust command
+ *  send an MCP `initialize` JSON-RPC request to the ping endpoint instead of
+ *  a plain GET (the local Wan2GP server only answers POST /mcp). Legacy
+ *  callers omit all options and keep the GET probe. */
 export async function testProvider(
   baseUrl: string,
   apiKey: string,
-  opts?: { pingPath?: string; auth?: string },
+  opts?: { pingPath?: string; auth?: string; transport?: string },
 ): Promise<TestProviderOutcome> {
   if (!isTauri()) {
     return {
@@ -287,6 +291,7 @@ export async function testProvider(
       apiKey,
       pingPath: opts?.pingPath ?? null,
       auth: opts?.auth ?? null,
+      transport: opts?.transport ?? null,
     })) as {
       reachable: boolean;
       status: number | null;

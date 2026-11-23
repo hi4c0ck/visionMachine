@@ -231,8 +231,35 @@ Group header = the shared fields; row = the exact catalog model id
    code-verified). Every other vendor prices via source ②/④ by design, not
    by bug.
 3. **MCP / special-API local transport** — reserved `customTransport` marker
-   (in use since 2026-11-22: `local-video` preset, config-only), no
-   implementation; ComfyUI slice carries its own pre-check (upload).
+   (in use since 2026-11-22: `local-video` preset, config-only); the MCP
+   branch is now implemented for Wan2GP (`mcp.rs`, §7.5) — code-verified by
+   stub tests but **unverified-live**; `special`/ComfyUI workflow graphs stay
+   deferred.
+
+### 7.5 Wan2GP local MCP (owner install 2026-11-23, endpoint-probed only)
+
+`WAN2GP_PRESET` (id `wan2gp`) is a **keyless video preset** for the owner's
+local Wan2GP server. `customTransport: 'mcp'` + model `ti2v_2_2`
+(`requestFormat: 'mcp'`, `pending: true`, `capabilities: ['t2v','i2v']`,
+`pricing: free-local / unverified-live`). The transport config lives on the
+preset (`endpoint: '/mcp'`, `protocolVersion: '2025-06-18'`, tools
+`wangp_generate` / `wangp_session`, portable generation defaults) and is
+resolved onto the wire spec as `spec.mcp` — the frontend catalog stays the
+single source of truth. **No checkpoint path, owner Models directory or
+Wan2GP config value is recorded in the repo.**
+
+| Cell | Status | Evidence / open item |
+|---|---|---|
+| Endpoint handshake | **code-verified, unverified-live** | stateless JSON-RPC `initialize` → `tools/call`; no session header; Accept `application/json, text/event-stream`. Probed 2026-11-23 (serverInfo WanGP, protocol 2025-06-18) — no live generation. |
+| Test connection | **code-verified** | ProviderCard passes the preset's ping path + transport; Rust `test_provider` sends the real `initialize` body and requires an MCP identity in the result. |
+| `isError` / envelope | **code-verified** | JSON-RPC `error` and tool `isError: true` are hard failures; `structuredContent` preferred, `content[0].text` JSON is the fallback. |
+| Artifact retrieval | **code-verified, unverified-live** | absolute output path copied locally; virtual `@outputs` path via `wangp_session` download action (path / URL / base64). Exact action arguments unverified — fail explicitly rather than fabricate bytes. |
+| I2V input | **code-verified, unverified-live** | local keyframes go through the `wangp_session` upload action and only its authorized reference reaches `image_start`; remote/data media fails with an actionable error before any generate call. T2V needs no upload. |
+| Cost | **code-verified by design** | `free-local` $0 marginal, compute-time on owner hardware; no in-band cost signal declared. |
+| Live run / `pending → generable` | **OPEN** | owner must report one concrete successful session and explicitly ask to flip the row. |
+
+The Agnes byte-stable path and the Tier-A adapter interpreter are untouched:
+the MCP branch is one additive dispatch ahead of them.
 
 ---
 
