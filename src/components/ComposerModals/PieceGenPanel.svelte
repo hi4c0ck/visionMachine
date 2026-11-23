@@ -12,7 +12,7 @@
 	//    one switches the "generated" preview to that artifact.
 	import { getSettings } from '$lib/settings/store';
 	import { unlockVerified } from '$lib/settings/guards';
-	import { modelsFor, getPreset } from '$lib/settings/catalog';
+	import { modelsFor, getPreset, capabilityNote } from '$lib/settings/catalog';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { flashToast } from '$lib/flashToast';
 	import ImageLightbox from './ImageLightbox.svelte';
@@ -316,7 +316,7 @@
 				aria-label="Image model"
 			>
 				{#each imageModels as m (m.id)}
-					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (pending)' : ''}</option>
+					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 				{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
 					<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->

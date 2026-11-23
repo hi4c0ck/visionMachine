@@ -266,6 +266,23 @@ export interface ModelSpec {
   label?: string;
   /** Read-only entry: viewable/inspectable in Settings, never generatable. */
   readOnly?: boolean;
+  /** Model capabilities beyond the default media mode — surfaced as
+   *  chips/notes in the model pickers; limitations ride WITH the
+   *  capability (never free-floating). No engine ships vid2vid yet —
+   *  the slot is reserved so a Tier-B entry just fills it in. */
+  capabilities?: {
+    /** Video-to-video: accepts a source video clip (restyle/extend/deform). */
+    vid2vid?: boolean;
+    /** vid2vid source-media limitations (declared alongside the capability). */
+    vid2vidLimits?: {
+      /** Source clip length ceiling (seconds). */
+      maxSeconds?: number;
+      /** Source file size ceiling (MB). */
+      maxMB?: number;
+      /** Accepted containers, e.g. ['mp4', 'mov']. */
+      formats?: string[];
+    };
+  };
   /** Obsolete (< 2.5) model: kept in the catalog so stored sessions still
    *  resolve, but hidden from every new-model picker in the UI. */
   obsolete?: boolean;

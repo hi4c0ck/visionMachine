@@ -345,6 +345,20 @@ const LOCAL_VIDEO_MODEL = (
   ...extra,
 });
 
+// VID2V reservation (Tier-B): no engine ships a video-to-video model here
+// yet. When one lands (Wan V2V, AnimateDiff interpolation, …), it enters
+// through THIS factory and declares its capability + limitations on the
+// spec — the type slot (ModelSpec.capabilities) and every picker's
+// capabilityNote() surface are already wired:
+//   LOCAL_VIDEO_MODEL('wan-v2v-...', 'Wan V2V (local)', {
+//     pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 } },
+//     capabilities: {
+//       vid2vid: true,
+//       vid2vidLimits: { maxSeconds: 10, maxMB: 200, formats: ['mp4', 'mov'] },
+//     },
+//   })
+// The picker then renders "(vid2vid · ≤10s · ≤200MB · mp4/mov)" next to it.
+
 export const LOCAL_VIDEO_PRESET: PresetSpec = {
   id: 'local-video',
   label: 'Local video engine (ComfyUI-class)',
@@ -1005,6 +1019,21 @@ export function modelsFor(preset: PresetSpec, kind: ProviderKind): ModelSpec[] {
 
 export function getModel(preset: PresetSpec, modelId: string): ModelSpec | undefined {
   return preset.models.find((m) => m.id === modelId);
+}
+
+/** Picker display for a model's declared capabilities + their limitations
+ *  ("vid2vid · ≤10s · ≤200MB · mp4/mov"). "" when nothing is declared —
+ *  pickers append it in parentheses. The limitations render WITH the
+ *  capability by construction: no chip without its limits block. */
+export function capabilityNote(m: ModelSpec): string {
+  const c = m.capabilities;
+  if (!c?.vid2vid) return '';
+  const parts: string[] = ['vid2vid'];
+  const L = c.vid2vidLimits;
+  if (L?.maxSeconds) parts.push(`≤${L.maxSeconds}s`);
+  if (L?.maxMB) parts.push(`≤${L.maxMB}MB`);
+  if (L?.formats?.length) parts.push(L.formats.join('/'));
+  return parts.join(' · ');
 }
 
 /** The preset id a slot should default to for a kind (first vendor that supports it). */

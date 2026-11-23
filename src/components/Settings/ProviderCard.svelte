@@ -4,7 +4,7 @@
 	// connection test. The card is stateless: the modal owns the draft slot
 	// and gets it back via onchange.
 	import type { ProviderKind, ProviderSlot } from '$types';
-	import { PRESETS, getPreset, modelsFor } from '$lib/settings/catalog';
+	import { PRESETS, getPreset, modelsFor, capabilityNote } from '$lib/settings/catalog';
 	import { validateHttpUrl, isConfigured, unlockVerified } from '$lib/settings/guards';
 	import { testProvider, type TestProviderOutcome } from '$lib/settings/store';
 
@@ -89,8 +89,13 @@
 
 	function toggleVerified(id: string) {
 		const cur: string[] = slot.verified ?? [];
-		const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-		onslotchange({ ...slot, verified: next.length ? next : undefined });
+		const on = !cur.includes(id);
+		const next = on ? [...cur, id] : cur.filter((x) => x !== id);
+		// CHECK = verify + SELECT the model — the effect is visible in the
+		// picker above (dropdown selection / typed input value), and the row
+		// leaves this section because the section only lists STILL-pending
+		// models. UNCHECK = back to reserved (selection is kept).
+		onslotchange({ ...slot, verified: next.length ? next : undefined, ...(on ? { model: id } : {}) });
 	}
 
 	async function runTest() {
@@ -179,13 +184,13 @@
 			/>
 			<datalist id="prov-model-dl-{kind}">
 				{#each modelOptions as m (m.id)}
-					<option value={m.id}>{m.label ?? m.id}{m.pending ? ' (reserved)' : ''}</option>
+					<option value={m.id}>{m.label ?? m.id}{m.pending ? ' (reserved)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 			</datalist>
 		{:else}
 			<select id="prov-model-{kind}" value={effectiveModel} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
 				{#each modelOptions as m (m.id)}
-					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 			</select>
 		{/if}
@@ -211,8 +216,11 @@
 				</label>
 			{/each}
 			<span class="hint">
-				Reserved until live-verified. Tick a model once you've confirmed it against
-				your engine — it unlocks generation on this machine only.
+				This section lists the preset's reserved models — the ones still
+				LOCKED in the model picker above (greyed out, "(details pending)").
+				Tick one = "I confirmed it against my engine": it unlocks AND gets
+				selected in the picker, and it leaves this list (nothing left to
+				verify there). Untick = back to reserved.
 			</span>
 		</div>
 	{/if}

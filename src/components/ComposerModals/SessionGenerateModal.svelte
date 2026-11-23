@@ -4,7 +4,7 @@
 	import { flashToast } from '$lib/flashToast';
 	import { getSettings } from '$lib/settings/store';
 	import { unlockVerified } from '$lib/settings/guards';
-	import { modelsFor, getPreset, resolveSpecs } from '$lib/settings';
+	import { modelsFor, getPreset, resolveSpecs, capabilityNote } from '$lib/settings';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import type { PipeParamOverride, RunStats } from '$lib/composerStore/sessionGeneration';
 	import { masterState, setMaster } from '$lib/sessionMasters';
@@ -395,7 +395,7 @@
 								<label for="sg-image-model">Image model</label>
 								<select id="sg-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
 									{#each imageModels as m (m.id)}
-										<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+										<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 									{/each}
 									{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
 										<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
@@ -407,7 +407,7 @@
 								<label for="sg-video-model">Video model</label>
 								<select id="sg-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
 									{#each videoModels as m (m.id)}
-										<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+										<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 									{/each}
 									{#if videoModel && !videoModels.some((m) => m.id === videoModel)}
 										<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->

@@ -9,7 +9,7 @@
 	import { APP_CONSTANTS } from '$constants';
 	import { getSettings, estimateGenerationCost, type CostEstimate } from '$lib/settings/store';
 	import { unlockVerified } from '$lib/settings/guards';
-	import { modelsFor, getPreset } from '$lib/settings/catalog';
+	import { modelsFor, getPreset, capabilityNote } from '$lib/settings/catalog';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import '../composer-modal.css';
 
@@ -171,7 +171,7 @@
 						<label for="gen-image-model">Image model</label>
 						<select id="gen-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
 							{#each imageModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 							{/each}
 							{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
 								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
@@ -183,7 +183,7 @@
 						<label for="gen-video-model">Video model</label>
 						<select id="gen-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
 							{#each videoModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}</option>
+								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 							{/each}
 							{#if videoModel && !videoModels.some((m) => m.id === videoModel)}
 								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->

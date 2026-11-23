@@ -7,10 +7,10 @@
  * presets (a non-free-form preset must still block unknown ids).
  * Plus the `unlockVerified` pure gate from the Settings live-verify checkboxes.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import type { Settings } from '../../src/types';
 import { unlockVerified } from '../../src/lib/settings/guards';
-import { LOCAL_VIDEO_PRESET, AGNES_PRESET } from '../../src/lib/settings/catalog';
+import { LOCAL_VIDEO_PRESET, AGNES_PRESET, capabilityNote } from '../../src/lib/settings/catalog';
 import { resolveModelSpec } from '../../src/lib/settings/resolveSpecs';
 import { getSettings, updateSettings } from '../../src/lib/settings/store';
 
@@ -34,6 +34,40 @@ describe('unlockVerified (Settings live-verify gate)', () => {
   it('leaves non-pending models untouched', () => {
     const ok = { id: 'm3', kind: 'video', pending: false } as const;
     expect(unlockVerified(ok as never, [])).toBe(ok);
+  });
+});
+
+describe('capabilityNote (model capability + limitations marking)', () => {
+  it('renders vid2vid with its limitations as one note', () => {
+    expect(
+      capabilityNote({
+        id: 'x', kind: 'video', endpoint: '', sync: false, requestFormat: 'video-adapter',
+        limits: {},
+        capabilities: {
+          vid2vid: true,
+          vid2vidLimits: { maxSeconds: 10, maxMB: 200, formats: ['mp4', 'mov'] },
+        },
+      }),
+    ).toBe('vid2vid · ≤10s · ≤200MB · mp4/mov');
+  });
+
+  it('renders bare "vid2vid" when no limitations are declared', () => {
+    expect(
+      capabilityNote({
+        id: 'x', kind: 'video', endpoint: '', sync: false, requestFormat: 'video-adapter',
+        limits: {},
+        capabilities: { vid2vid: true },
+      }),
+    ).toBe('vid2vid');
+  });
+
+  it('is empty when the model declares no capabilities', () => {
+    expect(
+      capabilityNote({
+        id: 'x', kind: 'video', endpoint: '', sync: false, requestFormat: 'video-adapter',
+        limits: {},
+      }),
+    ).toBe('');
   });
 });
 
