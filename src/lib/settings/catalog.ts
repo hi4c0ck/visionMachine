@@ -46,6 +46,7 @@ export const AGNES_PRESET: PresetSpec = {
     // IMAGE — 2.5-flash first = default (guards pick first non-pending).
     { id: 'agnes-image-2.5-flash', kind: 'image', label: 'Agnes Image 2.5 Flash',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
+      capabilities: { modes: ['t2i', 'i2i'] }, // source: text-image + img2img queues live-probed (comment above)
       limits: { resolutions: ['1K', '2K', '3K', '4K'],
                 ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'],
                 // Provisional tier mapping (Q2): session res → tier, orientation → ratio.
@@ -67,6 +68,7 @@ export const AGNES_PRESET: PresetSpec = {
       supportsSeed: false },
     { id: 'agnes-image-2.1-flash', kind: 'image', label: 'Agnes Image 2.1 Flash',
       endpoint: '/v1/images/generations', sync: true, requestFormat: 'image-gen',
+      capabilities: { modes: ['t2i'] }, // source: /v1/images/generations text-to-image; obsolete
       limits: { resolutions: ['1K', '2K', '3K', '4K'],
                 ratios: ['1:1', '3:4', '4:3', '16:9', '9:16', '2:3', '3:2', '21:9'],
                 sizeMap: { '480p': '1K', '720p': '1K', '1080p': '2K' },
@@ -76,6 +78,7 @@ export const AGNES_PRESET: PresetSpec = {
     // VIDEO — 2.5-flash first = default (free tier, 720P only, seconds 4–12).
     { id: 'agnes-video-2.5-flash', kind: 'video', label: 'Agnes Video 2.5 Flash (free)',
       endpoint: '/v1/videos', sync: false,
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /v1/videos + media.modes ['keyframes','reference']
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
       requestFormat: 'video-job-seconds',
       limits: { seconds: [4, 12], resolutions: ['720P'],
@@ -101,6 +104,7 @@ export const AGNES_PRESET: PresetSpec = {
     // future extension point (Q7).
     { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid · read-only)',
       endpoint: '/v1/videos', sync: false,
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /v1/videos + media.modes ['keyframes','reference'] dual
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
       requestFormat: 'video-job-seconds',
       limits: { seconds: [4, 12],
@@ -151,6 +155,7 @@ export const CUSTOM_PRESET: PresetSpec = {
       kind: 'video',
       label: 'Custom video model (async job)',
       endpoint: '/videos',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — text-only placeholder
       sync: false,
       pollEndpoint: '/videos/{jobId}',
       requestFormat: 'video-job',
@@ -379,6 +384,7 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
     // best overall quality, 480p–720p clips, strong motion physics; 4-step
     // LoRAs keep 14B FP8 fast on 16 GB."
     LOCAL_VIDEO_MODEL('wan-2.2-14b-fp8', 'Wan 2.2 14B FP8/GGUF (local)', {
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /prompt + media.modes ['keyframes']
       limits: { resolutions: ['480p', '720p'],
                 sizeMap: { '480p': '480p', '720p': '720p', '1080p': '720p' } },
       media: { modes: ['keyframes'], maxKeyframes: 1 },
@@ -387,6 +393,7 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
                  note: 'VRAM 8–16 GB (FP8/GGUF); 480p–720p best quality; runtimes ComfyUI / Wan2GP (4–16 GB, auto swap). Owner matrix 2026-11-22, unverified-live' } },
     ),
     LOCAL_VIDEO_MODEL('wan-2.2-5b-fp16', 'Wan 2.2 5B FP16 (local)', {
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /prompt + media.modes ['keyframes']
       limits: { resolutions: ['480p', '720p'],
                 sizeMap: { '480p': '480p', '720p': '720p', '1080p': '720p' } },
       media: { modes: ['keyframes'], maxKeyframes: 1 },
@@ -397,6 +404,7 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
     // "LTX-Video / LTX-2.3 (2B Distilled) — 6–12 GB VRAM — fastest; quick
     // iterations; ideal on 16 GB Apple Silicon."
     LOCAL_VIDEO_MODEL('ltx-video-2b', 'LTX-Video 2B distilled FP8/GGUF (local)', {
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /prompt + media.modes ['keyframes']
       media: { modes: ['keyframes'], maxKeyframes: 1 },
       pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
                  verifiedAt: '2026-11-22',
@@ -405,6 +413,7 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
     // "HunyuanVideo 1.5 — FP8 ~8.3 GB weights, 14–16 GB VRAM — cinematic
     // lighting & human motion; fits 16 GB with FP8 + sequential offloading."
     LOCAL_VIDEO_MODEL('hunyuanvideo-1.5', 'HunyuanVideo 1.5 FP8 (local)', {
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /prompt + media.modes ['keyframes']
       media: { modes: ['keyframes'], maxKeyframes: 1 },
       pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
                  verifiedAt: '2026-11-22',
@@ -413,6 +422,7 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
     // "Wan 2.1 (1.3B) — ~8.2–9.8 GB VRAM — easiest entry point, runs natively
     // without aggressive offloading."
     LOCAL_VIDEO_MODEL('wan-2.1-1.3b', 'Wan 2.1 1.3B FP16 (local)', {
+      capabilities: { modes: ['t2v'] }, // source: media.modes ['text'] — t2v-only variant
       media: { modes: ['text'] }, // t2v-only variant — no keyframe media
       pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
                  verifiedAt: '2026-11-22',
@@ -464,6 +474,7 @@ export const RUNWAY_PRESET: PresetSpec = {
   models: [
     { id: 'gen4.5', kind: 'video', label: 'Gen-4.5 (image-to-video)',
       endpoint: '/v1/image_to_video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: endpoint /v1/image_to_video
       limits: { seconds: [2, 10],
                 ratios: ['1280:720', '720:1280', '960:960', '1104:832', '832:1104', '1584:672'],
                 ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
@@ -479,6 +490,7 @@ export const RUNWAY_PRESET: PresetSpec = {
                  note: 'provider reports cost.credits per task (estimatedCost.credits on create); 1 credit = $0.01 (min $10 top-up); per-second credit rate for gen4.5 pending research' } },
     { id: 'gen4.5-t2v', kind: 'video', label: 'Gen-4.5 (text-to-video)',
       endpoint: '/v1/text_to_video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: endpoint /v1/text_to_video
       limits: { seconds: [2, 10],
                 ratios: ['1280:720', '720:1280', '960:960', '1104:832', '832:1104', '1584:672'],
                 ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
@@ -493,6 +505,7 @@ export const RUNWAY_PRESET: PresetSpec = {
                  note: 'provider reports cost.credits per task; 1 credit = $0.01' } },
     { id: 'seedance2_5', kind: 'video', label: 'Seedance 2.5 (Runway-hosted)',
       endpoint: '/v1/image_to_video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: endpoint /v1/image_to_video
       limits: { seconds: [2, 10],
                 ratios: ['1280:720', '720:1280', '960:960'],
                 ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
@@ -508,6 +521,7 @@ export const RUNWAY_PRESET: PresetSpec = {
                  note: 'provider reports cost.credits per task; 1 credit = $0.01' } },
     { id: 'hailuo3', kind: 'video', label: 'Hailuo 3 (H3, Runway-hosted)',
       endpoint: '/v1/image_to_video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: endpoint /v1/image_to_video
       limits: { seconds: [2, 10],
                 ratios: ['1280:720', '720:1280', '960:960'],
                 ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
@@ -522,6 +536,7 @@ export const RUNWAY_PRESET: PresetSpec = {
                  note: '10/15 cr-s at 768P/2K × $0.01/credit; ref image/keyframe +2 credits; in-band cost.credits is authoritative' } },
     { id: 'h3_max', kind: 'video', label: 'H3 Max (Runway-hosted)',
       endpoint: '/v1/image_to_video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: endpoint /v1/image_to_video
       limits: { seconds: [2, 10],
                 ratios: ['1280:720', '720:1280', '960:960'],
                 ratioMap: { horizontal: '1280:720', vertical: '720:1280', square: '960:960' } },
@@ -577,6 +592,7 @@ export const FAL_PRESET: PresetSpec = {
     { id: 'fal-ai/kling-video/v2.5-turbo/pro/image-to-video', kind: 'video',
       label: 'Kling 2.5 Turbo Pro (i2v, via fal)',
       endpoint: '/fal-ai/kling-video/v2.5-turbo/pro/image-to-video', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: endpoint image-to-video
       requestFormat: 'video-adapter',
       limits: { seconds: [5, 10], secondsEnum: [5, 10],
                 ratios: ['16:9', '9:16', '1:1'],
@@ -591,6 +607,7 @@ export const FAL_PRESET: PresetSpec = {
     { id: 'fal-ai/wan/v2.2-5b/image-to-video', kind: 'video',
       label: 'Wan 2.2 5B (i2v, via fal)',
       endpoint: '/fal-ai/wan/v2.2-5b/image-to-video', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: endpoint image-to-video
       requestFormat: 'video-adapter',
       limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
@@ -606,6 +623,7 @@ export const FAL_PRESET: PresetSpec = {
     { id: 'fal-ai/wan/v2.2-a14b/text-to-video', kind: 'video',
       label: 'Wan 2.2 A14B (t2v, via fal)',
       endpoint: '/fal-ai/wan/v2.2-a14b/text-to-video', sync: false,
+      capabilities: { modes: ['t2v'] }, // source: endpoint text-to-video
       requestFormat: 'video-adapter',
       limits: {}, pending: true,
       adapterPayload: { prompt: '{{prompt}}' },
@@ -617,6 +635,7 @@ export const FAL_PRESET: PresetSpec = {
     { id: 'fal-ai/wan/v2.2-a14b/image-to-video', kind: 'video',
       label: 'Wan 2.2 A14B (i2v, via fal)',
       endpoint: '/fal-ai/wan/v2.2-a14b/image-to-video', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: endpoint image-to-video
       requestFormat: 'video-adapter',
       limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
@@ -628,6 +647,7 @@ export const FAL_PRESET: PresetSpec = {
     { id: 'fal-ai/veo3.1/fast/image-to-video', kind: 'video',
       label: 'Veo 3.1 Fast (i2v, via fal)',
       endpoint: '/fal-ai/veo3.1/fast/image-to-video', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: endpoint image-to-video
       requestFormat: 'video-adapter',
       limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}' },
@@ -646,6 +666,7 @@ export const FAL_PRESET: PresetSpec = {
     // the authenticated API, once a key exists.
     { id: 'minimax/h3-max/text-to-video', kind: 'video', label: 'H3 Max (t2v, via fal)',
       endpoint: '/minimax/h3-max/text-to-video', sync: false,
+      capabilities: { modes: ['t2v'] }, // source: endpoint text-to-video
       requestFormat: 'video-adapter',
       limits: { seconds: [5, 15],
                 ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
@@ -660,6 +681,7 @@ export const FAL_PRESET: PresetSpec = {
                  note: 'public pages only; per-model live pricing needs a key (probed public paths 404, 2026-11-22)' } },
     { id: 'minimax/h3-max/image-to-video', kind: 'video', label: 'H3 Max (i2v, via fal)',
       endpoint: '/minimax/h3-max/image-to-video', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: endpoint image-to-video
       requestFormat: 'video-adapter',
       limits: { seconds: [5, 15],
                 resolutions: ['480P', '768P', '1080P'],
@@ -672,6 +694,7 @@ export const FAL_PRESET: PresetSpec = {
                  note: 'public pages only; per-model live pricing needs a key (probed public paths 404, 2026-11-22)' } },
     { id: 'minimax/h3-max-turbo/image-to-video', kind: 'video', label: 'H3 Max Turbo (i2v, via fal)',
       endpoint: '/minimax/h3-max-turbo/image-to-video', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: endpoint image-to-video
       requestFormat: 'video-adapter',
       limits: {}, pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
       adapterPayload: { prompt: '{{prompt}}', image_url: '{{media:first}}', duration: '{{seconds:int}}' },
@@ -717,6 +740,7 @@ export const REPLICATE_PRESET: PresetSpec = {
   models: [
     { id: 'minimax/video-01', kind: 'video', label: 'MiniMax Video-01 (via Replicate)',
       endpoint: '/v1/models/minimax/video-01/predictions', sync: false,
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — text-only
       requestFormat: 'video-adapter',
       limits: {}, pending: true,
       // Minimal input — the full schema (duration/resolution/first frame)
@@ -726,6 +750,7 @@ export const REPLICATE_PRESET: PresetSpec = {
                  verifiedAt: null, note: 'predict_time metered in-band; hardware rate pending research' } },
     { id: 'wan-video/wan-2.2-i2v-a14b', kind: 'video', label: 'Wan 2.2 I2V A14B (via Replicate)',
       endpoint: '/v1/models/wan-video/wan-2.2-i2v-a14b/predictions', sync: false,
+      capabilities: { modes: ['i2v'] }, // source: id -i2v + media.modes ['keyframes']
       requestFormat: 'video-adapter',
       // resolutions DOC-SOURCED (Wan-AI/Wan2.2 HF model card, fetched
       // 2026-11-22): I2V-A14B supports 480P & 720P; clip length is
@@ -771,6 +796,7 @@ export const LUMA_PRESET: PresetSpec = {
   models: [
     { id: 'ray-2', kind: 'video', label: 'Ray 2',
       endpoint: '/generations/video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /generations/video + keyframes prune on text-only run
       limits: { seconds: [5, 9], secondsEnum: [5, 9],
                 ratios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9', '9:21'],
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' },
@@ -827,6 +853,7 @@ export const KLING_PRESET: PresetSpec = {
   models: [
     { id: 'kling-v2-6', kind: 'video', label: 'Kling v2.6 (image-to-video)',
       endpoint: '/v1/videos/image2video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: endpoint /v1/videos/image2video
       limits: { seconds: [5, 10], secondsEnum: [5, 10],
                 ratios: ['16:9', '9:16', '1:1'],
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
@@ -841,6 +868,7 @@ export const KLING_PRESET: PresetSpec = {
                  note: 'provider reports final_unit_deduction; video 1 Unit = $0.14 LIST (pack discounts account-specific, unverified)' } },
     { id: 'kling-v2-6-t2v', kind: 'video', label: 'Kling v2.6 (text-to-video)',
       endpoint: '/v1/videos/text2video', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: endpoint /v1/videos/text2video
       limits: { seconds: [5, 10], secondsEnum: [5, 10],
                 ratios: ['16:9', '9:16', '1:1'],
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
@@ -903,6 +931,7 @@ export const MINIMAX_PRESET: PresetSpec = {
     // note ride the verification pass; prompt ≤ 2000 chars.
     { id: 'MiniMax-Hailuo-2.3', kind: 'video', label: 'Hailuo 2.3',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — t2v
       limits: { seconds: [6, 10], secondsEnum: [6, 10],
                 resolutions: ['768P', '1080P'],
                 sizeMap: { '480p': '768P', '720p': '768P', '1080p': '1080P' } },
@@ -916,6 +945,7 @@ export const MINIMAX_PRESET: PresetSpec = {
                  note: 'legacy Hailuo bills per clip; 1080P-10s unsupported → estimate unknown; balance via base_resp 1008' } },
     { id: 'MiniMax-Hailuo-02', kind: 'video', label: 'Hailuo 02',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — t2v
       limits: { seconds: [6, 10], secondsEnum: [6, 10],
                 resolutions: ['768P', '1080P'],
                 sizeMap: { '480p': '768P', '720p': '768P', '1080p': '1080P' } },
@@ -929,6 +959,7 @@ export const MINIMAX_PRESET: PresetSpec = {
                  note: 'legacy Hailuo bills per clip; 512P i2v-only tier ($0.10/6s, $0.15/10s) not in this model\'s limits' } },
     { id: 'MiniMax-Hailuo-2.3-i2v', kind: 'video', label: 'Hailuo 2.3 (image-to-video)',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: id -i2v + media.modes ['keyframes']
       limits: { seconds: [6, 10], secondsEnum: [6, 10],
                 resolutions: ['768P', '1080P'],
                 sizeMap: { '480p': '768P', '720p': '768P', '1080p': '1080P' } },
@@ -948,6 +979,7 @@ export const MINIMAX_PRESET: PresetSpec = {
     // as of 2026-11-21; when it ships it is a catalog row, not a schema change.
     { id: 'MiniMax-H3', kind: 'video', label: 'H3 (t2v)',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — t2v
       limits: { resolutions: ['768P', '2K'],
                 sizeMap: { '480p': '768P', '720p': '768P', '1080p': '2K' } },
       pending: true,
@@ -958,6 +990,7 @@ export const MINIMAX_PRESET: PresetSpec = {
                  note: '768P $0.08/s, 2K $0.13/s; ref image/keyframe +$0.04 (first 5 free); input video billed by duration' } },
     { id: 'MiniMax-H3-i2v', kind: 'video', label: 'H3 (i2v)',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['i2v'] }, // source: id -i2v + media.modes ['keyframes']
       limits: { resolutions: ['768P', '2K'],
                 sizeMap: { '480p': '768P', '720p': '768P', '1080p': '2K' } },
       pending: true, media: { modes: ['keyframes'], maxKeyframes: 1 },
@@ -969,6 +1002,7 @@ export const MINIMAX_PRESET: PresetSpec = {
                  note: 'as H3 t2v + input-image surcharge; i2v param name live-verify' } },
     { id: 'MiniMax-H3-Highspeed', kind: 'video', label: 'H3 Highspeed (t2v)',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — t2v
       limits: { resolutions: ['480P', '768P'],
                 sizeMap: { '480p': '480P', '720p': '768P' } },
       pending: true,
@@ -979,6 +1013,7 @@ export const MINIMAX_PRESET: PresetSpec = {
                  note: '480P $0.04/s, 768P $0.06/s — everyday-creation tier' } },
     { id: 'MiniMax-H3-Lite', kind: 'video', label: 'H3 Lite (t2v)',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — t2v
       limits: { resolutions: ['480P', '768P'],
                 sizeMap: { '480p': '480P', '720p': '768P' } },
       pending: true,
@@ -989,6 +1024,7 @@ export const MINIMAX_PRESET: PresetSpec = {
                  note: '480P $0.025/s, 768P $0.04/s — low-cost batch tier' } },
     { id: 'MiniMax-H3-Max', kind: 'video', label: 'H3 Max (t2v, multi-asset)',
       endpoint: '/v1/video_generation', sync: false, requestFormat: 'video-adapter',
+      capabilities: { modes: ['t2v'] }, // source: no media descriptor — t2v
       limits: { resolutions: ['480P', '768P'],
                 sizeMap: { '480p': '480P', '720p': '768P' } },
       pending: true,
@@ -1021,18 +1057,50 @@ export function getModel(preset: PresetSpec, modelId: string): ModelSpec | undef
   return preset.models.find((m) => m.id === modelId);
 }
 
-/** Picker display for a model's declared capabilities + their limitations
- *  ("vid2vid · ≤10s · ≤200MB · mp4/mov"). "" when nothing is declared —
- *  pickers append it in parentheses. The limitations render WITH the
- *  capability by construction: no chip without its limits block. */
+/** Honest cost suffix derived ONLY from the row's declared `pricing` — this
+ *  helper introduces no new price data. Mirrors the GenerateModal chip's
+ *  convention (≈ for a known estimate, "from" for a tiered lower bound).
+ *  A non-free-local $0 is never fabricated: non-positive rates are dropped. */
+function pricingNote(price: PriceSpec | undefined): string {
+  if (!price) return 'cost: unknown';
+  if (price.unit === 'free-local') return 'free on your hardware';
+  // Vendor-billed units/credits are reported in-band at run time — no static
+  // USD estimate is claimed here (the per-unit rate is a post-run anchor).
+  if (price.unit === 'per-credit' || price.unit === 'per-unit') return 'vendor units billed at run';
+  if (price.unit === 'per-video-second' || price.unit === 'per-video') {
+    const rates = price.rates;
+    if (!price.verifiedAt || !rates || Object.keys(rates).length === 0) return 'cost: research pending';
+    const values = Object.values(rates).filter((v) => typeof v === 'number' && Number.isFinite(v) && v > 0);
+    if (values.length === 0) return 'cost: research pending';
+    const lowest = Math.min(...values);
+    // More than one distinct tier → quote the cheapest with "from".
+    const tiered = new Set(values.map((v) => Number(v.toFixed(6)))).size > 1;
+    const usd = `$${lowest.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+    const suffix = price.unit === 'per-video-second' ? '/s' : '/clip';
+    return tiered ? `from ${usd}${suffix}` : `≈ ${usd}${suffix}`;
+  }
+  // per-token / per-image / anything else without a verified static rate.
+  return 'cost: research pending';
+}
+
+/** Picker display for a model's declared capabilities + honest cost hint.
+ *  Segments, in order: modes ("t2v / i2v"), the vid2vid block with its
+ *  limitations, then the cost suffix. A cost is ALWAYS present ('cost:
+ *  unknown' when the row ships no pricing), so pickers append the whole note
+ *  in parentheses. Limitations render WITH the capability by construction. */
 export function capabilityNote(m: ModelSpec): string {
   const c = m.capabilities;
-  if (!c?.vid2vid) return '';
-  const parts: string[] = ['vid2vid'];
-  const L = c.vid2vidLimits;
-  if (L?.maxSeconds) parts.push(`≤${L.maxSeconds}s`);
-  if (L?.maxMB) parts.push(`≤${L.maxMB}MB`);
-  if (L?.formats?.length) parts.push(L.formats.join('/'));
+  const parts: string[] = [];
+  if (c?.modes?.length) parts.push(c.modes.join(' / '));
+  if (c?.vid2vid) {
+    const v = ['vid2vid'];
+    const L = c.vid2vidLimits;
+    if (L?.maxSeconds) v.push(`≤${L.maxSeconds}s`);
+    if (L?.maxMB) v.push(`≤${L.maxMB}MB`);
+    if (L?.formats?.length) v.push(L.formats.join('/'));
+    parts.push(v.join(' · '));
+  }
+  parts.push(pricingNote(m.pricing));
   return parts.join(' · ');
 }
 

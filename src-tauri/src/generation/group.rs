@@ -111,6 +111,7 @@ fn fallback_image_spec(model_id: &str) -> ModelSpecWire {
         request_format: "image-gen".into(),
         limits: ModelSpecLimits::default(),
         pending: None,
+        owner_verified: None,
         label: Some("Agnes Image (fallback spec)".into()),
         read_only: None,
         supports_seed: None,

@@ -33,13 +33,13 @@ export function pipePrechecks(
   if (!video || video.pending) {
     out.push({
       code: 'spec-pending',
-      message: 'Video model details are pending — pick a configured video model in Settings',
+      message: `Video model ${video?.id ?? '(none)'} is pending — tick it in Settings > Providers > Live-verified models`,
     });
   }
   if (imageSpec?.pending) {
     out.push({
       code: 'spec-pending',
-      message: 'Image model details are pending — pick a configured image model in Settings',
+      message: `Image model ${imageSpec.id} is pending — tick it in Settings > Providers > Live-verified models`,
     });
   }
   // Read-only (paid) specs are Settings-browse only — block them here too,

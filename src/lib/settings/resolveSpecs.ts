@@ -8,6 +8,7 @@
 // per-model payload) so the Rust engine interprets one self-contained spec.
 import type { ModelSpec, ProviderKind, VideoAdapterSpec } from '$types';
 import { getPreset, getModel } from './catalog';
+import { unlockVerified } from './guards';
 import { getSettings } from './store';
 
 /** Spec + preset pair the engine will run against. */
@@ -55,8 +56,19 @@ export function mergeAdapter(
  * Resolve the model spec for one provider kind: this-run override (the
  * generate-modal pick) else the preset default. Null when the slot is
  * pending/unknown → the caller blocks with a concrete message (E1).
+ *
+ * `verified` is the owner's per-slot live-verified id list — a PARAMETER,
+ * never read from the settings singleton here, so a `$derived` caller that
+ * passes a reactive value re-runs on a tick/untick (skill: settings store is
+ * non-reactive). The gate is applied at THIS boundary so every downstream
+ * `.pending` reader (prechecks, seconds, cost, read-only) sees the same
+ * unlocked object the pickers show.
  */
-export function resolveModelSpec(kind: ProviderKind, overrideId?: string): ResolvedModelSpec | null {
+export function resolveModelSpec(
+  kind: ProviderKind,
+  overrideId?: string,
+  verified?: readonly string[] | null,
+): ResolvedModelSpec | null {
   const s = getSettings();
   const slot = s.providers[kind];
   if (!slot) return null;
@@ -65,6 +77,16 @@ export function resolveModelSpec(kind: ProviderKind, overrideId?: string): Resol
   const id = overrideId ? overrideId : slot.model;
   if (!id) return null;
   let spec = getModel(preset, id);
+  let ownerVerified = false;
+  // A pending CATALOG id unlocks only when the owner actually ticked it;
+  // `unlockVerified` returns a new object exactly in that case.
+  if (spec) {
+    const unlocked = unlockVerified(spec, verified);
+    if (unlocked !== spec) {
+      spec = unlocked;
+      ownerVerified = true;
+    }
+  }
   // Free-form preset (freeFormModel): a TYPED model id is not in the catalog
   // — ride the preset's base model spec (first model of the kind) so the run
   // proceeds with the catalog limits/media/pricing/adapter data, and the
@@ -73,21 +95,31 @@ export function resolveModelSpec(kind: ProviderKind, overrideId?: string): Resol
   // gate is lifted for the base spec (owner verified by construction).
   if (!spec && preset.freeFormModel) {
     const base = preset.models.find((m) => m.kind === kind);
-    if (base) spec = { ...base, id, pending: false };
+    if (base) {
+      spec = { ...base, id, pending: false };
+      ownerVerified = true;
+    }
   }
   if (!spec) return null;
   // Wire-safe resolved copy: auth scheme rides along (Rust builds headers +
   // relaxes the key gate for 'none'); the merged adapter rides for Tier A.
   const resolved: ModelSpec = { ...spec, auth: preset.auth };
+  // Stamp ONLY on an actual owner unlock or a typed free-form fallback —
+  // non-pending catalog specs stay unstamped (ownerVerified absent).
+  if (ownerVerified) resolved.ownerVerified = true;
   const adapter = mergeAdapter(preset.adapter, spec);
   if (adapter) resolved.adapter = adapter;
   return { preset: preset.id, spec: resolved };
 }
 
-/** Resolve image + video specs for a run (the generate modal's picks). */
+/** Resolve image + video specs for a run (the generate modal's picks).
+ *  The per-kind verified lists are read from the settings singleton HERE and
+ *  threaded into resolveModelSpec, so every caller of resolveSpecs gets the
+ *  same owner-gated spec the pickers show. */
 export function resolveSpecs(imageModel?: string, videoModel?: string): ResolvedPair {
+  const s = getSettings();
   return {
-    image: resolveModelSpec('image', imageModel),
-    video: resolveModelSpec('video', videoModel),
+    image: resolveModelSpec('image', imageModel, s.providers.image?.verified),
+    video: resolveModelSpec('video', videoModel, s.providers.video?.verified),
   };
 }

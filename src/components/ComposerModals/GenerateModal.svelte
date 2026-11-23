@@ -104,7 +104,15 @@
 	$effect(() => {
 		if (!open) return;
 		const s = getSettings();
-		const key = [s.providers.image.model, s.providers.video.model, s.providers.image.preset, s.providers.video.preset].join('|');
+		// The verified id lists are part of the seed signature: a tick/untick
+		// while the modal is open must refresh the unlocked model arrays —
+		// otherwise the select keeps a stale (un)locked set.
+		const key = [
+			s.providers.image.model, s.providers.video.model,
+			s.providers.image.preset, s.providers.video.preset,
+			(s.providers.image.verified ?? []).join(','),
+			(s.providers.video.verified ?? []).join(','),
+		].join('|');
 		if (modelSeedKey === key) return;
 		modelSeedKey = key;
 		imageModel = s.providers.image.model;
@@ -171,7 +179,7 @@
 						<label for="gen-image-model">Image model</label>
 						<select id="gen-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
 							{#each imageModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === imageModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 							{/each}
 							{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
 								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
@@ -183,7 +191,7 @@
 						<label for="gen-video-model">Video model</label>
 						<select id="gen-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
 							{#each videoModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === videoModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 							{/each}
 							{#if videoModel && !videoModels.some((m) => m.id === videoModel)}
 								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->

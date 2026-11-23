@@ -190,7 +190,7 @@
 		{:else}
 			<select id="prov-model-{kind}" value={effectiveModel} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
 				{#each modelOptions as m (m.id)}
-					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (details pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === effectiveModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 			</select>
 		{/if}

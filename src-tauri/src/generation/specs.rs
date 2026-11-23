@@ -267,6 +267,12 @@ pub struct ModelSpecWire {
     pub limits: ModelSpecLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<bool>,
+    /// Owner's live-verification unlock, set by the frontend's
+    /// Settings > Providers > Live-verified models gate. A pending spec is
+    /// generation-blocked unless this is `true` (free-form typed ids carry it
+    /// too). Wire name `ownerVerified` (struct is camelCase).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_verified: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -316,7 +316,7 @@
 				aria-label="Image model"
 			>
 				{#each imageModels as m (m.id)}
-					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? ' (pending)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === imageModel ? ' (details pending - selected, unverified)' : ' (pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 				{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
 					<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->

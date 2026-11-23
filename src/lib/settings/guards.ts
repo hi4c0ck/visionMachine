@@ -108,6 +108,14 @@ function normalizeSlot(kind: ProviderKind, raw: unknown): ProviderSlot {
   const def = DEFAULT_SETTINGS.providers[kind];
   const r = (raw ?? {}) as Partial<ProviderSlot>;
   const preset = typeof r.preset === 'string' && r.preset ? r.preset : def.preset;
+  // Owner live-verified model ids (vendor-scoped). Validate as an array of
+  // strings; an empty result is dropped to `undefined` so the shape matches
+  // ProviderCard.toggleVerified (untick clears the field entirely). Without
+  // this the list is erased on the next save/load — the gate ticks in the
+  // modal then reverts after Save.
+  const verified = Array.isArray(r.verified)
+    ? r.verified.filter((v): v is string => typeof v === 'string')
+    : [];
   return {
     preset,
     baseUrl:
@@ -116,6 +124,7 @@ function normalizeSlot(kind: ProviderKind, raw: unknown): ProviderSlot {
         : def.baseUrl,
     apiKey: typeof r.apiKey === 'string' ? r.apiKey : '',
     model: migrateStoredModel(preset, kind, typeof r.model === 'string' && r.model ? r.model : def.model),
+    ...(verified.length ? { verified } : {}),
   };
 }
 

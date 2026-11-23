@@ -376,11 +376,39 @@ pub fn build_pipe_start(
     (view, engine_input)
 }
 
+/// Wire-level backstop for the owner's live-verification gate.
+///
+/// A `pending` model spec is generation-blocked unless the owner explicitly
+/// verified it via Settings > Providers > Live-verified models. Free-form
+/// typed ids carry the same boolean (owner-typed against their own engine).
+/// Pure: no settings lookup and NO Rust-side catalog/allowlist — the boolean
+/// on the wire is the whole contract. `None` for ordinary specs.
+fn pending_spec_error(spec: &ModelSpecWire) -> Option<String> {
+    if spec.is_pending() && spec.owner_verified != Some(true) {
+        Some(format!(
+            "Model '{}' is pending owner verification; open Settings > Providers > Live-verified models and verify it before generating.",
+            spec.id
+        ))
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 pub async fn start_generation(
     input: StartGenerationInput,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    // Wire-level owner gate first: a pending spec without owner verification
+    // never reaches the registry (no task enqueued, no HTTP).
+    if let Some(err) = input
+        .image_spec
+        .as_ref()
+        .and_then(pending_spec_error)
+        .or_else(|| input.video_spec.as_ref().and_then(pending_spec_error))
+    {
+        return Err(err);
+    }
     let composer = {
         let db = &state.db.lock().await;
         db.get_composer(&input.session_id).await.map_err(|e| {
@@ -468,6 +496,16 @@ pub async fn start_session_generation(
     input: crate::generation::group::StartSessionGenerationInput,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    // Same backstop as the single-pipe ingress: reject a pending, unverified
+    // spec before the group coordinator can enqueue any task or fire HTTP.
+    if let Some(err) = input
+        .image_spec
+        .as_ref()
+        .and_then(pending_spec_error)
+        .or_else(|| input.video_spec.as_ref().and_then(pending_spec_error))
+    {
+        return Err(err);
+    }
     // Resolve the session media root here (command layer — has db access)
     // and thread it into the group so every pipe starts with a concrete
     // media tree, exactly like the per-pipe `start_generation` command.
@@ -709,6 +747,11 @@ pub async fn generate_piece_image(
     input: PieceGenerationInput,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    // Same wire-level owner gate as the task ingresses — reject before any
+    // engine call / HTTP request is made.
+    if let Some(err) = input.image_spec.as_ref().and_then(pending_spec_error) {
+        return Err(err);
+    }
     let engine = state
         .generation
         .registry
@@ -2981,6 +3024,55 @@ async fn media_roots(db: &crate::storage::db::Database) -> Vec<std::path::PathBu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── wire-level owner-verification backstop ─────────────────────────────
+
+    /// Build a spec through the camelCase wire shape so `ownerVerified` is
+    /// exercised as a wire field, not just a struct field.
+    fn wire_spec(pending: Option<bool>, owner_verified: Option<bool>) -> ModelSpecWire {
+        serde_json::from_value(serde_json::json!({
+            "id": "reserved-model",
+            "kind": "video",
+            "endpoint": "/videos",
+            "sync": false,
+            "requestFormat": "video-job",
+            "pending": pending,
+            "ownerVerified": owner_verified
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn pending_spec_without_owner_verification_is_rejected() {
+        let spec = wire_spec(Some(true), None);
+        assert!(spec.is_pending());
+        let err = pending_spec_error(&spec).expect("pending spec must be blocked");
+        assert!(err.contains("reserved-model"), "message must name the model id");
+        assert!(err.contains("Settings > Providers > Live-verified models"));
+
+        // Explicit `false` is the same as absent.
+        let spec_false = wire_spec(Some(true), Some(false));
+        assert!(pending_spec_error(&spec_false).is_some());
+    }
+
+    #[test]
+    fn pending_spec_with_owner_verification_is_accepted() {
+        let spec = wire_spec(Some(true), Some(true));
+        assert!(spec.owner_verified == Some(true));
+        assert!(pending_spec_error(&spec).is_none());
+    }
+
+    #[test]
+    fn ordinary_spec_is_unaffected_by_owner_verification() {
+        let plain = wire_spec(None, None);
+        assert!(!plain.is_pending());
+        assert!(plain.owner_verified.is_none());
+        assert!(pending_spec_error(&plain).is_none());
+
+        // Explicitly non-pending stays valid even with no verification flag.
+        let generable = wire_spec(Some(false), None);
+        assert!(pending_spec_error(&generable).is_none());
+    }
 
     #[test]
     fn composition_errors_are_stable_json_envelopes() {

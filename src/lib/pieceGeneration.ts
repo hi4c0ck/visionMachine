@@ -11,7 +11,7 @@
 
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { resolveModelSpec } from '$lib/settings';
-import { getProfileId } from '$lib/settings/store';
+import { getSettings, getProfileId } from '$lib/settings/store';
 import type { ModelSpec } from '$types';
 
 export type PieceKind = 'keyframe' | 'subject';
@@ -55,7 +55,7 @@ export interface PieceGenerationInput {
  * append-only history tree, and appends a manifest line.
  */
 export async function generatePiece(input: PieceGenerationInput): Promise<PieceGenerationResult> {
-  const spec = resolveModelSpec('image', input.imageModel);
+  const spec = resolveModelSpec('image', input.imageModel, getSettings().providers.image?.verified);
   const imageSpec: ModelSpec | undefined = spec?.spec;
   const raw = await invoke('generate_piece_image', {
     input: {

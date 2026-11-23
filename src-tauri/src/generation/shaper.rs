@@ -712,6 +712,7 @@ mod tests {
             request_format: fmt.into(),
             limits: ModelSpecLimits::default(),
             pending: None,
+            owner_verified: None,
             label: None,
             read_only: None,
             supports_seed: None,

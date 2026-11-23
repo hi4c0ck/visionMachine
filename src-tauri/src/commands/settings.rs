@@ -23,6 +23,11 @@ pub struct ProviderSlot {
     pub api_key: String,
     #[serde(default)]
     pub model: String,
+    /// Owner live-verified model ids (vendor-scoped): lifts the catalog
+    /// `pending` gate on this machine. Absent = none verified. Mirrors
+    /// ProviderSlot.verified in src/types/settings.ts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -96,6 +101,7 @@ impl Default for ProviderSlots {
                 base_url: "https://apihub.agnes-ai.com".into(),
                 api_key: String::new(),
                 model: model.into(),
+                verified: None,
             }
         }
         Self {
@@ -115,6 +121,43 @@ pub struct ToolsBlock {
     pub ffmpeg_path: String,
 }
 
+/// Top-panel carousel treatment (mirrors CarouselBlock in
+/// src/types/settings.ts). Immersive Snaps ships ON, auto-scroll ships OFF.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CarouselBlock {
+    /// Only an explicit false disables the dissolve treatment.
+    #[serde(default = "default_true")]
+    pub immersive_snaps: bool,
+    /// 'off' (default) | 'steady' | 'fast'; unknown values reseed to 'off'.
+    #[serde(default = "default_auto_scroll")]
+    pub auto_scroll: String,
+}
+
+fn default_auto_scroll() -> String {
+    "off".into()
+}
+
+impl Default for CarouselBlock {
+    fn default() -> Self {
+        Self {
+            immersive_snaps: true,
+            auto_scroll: "off".into(),
+        }
+    }
+}
+
+/// Experimental / opt-in feature gates (mirrors ExperimentalBlock in
+/// src/types/settings.ts). Every gate is OFF by default.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExperimentalBlock {
+    /// "Experimental compose pipes" — OFF (classic lossless splice) unless
+    /// explicitly enabled.
+    #[serde(default)]
+    pub compose_pipes: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -126,6 +169,10 @@ pub struct Settings {
     pub providers: ProviderSlots,
     #[serde(default)]
     pub tools: ToolsBlock,
+    #[serde(default)]
+    pub carousel: CarouselBlock,
+    #[serde(default)]
+    pub experimental: ExperimentalBlock,
 }
 
 /// Field-level sanitize: serde defaults make a blob structurally valid, but
@@ -151,6 +198,14 @@ pub fn normalize_settings(raw: &Value) -> Settings {
         && out.generation_defaults.concurrency != "parallel"
     {
         out.generation_defaults.concurrency = "sequential".into();
+    }
+    // Carousel auto-scroll: mirror guards.ts — only off/steady/fast are valid;
+    // unknown values reseed to the 'off' default instead of poisoning the UI.
+    if out.carousel.auto_scroll != "off"
+        && out.carousel.auto_scroll != "steady"
+        && out.carousel.auto_scroll != "fast"
+    {
+        out.carousel.auto_scroll = "off".into();
     }
     // A partially corrupted blob may carry empty slots (serde per-field
     // defaults are all-empty) — reseed them per kind, mirroring the
@@ -598,6 +653,65 @@ fn probe_one(path: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_settings_preserves_verified_carousel_and_experimental() {
+        // Same defect class as the TS normalize layers: a field absent from
+        // the serde struct is erased on the next save/load and compiles clean.
+        // Pin all three through a save → serialize → reload cycle.
+        let raw = serde_json::json!({
+            "providers": {
+                "video": {
+                    "preset": "custom",
+                    "baseUrl": "https://api.openai.com/v1",
+                    "model": "custom-video",
+                    "verified": ["custom-video", "another-pending-id"]
+                }
+            },
+            "carousel": { "immersiveSnaps": false, "autoScroll": "fast" },
+            "experimental": { "composePipes": true }
+        });
+        let out = normalize_settings(&raw);
+        assert_eq!(
+            out.providers.video.verified,
+            Some(vec!["custom-video".to_string(), "another-pending-id".to_string()])
+        );
+        assert!(!out.carousel.immersive_snaps);
+        assert_eq!(out.carousel.auto_scroll, "fast");
+        assert!(out.experimental.compose_pipes);
+
+        // The exact blob save_settings persists must carry all three fields.
+        let saved = serde_json::to_value(&out).unwrap();
+        assert_eq!(
+            saved["providers"]["video"]["verified"],
+            json!(["custom-video", "another-pending-id"])
+        );
+        assert_eq!(saved["carousel"]["immersiveSnaps"], false);
+        assert_eq!(saved["carousel"]["autoScroll"], "fast");
+        assert_eq!(saved["experimental"]["composePipes"], true);
+
+        // get_settings normalizes again on load — no field may be dropped.
+        let reloaded = normalize_settings(&saved);
+        assert_eq!(reloaded, out);
+    }
+
+    #[test]
+    fn defaults_seed_carousel_and_experimental_blocks() {
+        // Legacy blob without the blocks reseeds the frontend defaults:
+        // carousel.immersiveSnaps=true / autoScroll=off, composePipes=false.
+        let out = normalize_settings(&serde_json::json!({}));
+        assert!(out.carousel.immersive_snaps);
+        assert_eq!(out.carousel.auto_scroll, "off");
+        assert!(!out.experimental.compose_pipes);
+        // Unknown autoScroll values reseed to 'off' (mirrors guards.ts).
+        let junk = normalize_settings(&serde_json::json!({
+            "carousel": { "autoScroll": "nope" }
+        }));
+        assert_eq!(junk.carousel.auto_scroll, "off");
+        // Serialize → absent fields stay absent (no phantom verified arrays).
+        let json = serde_json::to_value(&Settings::default()).unwrap();
+        assert!(json["providers"]["text"].get("verified").is_none());
+    }
 
     #[test]
     fn default_settings_match_frontend_seed() {

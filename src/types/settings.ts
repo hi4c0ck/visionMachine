@@ -41,6 +41,13 @@ export type RequestFormat =
  *  never a user-selectable lock; a stored pipe never carries it). */
 export type MediaMode = 'keyframes' | 'reference' | 'text';
 
+/** Declared generation modes a model supports. 't2v'/'i2v'/'v2v' are video
+ *  (text / image / video conditioned); 't2i'/'i2i' are image. 'v2v' is a
+ *  RESERVED slot — no catalog row declares it until an engine ships (Tier-B,
+ *  see the LOCAL_VIDEO_MODEL reservation in catalog.ts). Surfaced as the
+ *  leading segment of capabilityNote(). */
+export type CapabilityMode = 't2v' | 'i2v' | 'v2v' | 't2i' | 'i2i';
+
 /** Per-model media-mode rules — the pipe UI shows/hides the keyframes and
  *  subject-refs rows based on these (docs/agnes-model-catalog.md, Q7).
  *  Absent = unknown model → keep today's behavior (both rows, no toggle). */
@@ -263,6 +270,11 @@ export interface ModelSpec {
   };
   /** Placeholder until concrete vendor details land — picker disables it. */
   pending?: boolean;
+  /** Resolved-only stamp (set by resolveModelSpec, never a catalog value):
+   *  true when the owner's verified tick lifted this pending catalog id, or
+   *  when a typed free-form id rode the preset's base spec. Lets downstream
+   *  gates/logging tell an owner-unlocked spec from a generable default. */
+  ownerVerified?: boolean;
   label?: string;
   /** Read-only entry: viewable/inspectable in Settings, never generatable. */
   readOnly?: boolean;
@@ -271,6 +283,9 @@ export interface ModelSpec {
    *  capability (never free-floating). No engine ships vid2vid yet —
    *  the slot is reserved so a Tier-B entry just fills it in. */
   capabilities?: {
+    /** Declared generation modes (t2v/i2v/v2v/t2i/i2i). v2v stays reserved —
+     *  no catalog row declares it. Rendered first by capabilityNote(). */
+    modes?: CapabilityMode[];
     /** Video-to-video: accepts a source video clip (restyle/extend/deform). */
     vid2vid?: boolean;
     /** vid2vid source-media limitations (declared alongside the capability). */
