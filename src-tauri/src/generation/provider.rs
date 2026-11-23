@@ -2545,22 +2545,28 @@ impl ProviderEngine {
         )
         .await;
 
+        // TASK 1: a WanGP business failure rides INSIDE a successful JSON-RPC
+        // tool result (top-level status error/interrupted and/or
+        // result.success=false). Report the real cause BEFORE any artifact
+        // lookup — otherwise a failed job degrades into the misleading
+        // "no generated_files" error and the owner's error text is lost.
+        if let Some(failure) = crate::generation::mcp::generate_failure_message(&payload) {
+            log::error!(
+                "[Generation] MCP video task {} generate failed: {}",
+                input.task_id,
+                failure
+            );
+            return Err(EngineError::Failure(failure));
+        }
+
         on_progress(0.9);
-        let files = crate::generation::mcp::generated_files(&payload);
-        let reference = files
-            .iter()
-            .find(|f| {
-                let lower = f.to_ascii_lowercase();
-                lower.ends_with(".mp4") || lower.ends_with(".webm") || lower.ends_with(".mov")
-            })
-            .or_else(|| files.first())
-            .cloned()
-            .ok_or_else(|| {
-                EngineError::Failure(format!(
-                    "MCP generate returned no generated_files for model {} — no artifact to retrieve",
-                    spec.id
-                ))
-            })?;
+        let references = crate::generation::mcp::artifact_references(&payload);
+        if references.is_empty() {
+            return Err(EngineError::Failure(format!(
+                "MCP generate for model {} returned no usable artifact reference (checked generated_files, result.gallery_items and result.artifacts)",
+                spec.id
+            )));
+        }
         on_event("retrieving MCP artifact");
 
         let local = match self.media_root_for(input) {
@@ -2573,11 +2579,41 @@ impl ProviderEngine {
                 let (_images, task_dir, _task_images) =
                     pipe_media_dirs(&root, pipe_dir, &input.task_id).map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                crate::generation::mcp::retrieve_artifact(
-                    &*self.http, &url, mcp, &reference, &dest, POLL_TIMEOUT,
-                )
-                .await
-                .map_err(EngineError::Failure)?;
+                // v2.1 compaction can leave several handles (gallery media id,
+                // its virtual path, artifact side files). Try each in order:
+                // absolute local paths are copied directly, virtual paths and
+                // media ids go through wangp_session create_file_download in
+                // retrieve_artifact. Only a concrete merge of failures is
+                // reported when every handle is unusable.
+                let mut last_err: Option<String> = None;
+                let mut retrieved = false;
+                for reference in &references {
+                    match crate::generation::mcp::retrieve_artifact(
+                        &*self.http, &url, mcp, reference, &dest, POLL_TIMEOUT,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            retrieved = true;
+                            break;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[Generation] MCP video task {} artifact handle '{}' failed: {}",
+                                input.task_id, reference, e
+                            );
+                            last_err = Some(e);
+                        }
+                    }
+                }
+                if !retrieved {
+                    return Err(EngineError::Failure(format!(
+                        "MCP generate for model {} produced {} artifact reference(s) but none could be retrieved: {}",
+                        spec.id,
+                        references.len(),
+                        last_err.unwrap_or_else(|| "unknown retrieval failure".into())
+                    )));
+                }
                 if dest.is_file() {
                     generate_video_proxy(&dest).await;
                 }
@@ -6099,6 +6135,73 @@ mod tests {
         assert!(err.contains("no media reference"), "{err}");
         let bodies = http.posted_bodies.lock().unwrap();
         assert_eq!(bodies.len(), 4, "initialize + create + chunk + finish, no generate");
+        drop(bodies);
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    /// The owner's observed WanGP failure, verbatim: `--offline` lacks the
+    /// umt5 tokenizer file, so the job fails before diffusion. The JSON-RPC
+    /// call itself succeeds and the job is `done`, but `status: error` +
+    /// `result.success: false` carry the real cause in `errors[0].message` and
+    /// there is NO generated_files. The engine must surface that text and
+    /// must not fall through to artifact discovery / a download call.
+    #[tokio::test]
+    async fn mcp_t2v_job_error_surfaces_wangp_message_without_artifact_lookup() {
+        const OFFLINE_ERROR: &str =
+            "special_tokens_map.json is missing and WanGP runs offline (--offline)...";
+        let failed_payload = json!({
+            "status": "error",
+            "done": true,
+            "job_id": "job-offline-1",
+            "result": {
+                "success": false,
+                "artifacts": [],
+                "errors": [
+                    { "message": OFFLINE_ERROR, "stage": "generation" },
+                    { "message": "second error must not win", "stage": "queue" }
+                ],
+                "failed_tasks": 1,
+                "gallery_items": [],
+                "successful_tasks": 0,
+                "total_tasks": 1
+            }
+        });
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, mcp_init_result())))
+                .queue_post(Ok((200, mcp_tool_result(failed_payload)))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let input = {
+            let mut i = video_input(&media);
+            i.prompt = "video prompt".into();
+            i.upstream.clear(); // t2v — no image input
+            i.video_spec = Some(mcp_spec());
+            i
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect_err("a failed WanGP job must fail the generation");
+        assert!(err.contains(OFFLINE_ERROR), "verbatim WangGP cause missing: {err}");
+        assert!(
+            !err.contains("no generated_files"),
+            "must not degrade into the artifact error: {err}"
+        );
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "initialize + generate only — failure short-circuits before artifact lookup"
+        );
+        assert!(
+            !bodies
+                .iter()
+                .any(|b| b["params"]["arguments"]["action"] == "create_file_download"),
+            "no artifact/download call may fire on a failed job"
+        );
         drop(bodies);
         let _ = std::fs::remove_dir_all(&media);
     }

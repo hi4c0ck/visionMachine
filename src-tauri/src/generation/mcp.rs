@@ -203,6 +203,109 @@ pub fn job_id(payload: &Value) -> Option<String> {
     None
 }
 
+/// Concrete failure reported by a WanGP `wangp_generate` payload, if any.
+///
+/// v2.1 reports business failures INSIDE a successful JSON-RPC tool result:
+/// the top-level `status` is `error`/`interrupted` and/or `result.success` is
+/// false, while the real cause is `result.errors[0].message`. This MUST be
+/// checked before artifact discovery — otherwise a failed job degrades into
+/// the misleading "no generated_files" error and the actual cause is lost.
+///
+/// The first error message is returned VERBATIM (no truncation, no rewrite),
+/// with the job id appended as context when present.
+pub fn generate_failure_message(payload: &Value) -> Option<String> {
+    let status = payload
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let result = payload.get("result").filter(|v| v.is_object());
+    let success_false = result
+        .and_then(|r| r.get("success"))
+        .and_then(Value::as_bool)
+        == Some(false);
+    let status_failed =
+        matches!(status.as_str(), "error" | "interrupted" | "failed" | "failure");
+    if !status_failed && !success_false {
+        return None;
+    }
+    let cause = result
+        .and_then(|r| r.get("errors"))
+        .and_then(Value::as_array)
+        .and_then(|errors| errors.first())
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty());
+    let job = job_id(payload);
+    Some(match (cause, job) {
+        (Some(cause), Some(job)) => format!("{cause} (job_id: {job})"),
+        (Some(cause), None) => cause,
+        (None, Some(job)) => {
+            format!("MCP generate reported status '{status}' (job_id: {job})")
+        }
+        (None, None) => format!("MCP generate reported status '{status}'"),
+    })
+}
+
+/// Ordered artifact candidates from a WanGP `wangp_generate` payload.
+///
+/// v2.1 compaction DELETES `generated_files` when gallery items cover the
+/// outputs, so discovery walks every known location in priority order:
+///   1. `generated_files` (legacy top level, plus nested `result.` for the
+///      pre-compaction v2.1 shape),
+///   2. `result.gallery_items[].media_id` / `.path` (media id is the stable
+///      server handle; both are collected so a failed handle can fall back),
+///   3. `result.artifacts[].path` and `.side_files[]` (string or object).
+///
+/// Every candidate is a server-side handle (virtual `@outputs` path, gallery
+/// media id, URL) or an absolute local path — retrieval decides the route.
+/// Deduped, order-stable, never panics on shape drift.
+pub fn artifact_references(payload: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // 1. Legacy / pre-compaction generated_files.
+    out.extend(generated_files(payload));
+    let result = payload.get("result").filter(|v| v.is_object());
+    if let Some(result) = result {
+        out.extend(generated_files(result));
+        // 2. Gallery items: media_id first, then the (possibly virtual) path.
+        if let Some(items) = result.get("gallery_items").and_then(Value::as_array) {
+            for item in items {
+                for key in [
+                    "media_id", "mediaId", "path", "file_path", "filePath", "url", "uri",
+                ] {
+                    push_ref(&mut out, &item[key]);
+                }
+            }
+        }
+        // 3. Artifacts: primary path plus every side file.
+        if let Some(items) = result.get("artifacts").and_then(Value::as_array) {
+            for item in items {
+                for key in [
+                    "path", "file_path", "filePath", "media_id", "mediaId", "url", "uri",
+                ] {
+                    push_ref(&mut out, &item[key]);
+                }
+                if let Some(side_files) = item.get("side_files").and_then(Value::as_array) {
+                    for entry in side_files {
+                        if entry.is_object() {
+                            for key in [
+                                "path", "media_id", "mediaId", "file_path", "filePath", "url", "uri",
+                            ] {
+                                push_ref(&mut out, &entry[key]);
+                            }
+                        } else {
+                            push_ref(&mut out, entry);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Read the first non-empty reference from the configured dot-path candidates
 /// (one level of nesting is enough for WanGP's action responses; deeper
 /// objects are searched recursively but only scalar strings are returned).
@@ -446,9 +549,45 @@ pub async fn upload_media(
     })
 }
 
+/// Ask `wangp_session` to turn a server-side artifact handle — a virtual
+/// `@outputs` path OR a gallery media id — into a downloadable reference.
+/// Rides the same `call_tool` JSON-RPC transport as the upload handshake;
+/// the returned object is consumed by `retrieve_artifact` (path / URL /
+/// in-band bytes). Never fabricates a reference from a missing action.
+pub async fn create_file_download(
+    http: &dyn HttpClient,
+    url: &str,
+    spec: &McpSpecWire,
+    reference: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let action = spec
+        .actions
+        .as_ref()
+        .and_then(|a| a.download.as_ref())
+        .ok_or_else(|| {
+            "MCP artifact needs mcp.actions.download (wangp_session create_file_download action)".to_string()
+        })?;
+    if action.action.trim().is_empty() || action.path_arg.trim().is_empty() {
+        return Err("mcp.actions.download is incomplete (action + pathArg required)".into());
+    }
+    let mut args = Map::new();
+    args.insert(action.path_arg.clone(), Value::String(reference.to_string()));
+    call_tool(
+        http,
+        url,
+        &spec.tools.session,
+        json!({ "action": action.action, "arguments": Value::Object(args) }),
+        timeout,
+    )
+    .await
+}
+
 /// Retrieve a generated artifact referenced by a `wangp_generate` result.
-/// Absolute paths are read locally; virtual `@outputs` paths go through a
-/// `wangp_session` download action (path / URL / base64 in the response).
+/// Absolute local paths are read directly; http(s) URLs are downloaded; every
+/// other handle (virtual `@outputs` path, gallery media id, server-side
+/// relative path) goes through `wangp_session create_file_download` to obtain
+/// a downloadable reference before the existing byte/path/URL handling below.
 pub async fn retrieve_artifact(
     http: &dyn HttpClient,
     url: &str,
@@ -457,36 +596,12 @@ pub async fn retrieve_artifact(
     dest: &Path,
     timeout: Duration,
 ) -> Result<(), String> {
-    let source = if Path::new(reference).is_absolute() && Path::new(reference).is_file() {
+    let payload = if Path::new(reference).is_absolute() && Path::new(reference).is_file() {
         return copy_local(reference, dest);
-    } else if reference.starts_with('@') {
-        let action = spec
-            .actions
-            .as_ref()
-            .and_then(|a| a.download.as_ref())
-            .ok_or_else(|| {
-                "virtual MCP artifact needs mcp.actions.download (wangp_session download action)".to_string()
-            })?;
-        if action.action.trim().is_empty() || action.path_arg.trim().is_empty() {
-            return Err("mcp.actions.download is incomplete (action + pathArg required)".into());
-        }
-        let mut args = Map::new();
-        args.insert(action.path_arg.clone(), Value::String(reference.to_string()));
-        Some(call_tool(
-            http,
-            url,
-            &spec.tools.session,
-            json!({ "action": action.action, "arguments": Value::Object(args) }),
-            timeout,
-        )
-        .await?)
+    } else if reference.starts_with("http://") || reference.starts_with("https://") {
+        return http.download(reference, dest, "").await;
     } else {
-        None
-    };
-    let Some(payload) = source else {
-        return Err(format!(
-            "MCP artifact '{reference}' is neither an absolute path nor a virtual @outputs reference — no safe retrieval route"
-        ));
+        create_file_download(http, url, spec, reference, timeout).await?
     };
     // A download action can return in-band bytes (base64) or an authorized
     // path/URL. Accept only those three shapes; anything else is a concrete
@@ -612,6 +727,112 @@ mod tests {
             generated_files(&payload),
             vec!["@outputs/one.mp4", "@outputs/two.mp4"]
         );
+    }
+
+    /// Exact failure shape verified from the owner's request.log (WanGP runs
+    /// offline without its tokenizer files). Kept verbatim — the client must
+    /// surface this text, never a synthesized "no generated_files" error.
+    const OFFLINE_ERROR: &str =
+        "special_tokens_map.json is missing and WanGP runs offline (--offline)...";
+
+    fn wangp_failed_payload() -> Value {
+        json!({
+            "status": "error",
+            "done": true,
+            "job_id": "job-offline-1",
+            "result": {
+                "success": false,
+                "artifacts": [],
+                "errors": [
+                    { "message": OFFLINE_ERROR, "stage": "generation" },
+                    { "message": "second error must not win", "stage": "queue" }
+                ],
+                "failed_tasks": 1,
+                "gallery_items": [],
+                "successful_tasks": 0,
+                "total_tasks": 1
+            }
+        })
+    }
+
+    #[test]
+    fn generate_failure_message_surfaces_first_error_verbatim_plus_job_id() {
+        let msg = generate_failure_message(&wangp_failed_payload()).unwrap();
+        assert!(msg.contains(OFFLINE_ERROR), "verbatim cause missing: {msg}");
+        assert!(msg.contains("job-offline-1"), "job id missing: {msg}");
+        assert!(
+            !msg.contains("second error"),
+            "only the FIRST errors[] message is surfaced: {msg}"
+        );
+
+        // success=false alone (no telling status) is still a failure.
+        let mut no_status = wangp_failed_payload();
+        no_status.as_object_mut().unwrap().remove("status");
+        assert!(generate_failure_message(&no_status).unwrap().contains(OFFLINE_ERROR));
+
+        // interrupted with no errors[] still produces an explicit failure.
+        let interrupted = json!({
+            "status": "interrupted", "done": true, "job_id": "job-2",
+            "result": { "success": false, "errors": [] }
+        });
+        let msg = generate_failure_message(&interrupted).unwrap();
+        assert!(msg.contains("interrupted") && msg.contains("job-2"), "{msg}");
+
+        // Legacy success + compacted v2.1 success are NOT failures.
+        assert_eq!(
+            generate_failure_message(&json!({
+                "status": "done", "generated_files": ["@outputs/a.mp4"]
+            })),
+            None
+        );
+        assert_eq!(
+            generate_failure_message(&json!({
+                "status": "done", "done": true, "job_id": "job-ok",
+                "result": { "success": true, "gallery_items": [] }
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn artifact_references_walk_generated_files_gallery_then_artifacts_in_order() {
+        let payload = json!({
+            "status": "done",
+            "generated_files": ["@outputs/legacy.mp4"],
+            "result": {
+                "generated_files": ["@outputs/nested.mp4"],
+                "gallery_items": [
+                    { "media_id": "media-1", "path": "@outputs/g1.mp4" },
+                    { "path": "@outputs/g2.mp4" }
+                ],
+                "artifacts": [
+                    { "path": "@outputs/primary.mp4", "side_files": [
+                        "@outputs/side1.mp4",
+                        { "path": "@outputs/side2.mp4", "media_id": "side-media" }
+                    ]}
+                ]
+            }
+        });
+        assert_eq!(
+            artifact_references(&payload),
+            vec![
+                "@outputs/legacy.mp4",
+                "@outputs/nested.mp4",
+                "media-1",
+                "@outputs/g1.mp4",
+                "@outputs/g2.mp4",
+                "@outputs/primary.mp4",
+                "@outputs/side1.mp4",
+                "@outputs/side2.mp4",
+                "side-media",
+            ]
+        );
+        // v2.1 compaction deleted ALL generated_files — gallery still resolves.
+        let compacted = json!({
+            "result": { "gallery_items": [{ "media_id": "gallery-1" }] }
+        });
+        assert_eq!(artifact_references(&compacted), vec!["gallery-1"]);
+        assert!(artifact_references(&json!({})).is_empty());
     }
 
     #[test]
