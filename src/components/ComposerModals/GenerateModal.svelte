@@ -8,7 +8,7 @@
 	import { flashToast } from '$lib/flashToast';
 	import { APP_CONSTANTS } from '$constants';
 	import { getSettings, estimateGenerationCost, type CostEstimate } from '$lib/settings/store';
-	import { unlockVerified } from '$lib/settings/guards';
+	import { unlockVerified, verificationGlyph } from '$lib/settings/guards';
 	import { modelsFor, getPreset, capabilityNote } from '$lib/settings/catalog';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
 	import '../composer-modal.css';
@@ -44,6 +44,11 @@
 	let videoModel = $state('');
 	let imageModels = $state<ModelSpec[]>([]);
 	let videoModels = $state<ModelSpec[]>([]);
+	// Owner tick lists, captured from the live settings in the same effect
+	// that rebuilds the model arrays — the glyph helper is a PURE function of
+	// (spec, verified), never a `getSettings()` call inside the template.
+	let imageVerified = $state<readonly string[] | undefined>(undefined);
+	let videoVerified = $state<readonly string[] | undefined>(undefined);
 	// Seed (docs/agnes-model-catalog.md): auto-rolled while Settings →
 	// “Always use a new seed” is ON; otherwise the value stays fixed and
 	// editable (reproducible runs). Shown only for seed-supporting models.
@@ -104,6 +109,10 @@
 	$effect(() => {
 		if (!open) return;
 		const s = getSettings();
+		// Snapshot the owner tick lists for the display-only glyphs. The
+		// effect re-runs whenever these change (they are in the seed key).
+		imageVerified = s.providers.image.verified;
+		videoVerified = s.providers.video.verified;
 		// The verified id lists are part of the seed signature: a tick/untick
 		// while the modal is open must refresh the unlocked model arrays —
 		// otherwise the select keeps a stale (un)locked set.
@@ -179,11 +188,12 @@
 						<label for="gen-image-model">Image model</label>
 						<select id="gen-image-model" value={imageModel} onchange={(e) => (imageModel = e.currentTarget.value)}>
 							{#each imageModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === imageModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+								{@const glyph = verificationGlyph(m, imageVerified)}
+								<option value={m.id} disabled={m.pending}>{glyph ? `${glyph} ` : ''}{m.label ?? m.id}{m.pending ? (m.id === imageModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 							{/each}
 							{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
-								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
-								<option value={imageModel}>{imageModel} (custom)</option>
+								<!-- Free-form preset: the Settings-typed model id (not in the catalog) — owner-typed = verified by construction -->
+								<option value={imageModel}>✓ {imageModel} (custom)</option>
 							{/if}
 						</select>
 					</div>
@@ -191,11 +201,12 @@
 						<label for="gen-video-model">Video model</label>
 						<select id="gen-video-model" value={videoModel} onchange={(e) => (videoModel = e.currentTarget.value)}>
 							{#each videoModels as m (m.id)}
-								<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === videoModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+								{@const glyph = verificationGlyph(m, videoVerified)}
+								<option value={m.id} disabled={m.pending}>{glyph ? `${glyph} ` : ''}{m.label ?? m.id}{m.pending ? (m.id === videoModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 							{/each}
 							{#if videoModel && !videoModels.some((m) => m.id === videoModel)}
-								<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
-								<option value={videoModel}>{videoModel} (custom)</option>
+								<!-- Free-form preset: the Settings-typed model id (not in the catalog) — owner-typed = verified by construction -->
+								<option value={videoModel}>✓ {videoModel} (custom)</option>
 							{/if}
 						</select>
 					</div>

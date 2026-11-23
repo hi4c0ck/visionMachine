@@ -5,7 +5,7 @@
 	// and gets it back via onchange.
 	import type { ProviderKind, ProviderSlot } from '$types';
 	import { PRESETS, getPreset, modelsFor, capabilityNote } from '$lib/settings/catalog';
-	import { validateHttpUrl, isConfigured, unlockVerified } from '$lib/settings/guards';
+	import { validateHttpUrl, isConfigured, unlockVerified, verificationGlyph } from '$lib/settings/guards';
 	import { testProvider, type TestProviderOutcome } from '$lib/settings/store';
 
 	let {
@@ -184,13 +184,15 @@
 			/>
 			<datalist id="prov-model-dl-{kind}">
 				{#each modelOptions as m (m.id)}
-					<option value={m.id}>{m.label ?? m.id}{m.pending ? ' (reserved)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+					{@const glyph = verificationGlyph(m, slot.verified)}
+					<option value={m.id}>{glyph ? `${glyph} ` : ''}{m.label ?? m.id}{m.pending ? ' (reserved)' : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 			</datalist>
 		{:else}
 			<select id="prov-model-{kind}" value={effectiveModel} onchange={(e) => onslotchange({ ...slot, model: e.currentTarget.value })}>
 				{#each modelOptions as m (m.id)}
-					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === effectiveModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+					{@const glyph = verificationGlyph(m, slot.verified)}
+					<option value={m.id} disabled={m.pending}>{glyph ? `${glyph} ` : ''}{m.label ?? m.id}{m.pending ? (m.id === effectiveModel ? ' (details pending - selected, unverified)' : ' (details pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 			</select>
 		{/if}
@@ -222,6 +224,7 @@
 				selected in the picker, and it leaves this list (nothing left to
 				verify there). Untick = back to reserved.
 			</span>
+			<span class="hint verified-legend">? reserved, not run · ✓ verified by a test session · no mark = catalog-generable</span>
 		</div>
 	{/if}
 
@@ -345,6 +348,11 @@
 
 	.hint-error {
 		color: var(--error-color, #f87171);
+	}
+
+	/* Compact glyph legend under the live-verified checkbox section. */
+	.verified-legend {
+		color: var(--text-secondary, #a1a1aa);
 	}
 
 	/* Owner live-verification gate: one checkbox row per reserved model. */

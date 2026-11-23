@@ -11,7 +11,7 @@
 	//  - A history strip lists the piece's prior on-disk generations; clicking
 	//    one switches the "generated" preview to that artifact.
 	import { getSettings } from '$lib/settings/store';
-	import { unlockVerified } from '$lib/settings/guards';
+	import { unlockVerified, verificationGlyph } from '$lib/settings/guards';
 	import { modelsFor, getPreset, capabilityNote } from '$lib/settings/catalog';
 	import { toMediaUrl } from '$lib/mediaUrl';
 	import { flashToast } from '$lib/flashToast';
@@ -64,6 +64,9 @@
 	const isImg2Img = $derived(imageType === 'img2img');
 
 	let imageModels = $state<ModelSpec[]>([]);
+	// Owner tick list, snapshotted alongside imageModels so the display-only
+	// glyph and the unlocked spec always come from the same settings read.
+	let imageVerified = $state<readonly string[] | undefined>(undefined);
 	let imageModel = $state('');
 	let busy = $state(false);
 	// Last standalone-generation failure (shown as a problem cue, cleared on
@@ -118,6 +121,7 @@
 	// GenerateModal): read-only / pending models are filtered out.
 	$effect(() => {
 		const s = getSettings();
+		imageVerified = s.providers.image.verified;
 		const key = [s.providers.image.model, s.providers.image.preset].join('|');
 		if (imageModelSeedKey === key) return;
 		imageModelSeedKey = key;
@@ -316,11 +320,12 @@
 				aria-label="Image model"
 			>
 				{#each imageModels as m (m.id)}
-					<option value={m.id} disabled={m.pending}>{m.label ?? m.id}{m.pending ? (m.id === imageModel ? ' (details pending - selected, unverified)' : ' (pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
+					{@const glyph = verificationGlyph(m, imageVerified)}
+					<option value={m.id} disabled={m.pending}>{glyph ? `${glyph} ` : ''}{m.label ?? m.id}{m.pending ? (m.id === imageModel ? ' (details pending - selected, unverified)' : ' (pending)') : ''}{capabilityNote(m) ? ` (${capabilityNote(m)})` : ''}</option>
 				{/each}
 				{#if imageModel && !imageModels.some((m) => m.id === imageModel)}
-					<!-- Free-form preset: the Settings-typed model id (not in the catalog) -->
-					<option value={imageModel}>{imageModel} (custom)</option>
+					<!-- Free-form preset: the Settings-typed model id (not in the catalog) — owner-typed = verified by construction -->
+					<option value={imageModel}>✓ {imageModel} (custom)</option>
 				{/if}
 			</select>
 		</label>

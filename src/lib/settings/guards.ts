@@ -48,6 +48,30 @@ export function unlockVerified(m: ModelSpec, verified: readonly string[] | undef
   return m.pending && verified?.includes(m.id) ? { ...m, pending: false } : m;
 }
 
+/**
+ * Display-only glyph prefixed to a model option label, BEFORE the capability/
+ * cost note (never part of the value or the gate). '?' = catalog pending/
+ * reserved, no concrete test session recorded; '✓' = the owner ticked this id
+ * in Settings > Providers > Live-verified models after a concrete successful
+ * test session (a typed free-form id is verified by construction); '' = a
+ * catalog-generable model with no concrete run recorded on this machine —
+ * generable by data is NOT a verification claim.
+ *
+ * Pending WINS over the verified list: the helper itself never bypasses the
+ * gate (only `unlockVerified` lifts it). Callers pass the RESOLVED spec from
+ * the list builder, so an owner-unlocked row renders '✓' and a still-pending
+ * row renders '?'. Pure: reads no store, mutates nothing. Non-string entries
+ * in the verified list are ignored.
+ */
+export function verificationGlyph(
+  m: ModelSpec,
+  verified: readonly string[] | null | undefined,
+): '?' | '✓' | '' {
+  if (m.pending) return '?';
+  if (Array.isArray(verified) && verified.some((v) => typeof v === 'string' && v === m.id)) return '✓';
+  return '';
+}
+
 export const DEFAULT_SETTINGS: Settings = {
   profile: { displayName: '', theme: '', layout: '' },
   generationDefaults: {
