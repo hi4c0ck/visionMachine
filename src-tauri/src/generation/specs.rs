@@ -270,11 +270,34 @@ pub struct McpActionWire {
     #[serde(default)]
     pub action: String,
     /// Argument key that carries the (authorized) path to the server.
+    /// Legacy path-based actions (download + old upload) still use it; the
+    /// v2.1 chunked upload uses `filename_arg`/`size_arg` instead.
     #[serde(default)]
     pub path_arg: String,
     /// Dot-path keys accepted when reading the returned media reference.
     #[serde(default)]
     pub ref_paths: Vec<String>,
+    // ── WanGP v2.1 chunked-upload handshake (mcp::upload_media) ────────────
+    // All fields are optional on the wire with serde defaults so older specs
+    // (path-based upload / download-only configs) still deserialize; the
+    // upload executor reports a concrete error when a required field is
+    // missing instead of silently sending an arbitrary path.
+    /// Argument key for the BARE sanitized filename on `create_file_upload`.
+    #[serde(default)]
+    pub filename_arg: String,
+    /// Argument key for the decoded byte size on `create_file_upload`.
+    #[serde(default)]
+    pub size_arg: String,
+    /// Dot-path keys for the one-time upload token from `create_file_upload`.
+    #[serde(default)]
+    pub token_paths: Vec<String>,
+    /// wangp_session action that uploads one base64 chunk (token, offset,
+    /// data_base64).
+    #[serde(default)]
+    pub chunk_action: String,
+    /// wangp_session action that finalizes the upload (token).
+    #[serde(default)]
+    pub finish_action: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -551,5 +574,56 @@ mod tests {
         let out = serde_json::to_value(&spec).unwrap();
         assert_eq!(out["mcp"]["protocolVersion"], "2025-06-18");
         assert_eq!(out["mcp"]["settingsDefaults"]["image_mode"], 0);
+    }
+
+    #[test]
+    fn mcp_upload_v21_wire_shape_round_trips_and_legacy_defaults() {
+        // The LOCKED cross-lane contract. Every field rides a serde default,
+        // so an older spec (the path-based shape in the test above) still
+        // deserializes with empty v2.1 config.
+        let json = serde_json::json!({
+            "id": "ti2v_2_2", "kind": "video", "requestFormat": "mcp",
+            "mcp": {
+                "tools": { "generate": "wangp_generate", "session": "wangp_session" },
+                "actions": {
+                    "upload": {
+                        "action": "create_file_upload",
+                        "filenameArg": "filename",
+                        "sizeArg": "size_bytes",
+                        "tokenPaths": ["token"],
+                        "chunkAction": "upload_chunk",
+                        "finishAction": "finish_upload",
+                        "refPaths": ["path", "media_id"]
+                    }
+                }
+            }
+        });
+        let spec: ModelSpecWire = serde_json::from_value(json).unwrap();
+        let up = spec.mcp.as_ref().unwrap().actions.as_ref().unwrap().upload.as_ref().unwrap();
+        assert_eq!(up.action, "create_file_upload");
+        assert_eq!(up.filename_arg, "filename");
+        assert_eq!(up.size_arg, "size_bytes");
+        assert_eq!(up.token_paths, vec!["token"]);
+        assert_eq!(up.chunk_action, "upload_chunk");
+        assert_eq!(up.finish_action, "finish_upload");
+        assert_eq!(up.ref_paths, vec!["path", "media_id"]);
+        // Camel-case wire names are stable for the other lane.
+        let out = serde_json::to_value(&spec).unwrap();
+        let wire = &out["mcp"]["actions"]["upload"];
+        assert_eq!(wire["filenameArg"], "filename");
+        assert_eq!(wire["sizeArg"], "size_bytes");
+        assert_eq!(wire["tokenPaths"][0], "token");
+        assert_eq!(wire["chunkAction"], "upload_chunk");
+        assert_eq!(wire["finishAction"], "finish_upload");
+
+        // Older specs deserialize with empty v2.1 fields (no hard failure).
+        let legacy: McpActionWire = serde_json::from_value(serde_json::json!({
+            "action": "create_file_upload", "pathArg": "path", "refPaths": ["media_id"]
+        })).unwrap();
+        assert_eq!(legacy.path_arg, "path");
+        assert_eq!(legacy.filename_arg, "");
+        assert!(legacy.token_paths.is_empty());
+        assert_eq!(legacy.chunk_action, "");
+        assert_eq!(legacy.finish_action, "");
     }
 }

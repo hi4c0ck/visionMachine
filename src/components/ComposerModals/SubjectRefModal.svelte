@@ -8,7 +8,7 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	import ChromeIcon from '../ChromeIcon.svelte';
 	import { flashToast } from '$lib/flashToast';
 	import { isTauri } from '@tauri-apps/api/core';
-	import { pickImageFile, readUserImage } from '$lib/localImage';
+	import { pickImageFile, readUserImage, downloadRemoteImage, bestEffortLocalCopy, withRemoteLocalCopy, isHttpUrl } from '$lib/localImage';
 	import SessionImageBrowser from './SessionImageBrowser.svelte';
 
 	let {
@@ -127,6 +127,10 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 	// The panel's standalone generation lifecycle: while a piece image is in
 	// flight the modal's Confirm is held.
 	let pieceBusy = $state(false);
+	// Confirm-time auto-save of a local copy for an http(s) source (local
+	// engines need bytes, not a CDN URL). Held alongside pieceBusy so a saved
+	// record never races its own download.
+	let localCopyBusy = $state(false);
 	async function browseLocal() {
 		if (!sessionId || localBusy) return;
 		const path = await pickImageFile();
@@ -158,6 +162,39 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 		if (!srValid) return;
 		if (!editingRefId && (pipe.subjectReferences?.length ?? 0) >= maxSubjectRefs) return;
 
+		// Source image: url / img2img → pasted URL. txt2img has no source to
+		// copy; `data:` and local paths already carry their bytes.
+		const sourceUrl = srType === 'url' || srType === 'img2img' ? srImageUrl : '';
+		const httpSource = isHttpUrl(sourceUrl) ? sourceUrl.trim() : '';
+		let localFromDownload: string | undefined;
+		if (httpSource && !srGenLocal.trim()) {
+			localCopyBusy = true;
+			try {
+				localFromDownload = await bestEffortLocalCopy(httpSource, async () => {
+					const res = await downloadRemoteImage(
+						sessionId, pipe.id, srRefId || 'local', httpSource,
+					);
+					return res.localPath;
+				});
+			} finally {
+				localCopyBusy = false;
+			}
+			// Non-blocking: a failed copy still saves the subject with its URL.
+			flashToast(
+				localFromDownload
+					? 'Local copy saved for local engines · remote URL kept for cloud'
+					: 'Saved with the remote URL — local engines need a local copy (download failed)',
+				localFromDownload ? 'success' : 'info',
+			);
+		}
+		// Pair rule: keep the ORIGINAL remote, add the local copy. imageUrl is
+		// NOT touched — a dead CDN must never cost us the subject, and cloud
+		// models keep fetching the pasted original.
+		const preview = withRemoteLocalCopy(httpSource, localFromDownload, {
+			previewLocalPath: srGenLocal,
+			previewRemoteUrl: srGenRemote,
+		});
+
 		let result;
 		if (editingRefId) {
 			// Atomic: one operation updates type/preset + range + useFrames together,
@@ -173,8 +210,8 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				// Carry the piece's current generation preview so the chip
 				// reflects the artifact (was dropped on edit-confirm, leaving
 				// a stale thumbnail — the "confirmed but no change" bug).
-				previewLocalPath: srGenLocal || undefined,
-				previewRemoteUrl: srGenRemote || undefined,
+				previewLocalPath: preview.previewLocalPath || undefined,
+				previewRemoteUrl: preview.previewRemoteUrl || undefined,
 			});
 			if (result.errors.length === 0) onSaved?.(editingRefId);
 		} else {
@@ -191,8 +228,8 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				srPrompt,
 				// Stable piece id + the pre-save generation preview (local + remote).
 				srRefId || undefined,
-				srGenLocal || undefined,
-				srGenRemote || undefined,
+				preview.previewLocalPath || undefined,
+				preview.previewRemoteUrl || undefined,
 			);
 		}
 		if (result.errors.length > 0) {
@@ -305,10 +342,10 @@ import PieceGenPanel from './PieceGenPanel.svelte';
 				<button
 					class="btn-confirm"
 					onclick={confirm}
-					disabled={!srValid || pieceBusy}
-					title={pieceBusy ? 'Wait for the in-flight generation to finish' : undefined}
+					disabled={!srValid || pieceBusy || localCopyBusy}
+					title={pieceBusy ? 'Wait for the in-flight generation to finish' : localCopyBusy ? 'Saving a local copy of the source image' : undefined}
 				>
-					{pieceBusy ? 'Confirm (waiting…)' : 'Confirm'}
+					{pieceBusy ? 'Confirm (waiting…)' : localCopyBusy ? 'Confirm (saving copy…)' : 'Confirm'}
 				</button>
 			</div>
 		</div>

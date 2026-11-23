@@ -2455,17 +2455,22 @@ impl ProviderEngine {
         .map_err(|e| EngineError::Failure(format!("MCP initialize failed: {e}")))?;
         on_event("MCP session initialized");
 
-        // I2V: local keyframes must become AUTHORIZED references through a
-        // wangp_session upload action. Never send an arbitrary filesystem
-        // path or data: URI — if the upload cannot be completed, FAIL with
-        // an actionable message (never silently drop the image input).
+        // I2V: local keyframes must become AUTHORIZED references through the
+        // WanGP v2.1 chunked upload. Never send an arbitrary filesystem path
+        // or data: URI — if the upload cannot be completed, FAIL with an
+        // actionable message (never silently drop the image input).
+        // Selection: PREFER a readable local_path when the upstream has one
+        // (a generated piece carries both a remote primary and a local
+        // mirror) — the local file is the only thing wangp_session can upload.
+        // Fall back to primary for legacy local-path-only upstreams.
         // T2V (no upstream media) just omits `image_start`.
         let media_refs: Vec<String> = ctx
             .upstream
             .iter()
             .map(|u| {
-                if u.primary.trim().is_empty() {
-                    u.local_path.trim().to_string()
+                let local = u.local_path.trim();
+                if !local.is_empty() && std::path::Path::new(local).is_file() {
+                    local.to_string()
                 } else {
                     u.primary.trim().to_string()
                 }
@@ -5798,8 +5803,12 @@ mod tests {
                     "flow_shift": 5, "image_mode": 0, "image_prompt_type": "T"
                 },
                 "actions": {
-                    "upload": { "action": "create_file_upload", "pathArg": "path",
-                                "refPaths": ["media_id", "path"] },
+                    "upload": {
+                        "action": "create_file_upload", "filenameArg": "filename",
+                        "sizeArg": "size_bytes", "tokenPaths": ["token"],
+                        "chunkAction": "upload_chunk", "finishAction": "finish_upload",
+                        "refPaths": ["path", "media_id"]
+                    },
                     "download": { "action": "create_file_download", "pathArg": "path",
                                   "refPaths": ["path"] }
                 }
@@ -5932,6 +5941,165 @@ mod tests {
                 .any(|b| b["method"] == "tools/call"),
             "no generate call may fire on un-uploadable media (initialize is expected)"
         );
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    // ── WanGP v2.1 chunked-upload flow (StubHttp) ──────────────────────────
+
+    fn mcp_init_result() -> Value {
+        json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "protocolVersion": "2025-06-18",
+                        "serverInfo": { "name": "WanGP", "version": "1.30.0" } }
+        })
+    }
+
+    fn mcp_tool_result(payload: Value) -> Value {
+        json!({
+            "jsonrpc": "2.0", "id": 2,
+            "result": {
+                "structuredContent": payload,
+                "content": [{ "type": "text", "text": "{}" }],
+                "isError": false
+            }
+        })
+    }
+
+    /// One upstream with a REMOTE primary and a readable LOCAL mirror. This
+    /// is the generated-piece shape the old selection logic mishandled.
+    fn mcp_i2v_input(media: &std::path::Path, local: &std::path::Path) -> EngineInput {
+        let mut input = video_input(media);
+        input.video_spec = Some(mcp_spec());
+        input.upstream = vec![UpstreamOutput {
+            source_id: "k1".into(),
+            kind: "keyframe".into(),
+            primary: "https://cdn.test/k1.png".into(),
+            local_path: local.to_string_lossy().into_owned(),
+        }];
+        input
+    }
+
+    #[tokio::test]
+    async fn mcp_i2v_local_and_remote_keyframe_uses_local_copy() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let local = media.join("kf-local.png");
+        let keyframe_bytes = b"fake-keyframe";
+        std::fs::write(&local, keyframe_bytes).unwrap();
+        let artifact = media.join("mcp-source.mp4");
+        std::fs::write(&artifact, b"fake-mcp-artifact").unwrap();
+
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, mcp_init_result())))
+                // create_file_upload -> token
+                .queue_post(Ok((200, mcp_tool_result(json!({ "token": "tok-1" })))))
+                // upload_chunk -> ok
+                .queue_post(Ok((200, mcp_tool_result(json!({ "ok": true })))))
+                // finish_upload -> the ref that goes into image_start
+                .queue_post(Ok((200, mcp_tool_result(json!({
+                    "path": "@outputs/kf-1.png", "media_id": "media-1"
+                })))))
+                // generate -> artifact
+                .queue_post(Ok((200, mcp_tool_result(json!({
+                    "status": "done", "job_id": "job-mcp-i2v",
+                    "generated_files": [artifact.to_string_lossy().to_string()]
+                }))))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let input = mcp_i2v_input(&media, &local);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let out = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect("local keyframe must be uploaded and generation succeed");
+        assert!(out.local_path.ends_with("video.mp4"));
+        assert!(std::path::Path::new(&out.local_path).is_file());
+
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 5, "initialize + create + chunk + finish + generate");
+        assert_eq!(bodies[0]["method"], "initialize");
+        // 1. create: bare sanitized filename + decoded size, never a path.
+        assert_eq!(bodies[1]["params"]["name"], "wangp_session");
+        assert_eq!(bodies[1]["params"]["arguments"]["action"], "create_file_upload");
+        let create_args = &bodies[1]["params"]["arguments"]["arguments"];
+        assert_eq!(create_args["filename"], "kf-local.png");
+        assert_eq!(create_args["size_bytes"], keyframe_bytes.len());
+        assert!(create_args.get("path").is_none(), "no raw filesystem path on the wire");
+        // 2. chunk: token + byte offset + base64 of the LOCAL file.
+        assert_eq!(bodies[2]["params"]["arguments"]["action"], "upload_chunk");
+        let chunk_args = &bodies[2]["params"]["arguments"]["arguments"];
+        assert_eq!(chunk_args["token"], "tok-1");
+        assert_eq!(chunk_args["offset"], 0);
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(chunk_args["data_base64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, keyframe_bytes.to_vec());
+        // 3. finish: token only; 4. generate uses the returned ref.
+        assert_eq!(bodies[3]["params"]["arguments"]["action"], "finish_upload");
+        assert_eq!(bodies[3]["params"]["arguments"]["arguments"]["token"], "tok-1");
+        assert_eq!(bodies[4]["params"]["name"], "wangp_generate");
+        let st = &bodies[4]["params"]["arguments"]["settings"];
+        assert_eq!(st["image_start"], "@outputs/kf-1.png");
+        // The remote primary was never sent anywhere.
+        let all = serde_json::to_string(&*bodies).unwrap();
+        assert!(!all.contains("cdn.test"), "remote primary must never ship: {all}");
+        drop(bodies);
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn mcp_i2v_missing_upload_token_fails_without_generate_call() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let local = media.join("kf-local.png");
+        std::fs::write(&local, b"fake-keyframe").unwrap();
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, mcp_init_result())))
+                // create returns no token.
+                .queue_post(Ok((200, mcp_tool_result(json!({ "status": "pending" }))))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let input = mcp_i2v_input(&media, &local);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect_err("missing token must fail");
+        assert!(err.contains("no upload token"), "{err}");
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2, "no chunk/finish/generate after a missing token");
+        drop(bodies);
+        let _ = std::fs::remove_dir_all(&media);
+    }
+
+    #[tokio::test]
+    async fn mcp_i2v_missing_finish_ref_fails_without_generate_call() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        std::fs::create_dir_all(&media).unwrap();
+        let local = media.join("kf-local.png");
+        std::fs::write(&local, b"fake-keyframe").unwrap();
+        let http = Arc::new(
+            StubHttp::new()
+                .queue_post(Ok((200, mcp_init_result())))
+                .queue_post(Ok((200, mcp_tool_result(json!({ "token": "tok-1" })))))
+                .queue_post(Ok((200, mcp_tool_result(json!({ "ok": true })))))
+                // finish returns no reference.
+                .queue_post(Ok((200, mcp_tool_result(json!({ "status": "done" }))))),
+        );
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let input = mcp_i2v_input(&media, &local);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = engine
+            .run(&input, &cancel, &|_p| {}, &|_line| {})
+            .await
+            .expect_err("missing finish reference must fail");
+        assert!(err.contains("no media reference"), "{err}");
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 4, "initialize + create + chunk + finish, no generate");
+        drop(bodies);
         let _ = std::fs::remove_dir_all(&media);
     }
 }

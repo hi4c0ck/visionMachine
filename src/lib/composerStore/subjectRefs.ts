@@ -58,8 +58,16 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
     // was saved — carry the preview pair onto the record (the chip shows a
     // thumbnail; the video stage carries the right source).
     const preview: Partial<SubjectReference> = {};
+    // A url subject's REMOTE side is its original imageUrl; an auto-downloaded
+    // local copy is for local engines only and must never replace it (cloud
+    // models keep fetching the original). Generated pieces keep their
+    // provider artifact URL.
+    const originalRemote =
+      presetType === 'url'
+        ? (previewRemoteUrl?.trim() || imageUrl.trim())
+        : previewRemoteUrl?.trim() || undefined;
+    if (originalRemote) preview.previewRemoteUrl = originalRemote;
     if (previewLocalPath?.trim()) preview.previewLocalPath = previewLocalPath;
-    if (previewRemoteUrl?.trim()) preview.previewRemoteUrl = previewRemoteUrl;
 
     const ref: SubjectReference = {
       id: id ?? crypto.randomUUID(),
@@ -215,7 +223,13 @@ export class SubjectReferenceServiceImpl implements SubjectReferenceService {
       // artifact — the chip thumbnail + the video stage's fetchable source.
       // Absent/empty = keep whatever preview the ref already had.
       if (update.previewLocalPath?.trim()) ref.previewLocalPath = update.previewLocalPath;
-      if (update.previewRemoteUrl?.trim()) ref.previewRemoteUrl = update.previewRemoteUrl;
+      // A url subject's remote IS its original imageUrl — never let a local
+      // copy replace or clear it; re-seed from the current URL on edit.
+      const originalRemote =
+        presetType === 'url'
+          ? (update.previewRemoteUrl?.trim() || (update.imageUrl ?? '').trim())
+          : update.previewRemoteUrl?.trim() || undefined;
+      if (originalRemote) ref.previewRemoteUrl = originalRemote;
     }
 
     return { errors };

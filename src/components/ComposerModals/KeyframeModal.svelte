@@ -7,7 +7,7 @@
 	import { flashToast } from '$lib/flashToast';
 	import { snapTo8 } from '$lib/frameMath';
 	import { isTauri } from '@tauri-apps/api/core';
-	import { pickImageFile, readUserImage, extractPipeLastFrame } from '$lib/localImage';
+	import { pickImageFile, readUserImage, extractPipeLastFrame, downloadRemoteImage, bestEffortLocalCopy, withRemoteLocalCopy, isHttpUrl } from '$lib/localImage';
 	import SessionImageBrowser from './SessionImageBrowser.svelte';
 
 	let {
@@ -110,6 +110,10 @@
 	let pieceBusy = $state(false);
 	let lastFrameBusy = $state(false);
 	let localBusy = $state(false);
+	// Confirm-time auto-save of a local copy for an http(s) source (local
+	// engines need bytes, not a CDN URL). Held alongside pieceBusy so a saved
+	// record never races its own download.
+	let localCopyBusy = $state(false);
 	// Session-image browser ("browse session images" affordance next to the
 	// "pick local file" button). Reuses readUserImage so the provider gets a
 	// data URI + a durable copy under this pipe's user-images dir. `browserMode`
@@ -219,6 +223,39 @@
 	async function confirm() {
 		if (!sessionId || editingSlot === null) return;
 		if (!kfValid) return;
+		// Source image for this piece: url → pasted URL, img2img → reference.
+		// txt2img has no source image to copy. `data:`/local paths already
+		// carry their bytes and are never downloaded.
+		const sourceUrl = kfType === 'url' ? kfUrl : kfType === 'img2img' ? kfReferenceUrl : '';
+		const httpSource = isHttpUrl(sourceUrl) ? sourceUrl.trim() : '';
+		let localFromDownload: string | undefined;
+		if (httpSource && !kfGenLocal.trim()) {
+			localCopyBusy = true;
+			try {
+				localFromDownload = await bestEffortLocalCopy(httpSource, async () => {
+					const res = await downloadRemoteImage(
+						sessionId, pipe.id, kfRefId || `kf-slot${editingSlot}`, httpSource,
+					);
+					return res.localPath;
+				});
+			} finally {
+				localCopyBusy = false;
+			}
+			// Non-blocking: a failed copy still saves the keyframe with its URL.
+			flashToast(
+				localFromDownload
+					? 'Local copy saved for local engines · remote URL kept for cloud'
+					: 'Saved with the remote URL — local engines need a local copy (download failed)',
+				localFromDownload ? 'success' : 'info',
+			);
+		}
+		// Pair rule: keep the ORIGINAL remote, add the local copy. imageSrc /
+		// referenceUrl are NOT touched — a disappeared CDN must never cost us
+		// the keyframe, and cloud models keep fetching the pasted original.
+		const preview = withRemoteLocalCopy(httpSource, localFromDownload, {
+			previewLocalPath: kfGenLocal,
+			previewRemoteUrl: kfGenRemote,
+		});
 		const result = await addKeyframeAction(
 			sessionId,
 			pipe.id,
@@ -229,8 +266,8 @@
 			kfType === 'img2img' ? kfReferenceUrl : undefined,
 			// Stable piece id + the pre-save generation preview (local + remote).
 			kfRefId || undefined,
-			kfGenLocal || undefined,
-			kfGenRemote || undefined,
+			preview.previewLocalPath || undefined,
+			preview.previewRemoteUrl || undefined,
 		);
 		if (result.errors.length > 0) {
 			flashToast(result.errors[0] || 'Failed to save keyframe');
@@ -395,10 +432,10 @@
 				<button
 					class="btn-confirm"
 					onclick={confirm}
-					disabled={!kfValid || pieceBusy}
-					title={pieceBusy ? 'Wait for the in-flight generation to finish' : undefined}
+					disabled={!kfValid || pieceBusy || localCopyBusy}
+					title={pieceBusy ? 'Wait for the in-flight generation to finish' : localCopyBusy ? 'Saving a local copy of the source image' : undefined}
 				>
-					{pieceBusy ? 'Confirm (waiting…)' : 'Confirm'}
+					{pieceBusy ? 'Confirm (waiting…)' : localCopyBusy ? 'Confirm (saving copy…)' : 'Confirm'}
 				</button>
 			</div>
 		</div>

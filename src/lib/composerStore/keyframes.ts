@@ -45,8 +45,17 @@ export class KeyframeServiceImpl implements KeyframeService {
     // the piece was saved. Carry its preview pair onto the record so the chip
     // shows a thumbnail + the video stage carries the right source.
     const preview: Partial<PipeKeyframe> = {};
+    // A url keyframe's REMOTE side is its original source URL. A local copy
+    // may have been auto-downloaded for local engines (Wan2GP upload mode),
+    // but it must never replace the remote: cloud models keep fetching the
+    // original. Re-seed from the current source when the caller didn't send a
+    // remote; generated (txt2img) pieces keep their provider artifact URL.
+    const originalRemote =
+      type === 'url'
+        ? (previewRemoteUrl?.trim() || value.trim())
+        : previewRemoteUrl?.trim() || undefined;
+    if (originalRemote) preview.previewRemoteUrl = originalRemote;
     if (previewLocalPath?.trim()) preview.previewLocalPath = previewLocalPath;
-    if (previewRemoteUrl?.trim()) preview.previewRemoteUrl = previewRemoteUrl;
 
     // Upsert: editing an existing slot replaces that keyframe instead of
     // stacking a duplicate entry in the same slot. Existing ID preserved.

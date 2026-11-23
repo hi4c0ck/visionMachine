@@ -205,6 +205,34 @@ export interface VideoAdapterSpec {
   };
 }
 
+/**
+ * Media-transfer action descriptor for the MCP `wangp_session` tool. Models
+ * the locked WanGP v2.1 chunked-upload handshake: `create_file_upload` takes
+ * a bare filename + byte size, returns a one-time token, then `chunkAction` /
+ * `finishAction` complete the transfer; `refPaths` locates the resulting
+ * media reference in the response. Mirrors the Rust `McpActionWire` fields.
+ * All keys are wire data — no paths or owner-machine values belong here
+ * (P5 portable catalog).
+ */
+export interface McpUploadSlot {
+  /** wangp_session action name (e.g. 'create_file_upload'). */
+  action: string;
+  /** Argument key carrying the bare sanitized filename on create. */
+  filenameArg: string;
+  /** Argument key carrying the decoded byte size on create. */
+  sizeArg: string;
+  /** Dot-path keys for the one-time upload token in the create response. */
+  tokenPaths: string[];
+  /** wangp_session action uploading one base64 chunk. */
+  chunkAction: string;
+  /** wangp_session action finalizing the upload. */
+  finishAction: string;
+  /** Dot-path keys accepted when reading the returned media reference. */
+  refPaths: string[];
+  /** Legacy path-based argument key (old upload / download configs). */
+  pathArg?: string;
+}
+
 /** Stateless JSON-RPC MCP transport (Tier-B code shaper, generation/mcp.rs).
  *  Declarative like the Tier-A adapter: transport + tool names + defaults on
  *  the PRESET (PresetSpec.mcp), resolved onto the wire spec as `spec.mcp`.
@@ -229,7 +257,7 @@ export interface McpSpec {
    *  action names/argument keys are server data; the engine fails with an
    *  actionable error if an upload/download cannot be completed safely. */
   actions?: {
-    upload?: { action: string; pathArg: string; refPaths: string[] };
+    upload?: McpUploadSlot;
     download?: { action: string; pathArg: string; refPaths: string[] };
   };
 }

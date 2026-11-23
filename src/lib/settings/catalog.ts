@@ -23,7 +23,7 @@
 //   runtimes ComfyUI / Wan2GP); the EXECUTOR (workflow graphs, 'upload'
 //   media input mode) remains the deferred Tier-B slice.
 
-import type { McpSpec, ModelSpec, PresetId, PresetSpec, PriceSpec, ProviderKind, VideoAdapterSpec } from '$types';
+import type { McpSpec, McpUploadSlot, ModelSpec, PresetId, PresetSpec, PriceSpec, ProviderKind, VideoAdapterSpec } from '$types';
 
 // Host-root base URL: creates carry the /v1 prefix in their endpoint path,
 // polling lives at the host root (/agnesapi) — one base for everything
@@ -443,6 +443,23 @@ export const LOCAL_VIDEO_PRESET: PresetSpec = {
 // PORTABLE DATA ONLY: no checkpoint path, no owner Models directory, no
 // Wan2GP config value. Settings defaults below are the generic generation
 // wire values from the MCP contract probe (no `config`/`overrides`/LoRA/path).
+// ── Locked media-upload wire contract (TS/UI lane → Rust lane) ──────────────
+// The Rust lane's `download_remote_image` / chunked-upload executor consumes
+// EXACTLY these keys. `McpUploadSlot` (src/types/settings.ts) is the real type
+// now wired through `McpSpec.actions.upload`, so no cast is needed here. The
+// runtime object carries no `pathArg` and no extras — the JSON on the wire is
+// byte-for-byte the locked v2.1 contract. The optional legacy `pathArg` on the
+// type exists only for older path-based download configs.
+const WAN2GP_UPLOAD: McpUploadSlot = {
+  action: 'create_file_upload',
+  filenameArg: 'filename',
+  sizeArg: 'size_bytes',
+  tokenPaths: ['token'],
+  chunkAction: 'upload_chunk',
+  finishAction: 'finish_upload',
+  refPaths: ['path', 'media_id'],
+};
+
 const WAN2GP_MCP: McpSpec = {
   endpoint: '/mcp',
   protocolVersion: '2025-06-18',
@@ -461,9 +478,9 @@ const WAN2GP_MCP: McpSpec = {
   },
   // Action names/argument keys are server data; `refPaths` lists the keys
   // the engine accepts when reading an authorized media reference back.
+  // The upload descriptor is the locked wire contract (see WAN2GP_UPLOAD).
   actions: {
-    upload: { action: 'create_file_upload', pathArg: 'path',
-              refPaths: ['media_id', 'gallery_id', 'id', 'path', 'name', 'uri'] },
+    upload: WAN2GP_UPLOAD,
     download: { action: 'create_file_download', pathArg: 'path',
                 refPaths: ['path', 'file_path', 'url', 'uri', 'content_base64', 'base64'] },
   },

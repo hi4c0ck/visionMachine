@@ -1386,6 +1386,159 @@ fn mime_from_ext(ext: Option<&str>) -> String {
     }
 }
 
+// ── Remote image ingest (Wan2GP I2V fix) ────────────────────────────────────
+//
+// A piece/keyframe can arrive as a remote URL (e.g. the ref the upload lane
+// persisted). The MCP engine can only upload a LOCAL file, so this command
+// pulls the bytes into the owning pipe's `user-images/` dir — plain GET, no
+// API key — and returns the local path + detected MIME.
+
+/// Input for the `download_remote_image` command.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadRemoteImageInput {
+    pub session_id: String,
+    pub pipe_id: String,
+    pub ref_id: String,
+    pub remote_url: String,
+}
+
+/// Sane upper bound for a user-sourced still (matches the 25 MiB local cap).
+const DOWNLOAD_IMAGE_MAX_BYTES: usize = 25 * 1024 * 1024;
+
+/// Only absolute http(s) URLs may be fetched — rejects `file:`, `data:`,
+/// relative paths and malformed hosts before anything reaches the transport.
+fn validate_remote_http_url(url: &str) -> Result<(), String> {
+    let t = url.trim();
+    if t.is_empty() {
+        return Err("no remote image URL supplied".into());
+    }
+    let lower = t.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(format!("remote image URL must be http(s): '{url}'"));
+    }
+    let parsed = reqwest::Url::parse(t).map_err(|e| format!("invalid remote image URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        other => Err(format!("remote image URL scheme '{other}' is not allowed")),
+    }
+}
+
+/// Detect a supported still-image signature, returning (extension, mime).
+fn image_signature(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("png", "image/png"))
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(("jpg", "image/jpeg"))
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(("webp", "image/webp"))
+    } else {
+        None
+    }
+}
+
+/// Plain, keyless GET with a streaming byte cap. `Response::chunk` avoids
+/// buffering an unbounded body — the cap is enforced while streaming.
+async fn fetch_remote_image_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::new();
+    let mut resp = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("fetch remote image: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("fetch remote image HTTP {}", resp.status()));
+    }
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("read remote image: {e}"))?;
+        let Some(chunk) = chunk else { break };
+        if bytes.len() + chunk.len() > DOWNLOAD_IMAGE_MAX_BYTES {
+            return Err(format!(
+                "remote image exceeds {DOWNLOAD_IMAGE_MAX_BYTES} byte cap"
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// Transport-injected core: fetch -> cap -> signature -> persist -> result.
+/// Kept separate from the Tauri wrapper so a stub can exercise the whole
+/// path without a network (the `Fut` is boxed by the compiler per call site).
+async fn download_remote_image_to<F, Fut>(
+    user_dir: &std::path::Path,
+    ref_id: &str,
+    remote_url: &str,
+    fetch: F,
+) -> Result<serde_json::Value, String>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, String>>,
+{
+    validate_remote_http_url(remote_url)?;
+    let bytes = fetch(remote_url.trim().to_string()).await?;
+    if bytes.is_empty() {
+        return Err("remote image body is empty".into());
+    }
+    if bytes.len() > DOWNLOAD_IMAGE_MAX_BYTES {
+        return Err(format!(
+            "remote image exceeds {DOWNLOAD_IMAGE_MAX_BYTES} byte cap"
+        ));
+    }
+    let (ext, mime) = image_signature(&bytes).ok_or_else(|| {
+        "remote image is not a supported PNG/JPEG/WebP (signature check failed)".to_string()
+    })?;
+    let path = persist_user_image(user_dir, ref_id, Some(std::ffi::OsStr::new(ext)))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(serde_json::json!({
+        "localPath": path.to_string_lossy(),
+        "remoteUrl": remote_url.trim(),
+        "mimeType": mime,
+    }))
+}
+
+/// Download a remote image into the session/pipe's `user-images/` dir so the
+/// MCP engine can upload it as a local keyframe. Keyless plain GET, size-capped
+/// and signature-checked; returns `{localPath, remoteUrl, mimeType}`.
+#[tauri::command]
+pub async fn download_remote_image(
+    input: DownloadRemoteImageInput,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    validate_remote_http_url(&input.remote_url)?;
+    let user_dir = {
+        let db = &state.db.lock().await;
+        let media_root = resolve_media_root(db, &input.session_id)
+            .await
+            .filter(|r| !r.trim().is_empty())
+            .ok_or_else(|| "no media root for session; cannot store remote image".to_string())?;
+        let composer = db
+            .get_composer(&input.session_id)
+            .await
+            .map_err(|e| format!("load composer: {e}"))?;
+        let pipe_name = composer
+            .pipes
+            .iter()
+            .find(|p| p.id == input.pipe_id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| input.pipe_id.clone());
+        let session_root =
+            std::path::Path::new(&media_root).join(safe_session_name(&composer.name));
+        crate::generation::user_image_dir(&session_root, &pipe_name)
+            .map_err(|e| format!("user image dir: {e}"))?
+    };
+    let url = input.remote_url.clone();
+    download_remote_image_to(&user_dir, &input.ref_id, &url, |u| async move {
+        fetch_remote_image_bytes(&u).await
+    })
+    .await
+}
+
 /// 0012 D4: the Agnes API's documented input-image limit (catalog, 2.5 paid
 /// reference caps: "256–5760 px per dim"). A local image whose LARGER side
 /// exceeds this would risk a provider 400, so we preemptively downscale the
@@ -3384,6 +3537,99 @@ mod tests {
         let f = dir.join("probe.png");
         std::fs::write(&f, &b).unwrap();
         assert_eq!(read_image_dims(&f), Some((1024, 512)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── download_remote_image (transport-injected stub tests) ────────────────
+
+    #[test]
+    fn remote_http_url_guard_rejects_non_http_schemes() {
+        for bad in [
+            "",
+            "   ",
+            "file:///C:/x.png",
+            "data:image/png;base64,AAAA",
+            "C:/x/y.png",
+            "//cdn.test/x.png",
+            "ftp://cdn.test/x.png",
+            "http://",
+            "https://",
+        ] {
+            assert!(validate_remote_http_url(bad).is_err(), "must reject {bad:?}");
+        }
+        assert!(validate_remote_http_url("https://cdn.test/k1.png").is_ok());
+        assert!(validate_remote_http_url("  http://127.0.0.1:8765/a.png  ").is_ok());
+    }
+
+    #[test]
+    fn image_signature_detects_supported_stills() {
+        assert_eq!(
+            image_signature(b"\x89PNG\r\n\x1a\nrest"),
+            Some(("png", "image/png"))
+        );
+        assert_eq!(
+            image_signature(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0]),
+            Some(("jpg", "image/jpeg"))
+        );
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&[0; 4]);
+        webp.extend_from_slice(b"WEBPVP8 ");
+        assert_eq!(image_signature(&webp), Some(("webp", "image/webp")));
+        assert_eq!(image_signature(b"<html>nope</html>"), None);
+        assert_eq!(image_signature(b""), None);
+    }
+
+    #[tokio::test]
+    async fn download_remote_image_stub_writes_local_copy_and_returns_result() {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "vm_download_image_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nstub-bytes";
+        let mut fetched: Vec<String> = Vec::new();
+        let out = download_remote_image_to(&dir, "k1", "  https://cdn.test/k1.png  ", |url| {
+            fetched.push(url);
+            let bytes = png.to_vec();
+            async move { Ok::<Vec<u8>, String>(bytes) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(fetched, vec!["https://cdn.test/k1.png".to_string()]);
+        assert_eq!(out["remoteUrl"], "https://cdn.test/k1.png");
+        assert_eq!(out["mimeType"], "image/png");
+        let local = out["localPath"].as_str().unwrap();
+        assert!(std::path::Path::new(local).is_file());
+        assert!(local.contains("local-k1"), "safe filename from ref_id: {local}");
+        assert!(local.ends_with(".png"), "extension from signature: {local}");
+        assert_eq!(std::fs::read(local).unwrap(), png.to_vec());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn download_remote_image_stub_rejects_bad_signature_and_over_cap() {
+        let dir = std::env::temp_dir().join(format!(
+            "vm_download_bad_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // HTTP 200 with an HTML error page must fail the signature check.
+        let err = download_remote_image_to(&dir, "k1", "https://cdn.test/x.png", |_| async {
+            Ok::<Vec<u8>, String>(b"<html>not an image</html>".to_vec())
+        })
+        .await
+        .unwrap_err();
+        assert!(err.contains("signature"), "{err}");
+        // An over-cap body is refused before anything is persisted.
+        let err = download_remote_image_to(&dir, "k1", "https://cdn.test/x.png", |_| async {
+            Ok::<Vec<u8>, String>(vec![0x89u8; DOWNLOAD_IMAGE_MAX_BYTES + 1])
+        })
+        .await
+        .unwrap_err();
+        assert!(err.contains("byte cap"), "{err}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "no partial file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

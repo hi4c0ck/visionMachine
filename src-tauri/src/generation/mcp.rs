@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::generation::specs::McpSpecWire;
+use crate::generation::specs::{McpActionWire, McpSpecWire};
 
 use super::provider::{HttpClient, RequestAuth};
 
@@ -25,6 +25,9 @@ pub const MCP_ACCEPT: &str = "application/json, text/event-stream";
 /// Protocol version observed from the owner's local server (endpoint probe
 /// 2026-11-23). It is protocol data, not owner config.
 pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
+/// WanGP v2.1 uploads base64 chunks of at most 8 MiB DECODED bytes (the wire
+/// payload is ~10.7 MiB) — under typical JSON-RPC body limits.
+pub const UPLOAD_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 const CLIENT_NAME: &str = "visionmachine";
 const CLIENT_VERSION: &str = "1.0.0";
@@ -286,11 +289,85 @@ pub async fn call_tool(
     result_payload(&result)
 }
 
-/// Upload a LOCAL media file through a `wangp_session` action and return the
-/// AUTHORIZED reference the server handed back (Gallery media id or an
-/// authorized path). No arbitrary filesystem access: the server validates the
-/// path against its own allowlist; a failed/empty response is a hard error so
-/// image input is never silently dropped.
+/// Validate the WanGP v2.1 chunked-upload config BEFORE any network call.
+/// A legacy/path-only spec fails here with a concrete, actionable error —
+/// there is no silent fallback to sending a raw filesystem path.
+fn validate_upload_action(action: &McpActionWire) -> Result<(), String> {
+    if action.action.trim().is_empty() {
+        return Err("mcp.actions.upload.action is required for i2v".into());
+    }
+    for (label, value) in [
+        ("filenameArg", action.filename_arg.as_str()),
+        ("sizeArg", action.size_arg.as_str()),
+        ("chunkAction", action.chunk_action.as_str()),
+        ("finishAction", action.finish_action.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!(
+                "mcp.actions.upload.{label} is required for the WanGP v2.1 chunked upload (local image input cannot be sent as an arbitrary path)"
+            ));
+        }
+    }
+    if action.token_paths.iter().all(|p| p.trim().is_empty()) {
+        return Err("mcp.actions.upload.tokenPaths must name the created upload token".into());
+    }
+    if action.ref_paths.iter().all(|p| p.trim().is_empty()) {
+        return Err("mcp.actions.upload.refPaths must name the finished media reference".into());
+    }
+    Ok(())
+}
+
+/// Bare, sanitized filename for `create_file_upload` — never a path. The
+/// server owns the upload namespace; the client hands it a single component.
+fn upload_filename(path: &str) -> String {
+    crate::generation::safe_dir_name(path)
+}
+
+/// Decoded-byte offset + base64 payload for each `upload_chunk` call. Pure so
+/// the 8 MiB boundary and round-trip are pinned without a server.
+fn upload_chunks(bytes: &[u8]) -> Vec<(usize, String)> {
+    use base64::Engine as _;
+    bytes
+        .chunks(UPLOAD_CHUNK_BYTES)
+        .enumerate()
+        .map(|(i, chunk)| {
+            (
+                i * UPLOAD_CHUNK_BYTES,
+                base64::engine::general_purpose::STANDARD.encode(chunk),
+            )
+        })
+        .collect()
+}
+
+/// One `wangp_session` action call (all v2.1 upload steps ride this tool).
+async fn session_action(
+    http: &dyn HttpClient,
+    url: &str,
+    spec: &McpSpecWire,
+    action: &str,
+    arguments: Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    call_tool(
+        http,
+        url,
+        &spec.tools.session,
+        json!({ "action": action, "arguments": arguments }),
+        timeout,
+    )
+    .await
+}
+
+/// Upload a LOCAL media file through the WanGP v2.1 three-step handshake and
+/// return the AUTHORIZED reference the server handed back — the exact value
+/// the engine puts into `settings.image_start`.
+///
+/// 1. `create_file_upload(filename, size_bytes)` -> one-time token
+/// 2. `upload_chunk(token, offset, data_base64)` for each <=8 MiB decoded chunk
+/// 3. `finish_upload(token)` -> media reference (path / media id)
+///
+/// Missing token or reference is a hard error: image input is never silently
+/// dropped or replaced with an arbitrary filesystem path.
 pub async fn upload_media(
     http: &dyn HttpClient,
     url: &str,
@@ -303,31 +380,67 @@ pub async fn upload_media(
         .as_ref()
         .and_then(|a| a.upload.as_ref())
         .ok_or_else(|| {
-            "i2v needs mcp.actions.upload (wangp_session upload action) — local image input cannot be sent as an arbitrary path".to_string()
+            "i2v needs mcp.actions.upload (WanGP v2.1 chunked upload) — local image input cannot be sent as an arbitrary path".to_string()
         })?;
-    if action.action.trim().is_empty() || action.path_arg.trim().is_empty() {
-        return Err("mcp.actions.upload is incomplete (action + pathArg required)".into());
-    }
-    let ref_path = std::path::Path::new(path);
-    if !ref_path.is_file() {
+    validate_upload_action(action)?;
+
+    let file = std::path::Path::new(path);
+    if !file.is_file() {
         return Err(format!(
             "local media '{path}' is not a readable file — i2v upload aborted"
         ));
     }
-    let mut args = Map::new();
-    args.insert(action.path_arg.clone(), Value::String(path.to_string()));
-    let payload = call_tool(
+    let bytes = std::fs::read(file).map_err(|e| format!("read local media '{path}': {e}"))?;
+    let filename = upload_filename(path);
+
+    // 1. Create: bare filename + decoded size only (no path, no bytes).
+    let mut create_args = Map::new();
+    create_args.insert(action.filename_arg.clone(), Value::String(filename.clone()));
+    create_args.insert(action.size_arg.clone(), json!(bytes.len()));
+    let created = session_action(
         http,
         url,
-        &spec.tools.session,
-        json!({ "action": action.action, "arguments": Value::Object(args) }),
+        spec,
+        &action.action,
+        Value::Object(create_args),
         timeout,
     )
     .await?;
-    find_ref(&payload, &action.ref_paths).ok_or_else(|| {
+    let token = find_ref(&created, &action.token_paths).ok_or_else(|| {
         format!(
-            "wangp_session '{}' returned no authorized media reference for '{path}' — checked {}",
+            "wangp_session '{}' returned no upload token for '{filename}' — checked tokenPaths: {}",
             action.action,
+            action.token_paths.join(", ")
+        )
+    })?;
+
+    // 2. Chunks: base64 of each <=8 MiB decoded slice, with its byte offset.
+    for (offset, data_base64) in upload_chunks(&bytes) {
+        session_action(
+            http,
+            url,
+            spec,
+            &action.chunk_action,
+            json!({ "token": token, "offset": offset, "data_base64": data_base64 }),
+            timeout,
+        )
+        .await?;
+    }
+
+    // 3. Finish: the returned reference is what goes into image_start.
+    let finished = session_action(
+        http,
+        url,
+        spec,
+        &action.finish_action,
+        json!({ "token": token }),
+        timeout,
+    )
+    .await?;
+    find_ref(&finished, &action.ref_paths).ok_or_else(|| {
+        format!(
+            "wangp_session '{}' returned no media reference for '{filename}' — checked refPaths: {}",
+            action.finish_action,
             action.ref_paths.join(", ")
         )
     })
@@ -519,5 +632,75 @@ mod tests {
         assert!(!initialize_ok(&json!({"status": "ok"})));
         assert!(initialize_ok(&json!({"protocolVersion": "2025-06-18"})));
         assert!(initialize_ok(&json!({"serverInfo": {"name": "WanGP"}})));
+    }
+
+    // ── WanGP v2.1 upload: pure framing checks (StubHttp flow in provider.rs) ──
+
+    fn locked_upload_action() -> McpActionWire {
+        serde_json::from_value(json!({
+            "action": "create_file_upload",
+            "filenameArg": "filename",
+            "sizeArg": "size_bytes",
+            "tokenPaths": ["token"],
+            "chunkAction": "upload_chunk",
+            "finishAction": "finish_upload",
+            "refPaths": ["path", "media_id"]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn upload_config_requires_v21_fields() {
+        assert!(validate_upload_action(&locked_upload_action()).is_ok());
+        // A legacy path-only spec deserializes, but the executor refuses it —
+        // no silent fallback to sending an arbitrary filesystem path.
+        let legacy: McpActionWire = serde_json::from_value(json!({
+            "action": "create_file_upload", "pathArg": "path", "refPaths": ["media_id"]
+        }))
+        .unwrap();
+        let err = validate_upload_action(&legacy).unwrap_err();
+        assert!(err.contains("filenameArg"), "{err}");
+        assert!(err.contains("v2.1"), "{err}");
+
+        let mut missing_token = locked_upload_action();
+        missing_token.token_paths.clear();
+        assert!(validate_upload_action(&missing_token)
+            .unwrap_err()
+            .contains("tokenPaths"));
+        let mut missing_ref = locked_upload_action();
+        missing_ref.ref_paths.clear();
+        assert!(validate_upload_action(&missing_ref)
+            .unwrap_err()
+            .contains("refPaths"));
+    }
+
+    #[test]
+    fn upload_filename_is_bare_and_sanitized() {
+        assert_eq!(upload_filename("C:/media/kf-1.png"), "kf-1.png");
+        // Traversal + Windows-illegal characters never leave the component.
+        assert_eq!(upload_filename("a/b/../my:kf?.png"), "mykf.png");
+        assert_eq!(upload_filename(""), "unknown");
+    }
+
+    #[test]
+    fn upload_chunks_respect_8mib_and_decode_round_trip() {
+        assert_eq!(UPLOAD_CHUNK_BYTES, 8 * 1024 * 1024);
+        let bytes = vec![0xABu8; UPLOAD_CHUNK_BYTES + 3];
+        let chunks = upload_chunks(&bytes);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].0, 0);
+        assert_eq!(chunks[1].0, UPLOAD_CHUNK_BYTES);
+        use base64::Engine as _;
+        let first = base64::engine::general_purpose::STANDARD
+            .decode(&chunks[0].1)
+            .unwrap();
+        let second = base64::engine::general_purpose::STANDARD
+            .decode(&chunks[1].1)
+            .unwrap();
+        assert_eq!(first.len(), UPLOAD_CHUNK_BYTES);
+        assert_eq!(second, vec![0xABu8; 3]);
+        assert_eq!([first, second].concat(), bytes);
+        // Empty file still has one (empty) chunk shape helper result = none.
+        assert!(upload_chunks(&[]).is_empty());
     }
 }
