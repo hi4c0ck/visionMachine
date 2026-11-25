@@ -11,6 +11,8 @@
 	import type { ModelSelection } from './GenerateModal.svelte';
 	import { effectiveTargetDims, targetDimsLabel } from '$types';
 	import { availableResolutionsForModel } from '$lib/settings/mediaMode';
+	import { frameGridForModel, fitFramesToGrid, getMaxFrames, FRAME_GRID_WARNING } from '$lib/frameMath';
+	import { reflowFrameGrid } from '$lib/composerStore';
 	import '../composer-modal.css';
 
 	export interface SessionGenerateStats {
@@ -210,6 +212,16 @@
 	let videoVerified = $state<readonly string[] | undefined>(undefined);
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
+	// Frame-grid drift across the WHOLE session: the warning appears only
+	// when the picked model's grid would change at least one pipe's length.
+	const gridChangeCount = $derived.by(() => {
+		const grid = frameGridForModel(videoModel);
+		const max = getMaxFrames(session?.resolution ?? '720p');
+		return pipes.reduce(
+			(n: number, p: PipeRow) => n + (fitFramesToGrid(p.lengthFrames, grid, max) !== p.lengthFrames ? 1 : 0),
+			0,
+		);
+	});
 	// 0012: offer only the resolution presets the active video model can emit.
 	const resOptions = $derived(
 		availableResolutionsForModel(selectedVideoModel, resolution),
@@ -321,6 +333,9 @@
 		if (busy || !canStart) return;
 		busy = true;
 		try {
+			// Model-change reflow: re-fit EVERY session to the picked model's
+			// grid before the session-generation command reads the timelines.
+			if (gridChangeCount > 0) await reflowFrameGrid(videoModel);
 			// "Apply to session": persist the run-local edits through the
 			// canonical store path (the session row is updated + saved),
 			// so the modal's values and the session's values agree after
@@ -530,6 +545,11 @@
 									<li>{c.message}</li>
 								{/each}
 							</ul>
+						{/if}
+						{#if gridChangeCount > 0}
+							<div class="gen-warning-box" role="note">
+								<p>{FRAME_GRID_WARNING}</p>
+							</div>
 						{/if}
 					</div>
 				</div>

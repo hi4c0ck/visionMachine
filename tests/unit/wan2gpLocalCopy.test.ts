@@ -99,9 +99,10 @@ describe('catalog mcp.upload matches the locked wire contract', () => {
     ]);
   });
 
-  it('leaves the model row, pricing and pending flag untouched', () => {
-    expect(WAN2GP_PRESET.models).toHaveLength(1);
-    const model = WAN2GP_PRESET.models[0];
+  it('leaves the ti2v_2_2 row, pricing and pending flag untouched', () => {
+    // The H3 2-step row is additive; pin the original row, not the total.
+    const model = WAN2GP_PRESET.models.find((m) => m.id === 'ti2v_2_2')!;
+    expect(model).toBeDefined();
     expect(model.id).toBe('ti2v_2_2');
     expect(model.pending).toBe(true);
     expect(model.pricing?.unit).toBe('free-local');

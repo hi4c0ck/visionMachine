@@ -127,6 +127,7 @@ fn fallback_image_spec(model_id: &str) -> ModelSpecWire {
         structured_output: None,
         thinking_toggle: None,
         pricing: None,
+        prompt_style: None,
     }
 }
 
@@ -253,6 +254,11 @@ pub struct StartSessionGenerationInput {
     #[serde(default)]
     pub pipe_params:
         Option<std::collections::HashMap<String, crate::commands::generation::PipeParamOverride>>,
+    /// Per-run MCP tunable values (see `StartGenerationInput::mcp_settings`);
+    /// carried into the `EngineInput` and merged over the catalog defaults in
+    /// the MCP engine branch.
+    #[serde(default)]
+    pub mcp_settings: Option<serde_json::Value>,
     /// Per-pipe "force first keyframe" toggles, keyed by pipe id. The
     /// sequential auto-catch watches EACH pipe's own setup: a pipe WITHOUT a
     /// settled slot-1 keyframe is always filled from the previous pipe's last
@@ -862,6 +868,7 @@ impl GroupCoordinator {
                 .pipe_params
                 .as_ref()
                 .and_then(|m| m.get(pipe_id).cloned()),
+            mcp_settings: input.mcp_settings.clone(),
         };
         let (view, mut engine_input) =
             crate::commands::generation::build_pipe_start(&composer, &pipe, &params);
@@ -1248,6 +1255,9 @@ impl GroupCoordinator {
                     // Carry the per-pipe experimental boundary-trim so a
                     // follow-up pipe splices with the same trim choice.
                     trim_boundary: run_params.trim_boundary.clone(),
+                    // Carry the run-scoped MCP tunables so follow-up pipes
+                    // regenerate with the same user-chosen values.
+                    mcp_settings: run_params.mcp_settings.clone(),
                 };
                 // This pipe's own force flag: the map is the source of truth
                 // (empty / absent = false). The catch is then driven by the
@@ -1929,6 +1939,7 @@ mod tests {
             pipe_params: None,
             force_last_frames: std::collections::HashMap::new(),
             trim_boundary: std::collections::HashMap::new(),
+            mcp_settings: None,
         }
     }
 
@@ -2109,6 +2120,7 @@ mod tests {
                 pipe_params: None,
                 force_last_frames: std::collections::HashMap::new(),
                 trim_boundary: std::collections::HashMap::new(),
+                mcp_settings: None,
             },
             media_root: None,
             completed_sources: Vec::new(),

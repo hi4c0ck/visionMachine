@@ -571,9 +571,9 @@
 						<option value="exact">Exact (stretch)</option>
 						<option value="none">Auto (center if mixed)</option>
 					</select>
-				</label>
+					</label>
 
-			</div>
+				</div>
 		{:else}
 			<p class="set-empty">Select a session to configure settings.</p>
 		{/if}

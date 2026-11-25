@@ -10,6 +10,54 @@
 //   - Minimum span: 8 frames (one inference batch)
 
 import { snapFrameDown, FRAME_STEP } from './frameGeometry';
+import { PRESETS } from './settings/catalog';
+
+// ── Per-model frame grids ──────────────────────────────────────────────────
+// The app's classic cadence is 8n+1 (min 41, step 8, offset 1). A model can
+// declare its OWN cadence in the catalog (ModelSpec.frameGrid); absent means
+// the legacy grid, so every other vendor stays byte-identical.
+
+export interface FrameGrid {
+  /** Smallest usable pipe length (also the floor after clamping). */
+  min: number;
+  /** Distance between consecutive valid lengths. */
+  step: number;
+  /** Residue: valid lengths are offset + k*step. */
+  offset: number;
+}
+
+export const DEFAULT_FRAME_GRID: FrameGrid = { min: 41, step: 8, offset: 1 };
+
+/** Exact warning shown in both generate modals when the picked model's grid
+ *  would change at least one pipe length. One source of truth for the copy. */
+export const FRAME_GRID_WARNING =
+  'Video model uses a different frame grid — pipe lengths will change and timelines will be adjusted on confirm.';
+
+/** Resolve a model id to its declared grid. Unknown/empty ids get the legacy
+ *  41/8/1 grid — never throw on a typed/free-form id. */
+export function frameGridForModel(modelId?: string | null): FrameGrid {
+  if (modelId) {
+    for (const preset of PRESETS) {
+      const spec = preset.models.find((m) => m.id === modelId);
+      if (spec?.frameGrid) return { ...spec.frameGrid };
+    }
+  }
+  return { ...DEFAULT_FRAME_GRID };
+}
+
+/**
+ * Ceil a frame count onto `grid`, then clamp to [grid.min, maxFrames].
+ * Formula: offset + ceil(max(0, n-offset)/step)*step.
+ * With the default grid this is exactly the old snapTo8nPlus1 + 41 floor;
+ * with H3's 5+17k grid: 41→107, 121→124, 241→243, 441→447 (at max 447).
+ */
+export function fitFramesToGrid(frames: number, grid: FrameGrid, maxFrames: number): number {
+  const step = grid.step > 0 ? grid.step : DEFAULT_FRAME_GRID.step;
+  const offset = Number.isFinite(grid.offset) ? grid.offset : DEFAULT_FRAME_GRID.offset;
+  const min = Number.isFinite(grid.min) ? grid.min : DEFAULT_FRAME_GRID.min;
+  const fitted = offset + Math.ceil(Math.max(0, frames - offset) / step) * step;
+  return Math.max(min, Math.min(fitted, maxFrames));
+}
 
 /**
  * @deprecated Use snapFrameDown from './frameGeometry' instead.

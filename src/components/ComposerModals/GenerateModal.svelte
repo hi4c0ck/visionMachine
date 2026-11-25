@@ -11,6 +11,8 @@
 	import { unlockVerified, verificationGlyph } from '$lib/settings/guards';
 	import { modelsFor, getPreset, capabilityNote } from '$lib/settings/catalog';
 	import { pipePrechecks, secondsPreview, type PipeConflict } from '$lib/settings';
+	import { frameGridForModel, fitFramesToGrid, getMaxFrames, FRAME_GRID_WARNING } from '$lib/frameMath';
+	import { reflowFrameGrid } from '$lib/composerStore';
 	import '../composer-modal.css';
 
 	export interface ModelSelection {
@@ -54,6 +56,18 @@
 	// editable (reproducible runs). Shown only for seed-supporting models.
 	let seed = $state<number | null>(null);
 	const selectedVideoModel = $derived(videoModels.find((m) => m.id === videoModel) ?? null);
+
+	// Frame-grid drift: warn ONLY when the picked model's grid would actually
+	// change this pipe's length under the session's resolution cap. Confirm
+	// then calls reflowFrameGrid(videoModel) before starting generation.
+	const gridWouldChange = $derived.by(() => {
+		const next = fitFramesToGrid(
+			pipe.lengthFrames,
+			frameGridForModel(videoModel),
+			getMaxFrames(session?.resolution ?? '720p'),
+		);
+		return next !== pipe.lengthFrames;
+	});
 
 	// Phase A: live pre-checks + seconds hint against the CURRENT model picks,
 	// so conflicts are visible before the user hits Confirm (E4).
@@ -162,6 +176,10 @@
 		if (busy || conflicts.length > 0) return;
 		busy = true;
 		try {
+			// Model-change reflow: re-fit EVERY session to the picked model's
+			// frame grid (reusing the store's rescaleElements) before the
+			// generation command reads the timelines.
+			if (gridWouldChange) await reflowFrameGrid(videoModel);
 			await onConfirm({ imageModel, videoModel }, seed);
 		} catch (e) {
 			// Never swallow the error silently: surface it so the user knows
@@ -264,12 +282,17 @@
 					</div>
 				</div>
 				{#if conflicts.length > 0}
-						<ul class="gen-conflicts" aria-label="Generation conflicts">
-							{#each conflicts as c (c.message)}
-								<li>{c.message}</li>
-							{/each}
-						</ul>
-					{/if}
+					<ul class="gen-conflicts" aria-label="Generation conflicts">
+						{#each conflicts as c (c.message)}
+							<li>{c.message}</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if gridWouldChange}
+					<div class="gen-warning-box" role="note">
+						<p>{FRAME_GRID_WARNING}</p>
+					</div>
+				{/if}
 				<div class="gen-presets-section" aria-label="Generation presets">
 					<div class="gen-chips">
 						<span>{session.fps} fps</span>

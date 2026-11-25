@@ -44,9 +44,11 @@ model, zero UI/engine rework).
   model's allowed range. Revisit after production tests.
 - Q2. Image/video resolution differences are accepted for now; the mapping
   rules get hardened later. Provisional mappings are listed per model below.
-- Q3. Paid `agnes-video-2.5` ships as a **read-only** catalog entry:
-  visible and selectable in Settings so its parameters can be inspected,
-  but NOT confirmable for generation.
+- Q3. Paid `agnes-video-2.5` was a **read-only** catalog entry (visible/
+  selectable in Settings to inspect parameters, NOT confirmable). The
+  restriction was lifted 2026-11-24 — the paid tier is now generable. The
+  read-only structure (`ModelSpec.readOnly` + the picker/confirm gate) is
+  retained for future read-only entries.
 - Q4. Q/C (quality/creativity) stay as-is; user will configure better later.
   FACT FLAG: the V2.5 family REJECTS `num_inference_steps`, `quality`,
   `fps`, `width`, `height` (HTTP 400) — its only knobs are
@@ -89,7 +91,7 @@ model, zero UI/engine rework).
 | image | `agnes-image-2.1-flash` | `POST /v1/images/generations` | sync  | same as 2.5 → **$0**     | active (fallback) |
 | video | ~~`agnes-video-v2.0`~~ — REMOVED 2026-11-11 (P1-7; provider retired it 2026-09-25, saved settings self-heal to the default) |
 | video | `agnes-video-2.5-flash` | `POST /v1/videos`     | async   | $0.025/s → **$0**        | active, DEFAULT |
-| video | `agnes-video-2.5`       | `POST /v1/videos`     | async   | $0.025–0.055/s (paid)   | **READ-ONLY**       |
+| video | `agnes-video-2.5`       | `POST /v1/videos`     | async   | $0.025–0.055/s (paid)   | active (paid, Q3 unlocked) |
 
 Base URL (all creates): `https://apihub.agnes-ai.com/v1` · auth: `Bearer sk-…`
 Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` — see URL composition below.
@@ -211,7 +213,7 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
 - fps (Q1): session frames → seconds via existing computation, clamped
   [4,12]. Res: any session res → `"720P"`; orientation → aspect_ratio.
 
-### video — `agnes-video-2.5` (PAID — read-only entry, Q3)
+### video — `agnes-video-2.5` (PAID — generable, Q3 unlocked)
 - Same create/poll shape; `model_name=agnes-video-2.5`.
 - `size`: `"720P"`/`"1080P"`/`"1K"` (1024²)/`"2K"` (2× 720P dims).
 - Reference caps: images ≤8 (<15 MB each, <50 MB request, 256–5760 px
@@ -222,8 +224,9 @@ Video polling lives at HOST ROOT: `GET https://apihub.agnes-ai.com/agnesapi` —
   `num_inference_steps`; pixel `size`; `aspect_ratio: "auto"`; `n` ≠ 1.
 - Billing: 720P $0.025/s · 1080P/1K $0.040/s · 2K $0.055/s; 6th+ input
   image $0.005; input video seconds billed at the output rate.
-- Catalog: `readOnly: true` — Settings can select + inspect its params;
-  generation confirm is gated off.
+- Catalog: `readOnly` lifted (Q3 unlock 2026-11-24) — the paid tier is now
+  generable; the `ModelSpec.readOnly` field + confirm gate are retained for
+  future read-only entries.
 
 ## Container changes (data-only, per P1/P2 rule)
 
@@ -290,7 +293,7 @@ model's capabilities (P2: the spec carries the rules):
 |--------------|---------------------------------------------------------------------|
 | v2.0         | both rows visible; subjects merge into the keyframes image array (cap 3, `extra_body.image` + mode "keyframes") — no toggle (single mode) |
 | 2.5-flash    | pipe-level toggle **[Keyframes \| Reference]**: keyframes mode → SUBJECTS ROW HIDDEN; reference mode → KEYFRAMES ROW HIDDEN (`first_frame`/`last_frame` ≤2 ↔ `images[]` ≤5 + `audios[]` ≤3) |
-| 2.5 (paid)   | BOTH rows visible (dual mode: first/last_frame + images/audios/videos) — toggle irrelevant while read-only |
+| 2.5 (paid)   | BOTH rows visible (dual mode: first/last_frame + images/audios/videos) — toggle active (Q3 unlock) |
 
 Data + wiring:
 - `PipeRow.mediaMode: 'keyframes' | 'reference'` (default `'keyframes'`),
@@ -473,15 +476,15 @@ export const AGNES_PRESET: PresetSpec = {
       limits: { seconds: [4, 12], resolutions: ['720P'],
                  ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
       supportsSeed: true },
-    // VIDEO — paid, READ-ONLY (Q3): inspect in Settings, never generable.
-    { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid · read-only)',
+    // VIDEO — paid, generable (Q3 unlock 2026-11-24; read-only structure kept).
+    { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid)',
       endpoint: '/v1/videos', sync: false,
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
       requestFormat: 'video-job-seconds',
       limits: { seconds: [4, 12],
                  resolutions: ['720P', '1080P', '1K', '2K'],
                  ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-      supportsSeed: true, readOnly: true },
+      supportsSeed: true },
   ],
 };
 ```

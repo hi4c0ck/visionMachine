@@ -423,6 +423,11 @@ pub struct ModelSpecWire {
     /// command reads it generically, no struct churn).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<Value>,
+    /// Model-specific wire prompt shaping (frontend `promptStyle`). Only
+    /// "plain-timed" currently reshapes the outbound prompt; absent = every
+    /// other model's request prompt stays byte-for-byte unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_style: Option<String>,
 }
 
 impl ModelSpecWire {
@@ -551,7 +556,7 @@ mod tests {
                 "actions": {
                     "upload": { "action": "create_file_upload", "pathArg": "path",
                                 "refPaths": ["media_id", "path"] },
-                    "download": { "action": "create_file_download", "pathArg": "path",
+                    "download": { "action": "create_file_download", "pathArg": "source",
                                   "refPaths": ["path"] }
                 }
             }

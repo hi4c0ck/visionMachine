@@ -1,7 +1,7 @@
 // Frame validation utilities for composer timeline
 // Encapsulates 8n+1 rule logic
 
-import { snapTo8, snapTo8nPlus1, getMaxFrames } from '$lib/frameMath';
+import { snapTo8, snapTo8nPlus1, getMaxFrames, frameGridForModel, fitFramesToGrid } from '$lib/frameMath';
 import { defaultResolutionFor } from '$lib/resolutionPresets';
 import type { PipeRow, SessionData, TagType } from '$types';
 import { TAG_SPECIFICATIONS } from '$types';
@@ -12,8 +12,17 @@ const MIN_SEGMENT_SPAN = 8;
 
 // ── Validation Functions ──────────────────────────────────────────────────────
 
-export function validatePipeLength(frames: number, resolution: string): number {
+/**
+ * Clamp a pipe length to the selected model's grid (when an id is given),
+ * otherwise run the byte-identical legacy 8n+1 path. Every catalog model
+ * without `frameGrid` resolves to the default grid, so omitting the id and
+ * passing any legacy model id produce exactly the same value.
+ */
+export function validatePipeLength(frames: number, resolution: string, modelId?: string): number {
   const maxFrames = getMaxFrames(resolution);
+  if (modelId) {
+    return fitFramesToGrid(frames, frameGridForModel(modelId), maxFrames);
+  }
   const MIN_LENGTH = 41; // 8*5+1 = 41
   const snapped = snapTo8nPlus1(frames);
   return Math.max(MIN_LENGTH, Math.min(snapped, maxFrames));

@@ -1602,6 +1602,7 @@ mod tests {
             target_w: 0,
             target_h: 0,
             video_ratio: None,
+            mcp_settings: None,
         }
     }
 

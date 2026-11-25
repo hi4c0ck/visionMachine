@@ -26,7 +26,7 @@ import { recoverVideoDownloads } from '$lib/videoDownloadRecovery';
 	import { subscribeGenTask } from '$lib/generationEvents';
 	import { isStaleGroup } from '$lib/compactPipes';
 	import { startSessionGeneration, fetchGenerationGroup, fetchLatestGenerationGroupForSession, cancelSessionGeneration, subscribeGroupEvent, isComposeStale, type FailurePolicy, type RunStats, type PipeParamOverride } from '$lib/composerStore/sessionGeneration';
-import { buildTrimBoundaryMap } from '$lib/composeTrim';
+	import { buildTrimBoundaryMap } from '$lib/composeTrim';
 	import { applyCompositionProgress, subscribeCompositionProgress } from '$lib/compositionProgress';
 	import { refOutcomes } from '$lib/generationOutcome';
 	import { toMediaUrl, isLocalPath } from '$lib/mediaUrl';

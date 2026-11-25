@@ -99,10 +99,12 @@ export const AGNES_PRESET: PresetSpec = {
     // the model id self-heal on load: normalizeSettings migrates any model
     // id missing from the catalog to the preset's default generable model
     // (agnes-video-2.5-flash), so the removal is transparent to users.
-    // 2.5 PAID — READ-ONLY entry (Q3): inspect in Settings, never generable.
-    // Dual media mode (first/last_frame + images/audios/videos) is the
-    // future extension point (Q7).
-    { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid · read-only)',
+    // 2.5 PAID — generable (Q3 unlock 2026-11-24): the read-only restriction
+    // was lifted, so the paid tier can now be confirmed for generation. The
+    // read-only catalog structure (ModelSpec.readOnly + the picker/confirm
+    // gate) is KEPT for future read-only entries. Dual media mode
+    // (first/last_frame + images/audios/videos) is the future extension point (Q7).
+    { id: 'agnes-video-2.5', kind: 'video', label: 'Agnes Video 2.5 (paid)',
       endpoint: '/v1/videos', sync: false,
       capabilities: { modes: ['t2v', 'i2v'] }, // source: generic /v1/videos + media.modes ['keyframes','reference'] dual
       pollEndpoint: '/agnesapi?video_id={videoId}&model_name={model}',
@@ -112,7 +114,7 @@ export const AGNES_PRESET: PresetSpec = {
                 ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
                 sizeMap: { '480p': '720P', '720p': '720P', '1080p': '1080P' },
                 ratioMap: { horizontal: '16:9', vertical: '9:16', square: '1:1' } },
-      supportsSeed: true, readOnly: true,
+      supportsSeed: true,
       media: { modes: ['keyframes', 'reference'], dual: true,
                maxKeyframes: 2, maxRefs: 8, maxAudios: 3, maxVideos: 1 } },
   ],
@@ -464,14 +466,18 @@ const WAN2GP_MCP: McpSpec = {
   endpoint: '/mcp',
   protocolVersion: '2025-06-18',
   tools: { generate: 'wangp_generate', session: 'wangp_session' },
-  generate: { wait: true, timeout_s: null },
+  // Non-blocking submit: the engine gets a job_id at once, then polls
+  // wangp_session get_job (progress % + stall watchdog + cancel). A blocking
+  // wait=true render orphans the client on a long job (owner fault: the
+  // 360s early drop), so Wan2GP rides the poll path.
+  generate: { wait: false, timeout_s: null },
   settingsDefaults: {
     model_type: 'ti2v_2_2',
     seed: -1,
-    resolution: '1280x720',
-    video_length: 121,
-    num_inference_steps: 50,
-    guidance_scale: 5,
+    // No invented generation values: resolution, frames, steps and guidance
+    // ride the STANDARD UI controls (limits.sizeMap / lengthFrames / qValue /
+    // cValue) and are inserted on the wire by generation/provider.rs.
+    // Only server constants with no UI control stay here.
     flow_shift: 5,
     image_mode: 0,
     image_prompt_type: 'T',
@@ -481,7 +487,7 @@ const WAN2GP_MCP: McpSpec = {
   // The upload descriptor is the locked wire contract (see WAN2GP_UPLOAD).
   actions: {
     upload: WAN2GP_UPLOAD,
-    download: { action: 'create_file_download', pathArg: 'path',
+    download: { action: 'create_file_download', pathArg: 'source',
                 refPaths: ['path', 'file_path', 'url', 'uri', 'content_base64', 'base64'] },
   },
 };
@@ -506,8 +512,59 @@ export const WAN2GP_PRESET: PresetSpec = {
       capabilities: { modes: ['t2v', 'i2v'] }, // source: MCP contract probe image_start + ti2v model type
       media: { modes: ['keyframes'], maxKeyframes: 1 },
       supportsSeed: true,
-      limits: {},
+      // Every generation value comes from the UI: resolution tier via
+      // limits.sizeMap, frames via lengthFrames, steps/guidance via the
+      // standard qValue/cValue controls. No hardcoded wire defaults.
+      guidance: 'guidance_scale',
+      steps: 'num_inference_steps',
+      limits: {
+        resolutions: ['480p', '720p'],
+        sizeMap: { '480p': '832x480', '720p': '1280x720' },
+      },
       pending: true,
+      pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
+                 verifiedAt: null,
+                 note: 'owner local install 2026-11-23, unverified-live' },
+    },
+    // MiniMax H3 two-step pi-DWD on the SAME Wan2GP MCP transport. Reuses
+    // WAN2GP_MCP verbatim (stateless JSON-RPC, wait=false long-poll, the
+    // locked create_file_download pathArg:'source' and chunked upload).
+    // The only new numbers are owner-verified from the H3 MCP handler:
+    // frames_minimum=107, frames_steps=17, frames_offset=5; fps 24, max 447.
+    {
+      id: 'minimax_h3_fl2va_pruned_pi_dwd_2step', kind: 'video',
+      label: 'MiniMax H3 FL2VA 2-step (local MCP · pi-DWD)',
+      endpoint: '/mcp', sync: false, requestFormat: 'mcp',
+      capabilities: { modes: ['t2v', 'i2v'] },
+      media: { modes: ['keyframes'], maxKeyframes: 1 },
+      supportsSeed: true,
+      frameGrid: { min: 107, step: 17, offset: 5 },
+      // H3 alone needs a plain, timed wire prompt: the XML final prompt's
+      // descriptive colons and "there ... and then" oral markers make the
+      // local model speak in the audio track. Other models keep their bytes.
+      promptStyle: 'plain-timed',
+      limits: {
+        fps: [24],
+        maxFrames: 447,
+        resolutions: ['480p'],
+        sizeMap: { '480p': '832x480' },
+      },
+      // No per-model payload block exists for MCP (the preset owns the
+      // transport), so the H3-only wire defaults ride mcp.settingsDefaults:
+      // resolveSpecs deep-merges this over WAN2GP_MCP.settingsDefaults and
+      // leaves the shared transport/actions byte-identical. Steps/guidance
+      // are NOT declared as q/c wire keys here — 2 / 1 are the model's
+      // fixed defaults, not user knobs.
+      mcp: {
+        settingsDefaults: {
+          model_type: 'minimax_h3_fl2va_pruned_pi_dwd_2step',
+          config: 'gguf_q2_k',
+          resolution: '832x480',
+          num_inference_steps: 2,
+          guidance_scale: 1,
+        },
+      },
+      pending: true, // owner-verification gate: reserved, never generable
       pricing: { unit: 'free-local', currency: 'USD', rates: { base: 0 },
                  verifiedAt: null,
                  note: 'owner local install 2026-11-23, unverified-live' },

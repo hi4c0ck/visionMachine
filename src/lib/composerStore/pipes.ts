@@ -10,6 +10,7 @@ import {
   nextFreePipeName,
   reindexPipes,
 } from './validators';
+import { getMaxFrames, frameGridForModel, fitFramesToGrid } from '$lib/frameMath';
 import { getSettings } from '$lib/settings/store';
 
 export class PipeServiceImpl implements PipeService {
@@ -26,6 +27,7 @@ export class PipeServiceImpl implements PipeService {
       lengthFrames: validatePipeLength(
         this.session.pipes[0]?.lengthFrames ?? 121,
         this.session.resolution,
+        getSettings().providers.video?.model,
       ),
       // Item 3 (RC4): new pipes seed from the profile's generation defaults
       // (was hardcoded 18/7, so a user default never reached later pipes).
@@ -177,10 +179,80 @@ export class PipeServiceImpl implements PipeService {
     const pipe = this.getPipe(this.session, pipeId);
     if (!pipe) return { errors: ['Pipe not found'] };
 
-    const newLength = validatePipeLength(frames, this.session.resolution);
+    const newLength = validatePipeLength(frames, this.session.resolution, getSettings().providers.video?.model);
     pipe.lengthFrames = newLength;
     this.rescaleElements(pipe);
     return { errors: [] };
+  }
+
+  /**
+   * Re-fit every pipe of THIS session to `modelId`'s frame grid. The store's
+   * bulk reflowFrameGrid loops sessions over this method; the per-pipe trim
+   * pass is the SAME rescaleElements setPipeLength already uses (no new
+   * rescaler, no tag prompt text rewrites, no new data fields). Returns the
+   * number of pipes whose length actually changed.
+   */
+  reflowToGrid(modelId: string): number {
+    const grid = frameGridForModel(modelId);
+    const maxFrames = getMaxFrames(this.session.resolution);
+    let changed = 0;
+    for (const pipe of this.session.pipes) {
+      const next = fitFramesToGrid(pipe.lengthFrames, grid, maxFrames);
+      if (next === pipe.lengthFrames) continue;
+      const previous = pipe.lengthFrames;
+      pipe.lengthFrames = next;
+      if (next > previous) this.scaleElementsToNewLength(pipe, previous, next);
+      else this.rescaleElements(pipe);
+      changed++;
+    }
+    return changed;
+  }
+
+  /**
+   * Grid reflow can GROW a pipe (41 → 107 for H3). The legacy
+   * `rescaleElements` only clamps/shrinks, so here every timeline position is
+   * scaled proportionally into the new frame space. Shrinking still uses the
+   * existing trim-only pass. Tag prompt text and stored data fields are never
+   * rewritten.
+   */
+  private scaleElementsToNewLength(pipe: PipeRow, oldLength: number, newLength: number): void {
+    const oldMax = Math.max(1, oldLength - 1);
+    const newMax = Math.max(1, newLength - 1);
+    const scale = (frame: number): number =>
+      Number.isFinite(frame) ? Math.max(0, Math.min(newMax, Math.round((frame / oldMax) * newMax))) : frame;
+    const spanGuard = (start: number, end: number, ceiling: number): number =>
+      end <= start ? Math.min(start + 8, ceiling) : end;
+
+    for (const el of pipe.elements as any[]) {
+      if (el.tag === 'global_style' || el.tag === 'sound') {
+        if (Number.isFinite(el.frameStart)) el.frameStart = scale(el.frameStart);
+        if (Number.isFinite(el.frameEnd)) el.frameEnd = scale(el.frameEnd);
+        if (Number.isFinite(el.frameEnd)) el.frameEnd = spanGuard(el.frameStart ?? 0, el.frameEnd, newMax);
+      } else if (el.tag === 'timeline') {
+        for (const seg of el.segments ?? []) {
+          if (Number.isFinite(seg.frameStart)) seg.frameStart = scale(seg.frameStart);
+          if (Number.isFinite(seg.frameEnd)) seg.frameEnd = scale(seg.frameEnd);
+          if (Number.isFinite(seg.frameEnd)) seg.frameEnd = spanGuard(seg.frameStart ?? 0, seg.frameEnd, newMax);
+          for (const tag of seg.tags ?? []) {
+            if (Number.isFinite(tag.frameStart)) tag.frameStart = scale(tag.frameStart);
+            if (Number.isFinite(tag.frameEnd)) tag.frameEnd = scale(tag.frameEnd);
+            if (Number.isFinite(tag.frameEnd)) tag.frameEnd = spanGuard(tag.frameStart ?? 0, tag.frameEnd, seg.frameEnd ?? newMax);
+          }
+        }
+      }
+    }
+    for (const kf of pipe.keyframes) {
+      if (Number.isFinite(kf.frame)) kf.frame = scale(kf.frame);
+    }
+    for (const ref of pipe.subjectReferences) {
+      if (ref.useFrames) {
+        if (Number.isFinite(ref.frameStart ?? Number.NaN)) ref.frameStart = scale(ref.frameStart!);
+        if (Number.isFinite(ref.frameEnd ?? Number.NaN)) ref.frameEnd = scale(ref.frameEnd!);
+        if (Number.isFinite(ref.frameEnd ?? Number.NaN)) {
+          ref.frameEnd = spanGuard(ref.frameStart ?? 0, ref.frameEnd!, newMax);
+        }
+      }
+    }
   }
 
   /**

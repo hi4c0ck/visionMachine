@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::generation::specs::{McpActionWire, McpSpecWire};
+use crate::generation::specs::{McpActionWire, McpSpecWire, ModelSpecWire};
 
 use super::provider::{HttpClient, RequestAuth};
 
@@ -583,6 +583,29 @@ pub async fn create_file_download(
     .await
 }
 
+/// Resolve a root-relative download path against the MCP endpoint's ORIGIN.
+/// WanGP v2.1 `create_file_download` returns `download_url` as
+/// `/wangp_api/files/download/<token>` (relative to the server, not to `/mcp`);
+/// the artifact must be fetched from that same host. Pure and dependency-free:
+/// accepts only `http`/`https` bases and root-relative paths, so a virtual
+/// `@outputs/...` handle or a foreign absolute URL is never rewritten here.
+fn absolute_url_from(base: &str, path: &str) -> Option<String> {
+    if !path.starts_with('/') || path.starts_with("//") {
+        return None;
+    }
+    let (scheme, rest) = base.split_once("://")?;
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return None;
+    }
+    // Everything up to the first '/' after `scheme://` is the origin; a base
+    // with no trailing path (`http://host:port`) is handled by split('/').next().
+    let authority = rest.split('/').next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{authority}{path}"))
+}
+
 /// Retrieve a generated artifact referenced by a `wangp_generate` result.
 /// Absolute local paths are read directly; http(s) URLs are downloaded; every
 /// other handle (virtual `@outputs` path, gallery media id, server-side
@@ -615,23 +638,117 @@ pub async fn retrieve_artifact(
             return write_bytes(dest, &bytes);
         }
     }
-    for key in ["path", "file_path", "filePath", "url", "uri", "file"] {
+    // WanGP v2.1 returns a ROOT-RELATIVE `download_url` alongside a still
+    // virtual `path` (`@outputs/...`): the URL must win, otherwise retrieval
+    // falls through to the misleading "no bytes/path" error. Keep the final
+    // error honest by reporting the last candidate that was actually seen.
+    let mut last_detail: Option<String> = None;
+    for key in [
+        "download_url", "path", "file_path", "filePath", "url", "uri", "file",
+    ] {
         if let Some(s) = payload.get(key).and_then(Value::as_str) {
             let s = s.trim();
             if s.is_empty() {
                 continue;
             }
+            last_detail = Some(format!("{key}={s}"));
             if Path::new(s).is_absolute() && Path::new(s).is_file() {
                 return copy_local(s, dest);
             }
             if s.starts_with("http://") || s.starts_with("https://") {
                 return http.download(s, dest, "").await;
             }
+            if s.starts_with('/') {
+                if let Some(download_url) = absolute_url_from(url, s) {
+                    return http.download(&download_url, dest, "").await;
+                }
+            }
         }
     }
-    Err(format!(
-        "wangp_session download returned no artifact bytes/path for '{reference}'"
-    ))
+    match last_detail {
+        Some(detail) => Err(format!(
+            "wangp_session download returned no artifact bytes/path for '{reference}' (last: '{detail}')"
+        )),
+        None => Err(format!(
+            "wangp_session download returned no artifact bytes/path for '{reference}'"
+        )),
+    }
+}
+
+/// Poll a submitted WanGP job. `wait_s` is the server-side long-poll window
+/// (Wan2GP caps it at 600): the call returns as soon as the job is terminal
+/// OR the window elapses, with the job's latest progress snapshot either way.
+/// Rides the same `wangp_session` tool transport as the upload/download
+/// actions; `event_limit` stays 0 so each poll is a light progress read.
+pub async fn get_job(
+    http: &dyn HttpClient,
+    url: &str,
+    spec: &McpSpecWire,
+    job_id: &str,
+    wait_s: u32,
+    timeout: Duration,
+) -> Result<Value, String> {
+    session_action(
+        http,
+        url,
+        spec,
+        "get_job",
+        json!({ "job_id": job_id, "wait_s": wait_s, "event_limit": 0 }),
+        timeout,
+    )
+    .await
+}
+
+/// Stop a submitted WanGP job by its server-side id. The returned snapshot
+/// reports `status: "interrupted"`; the engine treats that as a terminal,
+/// user-requested stop.
+pub async fn cancel_job(
+    http: &dyn HttpClient,
+    url: &str,
+    spec: &McpSpecWire,
+    job_id: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    session_action(http, url, spec, "cancel_job", json!({ "job_id": job_id }), timeout).await
+}
+
+/// Latest progress as (fraction 0..=1, human label) from a job snapshot.
+/// Prefers `progress.current_step/total_steps`, falls back to the percent
+/// field, else keeps a 0.0 fraction with the phase/status text — never
+/// fabricates a fraction. The label folds in "phase x/y" when step counts
+/// are present so the UI can show "Denoising 12/50".
+pub fn job_progress(snapshot: &Value) -> (f64, String) {
+    let progress = snapshot.get("progress");
+    let cur = progress.and_then(|p| p.get("current_step")).and_then(Value::as_i64);
+    let total = progress.and_then(|p| p.get("total_steps")).and_then(Value::as_i64);
+    let pct = progress.and_then(|p| p.get("progress")).and_then(Value::as_f64);
+    let phase = progress
+        .and_then(|p| p.get("phase").or_else(|| p.get("status")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let frac = match (cur, total, pct) {
+        (Some(c), Some(t), _) if t > 0 => (c as f64 / t as f64).clamp(0.0, 1.0),
+        (_, _, Some(p)) => (p / 100.0).clamp(0.0, 1.0),
+        _ => 0.0,
+    };
+    let label = match (cur, total) {
+        (Some(c), Some(t)) if phase.is_empty() => format!("{c}/{t}"),
+        (Some(c), Some(t)) => format!("{phase} {c}/{t}"),
+        _ => phase.to_string(),
+    };
+    (frac, label)
+}
+
+/// True when a snapshot reports a terminal job status (done / error /
+/// interrupted) — the watch loop stops and hands the snapshot to the
+/// terminal artifact/failure handling.
+pub fn job_terminal(snapshot: &Value) -> bool {
+    snapshot.get("done").and_then(Value::as_bool).unwrap_or(false)
+        || matches!(
+            snapshot.get("status").and_then(Value::as_str),
+            Some("done" | "error" | "interrupted")
+        )
 }
 
 fn copy_local(from: &str, dest: &Path) -> Result<(), String> {
@@ -650,11 +767,658 @@ fn write_bytes(dest: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::write(dest, bytes).map_err(|e| format!("write MCP artifact: {e}"))
 }
 
+// ── Model-specific wire prompt shaping (pure, std-only) ────────────────────
+
+/// Shape the outbound prompt according to the MODEL's declared prompt style.
+/// Everything except `promptStyle: "plain-timed"` returns the ORIGINAL string
+/// verbatim — no trim, no reorder, no colon cleanup, byte-for-byte identical.
+pub fn transform_prompt_for_model(spec: &ModelSpecWire, prompt: &str, fps: u32) -> String {
+    if spec.prompt_style.as_deref() != Some("plain-timed") {
+        return prompt.to_string();
+    }
+    plain_timed_prompt(prompt, fps)
+}
+
+/// Shot-name labels are replaced with a trailing comma; every other colon
+/// becomes ", ". Longest labels first so `extreme close:` wins over `close:`.
+const SHOT_LABELS: &[(&str, &str)] = &[
+    ("extreme close:", "extreme close-up shot,"),
+    ("close-up:", "close-up shot,"),
+    ("closeup:", "close-up shot,"),
+    ("close:", "close-up shot,"),
+    ("top-down:", "top-down shot,"),
+    ("top:", "top-down shot,"),
+    ("aerial:", "aerial shot,"),
+    ("overhead:", "overhead shot,"),
+    ("medium:", "medium shot,"),
+    ("wide:", "wide shot,"),
+    ("low:", "low shot,"),
+    ("high:", "high shot,"),
+];
+
+/// Drop every angle-bracket tag, keeping inner text in document order.
+fn strip_tags(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < text.len() {
+        if text.as_bytes()[i] == b'<' {
+            if let Some(rel) = text[i..].find('>') {
+                i += rel + 1; // skip the whole <tag ...> or </tag>
+                continue;
+            }
+        }
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// ASCII case-insensitive literal replacement (no regex crate). The lowercase
+/// copy keeps byte offsets because `to_ascii_lowercase` never changes UTF-8
+/// character widths.
+fn replace_ci(text: &str, needle: &str, replacement: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let nl = needle.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < text.len() {
+        if lower.as_bytes()[i..].starts_with(nl) {
+            out.push_str(replacement);
+            i += nl.len();
+        } else {
+            let ch = text[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn replace_colons(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < text.len() {
+        let mut matched = false;
+        for (from, to) in SHOT_LABELS {
+            if lower.as_bytes()[i..].starts_with(from.as_bytes()) {
+                out.push_str(to);
+                i += from.len();
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            continue;
+        }
+        if text.as_bytes()[i] == b':' {
+            out.push_str(", ");
+            i += 1;
+            continue;
+        }
+        let ch = text[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Strip the oral narration markers at a line/sentence start. `there is` /
+/// `there are` are checked before the shorter `there ` prefix.
+fn strip_leading_oral(s: &str) -> &str {
+    let mut t = s.trim_start();
+    loop {
+        let low = t.to_ascii_lowercase();
+        let mut n = 0usize;
+        for marker in ["there are ", "there is ", "there ", "and then "] {
+            if low.starts_with(marker) {
+                n = marker.len();
+                break;
+            }
+        }
+        if n == 0 {
+            return t;
+        }
+        t = t[n..].trim_start();
+    }
+}
+
+fn oral_cleanup(text: &str) -> String {
+    let replaced = replace_ci(text, " and then ", ", ");
+    // A sentence starts at the text start and after `.`/`!`/`?` followed by
+    // whitespace (a dot inside "1.5s" is not a sentence boundary).
+    let mut out = String::with_capacity(replaced.len());
+    let mut chunk_start = 0usize;
+    for (i, ch) in replaced.char_indices() {
+        if matches!(ch, '.' | '!' | '?') {
+            let next = replaced[i + ch.len_utf8()..].chars().next();
+            if next.map_or(true, |c| c.is_whitespace()) {
+                out.push_str(strip_leading_oral(&replaced[chunk_start..=i]));
+                out.push(' ');
+                chunk_start = i + ch.len_utf8();
+            }
+        }
+    }
+    out.push_str(strip_leading_oral(&replaced[chunk_start..]));
+    out
+}
+
+/// Story/event markers that H3's DWD speaks when they survive the prompt.
+/// Phrases are matched literally (case-insensitive); single words need a
+/// token boundary so a visual clause like "wide open sky" survives.
+const STORY_PHRASES: &[&str] = &[
+    "fithting with",
+    "fighting with",
+    "struck when",
+    "poop over",
+    "settles into",
+    "shatters when",
+    "emerges from",
+    "forcing a",
+    "comes and",
+    "scene_0.shot_1",
+    "navigates the",
+    "tracking a towering",
+    "redefine reality",
+    "the scene shifts",
+    "carries over",
+    "leaves the story",
+    "next clip",
+    "hand-off",
+];
+const STORY_WORDS: &[&str] = &["develops", "opens", "continues", "desperate", "they"];
+
+/// Split descriptive text at clause boundaries: commas, semicolons, the
+/// middot separators used by `global_style`, newlines and sentence-ending
+/// `. ` (but never the dot inside a cue like `1.5s`).
+fn clause_slices(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < text.len() {
+        let ch = text[i..].chars().next().unwrap();
+        let sep_len = match ch {
+            ',' | ';' | '\n' | '\r' | '·' | '•' => ch.len_utf8(),
+            '.' if text[i + 1..].chars().next().map_or(true, char::is_whitespace) => 1,
+            _ => 0,
+        };
+        if sep_len > 0 {
+            out.push(&text[start..i]);
+            i += sep_len;
+            start = i;
+        } else {
+            i += ch.len_utf8();
+        }
+    }
+    out.push(&text[start..]);
+    out
+}
+
+fn is_story_clause(clause: &str) -> bool {
+    let low = clause.to_ascii_lowercase();
+    if STORY_PHRASES.iter().any(|marker| low.contains(marker)) {
+        return true;
+    }
+    low.split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|word| STORY_WORDS.contains(&word))
+}
+
+/// Remove narrated story/events, keeping visual, style and ambience clauses.
+/// Retaining nothing is legal: the caller emits an empty line, never crashes.
+fn drop_story_clauses(text: &str) -> String {
+    clause_slices(text)
+        .into_iter()
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty() && !is_story_clause(clause))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Strip tags, drop narration clauses, clean descriptive text, collapse
+/// whitespace into one line. Colon/oral cleanup runs before timecodes exist.
+fn clean_descriptive(text: &str) -> String {
+    let coloned = replace_colons(&strip_tags(text));
+    let mut lines = Vec::new();
+    for line in coloned.split('\n') {
+        let sanitized = drop_story_clauses(line);
+        let collapsed = oral_cleanup(&sanitized)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !collapsed.is_empty() {
+            lines.push(collapsed);
+        }
+    }
+    lines.join(" ")
+}
+
+/// Top-level text (global_style / audio / leftover tags) stays before the
+/// timed block, one cleaned plain line per original source line.
+fn push_plain_lines(out: &mut Vec<String>, text: &str) {
+    for line in text.split('\n') {
+        let cleaned = clean_descriptive(line);
+        if !cleaned.is_empty() {
+            out.push(cleaned);
+        }
+    }
+}
+
+/// Read `length="40f"` / `length="5s"` from a `<segments ...>` opening tag.
+fn segment_length_seconds(attrs: &str, fps: u32) -> Option<f64> {
+    let lower = attrs.to_ascii_lowercase();
+    let b = lower.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = lower[from..].find("length") {
+        let start = from + rel;
+        // Skip `mylength` / `data-length`: the attribute name must stand alone.
+        if start > 0 && (b[start - 1].is_ascii_alphanumeric() || b[start - 1] == b'-') {
+            from = start + 6;
+            continue;
+        }
+        let mut j = start + 6;
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j >= b.len() || b[j] != b'=' {
+            from = start + 6;
+            continue;
+        }
+        j += 1;
+        while j < b.len() && b[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j < b.len() && (b[j] == b'"' || b[j] == b'\'') {
+            j += 1;
+        }
+        let num_start = j;
+        while j < b.len() && (b[j].is_ascii_digit() || b[j] == b'.') {
+            j += 1;
+        }
+        if j == num_start || j >= b.len() {
+            from = j.max(start + 6);
+            continue;
+        }
+        let Ok(n) = attrs[num_start..j].parse::<f64>() else {
+            from = j;
+            continue;
+        };
+        return Some(match b[j] {
+            b'f' => n / fps.max(1) as f64,
+            b's' => n,
+            _ => {
+                from = j;
+                continue;
+            }
+        });
+    }
+    None
+}
+
+/// Locate a real `<segments` opening tag (not `<segmentsX>`), or None.
+fn find_segments_open(text: &str, from: usize) -> Option<usize> {
+    let mut at = from;
+    while let Some(rel) = text[at..].find("<segments") {
+        let idx = at + rel;
+        let next = text.as_bytes().get(idx + "<segments".len()).copied();
+        if next.map_or(true, |c| c.is_ascii_whitespace() || c == b'>') {
+            return Some(idx);
+        }
+        at = idx + "<segments".len();
+    }
+    None
+}
+
+/// Zero-padded mm:ss.cc clock, centiseconds floored (no integer truncation).
+fn clock(seconds: f64) -> String {
+    let cs = (seconds.max(0.0) * 100.0).floor() as u64;
+    format!("{:02}:{:02}.{:02}", cs / 6000, (cs / 100) % 60, cs % 100)
+}
+
+/// Byte spans of `after Xs` / `for Xs along` cues inside a RAW tag body.
+/// `lower` must be the ASCII-lowercase form of the body (same byte offsets).
+fn cue_spans(lower: &str) -> Vec<(usize, usize)> {
+    let b = lower.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+    while i < lower.len() {
+        let key_len = if lower[i..].starts_with("after ") {
+            6
+        } else if lower[i..].starts_with("for ") {
+            4
+        } else {
+            // Advance by a full UTF-8 character: tag bodies contain `·`
+            // separators, and byte-stepping would slice inside them.
+            i += lower[i..].chars().next().map_or(1, char::len_utf8);
+            continue;
+        };
+        let num_start = i + key_len;
+        let mut j = num_start;
+        while j < b.len() && (b[j].is_ascii_digit() || b[j] == b'.') {
+            j += 1;
+        }
+        if j == num_start || j >= b.len() || b[j] != b's' || lower[num_start..j].parse::<f64>().is_err() {
+            i += lower[i..].chars().next().map_or(1, char::len_utf8);
+            continue;
+        }
+        let mut end = j + 1;
+        if key_len == 4 && lower[end..].starts_with(" along") {
+            end += " along".len();
+        }
+        spans.push((i, end));
+        i = end;
+    }
+    spans
+}
+
+/// Absolute tag range from the raw body's relative cues, clamped to the
+/// parent segment. `after Xs` moves the start, `for Xs along` pulls the end in.
+fn cue_bounds(body: &str, seg_start: f64, seg_end: f64) -> (f64, f64) {
+    let lower = body.to_ascii_lowercase();
+    let mut start = seg_start;
+    let mut end = seg_end;
+    for (from, to) in cue_spans(&lower) {
+        let cue = &lower[from..to];
+        let num = cue
+            .trim_start_matches("after ")
+            .trim_start_matches("for ")
+            .trim_end_matches(" along")
+            .trim_end_matches('s');
+        if let Ok(value) = num.parse::<f64>() {
+            if cue.starts_with("after ") {
+                start = seg_start + value;
+            } else {
+                end = seg_end - value;
+            }
+        }
+    }
+    let clamp = |v: f64| v.max(seg_start).min(seg_end);
+    let start = clamp(start);
+    let end = clamp(end).max(start);
+    (start, end)
+}
+
+/// Remove the relative cue prefix so only the descriptive clause is emitted.
+fn strip_cue_prefix(body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    let mut out = String::with_capacity(body.len());
+    let mut cursor = 0usize;
+    for (from, to) in cue_spans(&lower) {
+        if from < cursor {
+            continue;
+        }
+        out.push_str(&body[cursor..from]);
+        cursor = to;
+    }
+    out.push_str(&body[cursor..]);
+    out.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | ',' | '-' | '·' | '•'))
+        .to_string()
+}
+
+/// Closed inner `<tag>body</tag>` pairs in document order:
+/// (lowercase name, raw body, opening byte, byte after closing tag).
+fn inner_tags(inner: &str) -> Vec<(String, &str, usize, usize)> {
+    let lower = inner.to_ascii_lowercase();
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(rel) = inner[cursor..].find('<') {
+        let open = cursor + rel;
+        if inner[open..].starts_with("</") || inner[open..].starts_with("<!--") {
+            cursor = open + 1;
+            continue;
+        }
+        let Some(gt_rel) = inner[open..].find('>') else { break };
+        let gt = open + gt_rel;
+        let name = inner[open + 1..gt]
+            .split(|c: char| c.is_ascii_whitespace() || c == '/' || c == '<')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            cursor = gt + 1;
+            continue;
+        }
+        let close_pat = format!("</{}>", name);
+        let Some(close_rel) = lower[gt + 1..].find(&close_pat) else {
+            cursor = gt + 1;
+            continue;
+        };
+        let close = gt + 1 + close_rel;
+        result.push((name, &inner[gt + 1..close], open, close + close_pat.len()));
+        cursor = close + close_pat.len();
+    }
+    result
+}
+
+/// Non-tag text inside a segment (defensive: today's prompt engine emits
+/// only closed tag pairs) keeps the segment's full range, indented.
+fn push_inner_gap(out: &mut Vec<String>, text: &str, start: f64, end: f64) {
+    for line in text.split('\n') {
+        let cleaned = clean_descriptive(line);
+        if !cleaned.is_empty() {
+            out.push(format!("  [{} - {}] {}", clock(start), clock(end), cleaned));
+        }
+    }
+}
+
+/// The "plain-timed" conversion: top-level plain lines first, then a segment
+/// header plus one indented labelled line per inner tag with its own absolute
+/// centisecond range. All text is cleaned BEFORE generated timecodes are
+/// inserted, so the mm:ss.cc colons survive. A prompt with no `<segments>`
+/// never gets a timecode.
+fn plain_timed_prompt(prompt: &str, fps: u32) -> String {
+    let fps = if fps == 0 { 24 } else { fps };
+    let mut out: Vec<String> = Vec::new();
+    let mut cursor = 0usize;
+    let mut elapsed = 0.0f64;
+    let mut segment_no = 0usize;
+
+    while let Some(open) = find_segments_open(prompt, cursor) {
+        push_plain_lines(&mut out, &prompt[cursor..open]);
+        let open_end = prompt[open..]
+            .find('>')
+            .map(|i| open + i)
+            .unwrap_or(prompt.len());
+        let close = prompt[open_end..]
+            .find("</segments>")
+            .map(|i| open_end + i)
+            .unwrap_or(prompt.len());
+        let inner = &prompt[open_end + 1..close];
+
+        segment_no += 1;
+        let duration = segment_length_seconds(&prompt[open + "<segments".len()..open_end], fps)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let start = elapsed;
+        let end = start + duration;
+        out.push(format!(
+            "[{} - {}] segment {}",
+            clock(start),
+            clock(end),
+            segment_no
+        ));
+
+        let mut gap_cursor = 0usize;
+        for (name, body, tag_open, tag_close) in inner_tags(inner) {
+            push_inner_gap(&mut out, &inner[gap_cursor..tag_open], start, end);
+            gap_cursor = tag_close;
+            let (tag_start, tag_end) = cue_bounds(body, start, end);
+            let cleaned = clean_descriptive(&strip_cue_prefix(body));
+            out.push(format!(
+                "  [{} - {}] {} — {}",
+                clock(tag_start),
+                clock(tag_end),
+                name,
+                cleaned
+            ));
+        }
+        push_inner_gap(&mut out, &inner[gap_cursor..], start, end);
+
+        elapsed = end;
+        cursor = if close < prompt.len() {
+            close + "</segments>".len()
+        } else {
+            prompt.len()
+        };
+    }
+    push_plain_lines(&mut out, &prompt[cursor..]);
+    out.join("\n")
+}
+
 // ── Pure parsing tests (stub HTTP drives the engine-level flow in provider.rs) ──
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain_timed_spec() -> ModelSpecWire {
+        ModelSpecWire {
+            id: "minimax_h3_fl2va_pruned_pi_dwd_2step".into(),
+            prompt_style: Some("plain-timed".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn prompt_transform_passes_every_other_model_through_byte_for_byte() {
+        let prompt = "  <global_style>wide: keep me EXACT</global_style> \n\t<timeline>x</timeline>  ";
+        for spec in [
+            ModelSpecWire::default(),
+            ModelSpecWire {
+                id: "ti2v_2_2".into(),
+                prompt_style: Some("verbatim".into()),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                transform_prompt_for_model(&spec, prompt, 24),
+                prompt.to_string(),
+                "only the declared plain-timed style may reshape a prompt"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_transform_plain_timed_exact_output() {
+        let prompt = concat!(
+            "<global_style>there Google bubble with comix eyes and eyebrows is fithting with M$ bubble and then they struck when Anthropic bubble comes and poop over both, lived-in cinematic space, motivated light, deep detail, tactile surfaces · bright neutral daylight · wide: rule_of_thirds framing · ambience: quiet location ambience, soft natural sound bed</global_style>\n",
+            "<audio>ambience: soft rain</audio>\n",
+            "<timeline>\n",
+            "<segments length=\"5s\">\n",
+            "<scene>Google bubble, lived-in cinematic space</scene>\n",
+            "<camera>after 2s, for 1s along - close-up: fill_frame framing, shallow depth of field, 85mm lens</camera>\n",
+            "</segments>\n",
+            "<segments length=\"2s\">\n",
+            "<scene>after 1s - Google bubble, bright daylight</scene>\n",
+            "</segments>\n",
+            "</timeline>",
+        );
+        let expected = concat!(
+            "lived-in cinematic space, motivated light, deep detail, tactile surfaces, bright neutral daylight, wide shot, rule_of_thirds framing, ambience, quiet location ambience, soft natural sound bed\n",
+            "ambience, soft rain\n",
+            "[00:00.00 - 00:05.00] segment 1\n",
+            "  [00:00.00 - 00:05.00] scene — Google bubble, lived-in cinematic space\n",
+            "  [00:02.00 - 00:04.00] camera — close-up shot, fill_frame framing, shallow depth of field, 85mm lens\n",
+            "[00:05.00 - 00:07.00] segment 2\n",
+            "  [00:06.00 - 00:07.00] scene — Google bubble, bright daylight",
+        );
+        let shaped = transform_prompt_for_model(&plain_timed_spec(), prompt, 24);
+        assert_eq!(shaped, expected);
+        assert!(!shaped.contains('<') && !shaped.contains('>'));
+        for forbidden in ["there", "and then", "struck when", "poop over", "fithting with"] {
+            assert!(
+                !shaped.to_ascii_lowercase().contains(forbidden),
+                "narration leaked: {forbidden} in {shaped}"
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_transform_plain_timed_tag_for_along_pulls_end_earlier() {
+        let prompt = "<segments length=\"5s\"><scene>for 1s along - wide: coast</scene></segments>";
+        let expected = concat!(
+            "[00:00.00 - 00:05.00] segment 1\n",
+            "  [00:00.00 - 00:04.00] scene — wide shot, coast",
+        );
+        assert_eq!(transform_prompt_for_model(&plain_timed_spec(), prompt, 24), expected);
+    }
+
+    #[test]
+    fn prompt_transform_plain_timed_handles_untagged_text_and_zero_fps() {
+        let spec = plain_timed_spec();
+        // No tags and no segments => cleanup only, never a timecode.
+        assert_eq!(
+            transform_prompt_for_model(&spec, "there are two things and then three  ", 24),
+            "two things, three"
+        );
+        // fps 0 falls back to 24: 48f = 2s; a total over 60s rolls into mm.
+        let prompt = "<segments length=\"48f\"><scene>there is a high: view</scene></segments>";
+        assert_eq!(
+            transform_prompt_for_model(&spec, prompt, 0),
+            "[00:00.00 - 00:02.00] segment 1\n  [00:00.00 - 00:02.00] scene — a high shot, view"
+        );
+        // Centiseconds are floored: 40f @ 24fps = 1.666..s -> 00:01.66.
+        let frames = "<segments length=\"40f\"><scene>aerial: coast</scene></segments>";
+        assert_eq!(
+            transform_prompt_for_model(&spec, frames, 24),
+            "[00:00.00 - 00:01.66] segment 1\n  [00:00.00 - 00:01.66] scene — aerial shot, coast"
+        );
+        let long = "<segments length=\"90s\"><scene>aerial: coast</scene></segments>";
+        assert_eq!(
+            transform_prompt_for_model(&spec, long, 24),
+            "[00:00.00 - 01:30.00] segment 1\n  [00:00.00 - 01:30.00] scene — aerial shot, coast"
+        );
+    }
+
+    /// Live `wangp_session get_job` snapshots: running jobs carry
+    /// `progress{current_step,total_steps,phase}`, terminal ones carry
+    /// `result{success,errors,gallery_items}`. These shapes are the poll
+    /// path's only input — no model / MCP server involved.
+    #[test]
+    fn job_snapshot_progress_and_terminal_detection() {
+        let running = json!({
+            "job_id": "j1", "done": false,
+            "progress": {"current_step": 12, "total_steps": 25, "phase": "Denoising"}
+        });
+        assert!(!job_terminal(&running));
+        let (frac, label) = job_progress(&running);
+        assert!((frac - 0.48).abs() < 1e-9, "{frac}");
+        assert_eq!(label, "Denoising 12/25");
+
+        let pct = json!({"done": false, "progress": {"progress": 75.0, "status": "Sampling"}});
+        assert!((job_progress(&pct).0 - 0.75).abs() < 1e-9);
+        assert_eq!(job_progress(&pct).1, "Sampling");
+
+        for terminal in [
+            json!({"done": true, "result": {"success": true}}),
+            json!({"done": false, "status": "error"}),
+            json!({"done": false, "status": "interrupted"}),
+        ] {
+            assert!(job_terminal(&terminal), "{terminal}");
+        }
+    }
+
+    #[test]
+    fn terminal_snapshot_failure_and_artifacts_use_result_shape() {
+        let failed = json!({
+            "done": true,
+            "result": {"success": false,
+                "errors": [{"message": "CUDA out of memory"}], "generated_files": []}
+        });
+        assert!(generate_failure_message(&failed).unwrap().contains("CUDA out of memory"));
+
+        let done = json!({
+            "done": true,
+            "result": {"success": true, "generated_files": [],
+                "gallery_items": [{"media_id": "m1", "path": "@outputs/v.mp4"}]}
+        });
+        assert!(generate_failure_message(&done).is_none());
+        assert_eq!(artifact_references(&done), vec!["m1", "@outputs/v.mp4"]);
+    }
 
     #[test]
     fn rpc_request_is_jsonrpc_2() {
@@ -855,6 +1619,35 @@ mod tests {
         assert!(initialize_ok(&json!({"serverInfo": {"name": "WanGP"}})));
     }
 
+    #[test]
+    fn absolute_url_from_resolves_root_relative_download_urls() {
+        let base = "http://127.0.0.1:8765/mcp";
+        let path = "/wangp_api/files/download/tok";
+        assert_eq!(
+            absolute_url_from(base, path).as_deref(),
+            Some("http://127.0.0.1:8765/wangp_api/files/download/tok")
+        );
+        // Origin only (no trailing path on the base).
+        assert_eq!(
+            absolute_url_from("https://wangp.example", path).as_deref(),
+            Some("https://wangp.example/wangp_api/files/download/tok")
+        );
+        assert_eq!(
+            absolute_url_from("https://wangp.example/mcp", path).as_deref(),
+            Some("https://wangp.example/wangp_api/files/download/tok")
+        );
+        // Virtual handles, relative paths and absolute URLs are not ours to rewrite.
+        for other in [
+            "@outputs/v.mp4",
+            "wangp_api/files/download/tok",
+            "https://elsewhere.example/v.mp4",
+            "//elsewhere.example/v.mp4",
+        ] {
+            assert_eq!(absolute_url_from(base, other), None, "{other}");
+        }
+        assert_eq!(absolute_url_from("ftp://127.0.0.1:8765/mcp", path), None);
+    }
+
     // ── WanGP v2.1 upload: pure framing checks (StubHttp flow in provider.rs) ──
 
     fn locked_upload_action() -> McpActionWire {
@@ -923,5 +1716,15 @@ mod tests {
         assert_eq!([first, second].concat(), bytes);
         // Empty file still has one (empty) chunk shape helper result = none.
         assert!(upload_chunks(&[]).is_empty());
+    }
+
+    #[test]
+    fn plain_timed_cue_scan_skips_multibyte_separators() {
+        let prompt = "<global_style>style · wide shot</global_style>\
+<timeline><segments length=\"24f\">\
+<camera>wide shot, fill_frame framing · 14mm lens</camera>\
+</segments></timeline>";
+        let out = transform_prompt_for_model(&plain_timed_spec(), prompt, 24);
+        assert!(out.contains("camera — wide shot, fill_frame framing, 14mm lens"), "{out}");
     }
 }

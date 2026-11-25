@@ -103,7 +103,8 @@ export function buildSessionGenerationPayload(input: SessionGenerationInput) {
     // Experimental "compose pipes" boundary-trim: only the ON interior pipes,
     // keyed by pipe id (first pipe never included). Empty = classic lossless
     // splice. Maps to the Rust `trim_boundary` (camelCase rename).
-    trimBoundary: input.trimBoundary ?? {} };
+    trimBoundary: input.trimBoundary ?? {},
+  };
 }
 export async function startSessionGeneration(input: SessionGenerationInput, timeoutMs = 60_000): Promise<SessionGenerationStart> {
   // Bound the wait: a wedged invoke would leave the generate modal stuck in

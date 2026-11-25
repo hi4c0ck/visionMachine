@@ -85,6 +85,14 @@ pub struct EngineInput {
     /// media_mode is "reference". None = use the pipe's stored mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_media_mode: Option<String>,
+    /// Per-run MCP tunable overrides chosen in the UI (the active preset's
+    /// `mcp.tunables` values). A JSON object keyed by the exact WanGP settings
+    /// keys (num_inference_steps, video_length, resolution, guidance_scale,
+    /// flow_shift, ...). Merged OVER the catalog `settings_defaults` in the
+    /// MCP engine branch — user values win. Absent for non-MCP presets / when
+    /// the UI sent none (the Agnes + Tier-A paths never set it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_settings: Option<serde_json::Value>,
 }
 
 /// Per-stage context the provider engine executes against — today the

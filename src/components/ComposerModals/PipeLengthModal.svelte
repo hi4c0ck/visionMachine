@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { PipeRow } from '$types';
-	import { snapTo8nPlus1 } from '$lib/frameMath';
+	import { fitFramesToGrid, frameGridForModel } from '$lib/frameMath';
+	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import '../composer-modal.css';
 
 	let {
@@ -17,7 +18,7 @@
 		pipe: PipeRow;
 		/** Session fps — frames ↔ seconds conversion. */
 		fps: number;
-		/** Resolution cap (8n+1). */
+		/** Resolution cap — the model grid is fitted UNDER this ceiling. */
 		maxFrames: number;
 		/** Computed by the panel for the current pending frames: which zones/tags
 		 *  would be trimmed away when the pipe shrinks to it. Empty when growing. */
@@ -36,12 +37,22 @@
 		onPreview: (frames: number) => void;
 	}>();
 
-	const MIN_LENGTH = 41; // 8*5+1
+	// The settings store is a non-reactive singleton, so read the picked
+	// model id reactively through its change notification (never inside
+	// $derived alone — that would freeze on the first render).
+	let currentModelId = $state(getSettings().providers.video?.model ?? '');
+	$effect(() => {
+		const sync = () => { currentModelId = getSettings().providers.video?.model ?? ''; };
+		setOnSettingsChange(sync);
+		return () => unregisterSettingsChange(sync);
+	});
+	const grid = $derived(frameGridForModel(currentModelId));
+	const minLength = $derived(grid.min);
 	// Seconds → frames step (1 tick = one frame at the session fps). Display is
 	// rounded to 1 decimal; the value itself keeps full precision for the
 	// cross-calculation back to frames.
 	const SEC_STEP = $derived(1 / Math.max(1, fps));
-	const FRAME_STEP = 8; // frame arrows snap on the 8-frame grid
+	const FRAME_STEP = $derived(grid.step);
 
 	// svelte-ignore state_referenced_locally — intentional: seed from pipe, sync via effect
 	let frames = $state(pipe.lengthFrames);
@@ -55,16 +66,17 @@
 		seconds = pipe.lengthFrames / Math.max(1, fps);
 	});
 
-	// Frames (source of truth) — snap to a valid 8n+1 count within [41, maxFrames].
+	// Frames (source of truth) — ceil onto the model's grid, clamped to
+	// [grid.min, resolution cap]. The default grid reproduces the old 8n+1.
 	function applyFrames(raw: number) {
 		if (!Number.isFinite(raw)) return;
-		frames = Math.max(MIN_LENGTH, Math.min(snapTo8nPlus1(raw), maxFrames));
+		frames = fitFramesToGrid(raw, grid, maxFrames);
 		seconds = frames / Math.max(1, fps);
 		onPreview(frames);
 	}
 
-	// Step the frame count by ±8 (the 8-frame grid), clamped to the valid
-	// 8n+1 range. This drives the visible ▲/▼ arrows next to the frames field.
+	// Step the frame count by ±one grid interval, clamped to the valid range.
+	// This drives the visible ▲/▼ arrows next to the frames field.
 	function nudgeFrames(delta: number) {
 		applyFrames(frames + delta * FRAME_STEP);
 	}
@@ -72,7 +84,7 @@
 	// Seconds → frames (live recalculation).
 	function applySeconds(raw: number) {
 		if (!Number.isFinite(raw) || raw <= 0) return;
-		frames = Math.max(MIN_LENGTH, Math.min(snapTo8nPlus1(Math.round(raw * Math.max(1, fps))), maxFrames));
+		frames = fitFramesToGrid(Math.round(raw * Math.max(1, fps)), grid, maxFrames);
 		seconds = frames / Math.max(1, fps);
 		onPreview(frames);
 	}
@@ -100,18 +112,18 @@
 					<label id="pl-frames-label">Frames</label>
 					<div class="pl-stepper">
 						<button type="button" class="pl-step" onclick={() => nudgeFrames(-1)}
-							disabled={frames <= MIN_LENGTH} title="-8 frames" aria-label="8 frames less">−</button>
+							disabled={frames <= minLength} title={`−${FRAME_STEP} frames`} aria-label={`${FRAME_STEP} frames less`}>−</button>
 						<input
 							type="number"
 							step={FRAME_STEP}
-							min={MIN_LENGTH}
+							min={minLength}
 							max={maxFrames}
 							value={frames}
 							onchange={(e) => applyFrames(Number(e.currentTarget.value))}
 							class="modal-input"
 							aria-labelledby="pl-frames-label" />
 						<button type="button" class="pl-step" onclick={() => nudgeFrames(1)}
-							disabled={frames >= maxFrames} title="+8 frames" aria-label="8 frames more">+</button>
+							disabled={frames >= maxFrames} title={`+${FRAME_STEP} frames`} aria-label={`${FRAME_STEP} frames more`}>+</button>
 					</div>
 				</div>
 				<div class="modal-field">

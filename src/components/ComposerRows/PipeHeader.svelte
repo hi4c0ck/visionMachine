@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { PipeRow } from '$types';
+	import { frameGridForModel } from '$lib/frameMath';
+	import { getSettings, setOnSettingsChange, unregisterSettingsChange } from '$lib/settings/store';
 	import ChromeIcon from '../ChromeIcon.svelte';
 
 	// Pipe header row — pure chrome. The panel owns pipe ordering/length
@@ -33,6 +35,19 @@
 		targetLabel?: string | null;
 	}>();
 
+	// Model-owned grid: min/step come from the catalog, default 41/8 for every
+	// legacy model. The settings store is a module singleton, so subscribe to
+	// its change notification instead of reading it inside a $derived.
+	let currentModelId = $state(getSettings().providers.video?.model ?? '');
+	$effect(() => {
+		const sync = () => { currentModelId = getSettings().providers.video?.model ?? ''; };
+		setOnSettingsChange(sync);
+		return () => unregisterSettingsChange(sync);
+	});
+	const grid = $derived(frameGridForModel(currentModelId));
+	const minLength = $derived(grid.min);
+	const frameStep = $derived(grid.step);
+
 	// The bare <input type=number> spinners were the old path for the pipe
 	// length — nudging was too fiddly and gave no way to reason in seconds.
 	// The field now displays the value; clicking it (or the edit affordance)
@@ -42,7 +57,7 @@
 	function handleLenInput(e: Event) {
 		const input = e.currentTarget as HTMLInputElement;
 		const raw = Number(input.value);
-		if (Number.isFinite(raw) && raw >= 41) {
+		if (Number.isFinite(raw) && raw >= minLength) {
 			onLengthChange(raw);
 		}
 		// Otherwise keep the stored value (invalid/out-of-range edits don't
@@ -65,9 +80,9 @@
 		<button class="btn-icon" onclick={() => onMove(-1)} disabled={idx === 0} title="Move pipe up"><ChromeIcon id="step-prev" size={14} /></button>
 		<button class="btn-icon" onclick={() => onMove(1)} disabled={idx === pipeCount - 1} title="Move pipe down"><ChromeIcon id="step-next" size={14} /></button>
 		<button class="btn-icon" onclick={onDuplicate} title="Duplicate pipe"><ChromeIcon id="copy" size={14} /></button>
-		<label class="pipe-len" title="Pipe length in frames (min 41) — click to edit">
+		<label class="pipe-len" title={`Pipe length in frames (min ${minLength}) — click to edit`}>
 			<span>len</span>
-			<input type="number" min="41" step="8" value={pipe.lengthFrames}
+			<input type="number" min={minLength} step={frameStep} value={pipe.lengthFrames}
 				onchange={handleLenInput} onfocus={() => onLengthEdit()} />
 		</label>
 		<button class="btn-icon" onclick={onLengthEdit} title="Edit length (frames / seconds)"><ChromeIcon id="edit" size={14} /></button>

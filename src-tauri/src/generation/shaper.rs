@@ -728,6 +728,7 @@ mod tests {
             structured_output: None,
             thinking_toggle: None,
             pricing: None,
+            prompt_style: None,
         };
         extra(&mut s);
         s

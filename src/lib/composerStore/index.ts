@@ -207,6 +207,21 @@ class ComposerStoreImpl implements ComposerStore {
     return result;
   }
 
+  /**
+   * Bulk model-change reflow: re-fit EVERY session's pipe lengths to
+   * `modelId`'s frame grid (window cap from each session's resolution),
+   * reusing PipeServiceImpl.rescaleElements for each changed pipe. One
+   * notifyUpdate per session that actually changed — touchPipeShells +
+   * unsynced + the UI callback all fire once, not once per pipe.
+   */
+  async reflowFrameGrid(modelId: string): Promise<ServiceResult> {
+    for (const [sessionId, session] of sessions) {
+      const pipes = new PipeServiceImpl(session);
+      if (pipes.reflowToGrid(modelId) > 0) this.notifyUpdate(sessionId);
+    }
+    return { errors: [] };
+  }
+
   async setMediaMode(sessionId: string, pipeId: string, mode: 'keyframes' | 'reference'): Promise<ServiceResult> {
     const s = this.getService(sessionId);
     const result = await s.pipes.setMediaMode(sessionId, pipeId, mode);
@@ -871,6 +886,7 @@ export const duplicatePipe = composerStore.duplicatePipe.bind(composerStore);
 export const updateQ = composerStore.updateQ.bind(composerStore);
 export const updateC = composerStore.updateC.bind(composerStore);
 export const setPipeLength = composerStore.setPipeLength.bind(composerStore);
+export const reflowFrameGrid = composerStore.reflowFrameGrid.bind(composerStore);
 export const setMediaMode = composerStore.setMediaMode.bind(composerStore);
 export const setTrimBoundary = composerStore.setTrimBoundary.bind(composerStore);
 export const setPipeCropOverride = composerStore.setPipeCropOverride.bind(composerStore);

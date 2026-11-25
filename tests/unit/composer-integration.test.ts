@@ -35,6 +35,7 @@ import {
   duplicatePipe,
   loadSession,
   saveSession,
+  reflowFrameGrid,
   updateFPS,
   updateResolution,
   updateOrientation,
@@ -941,6 +942,46 @@ describe('Composer Integration', () => {
       expect(timeline.segments).toHaveLength(2);
       expect(timeline.segments[0].tags).toHaveLength(2);
       expect(pipe.keyframes).toHaveLength(1);
+    });
+  });
+
+  describe('reflowFrameGrid', () => {
+    it('grows an H3 pipe and scales every timeline range into the new frame space', async () => {
+      mockInvoke.mockResolvedValue({
+        id: 'session-grid',
+        name: 'Grid',
+        fps: 24,
+        resolution: '480p',
+        pipes: [{
+          id: 'pipe-grid',
+          name: 'Pipe 1',
+          lengthFrames: 41,
+          qValue: 18,
+          cValue: 7,
+          keyframes: [{ id: 'kf1', frame: 20, slotIndex: 0, type: 'url', imageSrc: 'k.jpg', status: 'done' }],
+          elements: [
+            { id: 'gs', tag: 'global_style', value: 'style', enabled: true, frameStart: 0, frameEnd: 40 },
+            {
+              id: 'tl', tag: 'timeline',
+              segments: [{
+                id: 'seg1', frameStart: 0, frameEnd: 40,
+                tags: [{ id: 'tag1', tag: 'scene', frameStart: 8, frameEnd: 32, value: 0, spec: TAG_SPECIFICATIONS['scene'] }],
+              }],
+            },
+          ],
+        }],
+      });
+      await loadSession('session-grid');
+
+      const result = await reflowFrameGrid('minimax_h3_fl2va_pruned_pi_dwd_2step');
+      expect(result.errors).toHaveLength(0);
+
+      const pipe = sessions.get('session-grid')!.pipes[0];
+      expect(pipe.lengthFrames).toBe(107);
+      const timeline = pipe.elements.find((e: any) => e.tag === 'timeline') as any;
+      expect(timeline.segments[0].frameEnd).toBe(106);
+      expect(timeline.segments[0].tags[0].frameEnd).toBeGreaterThan(32);
+      expect(pipe.keyframes[0].frame).toBeGreaterThan(20);
     });
   });
 });

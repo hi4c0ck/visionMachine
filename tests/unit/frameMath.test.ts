@@ -25,7 +25,11 @@ import {
   placeTagInZone,
   evenSplitZone,
   minZoneSpan,
+  DEFAULT_FRAME_GRID,
+  frameGridForModel,
+  fitFramesToGrid,
 } from '../../src/lib/frameMath';
+import { validatePipeLength } from '../../src/lib/composerStore/validators';
 
 // ── minZoneSpan ──────────────────────────────────────────────────────────────
 
@@ -285,6 +289,66 @@ describe('getMaxFrames', () => {
     expect(getMaxFrames('480p')).toBe(441);  // 8*55+1
     expect(getMaxFrames('720p')).toBe(241);  // 8*30+1
     expect(getMaxFrames('1080p')).toBe(121); // 8*15+1
+  });
+});
+
+// ── per-model frame grids ────────────────────────────────────────────────────
+
+describe('per-model frame grids', () => {
+  const H3 = 'minimax_h3_fl2va_pruned_pi_dwd_2step';
+
+  it('defaults to the legacy 41 / 8n+1 grid for absent or unknown ids', () => {
+    expect(DEFAULT_FRAME_GRID).toEqual({ min: 41, step: 8, offset: 1 });
+    expect(frameGridForModel()).toEqual(DEFAULT_FRAME_GRID);
+    expect(frameGridForModel(null)).toEqual(DEFAULT_FRAME_GRID);
+    expect(frameGridForModel('not-a-catalog-model')).toEqual(DEFAULT_FRAME_GRID);
+    expect(frameGridForModel('ti2v_2_2')).toEqual(DEFAULT_FRAME_GRID);
+    expect(frameGridForModel('agnes-video-2.5-flash')).toEqual(DEFAULT_FRAME_GRID);
+  });
+
+  it('reads H3 native grid from the catalog', () => {
+    expect(frameGridForModel(H3)).toEqual({ min: 107, step: 17, offset: 5 });
+  });
+
+  it('pins the four owner-verified H3 fits (ceil-to-grid at max 447)', () => {
+    const grid = frameGridForModel(H3);
+    expect(fitFramesToGrid(41, grid, 447)).toBe(107);
+    expect(fitFramesToGrid(121, grid, 447)).toBe(124);
+    expect(fitFramesToGrid(241, grid, 447)).toBe(243);
+    expect(fitFramesToGrid(441, grid, 447)).toBe(447);
+  });
+
+  it('clamps to the grid floor and the resolution cap', () => {
+    const grid = frameGridForModel(H3);
+    expect(fitFramesToGrid(1, grid, 447)).toBe(107);
+    expect(fitFramesToGrid(0, grid, 447)).toBe(107);
+    expect(fitFramesToGrid(447, grid, 241)).toBe(241);
+    // The ceiling clamp runs AFTER the grid fit, so a cap below the next
+    // grid point can leave the final value off-grid (441 here) — by spec.
+    expect(fitFramesToGrid(441, grid, 441)).toBe(441);
+  });
+
+  it('keeps the default grid byte-compatible with the legacy 8n+1 path', () => {
+    const grid = frameGridForModel('ti2v_2_2');
+    expect(fitFramesToGrid(41, grid, 241)).toBe(41);
+    expect(fitFramesToGrid(42, grid, 241)).toBe(49);
+    expect(fitFramesToGrid(121, grid, 121)).toBe(121);
+    expect(fitFramesToGrid(300, grid, 241)).toBe(241);
+  });
+});
+
+describe('validatePipeLength with a model id', () => {
+  it('uses the model grid when an id is supplied', () => {
+    expect(validatePipeLength(41, '480p', 'minimax_h3_fl2va_pruned_pi_dwd_2step')).toBe(107);
+    expect(validatePipeLength(121, '480p', 'minimax_h3_fl2va_pruned_pi_dwd_2step')).toBe(124);
+  });
+
+  it('stays byte-identical for the legacy/no-id path', () => {
+    expect(validatePipeLength(41, '480p')).toBe(41);
+    expect(validatePipeLength(42, '480p')).toBe(49);
+    expect(validatePipeLength(500, '480p')).toBe(441);
+    expect(validatePipeLength(41, '480p', 'ti2v_2_2')).toBe(41);
+    expect(validatePipeLength(41, '480p', 'agnes-video-2.5-flash')).toBe(41);
   });
 });
 

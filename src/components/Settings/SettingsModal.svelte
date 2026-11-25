@@ -6,6 +6,8 @@
 	// hosts the ffmpeg path override (two-variant ship: tiny = user path).
 	import type { ProviderKind, ProviderSlot, Settings } from '$types';
 	import { getSettings, commitSettings } from '$lib/settings/store';
+	import { frameGridForModel } from '$lib/frameMath';
+	import { reflowFrameGrid } from '$lib/composerStore';
 	import { flashToast } from '$lib/flashToast';
 	import SettingsDefaults from './SettingsDefaults.svelte';
 	import ProviderCard from './ProviderCard.svelte';
@@ -57,7 +59,19 @@
 		if (saving || !dirty) return;
 		saving = true;
 		try {
+			// Pre-save slot value from the LIVE store (the draft is only a
+			// local copy until commit). Compare after commit against the
+			// normalized stored id, so a healed/unknown pick can't fake a grid
+			// change.
+			const previousVideoModel = getSettings().providers.video?.model;
 			await commitSettings(draft);
+			const newVideoModel = getSettings().providers.video?.model;
+			if (
+				newVideoModel !== previousVideoModel &&
+				JSON.stringify(frameGridForModel(newVideoModel)) !== JSON.stringify(frameGridForModel(previousVideoModel))
+			) {
+				await reflowFrameGrid(newVideoModel);
+			}
 			flashToast('Settings saved', 'info');
 			open = false;
 		} catch (e) {

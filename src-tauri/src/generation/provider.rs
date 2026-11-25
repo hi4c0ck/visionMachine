@@ -25,7 +25,7 @@ use crate::generation::media::{
 };
 use crate::generation::shaper::StageContext;
 use crate::generation::shaper::{shape_request, substitute_poll_template};
-use crate::generation::specs::ModelSpecWire;
+use crate::generation::specs::{McpSpecWire, ModelSpecWire};
 use crate::generation::video_adapter;
 use crate::generation::types::SourceKind;
 use crate::storage::db::Database;
@@ -209,6 +209,32 @@ const RATE_LIMIT_BACKOFF_SECS: u64 = 30;
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(360);
 /// Poll transport timeout (transient network, not the job itself).
 const POLL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Non-blocking MCP submit (wait=false): the server returns a job_id at once,
+/// so the submit itself is fast — a short bound covers handshake overhead.
+const MCP_SUBMIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Server-side `get_job` long-poll window per watch round (Wan2GP caps it at
+/// 600). The call returns as soon as the job is terminal OR the window
+/// elapses, with the latest progress snapshot either way.
+///
+/// This window is ALSO the worst-case remote-cancel latency: WanGP serves
+/// `get_job` and `cancel_job` through the same single MCP tool queue, so an
+/// in-flight long-poll makes a queued cancel wait for the window to expire.
+/// Keep it short (~2 s) for near-interactive cancellation; a UI cancel must
+/// reach the server in ~2 s, not up to 30 s.
+const MCP_POLL_WAIT_S: u32 = 2;
+/// Client HTTP timeout for one `get_job` long-poll (must cover the server
+/// window + transport overhead, but not hold the shared tool queue for long).
+const MCP_POLL_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Consecutive watch rounds with no progress change before flagging a stalled
+/// job (~MCP_STALL_ROUNDS * MCP_POLL_WAIT_S seconds ≈ 10 min at 300 * 2 s).
+/// A regressing/resetting progress re-arms the counter; the cancel flag is
+/// the real escape hatch for a genuinely hung render. Scaled up with the
+/// shorter poll window so the stall warning keeps its old ~10 min cadence.
+const MCP_STALL_ROUNDS: u32 = 300;
+/// Consecutive `get_job` transport failures tolerated before giving up. A
+/// WanGP restart drops its job store (the server reports "Unknown job_id"),
+/// so an endless retry would pin a task to a job that can never finish.
+const MCP_POLL_MAX_FAILURES: u32 = 5;
 
 /// Whether a 503 body describes a TRANSIENT provider-side condition that the
 /// backoff should absorb (retry on the steady 15 s schedule).
@@ -876,6 +902,7 @@ impl ProviderEngine {
             target_w: 0,
             target_h: 0,
             video_ratio: None,
+            mcp_settings: None,
         };
         let slot = self
             .provider_slot(&input, spec.kind.clone(), spec.auth.as_deref().unwrap_or("bearer"))
@@ -2409,7 +2436,15 @@ impl ProviderEngine {
         // filename ever enters the wire (P5, owner-local config policy).
         let mut settings = mcp.settings_defaults.clone();
         settings.insert("model_type".into(), Value::String(spec.id.clone()));
-        settings.insert("prompt".into(), Value::String(ctx.prompt.clone()));
+        // Data-driven wire prompt shaping: only models declaring
+        // `promptStyle: "plain-timed"` get the plain, timecoded prompt;
+        // every other model sends ctx.prompt byte-for-byte unchanged.
+        let wire_prompt = crate::generation::mcp::transform_prompt_for_model(
+            spec,
+            &ctx.prompt,
+            ctx.fps,
+        );
+        settings.insert("prompt".into(), Value::String(wire_prompt));
         if spec.supports_seed() {
             if let Some(seed) = ctx.seed {
                 settings.insert("seed".into(), json!(seed));
@@ -2433,6 +2468,15 @@ impl ProviderEngine {
         }
         if let Some(name) = spec.steps.as_deref() {
             settings.insert(name.into(), json!(ctx.q_value));
+        }
+        // User-chosen MCP tunable values (the preset's `mcp.tunables` UI block)
+        // override the catalog defaults and this run's inserts — a value the
+        // owner set in the Tools panel / generation modal wins. Only keys the
+        // UI knows about reach the wire (never arbitrary input).
+        if let Some(obj) = input.mcp_settings.as_ref().and_then(Value::as_object) {
+            for (key, value) in obj {
+                settings.insert(key.clone(), value.clone());
+            }
         }
 
         let base = slot.base_url.trim().trim_end_matches('/');
@@ -2520,12 +2564,21 @@ impl ProviderEngine {
 
         on_progress(0.45);
         on_event("calling MCP generate tool");
+        // wait=false returns a job_id fast, so a short submit bound fails a
+        // hung submit early; wait=true blocks for the whole generation and
+        // needs the long image bound (this is the 360s early-drop the owner
+        // flagged — wait=false sidesteps it by polling instead of blocking).
+        let submit_timeout = if mcp.generate.wait {
+            IMAGE_TIMEOUT
+        } else {
+            MCP_SUBMIT_TIMEOUT
+        };
         let payload = crate::generation::mcp::call_tool(
             &*self.http,
             &url,
             &mcp.tools.generate,
             Value::Object(args),
-            IMAGE_TIMEOUT,
+            submit_timeout,
         )
         .await
         .map_err(EngineError::Failure)?;
@@ -2558,18 +2611,267 @@ impl ProviderEngine {
             );
             return Err(EngineError::Failure(failure));
         }
+        // Non-blocking submit (wait=false): the payload is a job submission,
+        // not a finished generation. Watch the job to completion — progress,
+        // stall watchdog, cancel — before retrieving the artifact. wait=true
+        // keeps the synchronous retrieval below, byte-identical.
+        if !mcp.generate.wait {
+            let job_id = match crate::generation::mcp::job_id(&payload) {
+                Some(id) => id,
+                None => {
+                    return Err(EngineError::Failure(format!(
+                        "MCP generate for model {} (wait=false) returned no job_id to watch",
+                        spec.id
+                    )));
+                }
+            };
+            return self
+                .watch_mcp_job(
+                    input,
+                    spec,
+                    mcp,
+                    &url,
+                    &job_id,
+                    &settings,
+                    cancel,
+                    on_progress,
+                    on_event,
+                )
+                .await;
+        }
 
+        self
+            .materialize_mcp_video(
+                input,
+                spec,
+                mcp,
+                &url,
+                &payload,
+                crate::generation::mcp::job_id(&payload).as_deref(),
+                &settings,
+                on_progress,
+                on_event,
+            )
+            .await
+    }
+
+    /// Ask WanGP to abort a submitted job, making the outcome observable.
+    /// `cancel_job` and `get_job` share the server's single MCP tool queue,
+    /// so the abort's latency is bounded by the short `MCP_POLL_WAIT_S`
+    /// long-poll window. The RPC is logged at info on success (with the
+    /// snapshot's status) and warn on failure; failure never masks the user's
+    /// cancel — callers still emit "generation cancelled" and return
+    /// `EngineError::Cancelled`.
+    async fn request_mcp_cancel(
+        &self,
+        url: &str,
+        mcp: &McpSpecWire,
+        job_id: &str,
+        task_id: &str,
+    ) {
+        match crate::generation::mcp::cancel_job(
+            &*self.http, url, mcp, job_id, POLL_TIMEOUT,
+        )
+        .await
+        {
+            Ok(snapshot) => {
+                let status = snapshot
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        snapshot
+                            .get("progress")
+                            .and_then(|p| p.get("status"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or("unknown");
+                log::info!(
+                    "[Generation] MCP video task {} job {} cancel_job ok: status={}",
+                    task_id,
+                    job_id,
+                    status
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Generation] MCP video task {} job {} cancel_job failed: {}",
+                    task_id,
+                    job_id,
+                    e
+                );
+            }
+        }
+    }
+
+    /// Masterpiece polling for a non-blocking MCP submit (wait=false). Holds the
+    /// submitted job_id and loops `get_job` long-polls (server window
+    /// MCP_POLL_WAIT_S, transient-retry via POLL_TIMEOUT) until the job is
+    /// terminal, streaming progress % / step counts, re-arming a stall
+    /// watchdog when progress stops moving, and honouring the cancel flag by
+    /// asking the server to abort the render. Terminal success reuses the same
+    /// artifact-retrieval shape as the synchronous path. wait=true never
+    /// reaches here (the caller branches on it first).
+    async fn watch_mcp_job(
+        &self,
+        input: &EngineInput,
+        spec: &ModelSpecWire,
+        mcp: &McpSpecWire,
+        url: &str,
+        job_id: &str,
+        settings: &serde_json::Map<String, Value>,
+        cancel: &AtomicBool,
+        on_progress: &(dyn Fn(f32) + Sync),
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<String, EngineError> {
+        on_event("watching MCP job");
+        let mut last_fraction: f64 = 0.0;
+        let mut stall_rounds: u32 = 0;
+        let mut poll_failures: u32 = 0;
+
+        loop {
+            // Cancel before a round: tell the server to abort, then surface it.
+            if cancel.load(Ordering::Acquire) {
+                self.request_mcp_cancel(url, mcp, job_id, &input.task_id)
+                    .await;
+                on_event("generation cancelled");
+                return Err(EngineError::Cancelled);
+            }
+
+            // One long-poll round; transport errors retry (the job keeps
+            // running server-side), they never abort the watch.
+            let snapshot = match crate::generation::mcp::get_job(
+                &*self.http,
+                url,
+                mcp,
+                job_id,
+                MCP_POLL_WAIT_S,
+                MCP_POLL_HTTP_TIMEOUT,
+            )
+            .await
+            {
+                Ok(s) => {
+                    poll_failures = 0;
+                    s
+                }
+                Err(e) => {
+                    poll_failures += 1;
+                    if poll_failures >= MCP_POLL_MAX_FAILURES {
+                        return Err(EngineError::Failure(format!(
+                            "MCP job {job_id} lost after {poll_failures} consecutive get_job failures (WanGP may have restarted): {e}"
+                        )));
+                    }
+                    log::warn!(
+                        "[Generation] MCP video task {} job {} poll transient error ({}/{}): {}",
+                        input.task_id,
+                        job_id,
+                        poll_failures,
+                        MCP_POLL_MAX_FAILURES,
+                        e
+                    );
+                    if cancel_aware_sleep(cancel, POLL_TIMEOUT).await {
+                        on_event("generation cancelled");
+                        return Err(EngineError::Cancelled);
+                    }
+                    // Sleep finished normally (no cancel) — this is only a
+                    // transient get_job error, so retry the SAME job. Never
+                    // interpret `false` as cancellation: that inverted branch
+                    // silently killed live jobs exactly 30 s after one blip.
+                    continue;
+                }
+            };
+
+            // Cancel while a round was in flight.
+            if cancel.load(Ordering::Acquire) {
+                self.request_mcp_cancel(url, mcp, job_id, &input.task_id)
+                    .await;
+                on_event("generation cancelled");
+                return Err(EngineError::Cancelled);
+            }
+
+            // Terminal? A job error/interrupted is a real failure; otherwise
+            // retrieve the artifact the job reported and finish.
+            if crate::generation::mcp::job_terminal(&snapshot) {
+                if let Some(failure) =
+                    crate::generation::mcp::generate_failure_message(&snapshot)
+                {
+                    log::error!(
+                        "[Generation] MCP video task {} job {} failed: {}",
+                        input.task_id,
+                        job_id,
+                        failure
+                    );
+                    return Err(EngineError::Failure(failure));
+                }
+
+                return self
+                    .materialize_mcp_video(
+                        input,
+                        spec,
+                        mcp,
+                        url,
+                        &snapshot,
+                        Some(job_id),
+                        settings,
+                        on_progress,
+                        on_event,
+                    )
+                    .await;
+            }
+
+            // Live progress band (submit = 0.45 .. artifact = 0.9). A rising
+            // fraction re-arms the watchdog; a stalled one counts toward it.
+            let (fraction, label) = crate::generation::mcp::job_progress(&snapshot);
+            if fraction > last_fraction {
+                last_fraction = fraction;
+                stall_rounds = 0;
+                on_progress((0.45 + fraction * 0.45) as f32);
+                if !label.is_empty() {
+                    on_event(&format!("MCP job: {label}"));
+                }
+            } else {
+                stall_rounds += 1;
+                if stall_rounds == MCP_STALL_ROUNDS {
+                    log::warn!(
+                        "[Generation] MCP video task {} job {} no progress change for ~{}s; still watching (cancel to abort)",
+                        input.task_id,
+                        job_id,
+                        stall_rounds * MCP_POLL_WAIT_S
+                    );
+                    on_event("MCP job stalled — no progress change; still watching (cancel to abort)");
+                }
+            }
+        }
+    }
+
+    /// Materialize a finished MCP video job (its JSON-RPC result snapshot) into
+    /// `media_root/<pipe>/<task>/video.mp4` + `output.json`, streaming progress
+    /// to 0.9 then 1.0. Shared by the synchronous wait=true tail and the
+    /// wait=false poll terminal so both write artifacts identically.
+    /// `provider_task_id` is the job id (always `Some` on the poll path;
+    /// optional on the sync path).
+    async fn materialize_mcp_video(
+        &self,
+        input: &EngineInput,
+        spec: &ModelSpecWire,
+        mcp: &McpSpecWire,
+        url: &str,
+        snapshot: &Value,
+        provider_task_id: Option<&str>,
+        settings: &serde_json::Map<String, Value>,
+        on_progress: &(dyn Fn(f32) + Sync),
+        on_event: &(dyn Fn(&str) + Sync),
+    ) -> Result<String, EngineError> {
         on_progress(0.9);
-        let references = crate::generation::mcp::artifact_references(&payload);
+        let references = crate::generation::mcp::artifact_references(snapshot);
         if references.is_empty() {
             return Err(EngineError::Failure(format!(
-                "MCP generate for model {} returned no usable artifact reference (checked generated_files, result.gallery_items and result.artifacts)",
+                "MCP video job for model {} finished but reported no usable artifact reference (checked generated_files, result.gallery_items and result.artifacts)",
                 spec.id
             )));
         }
         on_event("retrieving MCP artifact");
-
-        let local = match self.media_root_for(input) {
+        let media_root = self.media_root_for(input);
+        let local = match media_root {
             Some(root) => {
                 let pipe_dir = input
                     .pipe_name
@@ -2579,17 +2881,11 @@ impl ProviderEngine {
                 let (_images, task_dir, _task_images) =
                     pipe_media_dirs(&root, pipe_dir, &input.task_id).map_err(EngineError::Failure)?;
                 let dest = task_dir.join("video.mp4");
-                // v2.1 compaction can leave several handles (gallery media id,
-                // its virtual path, artifact side files). Try each in order:
-                // absolute local paths are copied directly, virtual paths and
-                // media ids go through wangp_session create_file_download in
-                // retrieve_artifact. Only a concrete merge of failures is
-                // reported when every handle is unusable.
                 let mut last_err: Option<String> = None;
                 let mut retrieved = false;
                 for reference in &references {
                     match crate::generation::mcp::retrieve_artifact(
-                        &*self.http, &url, mcp, reference, &dest, POLL_TIMEOUT,
+                        &*self.http, url, mcp, reference, &dest, POLL_TIMEOUT,
                     )
                     .await
                     {
@@ -2608,7 +2904,7 @@ impl ProviderEngine {
                 }
                 if !retrieved {
                     return Err(EngineError::Failure(format!(
-                        "MCP generate for model {} produced {} artifact reference(s) but none could be retrieved: {}",
+                        "MCP video job for model {} produced {} artifact reference(s) but none could be retrieved: {}",
                         spec.id,
                         references.len(),
                         last_err.unwrap_or_else(|| "unknown retrieval failure".into())
@@ -2625,7 +2921,7 @@ impl ProviderEngine {
                     "params": settings,
                     "status": "done",
                 });
-                if let Some(id) = crate::generation::mcp::job_id(&payload) {
+                if let Some(id) = provider_task_id {
                     out["providerTaskId"] = json!(id);
                 }
                 write_json(&task_dir.join("output.json"), &out).map_err(EngineError::Failure)?;
@@ -2640,7 +2936,11 @@ impl ProviderEngine {
 
         on_progress(1.0);
         on_event("complete");
-        log::info!("[Generation] MCP video task {} ok ({})", input.task_id, local);
+        log::info!(
+            "[Generation] MCP video task {} ok ({})",
+            input.task_id,
+            local
+        );
         Ok(local)
     }
 }
@@ -4035,6 +4335,7 @@ mod tests {
             structured_output: None,
             thinking_toggle: None,
             pricing: None,
+            prompt_style: None,
         }
     }
 
@@ -4064,6 +4365,7 @@ mod tests {
             structured_output: None,
             thinking_toggle: None,
             pricing: None,
+            prompt_style: None,
         }
     }
 
@@ -4103,6 +4405,7 @@ mod tests {
             target_w: 0,
             target_h: 0,
             video_ratio: None,
+            mcp_settings: None,
         }
     }
 
@@ -5845,12 +6148,89 @@ mod tests {
                         "chunkAction": "upload_chunk", "finishAction": "finish_upload",
                         "refPaths": ["path", "media_id"]
                     },
-                    "download": { "action": "create_file_download", "pathArg": "path",
+                    "download": { "action": "create_file_download", "pathArg": "source",
                                   "refPaths": ["path"] }
                 }
             }
         }))
         .unwrap()
+    }
+
+    /// A pre-set cancel flag must issue exactly one `wangp_session cancel_job`
+    /// RPC and surface `Cancelled` immediately — no `get_job` long-poll (which
+    /// would otherwise cost MCP_POLL_WAIT_S) and no artifact/download work.
+    /// Pre-setting the flag keeps this test instant (no real 2 s waits).
+    #[tokio::test]
+    async fn mcp_watch_preset_cancel_issues_cancel_job_without_artifact_work() {
+        let (db, media) = db_with_slots("sk-image-key", "sk-video-key").await;
+        let http = Arc::new(StubHttp::new().queue_post(Ok((
+            200,
+            json!({
+                "jsonrpc": "2.0", "id": 2,
+                "result": {
+                    "structuredContent": {
+                        "status": "interrupted", "done": true, "job_id": "api_cancel_me"
+                    },
+                    "content": [{ "type": "text", "text": "{}" }],
+                    "isError": false
+                }
+            }),
+        ))));
+        let engine = engine_with(db, media.clone(), http.clone(), [0, 0, 0]);
+        let spec = mcp_spec();
+        let mcp = spec.mcp.as_ref().unwrap();
+        let input = video_input(&media);
+        let cancel = Arc::new(AtomicBool::new(true));
+        let events = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let events_for_cb = Arc::clone(&events);
+
+        let err = engine
+            .watch_mcp_job(
+                &input,
+                &spec,
+                mcp,
+                "http://127.0.0.1:8765/mcp",
+                "api_cancel_me",
+                &mcp.settings_defaults,
+                &cancel,
+                &|_p| {},
+                &move |line: &str| {
+                    if let Ok(mut e) = events_for_cb.lock() {
+                        e.push(line.to_string());
+                    }
+                },
+            )
+            .await
+            .expect_err("pre-set cancel must surface Cancelled");
+
+        assert_eq!(err, EngineError::Cancelled, "{err:?}");
+        {
+            let ev = events.lock().unwrap();
+            assert!(
+                ev.iter().any(|e| e == "generation cancelled"),
+                "{ev:?}"
+            );
+        }
+
+        let bodies = http.posted_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1, "only cancel_job may fire: {bodies:?}");
+        assert_eq!(bodies[0]["method"], "tools/call");
+        assert_eq!(bodies[0]["params"]["name"], "wangp_session");
+        assert_eq!(bodies[0]["params"]["arguments"]["action"], "cancel_job");
+        assert_eq!(
+            bodies[0]["params"]["arguments"]["arguments"]["job_id"],
+            "api_cancel_me"
+        );
+        drop(bodies);
+        assert!(
+            http.downloads.lock().unwrap().is_empty(),
+            "cancel must not retrieve any artifact"
+        );
+        assert!(
+            !media.join("pipe1/task1/video.mp4").exists(),
+            "cancel must not write a video artifact"
+        );
+        let _ = std::fs::remove_dir_all(&media);
     }
 
     #[tokio::test]

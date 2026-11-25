@@ -97,13 +97,14 @@ test.describe('Settings', () => {
     expect(JSON.parse(stored).generationDefaults.alwaysNewSeed).toBe(false);
   });
 
-  test('paid read-only video model shows a badge + limits in the provider card', async ({ page }) => {
+  test('paid 2.5 video model is generable — no read-only badge, limits shown in the provider card', async ({ page }) => {
     await page.locator('.profile-icon.settings').click();
     await page.locator('.tab-btn:has-text("Providers")').click();
     const videoCard = page.locator('.provider-card').nth(2);
     await videoCard.locator('#prov-model-video').selectOption('agnes-video-2.5');
-    await expect(videoCard.locator('.hint-readonly')).toBeVisible();
-    await expect(videoCard.locator('.hint-readonly')).toContainText(/read-only/i);
+    // Q3 unlock: the read-only restriction was lifted, so the .hint-readonly
+    // badge no longer renders (the ProviderCard gate stays for future use).
+    await expect(videoCard.locator('.hint-readonly')).toHaveCount(0);
     await expect(videoCard.locator('.field .hint').filter({ hasText: 'Limits' })).toContainText('2K');
   });
   test('provider status chip opens the modal at the Providers tab', async ({ page }) => {

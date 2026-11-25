@@ -239,6 +239,7 @@ export interface McpUploadSlot {
  *  No SDK crate, no session header — initialize then tools/call per request.
  *  All strings are protocol data; NEVER put owner-machine paths/checkpoints
  *  or Wan2GP config values here (P5: portable catalog). */
+
 export interface McpSpec {
   /** JSON-RPC endpoint under the provider base URL (e.g. '/mcp'). */
   endpoint: string;
@@ -328,6 +329,17 @@ export interface ModelSpec {
      */
     ratioMap?: Record<string, string>;
   };
+  /**
+   * Per-model pipe-length grid: valid lengths are `offset + k*step` (k ≥ 0),
+   * floored at `min`. Absent = the app's legacy 41 / 8n+1 grid
+   * ({ min: 41, step: 8, offset: 1 }); every existing model keeps that path
+   * byte-for-byte. Declared on the MODEL (not the preset) so a local engine
+   * with a native non-8n+1 cadence (Wan2GP H3: 5 + 17k, min 107) can be
+   * refitted without touching other vendors. Rust's ModelSpecWire ignores
+   * this frontend-only field (no deny_unknown_fields) — do NOT add it to
+   * Rust unless the engine actually consumes it.
+   */
+  frameGrid?: { min: number; step: number; offset: number };
   /** Placeholder until concrete vendor details land — picker disables it. */
   pending?: boolean;
   /** Resolved-only stamp (set by resolveModelSpec, never a catalog value):
@@ -399,9 +411,21 @@ export interface ModelSpec {
   adapterOverrides?: Partial<VideoAdapterSpec>;
   /** Merged adapter attached by resolveSpecs (preset ⊕ overrides ⊕ payload). */
   adapter?: VideoAdapterSpec;
-  /** Merged MCP transport config attached by resolveSpecs (requestFormat
-   *  'mcp'). Transport + tool names + defaults, no owner-machine values. */
-  mcp?: McpSpec;
+  /** Per-model MCP DEFAULTS/overrides (requestFormat 'mcp'). Transport + tool
+   *  names come from the preset and are deep-merged by `mergeMcp`; the model
+   *  may legally declare only `settingsDefaults`, so this is Partial, not a
+   *  full McpSpec. Resolved specs carry the merged complete config. */
+  mcp?: Partial<McpSpec>;
+  /**
+   * Model-specific wire prompt shaping, applied ONLY to the named model's
+   * outbound request prompt (never to other models' request bytes).
+   * 'plain-timed' = strip XML tags/descriptive colons, insert cumulative
+   * [mm:ss - mm:ss] timecodes per segment and drop oral narration markers;
+   * implemented in the Rust generation/mcp.rs prompt transformer. Absent =
+   * the compiled prompt is sent verbatim (every other model's byte-identical
+   * path).
+   */
+  promptStyle?: 'plain-timed';
   /** Text models: structured-output capability for the Director Node A call.
    *  json_schema (OpenAI/Agnes), json_object (most local servers),
    *  prompt-only (fallback instruction; the retry net still applies). */

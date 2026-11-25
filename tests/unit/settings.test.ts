@@ -374,7 +374,8 @@ describe('catalog', () => {
 
   it('filters models by kind', () => {
     // The legacy V2.0 video model was removed (P1-7): the video list is now
-    // the 2.5-flash generable default + the paid 2.5 read-only entry.
+    // the 2.5-flash generable default + the paid 2.5 generable tier (read-only
+    // lifted, Q3 unlock).
     expect(modelsFor(AGNES_PRESET, 'video').map((m) => m.id)).toEqual([
       'agnes-video-2.5-flash',
       'agnes-video-2.5',
@@ -389,8 +390,12 @@ describe('catalog', () => {
     expect(getModel(CUSTOM_PRESET, 'custom-text')?.pending).toBeFalsy();
   });
 
-  it('marks the paid 2.5 video model read-only (Q3)', () => {
-    expect(getModel(AGNES_PRESET, 'agnes-video-2.5')?.readOnly).toBe(true);
+  it('paid 2.5 video model is generable (Q3 unlock; read-only structure retained)', () => {
+    // Q3 unlock (2026-11-24): the read-only restriction on the paid 2.5 video
+    // tier was lifted, so it is now confirmable for generation. The `readOnly`
+    // catalog field + the picker/confirm gate stay for future use, but no
+    // catalog model currently sets it.
+    expect(getModel(AGNES_PRESET, 'agnes-video-2.5')?.readOnly).toBeUndefined();
     expect(getModel(AGNES_PRESET, 'agnes-video-2.5-flash')?.readOnly).toBeUndefined();
     expect(getModel(AGNES_PRESET, 'agnes-image-2.5-flash')?.readOnly).toBeUndefined();
   });
@@ -401,9 +406,9 @@ describe('catalog', () => {
     // still name it self-heal to the generable default (see the
     // normalizeSettings migration test above).
     expect(getModel(AGNES_PRESET, 'agnes-video-v2.0')).toBeUndefined();
-    // The generable default + the paid read-only 2.5 remain.
+    // The generable default + the paid 2.5 remain (Q3 unlock: now generable).
     expect(getModel(AGNES_PRESET, 'agnes-video-2.5-flash')).toBeDefined();
-    expect(getModel(AGNES_PRESET, 'agnes-video-2.5')?.readOnly).toBe(true);
+    expect(getModel(AGNES_PRESET, 'agnes-video-2.5')).toBeDefined();
   });
 
   it('carries per-model media + seconds limits for the pipe UI (Q7)', () => {

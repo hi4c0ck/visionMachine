@@ -180,6 +180,13 @@ pub struct StartGenerationInput {
     pub image_spec: Option<ModelSpecWire>,
     #[serde(default)]
     pub video_spec: Option<ModelSpecWire>,
+    /// Per-run MCP tunable values (the active preset's `mcp.tunables`) chosen
+    /// in the UI: a plain JSON object keyed by the exact WanGP settings keys
+    /// (num_inference_steps, video_length, resolution, ...). Absent for
+    /// non-MCP presets / when the UI sent none; merged over the catalog
+    /// defaults in the MCP engine branch.
+    #[serde(default)]
+    pub mcp_settings: Option<serde_json::Value>,
 }
 
 // ── Run-scoped generation overrides (Option B: hybrid run-local + optional
@@ -260,6 +267,10 @@ pub struct PipeStartParams {
     /// Run-scoped per-pipe Q/C override (diff map, only changed values).
     /// None = build from the pipe row.
     pub pipe_params: Option<PipeParamOverride>,
+    /// Per-run MCP tunable values (see `StartGenerationInput::mcp_settings`);
+    /// carried into the `EngineInput` and merged over the catalog defaults in
+    /// the MCP engine branch.
+    pub mcp_settings: Option<serde_json::Value>,
 }
 
 /// Build the initial task view + engine input for one pipe start. Pure: it
@@ -372,6 +383,7 @@ pub fn build_pipe_start(
         stage: None,
         upstream: Vec::new(),
         force_media_mode: None,
+        mcp_settings: params.mcp_settings.clone(),
     };
     (view, engine_input)
 }
@@ -452,6 +464,7 @@ pub async fn start_generation(
         profile_id: input.profile_id,
         image_spec: input.image_spec,
         video_spec: input.video_spec,
+        mcp_settings: input.mcp_settings.clone(),
         // The per-pipe flow has no run-scoped overrides — it always builds
         // from the composer + pipe rows.
         run_stats: None,
